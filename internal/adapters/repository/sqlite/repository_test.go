@@ -94,3 +94,11 @@ func TestRepositoryListTasks_OrdersByUpdatedAtDescending(t *testing.T) {
 	require.Equal(t, "second-task", tasks[0].Slug)
 	require.Equal(t, "first-task", tasks[1].Slug)
 }
+
+func TestNewRepository_CreatesParentDirectory(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "nested", "state.db")
+
+	repo, err := NewRepository(path)
+	require.NoError(t, err)
+	require.NotNil(t, repo)
+}

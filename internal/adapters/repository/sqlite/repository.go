@@ -3,6 +3,8 @@ package sqlite
 import (
 	"context"
 	"database/sql"
+	"os"
+	"path/filepath"
 	"time"
 
 	"agent/internal/core"
@@ -15,6 +17,10 @@ type Repository struct {
 }
 
 func NewRepository(path string) (*Repository, error) {
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		return nil, err
+	}
+
 	db, err := sql.Open("sqlite", path)
 	if err != nil {
 		return nil, err
