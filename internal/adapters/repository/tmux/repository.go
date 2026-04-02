@@ -1,0 +1,75 @@
+package tmux
+
+import (
+	"context"
+	"strings"
+
+	"agent/internal/core"
+	"agent/internal/pkg/execx"
+)
+
+type Repository struct {
+	runner execx.Runner
+}
+
+func NewRepository(runner execx.Runner) *Repository {
+	return &Repository{runner: runner}
+}
+
+func (r *Repository) IsAvailable(ctx context.Context) error {
+	_, err := r.runner.Run(ctx, "", "tmux", "-V")
+	return err
+}
+
+func (r *Repository) SessionExists(ctx context.Context, session string) (bool, error) {
+	_, err := r.runner.Run(ctx, "", "tmux", "has-session", "-t", session)
+	if err != nil {
+		return false, nil
+	}
+
+	return true, nil
+}
+
+func (r *Repository) CreateSession(ctx context.Context, in core.CreateSessionInput) error {
+	_, err := r.runner.Run(
+		ctx,
+		"",
+		"tmux",
+		"new-session",
+		"-d",
+		"-s",
+		in.SessionName,
+		"-c",
+		in.WorkingDir,
+	)
+	return err
+}
+
+func (r *Repository) AttachOrSwitch(ctx context.Context, session string) error {
+	_, err := r.runner.Run(ctx, "", "tmux", "switch-client", "-t", session)
+	return err
+}
+
+func (r *Repository) SendKeys(ctx context.Context, session string, command []string) error {
+	quoted := make([]string, 0, len(command))
+	for _, part := range command {
+		if strings.ContainsRune(part, ' ') {
+			quoted = append(quoted, "'"+strings.ReplaceAll(part, "'", "'\\''")+"'")
+			continue
+		}
+
+		quoted = append(quoted, part)
+	}
+
+	_, err := r.runner.Run(
+		ctx,
+		"",
+		"tmux",
+		"send-keys",
+		"-t",
+		session,
+		strings.Join(quoted, " "),
+		"C-m",
+	)
+	return err
+}
