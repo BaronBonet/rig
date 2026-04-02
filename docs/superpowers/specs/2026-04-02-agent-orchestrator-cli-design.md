@@ -15,6 +15,7 @@ The CLI is the source of truth for naming, state, worktree creation, tmux setup,
 - Attach or switch directly into the new tmux session after creation.
 - Persist task state in SQLite and reconcile that state against git and tmux on read operations.
 - Provide a small initial command set: `new`, `ls`, `open`, `status`, `doctor`.
+- Support both interactive and non-interactive invocation patterns cleanly.
 
 ## Non-Goals
 
@@ -124,6 +125,22 @@ Expected flow:
 
 If Codex title generation fails, the CLI should fall back to a deterministic local title derived from the prompt, still allowing interactive confirmation or editing before proceeding.
 
+#### Interactive Vs Non-Interactive Use
+
+Because the tool must work for both humans and parent agents, `agent new` needs two modes:
+
+- interactive mode
+  - default for human shell use
+  - shows the proposed title and lets the user confirm or edit it
+  - attaches to the created tmux session by default
+- non-interactive mode
+  - intended for parent-agent or script usage
+  - accepts the proposed title automatically unless an explicit override is provided
+  - does not require a terminal prompt to continue
+  - should support returning the created task details in a machine-readable format
+
+The exact flags can be chosen during planning, but the behavior split above is required by the design.
+
 ### `agent ls`
 
 - Lists persisted tasks with reconciled live state.
@@ -191,6 +208,14 @@ The worktree location should be configurable later, but the default in v1 is sib
 
 SQLite is the v1 state store.
 
+### Default Location
+
+The default database path should live outside individual repos, for example:
+
+- `~/.local/share/agent/state.db`
+
+This path should be configurable so the database location can be overridden without changing the core model.
+
 ### Tables
 
 #### `tasks`
@@ -220,6 +245,7 @@ V1 should support a minimal config file at `~/.config/agent/config.yaml`.
 ### Initial Config Surface
 
 - default base branch
+- state database path
 - worktree root strategy
 - codex binary path
 - attach behavior
