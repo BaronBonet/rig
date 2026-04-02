@@ -44,6 +44,7 @@ type fakeTaskRepository struct {
 	createErr   error
 	updateErr   error
 	listTasks   []*Task
+	getTask     *Task
 	createdTask *Task
 	updatedTask *Task
 }
@@ -68,7 +69,14 @@ func (f *fakeTaskRepository) UpdateTask(_ context.Context, task *Task) error {
 	return nil
 }
 
-func (*fakeTaskRepository) GetTask(context.Context, string) (*Task, error) { return nil, ErrTaskNotFound }
+func (f *fakeTaskRepository) GetTask(context.Context, string) (*Task, error) {
+	if f.getTask == nil {
+		return nil, ErrTaskNotFound
+	}
+
+	clone := *f.getTask
+	return &clone, nil
+}
 func (f *fakeTaskRepository) ListTasks(context.Context) ([]*Task, error)    { return f.listTasks, nil }
 func (*fakeTaskRepository) AppendEvent(context.Context, string, string, string) error {
 	return nil
@@ -78,6 +86,7 @@ type fakeGitRepository struct {
 	isAvailableErr    error
 	detectRepoErr     error
 	createWorktreeErr error
+	branchExists      bool
 	repoContext       RepoContext
 	createWorktreeInput CreateWorktreeInput
 }
@@ -90,27 +99,36 @@ func (f *fakeGitRepository) DetectRepo(context.Context, string) (RepoContext, er
 
 	return f.repoContext, nil
 }
-func (*fakeGitRepository) BranchExists(context.Context, string, string) (bool, error) { return false, nil }
+func (f *fakeGitRepository) BranchExists(context.Context, string, string) (bool, error) {
+	return f.branchExists, nil
+}
 func (f *fakeGitRepository) CreateWorktree(_ context.Context, input CreateWorktreeInput) error {
 	f.createWorktreeInput = input
 	return f.createWorktreeErr
 }
 
 type fakeTmuxRepository struct {
-	isAvailableErr  error
+	isAvailableErr   error
 	createSessionErr error
 	sendKeysErr      error
+	sessionExists    bool
+	attachedSession  string
 	createdSession   CreateSessionInput
 	sentCommand      []string
 }
 
 func (f *fakeTmuxRepository) IsAvailable(context.Context) error { return f.isAvailableErr }
-func (*fakeTmuxRepository) SessionExists(context.Context, string) (bool, error) { return false, nil }
+func (f *fakeTmuxRepository) SessionExists(context.Context, string) (bool, error) {
+	return f.sessionExists, nil
+}
 func (f *fakeTmuxRepository) CreateSession(_ context.Context, input CreateSessionInput) error {
 	f.createdSession = input
 	return f.createSessionErr
 }
-func (*fakeTmuxRepository) AttachOrSwitch(context.Context, string) error { return nil }
+func (f *fakeTmuxRepository) AttachOrSwitch(_ context.Context, session string) error {
+	f.attachedSession = session
+	return nil
+}
 func (f *fakeTmuxRepository) SendKeys(_ context.Context, _ string, command []string) error {
 	f.sentCommand = append([]string(nil), command...)
 	return f.sendKeysErr

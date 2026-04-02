@@ -88,3 +88,9 @@ func (f *fakeNewCLIService) NewTask(_ context.Context, input core.NewTaskInput) 
 	f.newTaskInput = input
 	return f.newTask, f.newTaskErr
 }
+
+func (*fakeNewCLIService) ListTasks(context.Context) ([]*core.Task, error) { return nil, nil }
+
+func (*fakeNewCLIService) GetTask(context.Context, string) (*core.Task, error) { return nil, nil }
+
+func (*fakeNewCLIService) OpenTask(context.Context, string) error { return nil }

@@ -3,6 +3,7 @@ package core
 import (
 	"fmt"
 	"context"
+	"errors"
 	"os"
 	"path/filepath"
 	"slices"
@@ -136,6 +137,47 @@ func (s *Service) NewTask(ctx context.Context, input NewTaskInput) (*Task, error
 	return task, nil
 }
 
+func (s *Service) ListTasks(ctx context.Context) ([]*Task, error) {
+	tasks, err := s.tasks.ListTasks(ctx)
+	if err != nil {
+		return nil, err
+	}
+
+	reconciled := make([]*Task, 0, len(tasks))
+	for _, task := range tasks {
+		nextTask, reconcileErr := s.reconcileTask(ctx, task)
+		if reconcileErr != nil {
+			return nil, reconcileErr
+		}
+
+		reconciled = append(reconciled, nextTask)
+	}
+
+	return reconciled, nil
+}
+
+func (s *Service) GetTask(ctx context.Context, idOrSlug string) (*Task, error) {
+	task, err := s.tasks.GetTask(ctx, idOrSlug)
+	if err != nil {
+		return nil, err
+	}
+
+	return s.reconcileTask(ctx, task)
+}
+
+func (s *Service) OpenTask(ctx context.Context, idOrSlug string) error {
+	task, err := s.GetTask(ctx, idOrSlug)
+	if err != nil {
+		return err
+	}
+
+	if !task.SessionExists {
+		return ErrBrokenTask
+	}
+
+	return s.tmux.AttachOrSwitch(ctx, task.TmuxSession)
+}
+
 func NewService(
 	tasks TaskRepository,
 	git GitRepository,
@@ -190,6 +232,50 @@ func ensureDatabasePath(path string) error {
 	return os.MkdirAll(filepath.Dir(path), 0o755)
 }
 
+func (s *Service) reconcileTask(ctx context.Context, task *Task) (*Task, error) {
+	reconciled := *task
+	reconciled.WorktreeExists = worktreeExists(reconciled.WorktreePath)
+
+	branchExists, err := s.git.BranchExists(ctx, reconciled.RepoRoot, reconciled.BranchName)
+	if err != nil {
+		return nil, err
+	}
+	reconciled.BranchExists = branchExists
+
+	sessionExists, err := s.tmux.SessionExists(ctx, reconciled.TmuxSession)
+	if err != nil {
+		return nil, err
+	}
+	reconciled.SessionExists = sessionExists
+	reconciled.LastReconciledAt = s.clock.Now().UTC()
+	reconciled.UpdatedAt = s.clock.Now().UTC()
+
+	missing := make([]string, 0, 3)
+	if !reconciled.WorktreeExists {
+		missing = append(missing, "missing worktree")
+	}
+	if !reconciled.BranchExists {
+		missing = append(missing, "missing branch")
+	}
+	if !reconciled.SessionExists {
+		missing = append(missing, "missing tmux session")
+	}
+
+	if len(missing) > 0 {
+		reconciled.Status = TaskStatusBroken
+		reconciled.LastError = strings.Join(missing, ", ")
+	} else {
+		reconciled.Status = TaskStatusRunning
+		reconciled.LastError = ""
+	}
+
+	if err := s.tasks.UpdateTask(ctx, &reconciled); err != nil && !errors.Is(err, ErrTaskNotFound) {
+		return nil, err
+	}
+
+	return &reconciled, nil
+}
+
 func (s *Service) markBroken(ctx context.Context, task *Task, failure error) (*Task, error) {
 	task.Status = TaskStatusBroken
 	task.LastError = failure.Error()
@@ -220,4 +306,17 @@ func fallbackDisplayName(prompt string) string {
 	}
 
 	return strings.Join(words, " ")
+}
+
+func worktreeExists(path string) bool {
+	if strings.TrimSpace(path) == "" {
+		return false
+	}
+
+	info, err := os.Stat(path)
+	if err != nil {
+		return false
+	}
+
+	return info.IsDir()
 }

@@ -13,6 +13,9 @@ type TaskService interface {
 	Doctor(ctx context.Context, cwd string) (core.DoctorResult, error)
 	SuggestTaskName(ctx context.Context, prompt string) (string, error)
 	NewTask(ctx context.Context, input core.NewTaskInput) (*core.Task, error)
+	ListTasks(ctx context.Context) ([]*core.Task, error)
+	GetTask(ctx context.Context, idOrSlug string) (*core.Task, error)
+	OpenTask(ctx context.Context, idOrSlug string) error
 }
 
 type Dependencies struct {

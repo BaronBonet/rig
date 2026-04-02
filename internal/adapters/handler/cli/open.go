@@ -1,13 +1,23 @@
 package cli
 
-import "github.com/spf13/cobra"
+import (
+	"context"
+	"fmt"
 
-func newOpenCommand(_ Dependencies) *cobra.Command {
+	"github.com/spf13/cobra"
+)
+
+func newOpenCommand(deps Dependencies) *cobra.Command {
 	return &cobra.Command{
-		Use:   "open",
+		Use:   "open <task>",
 		Short: "Open an existing task session",
-		RunE: func(_ *cobra.Command, _ []string) error {
-			return nil
+		Args:  cobra.ExactArgs(1),
+		RunE: func(_ *cobra.Command, args []string) error {
+			if deps.Service == nil {
+				return fmt.Errorf("service not configured")
+			}
+
+			return deps.Service.OpenTask(context.Background(), args[0])
 		},
 	}
 }
