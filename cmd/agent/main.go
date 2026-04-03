@@ -8,9 +8,11 @@ import (
 	"strings"
 
 	"agent/internal/adapters/handler/cli"
+	agentconfigrepo "agent/internal/adapters/repository/agentconfig"
 	codexrepo "agent/internal/adapters/repository/codex"
 	gitrepo "agent/internal/adapters/repository/git"
 	sqliterepo "agent/internal/adapters/repository/sqlite"
+	workspacerepo "agent/internal/adapters/repository/workspace"
 	"agent/internal/core"
 	"agent/internal/pkg/execx"
 	"agent/internal/pkg/timeutil"
@@ -143,6 +145,8 @@ func (r *runtimeService) newService(withSQLite bool) (*core.Service, error) {
 		gitrepo.NewRepository(r.runner),
 		&runtimeTmuxRepository{runner: r.runner, paneIDs: map[string]string{}},
 		codexrepo.NewRepository(r.runner, r.cfg.CodexBinary),
+		agentconfigrepo.NewRepository(),
+		workspacerepo.NewRepository(),
 		timeutil.RealClock{},
 		r.cfg,
 	), nil

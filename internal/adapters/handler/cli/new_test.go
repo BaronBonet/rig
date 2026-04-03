@@ -84,6 +84,9 @@ func TestNewCommand_PrintsProgressAndUsesProgressCreatePath(t *testing.T) {
 		progressEvents: []core.TaskProgress{
 			{Step: core.TaskProgressNameSelected, Message: "Selected name: billing retry flow"},
 			{Step: core.TaskProgressWorktreeCreating, Message: "Creating worktree..."},
+			{Step: core.TaskProgressWorkspaceSeeding, Message: "Seeding workspace..."},
+			{Step: core.TaskProgressWorkspaceSeeded, Message: "Copied .env"},
+			{Step: core.TaskProgressWorkspaceSeeded, Message: "Copied local/"},
 			{Step: core.TaskProgressTmuxStarting, Message: "Starting tmux session..."},
 			{Step: core.TaskProgressCodexLaunching, Message: "Launching Codex..."},
 			{Step: core.TaskProgressTaskCreated, Message: "Created task billing retry flow in session repo-billing-retry-flow"},
@@ -108,6 +111,9 @@ func TestNewCommand_PrintsProgressAndUsesProgressCreatePath(t *testing.T) {
 	require.True(t, service.createOptions.OpenSession)
 	require.Contains(t, errOut.String(), "Selected name: billing retry flow")
 	require.Contains(t, errOut.String(), "Creating worktree...")
+	require.Contains(t, errOut.String(), "Seeding workspace...")
+	require.Contains(t, errOut.String(), "Copied .env")
+	require.Contains(t, errOut.String(), "Copied local/")
 	require.Contains(t, errOut.String(), "Opening tmux session...")
 	require.Empty(t, out.String())
 }

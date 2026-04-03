@@ -4,6 +4,7 @@ import (
 	"context"
 	"testing"
 
+	"agent/internal/core"
 	"agent/internal/pkg/execx"
 
 	"github.com/stretchr/testify/require"
@@ -37,4 +38,12 @@ func TestRuntimeTmuxRepositoryAttachOrSwitch_SwitchesInsideTmux(t *testing.T) {
 		"-t",
 		"repo-billing-retry-flow",
 	}, runner.Calls[0].Args)
+}
+
+func TestRuntimeService_NewServiceConstructs(t *testing.T) {
+	svc := &runtimeService{cfg: core.DefaultConfig(), runner: execx.ExecRunner{}}
+
+	service, err := svc.newService(false)
+	require.NoError(t, err)
+	require.NotNil(t, service)
 }

@@ -3,6 +3,7 @@ package cli
 import (
 	"bytes"
 	"context"
+	"strings"
 	"testing"
 
 	"agent/internal/core"
@@ -15,6 +16,7 @@ func TestDoctorCommand_PrintsFailures(t *testing.T) {
 	cmd := newDoctorCommand(Dependencies{
 		Service: fakeCLIService{
 			doctorResult: core.DoctorResult{
+				Notes:    []string{"config: loaded agent.yaml"},
 				Failures: []string{"codex: missing codex"},
 			},
 		},
@@ -27,7 +29,33 @@ func TestDoctorCommand_PrintsFailures(t *testing.T) {
 
 	err := cmd.Execute()
 	require.NoError(t, err)
+	require.Contains(t, out.String(), "config: loaded agent.yaml")
 	require.Contains(t, out.String(), "codex: missing codex")
+}
+
+func TestDoctorCommand_PrintsNotesBeforeOk(t *testing.T) {
+	out := &bytes.Buffer{}
+	cmd := newDoctorCommand(Dependencies{
+		Service: fakeCLIService{
+			doctorResult: core.DoctorResult{
+				Notes: []string{
+					"config: loaded agent.yaml",
+					"config: seed path ok: .env",
+				},
+			},
+		},
+		Stdout: out,
+		Stderr: out,
+		Cwd:    "/tmp/repo",
+	})
+	cmd.SetOut(out)
+	cmd.SetErr(out)
+
+	err := cmd.Execute()
+	require.NoError(t, err)
+	require.Less(t, strings.Index(out.String(), "config: loaded agent.yaml"), strings.Index(out.String(), "doctor: ok"))
+	require.Less(t, strings.Index(out.String(), "config: seed path ok: .env"), strings.Index(out.String(), "doctor: ok"))
+	require.Contains(t, out.String(), "doctor: ok")
 }
 
 type fakeCLIService struct {

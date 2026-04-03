@@ -32,6 +32,12 @@ func newDoctorCommand(deps Dependencies) *cobra.Command {
 				return err
 			}
 
+			for _, note := range result.Notes {
+				if _, err = fmt.Fprintln(cmd.OutOrStdout(), note); err != nil {
+					return err
+				}
+			}
+
 			if len(result.Failures) == 0 {
 				_, err = fmt.Fprintln(cmd.OutOrStdout(), "doctor: ok")
 				return err

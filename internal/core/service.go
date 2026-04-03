@@ -14,6 +14,7 @@ import (
 )
 
 type DoctorResult struct {
+	Notes    []string
 	Failures []string
 }
 
@@ -24,12 +25,14 @@ type NewTaskInput struct {
 }
 
 type Service struct {
-	tasks TaskRepository
-	git   GitRepository
-	tmux  TmuxRepository
-	codex CodexRepository
-	clock timeutil.Clock
-	cfg   Config
+	tasks      TaskRepository
+	git        GitRepository
+	tmux       TmuxRepository
+	codex      CodexRepository
+	repoConfig RepoConfigRepository
+	workspace  WorkspaceSeeder
+	clock      timeutil.Clock
+	cfg        Config
 }
 
 func (s *Service) SuggestTaskName(ctx context.Context, prompt string) (string, error) {
@@ -63,6 +66,16 @@ func (s *Service) createTask(
 	repoCtx, err := s.git.DetectRepo(ctx, input.Cwd)
 	if err != nil {
 		return nil, err
+	}
+
+	repoConfig, err := s.repoConfig.LoadRepoConfig(ctx, repoCtx.Root)
+	if err != nil {
+		return nil, err
+	}
+	if len(repoConfig.Seed.Copy) > 0 {
+		if err := s.workspace.ValidateSeedPaths(ctx, repoCtx.Root, repoConfig.Seed.Copy); err != nil {
+			return nil, fmt.Errorf("seed workspace: %w", err)
+		}
 	}
 
 	displayName := strings.TrimSpace(input.ConfirmedDisplayName)
@@ -135,6 +148,29 @@ func (s *Service) createTask(
 	task.UpdatedAt = s.clock.Now().UTC()
 	if err := s.tasks.UpdateTask(ctx, task); err != nil {
 		return task, err
+	}
+
+	if len(repoConfig.Seed.Copy) > 0 {
+		emitTaskProgress(progress, TaskProgress{
+			Step:    TaskProgressWorkspaceSeeding,
+			Message: "Seeding workspace...",
+			Task:    cloneTask(task),
+		})
+
+		err := s.workspace.SeedWorkspace(ctx, SeedWorkspaceInput{
+			RepoRoot:      task.RepoRoot,
+			WorktreePath:  task.WorktreePath,
+			RelativePaths: repoConfig.Seed.Copy,
+		}, func(path string) {
+			emitTaskProgress(progress, TaskProgress{
+				Step:    TaskProgressWorkspaceSeeded,
+				Message: fmt.Sprintf("Copied %s", path),
+				Task:    cloneTask(task),
+			})
+		})
+		if err != nil {
+			return s.markBroken(ctx, task, fmt.Errorf("seed workspace: %w", err))
+		}
 	}
 
 	emitTaskProgress(progress, TaskProgress{
@@ -302,16 +338,20 @@ func NewService(
 	git GitRepository,
 	tmux TmuxRepository,
 	codex CodexRepository,
+	repoConfig RepoConfigRepository,
+	workspace WorkspaceSeeder,
 	clock timeutil.Clock,
 	cfg Config,
 ) *Service {
 	return &Service{
-		tasks: tasks,
-		git:   git,
-		tmux:  tmux,
-		codex: codex,
-		clock: clock,
-		cfg:   cfg,
+		tasks:      tasks,
+		git:        git,
+		tmux:       tmux,
+		codex:      codex,
+		repoConfig: repoConfig,
+		workspace:  workspace,
+		clock:      clock,
+		cfg:        cfg,
 	}
 }
 
@@ -335,8 +375,25 @@ func (s *Service) Doctor(ctx context.Context, cwd string) (DoctorResult, error) 
 	}
 
 	if strings.TrimSpace(cwd) != "" {
-		if _, err := s.git.DetectRepo(ctx, cwd); err != nil {
+		repoCtx, err := s.git.DetectRepo(ctx, cwd)
+		if err != nil {
 			result.Failures = append(result.Failures, "repo: "+err.Error())
+		} else {
+			repoConfig, err := s.repoConfig.LoadRepoConfig(ctx, repoCtx.Root)
+			if err != nil {
+				result.Failures = append(result.Failures, "config: "+err.Error())
+			} else if !repoConfig.Exists {
+				result.Notes = append(result.Notes, "config: agent.yaml not found")
+			} else {
+				result.Notes = append(result.Notes, "config: loaded agent.yaml")
+				if err := s.workspace.ValidateSeedPaths(ctx, repoCtx.Root, repoConfig.Seed.Copy); err != nil {
+					result.Failures = append(result.Failures, "config: "+err.Error())
+				} else {
+					for _, path := range repoConfig.Seed.Copy {
+						result.Notes = append(result.Notes, "config: seed path ok: "+path)
+					}
+				}
+			}
 		}
 	}
 

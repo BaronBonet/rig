@@ -26,11 +26,27 @@ The CLI expects these binaries to be available on `PATH`:
 
 ## Defaults
 
-- Config is currently code-defined rather than file-loaded.
+- Config is loaded from an optional repo-local `agent.yaml` when present.
 - SQLite state path defaults to `~/.local/share/agent/state.db`.
 - Worktrees default to sibling directories such as `../repo-billing-retry-flow`.
 - Branches default to `feat/<slug>`.
 - tmux sessions default to `<repo>-<slug>`.
+
+## Repo Config
+
+Place `agent.yaml` at the root of the repository you run `agent` inside:
+
+```yaml
+seed:
+  copy:
+    - .env
+    - .lazy.lua
+    - local/
+```
+
+Each `seed.copy` entry is copied from the repo root into the new worktree after `git worktree add` and before tmux starts. Entries are literal repo-relative paths only, so glob patterns are not supported.
+
+If a configured source path is missing, the `new` command fails. If the destination already exists in the worktree, the command also fails. Symlink sources are rejected explicitly.
 
 ## Usage
 
@@ -47,6 +63,7 @@ go run ./cmd/agent new "add billing retry flow"
 ```
 
 The command now prints stage-by-stage progress to stderr and then opens the tmux session automatically.
+When seeding is configured, it also prints `Seeding workspace...` followed by one `Copied ...` line per seeded path.
 
 When prompted for the proposed name, press Enter to accept it or type a replacement.
 Typing `y` or `yes` also accepts the suggested name.
@@ -100,4 +117,4 @@ Cleanup deletes the tmux session and worktree for the selected task, but keeps t
 
 - No multi-window tmux layouts yet
 - No Claude provider yet
-- Config file loading is not implemented yet
+- `agent.yaml` only supports `seed.copy` in v1

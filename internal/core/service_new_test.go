@@ -84,6 +84,68 @@ func TestServiceCreateTaskWithProgress_EmitsEventsAndOpensSession(t *testing.T) 
 	require.Equal(t, task.DisplayName, events[len(events)-2].Task.DisplayName)
 }
 
+func TestServiceCreateTaskWithProgress_SeedsWorkspaceBeforeTmux(t *testing.T) {
+	svc := newTestService()
+	svc.configRepo.repoConfig = RepoConfig{
+		Seed: SeedConfig{Copy: []string{".env", "local/"}},
+	}
+
+	var events []TaskProgress
+	task, err := svc.service.CreateTaskWithProgress(t.Context(), NewTaskInput{
+		Cwd:                  "/tmp/repo",
+		Prompt:               "seed workspace",
+		ConfirmedDisplayName: "seed workspace",
+	}, CreateTaskOptions{}, func(event TaskProgress) {
+		events = append(events, event)
+	})
+
+	require.NoError(t, err)
+	require.Equal(t, "/tmp/repo", svc.configRepo.loadedRepoRoot)
+	require.Equal(t, SeedWorkspaceInput{
+		RepoRoot:      "/tmp/repo",
+		WorktreePath:  "/tmp/repo-seed-workspace",
+		RelativePaths: []string{".env", "local/"},
+	}, svc.workspaceSeeder.seedInput)
+	require.Equal(t, []string{".env", "local/"}, svc.workspaceSeeder.seededPaths)
+	require.True(t, svc.workspaceSeeder.seededBeforeTmux)
+	require.Equal(t, []TaskProgressStep{
+		TaskProgressNameSelected,
+		TaskProgressWorktreeCreating,
+		TaskProgressWorkspaceSeeding,
+		TaskProgressWorkspaceSeeded,
+		TaskProgressWorkspaceSeeded,
+		TaskProgressTmuxStarting,
+		TaskProgressCodexLaunching,
+		TaskProgressTaskCreated,
+	}, progressSteps(events))
+	require.Equal(t, "Seeding workspace...", events[2].Message)
+	require.Equal(t, "Copied .env", events[3].Message)
+	require.Equal(t, "Copied local/", events[4].Message)
+	require.Equal(t, TaskStatusRunning, task.Status)
+}
+
+func TestServiceNewTask_FailsBeforeCreatingTaskWhenWorkspaceValidationFails(t *testing.T) {
+	svc := newTestService()
+	svc.configRepo.repoConfig = RepoConfig{
+		Exists: true,
+		Seed:   SeedConfig{Copy: []string{".env"}},
+	}
+	svc.workspaceSeeder.validateErr = errors.New("invalid seed path \".env\": source path not found")
+
+	task, err := svc.service.NewTask(t.Context(), NewTaskInput{
+		Cwd:                  "/tmp/repo",
+		Prompt:               "seed workspace",
+		ConfirmedDisplayName: "seed workspace",
+	})
+
+	require.Error(t, err)
+	require.Nil(t, task)
+	require.EqualError(t, err, "seed workspace: invalid seed path \".env\": source path not found")
+	require.Nil(t, svc.taskRepo.createdTask)
+	require.Equal(t, CreateWorktreeInput{}, svc.gitRepo.createWorktreeInput)
+	require.Empty(t, svc.tmuxRepo.createdSession.SessionName)
+}
+
 func progressSteps(events []TaskProgress) []TaskProgressStep {
 	steps := make([]TaskProgressStep, 0, len(events))
 	for _, event := range events {

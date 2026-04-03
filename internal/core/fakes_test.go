@@ -9,11 +9,13 @@ import (
 )
 
 type testServiceHarness struct {
-	service   *Service
-	taskRepo  *fakeTaskRepository
-	gitRepo   *fakeGitRepository
-	tmuxRepo  *fakeTmuxRepository
-	codexRepo *fakeCodexRepository
+	service         *Service
+	taskRepo        *fakeTaskRepository
+	gitRepo         *fakeGitRepository
+	tmuxRepo        *fakeTmuxRepository
+	codexRepo       *fakeCodexRepository
+	configRepo      *fakeRepoConfigRepository
+	workspaceSeeder *fakeWorkspaceSeeder
 }
 
 func newTestService() *testServiceHarness {
@@ -27,17 +29,24 @@ func newTestService() *testServiceHarness {
 	}
 	tmuxRepo := &fakeTmuxRepository{}
 	codexRepo := &fakeCodexRepository{}
+	configRepo := &fakeRepoConfigRepository{}
+	workspaceSeeder := &fakeWorkspaceSeeder{}
+	tmuxRepo.createSessionHook = func() {
+		workspaceSeeder.seededBeforeTmux = workspaceSeeder.seedCalled
+	}
 
 	return &testServiceHarness{
-		service: NewService(taskRepo, gitRepo, tmuxRepo, codexRepo, fakeClock{
+		service: NewService(taskRepo, gitRepo, tmuxRepo, codexRepo, configRepo, workspaceSeeder, fakeClock{
 			now: time.Date(2026, 4, 2, 12, 0, 0, 0, time.UTC),
 		}, Config{
 			DatabasePath: "/tmp/agent/state.db",
 		}),
-		taskRepo:  taskRepo,
-		gitRepo:   gitRepo,
-		tmuxRepo:  tmuxRepo,
-		codexRepo: codexRepo,
+		taskRepo:        taskRepo,
+		gitRepo:         gitRepo,
+		tmuxRepo:        tmuxRepo,
+		codexRepo:       codexRepo,
+		configRepo:      configRepo,
+		workspaceSeeder: workspaceSeeder,
 	}
 }
 
@@ -153,6 +162,7 @@ func (f *fakeGitRepository) RemoveWorktree(_ context.Context, _ string, path str
 type fakeTmuxRepository struct {
 	isAvailableErr   error
 	createSessionErr error
+	createSessionHook func()
 	killSessionErr   error
 	killSessionHook  func()
 	sendKeysErr      error
@@ -169,6 +179,9 @@ func (f *fakeTmuxRepository) SessionExists(context.Context, string) (bool, error
 }
 func (f *fakeTmuxRepository) CreateSession(_ context.Context, input CreateSessionInput) error {
 	f.createdSession = input
+	if f.createSessionHook != nil {
+		f.createSessionHook()
+	}
 	return f.createSessionErr
 }
 
@@ -224,3 +237,52 @@ type fakeClock struct {
 func (f fakeClock) Now() time.Time { return f.now }
 
 var _ timeutil.Clock = fakeClock{}
+
+type fakeRepoConfigRepository struct {
+	repoConfig     RepoConfig
+	loadErr        error
+	loadedRepoRoot string
+}
+
+func (f *fakeRepoConfigRepository) LoadRepoConfig(_ context.Context, repoRoot string) (RepoConfig, error) {
+	f.loadedRepoRoot = repoRoot
+	if f.loadErr != nil {
+		return RepoConfig{}, f.loadErr
+	}
+
+	return f.repoConfig, nil
+}
+
+type fakeWorkspaceSeeder struct {
+	validateErr      error
+	seedErr          error
+	validateRepoRoot string
+	validatePaths    []string
+	seedInput        SeedWorkspaceInput
+	seededPaths      []string
+	seedCalled       bool
+	seededBeforeTmux bool
+}
+
+func (f *fakeWorkspaceSeeder) SeedWorkspace(_ context.Context, in SeedWorkspaceInput, progress func(string)) error {
+	f.seedCalled = true
+	f.seedInput = in
+	if f.seedErr != nil {
+		return f.seedErr
+	}
+
+	for _, path := range in.RelativePaths {
+		f.seededPaths = append(f.seededPaths, path)
+		if progress != nil {
+			progress(path)
+		}
+	}
+
+	return nil
+}
+
+func (f *fakeWorkspaceSeeder) ValidateSeedPaths(_ context.Context, repoRoot string, relativePaths []string) error {
+	f.validateRepoRoot = repoRoot
+	f.validatePaths = append([]string(nil), relativePaths...)
+	return f.validateErr
+}

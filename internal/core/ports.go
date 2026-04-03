@@ -8,6 +8,15 @@ type RepoContext struct {
 	BaseBranch string
 }
 
+type RepoConfig struct {
+	Exists bool
+	Seed   SeedConfig
+}
+
+type SeedConfig struct {
+	Copy []string
+}
+
 type CreateWorktreeInput struct {
 	RepoRoot     string
 	BaseBranch   string
@@ -20,12 +29,27 @@ type CreateSessionInput struct {
 	WorkingDir  string
 }
 
+type SeedWorkspaceInput struct {
+	RepoRoot      string
+	WorktreePath  string
+	RelativePaths []string
+}
+
 type TaskRepository interface {
 	CreateTask(ctx context.Context, task *Task) error
 	UpdateTask(ctx context.Context, task *Task) error
 	GetTask(ctx context.Context, idOrSlug string) (*Task, error)
 	ListTasks(ctx context.Context) ([]*Task, error)
 	AppendEvent(ctx context.Context, taskID, eventType, payload string) error
+}
+
+type RepoConfigRepository interface {
+	LoadRepoConfig(ctx context.Context, repoRoot string) (RepoConfig, error)
+}
+
+type WorkspaceSeeder interface {
+	SeedWorkspace(ctx context.Context, in SeedWorkspaceInput, progress func(string)) error
+	ValidateSeedPaths(ctx context.Context, repoRoot string, relativePaths []string) error
 }
 
 type GitRepository interface {
