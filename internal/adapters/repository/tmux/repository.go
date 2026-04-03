@@ -2,6 +2,7 @@ package tmux
 
 import (
 	"context"
+	"errors"
 	"strings"
 
 	"agent/internal/core"
@@ -22,9 +23,13 @@ func (r *Repository) IsAvailable(ctx context.Context) error {
 }
 
 func (r *Repository) SessionExists(ctx context.Context, session string) (bool, error) {
-	_, err := r.runner.Run(ctx, "", "tmux", "has-session", "-t", exactSessionTarget(session))
+	result, err := r.runner.Run(ctx, "", "tmux", "has-session", "-t", exactSessionTarget(session))
 	if err != nil {
-		return false, nil
+		if isMissingSession(result, err) {
+			return false, nil
+		}
+
+		return false, err
 	}
 
 	return true, nil
@@ -85,4 +90,14 @@ func exactSessionTarget(session string) string {
 
 func firstPaneTarget(session string) string {
 	return session + ":0.0"
+}
+
+func isMissingSession(result execx.Result, err error) bool {
+	var commandErr execx.CommandError
+	if !errors.As(err, &commandErr) {
+		return false
+	}
+
+	output := strings.ToLower(result.Stderr + "\n" + result.Stdout + "\n" + commandErr.Stderr + "\n" + commandErr.Stdout)
+	return strings.Contains(output, "can't find session")
 }

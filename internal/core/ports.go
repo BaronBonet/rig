@@ -9,10 +9,10 @@ type RepoContext struct {
 }
 
 type CreateWorktreeInput struct {
-	RepoRoot      string
-	BaseBranch    string
-	BranchName    string
-	WorktreePath  string
+	RepoRoot     string
+	BaseBranch   string
+	BranchName   string
+	WorktreePath string
 }
 
 type CreateSessionInput struct {
@@ -33,12 +33,14 @@ type GitRepository interface {
 	DetectRepo(ctx context.Context, cwd string) (RepoContext, error)
 	BranchExists(ctx context.Context, repoRoot, branch string) (bool, error)
 	CreateWorktree(ctx context.Context, in CreateWorktreeInput) error
+	RemoveWorktree(ctx context.Context, repoRoot, path string) error
 }
 
 type TmuxRepository interface {
 	IsAvailable(ctx context.Context) error
 	SessionExists(ctx context.Context, session string) (bool, error)
 	CreateSession(ctx context.Context, in CreateSessionInput) error
+	KillSession(ctx context.Context, session string) error
 	AttachOrSwitch(ctx context.Context, session string) error
 	SendKeys(ctx context.Context, session string, command []string) error
 }

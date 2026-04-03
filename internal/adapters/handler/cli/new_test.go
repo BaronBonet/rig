@@ -122,3 +122,7 @@ func (*fakeNewCLIService) ListTasks(context.Context) ([]*core.Task, error) { ret
 func (*fakeNewCLIService) GetTask(context.Context, string) (*core.Task, error) { return nil, nil }
 
 func (*fakeNewCLIService) OpenTask(context.Context, string) error { return nil }
+
+func (*fakeNewCLIService) DeleteTaskResources(context.Context, string) (*core.Task, error) {
+	return nil, nil
+}

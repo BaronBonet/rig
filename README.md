@@ -11,8 +11,10 @@ The first version supports:
 - `agent open`
 - `agent status`
 - `agent doctor`
+- `agent tui`
 
 The first release only supports `codex` as the provider, uses SQLite for persisted task state, and defaults to a single-window tmux session per task.
+`agent tui` is the first TUI and is cleanup-focused: it shows tracked tasks, live tmux/worktree state, and lets you remove runtime resources for a task.
 
 ## Requirements
 
@@ -71,9 +73,26 @@ Open a task session:
 go run ./cmd/agent open billing-retry-flow
 ```
 
+Open the cleanup TUI:
+
+```bash
+go run ./cmd/agent tui
+```
+
+Keybindings in the TUI:
+
+- `j` / `k` or arrow keys move between tasks
+- `g` / `G` or home/end jump to the top or bottom
+- `x` starts cleanup for the selected task
+- `y` confirms cleanup
+- `n`, `esc`, or `q` cancel the confirmation prompt
+- `r` refreshes task state
+- `q` quits the TUI from the main view
+
+Cleanup deletes the tmux session and worktree for the selected task, but keeps the branch.
+
 ## Current Limitations
 
-- No cleanup or merge commands yet
 - No multi-window tmux layouts yet
 - No Claude provider yet
 - Config file loading is not implemented yet

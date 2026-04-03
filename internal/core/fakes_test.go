@@ -2,6 +2,7 @@ package core
 
 import (
 	"context"
+	"os"
 	"time"
 
 	"agent/internal/pkg/timeutil"
@@ -41,12 +42,15 @@ func newTestService() *testServiceHarness {
 }
 
 type fakeTaskRepository struct {
-	createErr   error
-	updateErr   error
-	listTasks   []*Task
-	getTask     *Task
-	createdTask *Task
-	updatedTask *Task
+	createErr      error
+	updateErr      error
+	updateErrAt    int
+	updateCount    int
+	listTasks      []*Task
+	getTask        *Task
+	createdTask    *Task
+	updatedTask    *Task
+	appendedEvents []fakeTaskEvent
 }
 
 func (f *fakeTaskRepository) CreateTask(_ context.Context, task *Task) error {
@@ -56,16 +60,19 @@ func (f *fakeTaskRepository) CreateTask(_ context.Context, task *Task) error {
 
 	clone := *task
 	f.createdTask = &clone
+	f.getTask = &clone
 	return nil
 }
 
 func (f *fakeTaskRepository) UpdateTask(_ context.Context, task *Task) error {
-	if f.updateErr != nil {
+	f.updateCount++
+	if f.updateErr != nil && (f.updateErrAt == 0 || f.updateCount == f.updateErrAt) {
 		return f.updateErr
 	}
 
 	clone := *task
 	f.updatedTask = &clone
+	f.getTask = &clone
 	return nil
 }
 
@@ -77,18 +84,42 @@ func (f *fakeTaskRepository) GetTask(context.Context, string) (*Task, error) {
 	clone := *f.getTask
 	return &clone, nil
 }
-func (f *fakeTaskRepository) ListTasks(context.Context) ([]*Task, error)    { return f.listTasks, nil }
-func (*fakeTaskRepository) AppendEvent(context.Context, string, string, string) error {
+
+func (f *fakeTaskRepository) ListTasks(context.Context) ([]*Task, error) {
+	tasks := make([]*Task, 0, len(f.listTasks))
+	for _, task := range f.listTasks {
+		clone := *task
+		tasks = append(tasks, &clone)
+	}
+
+	return tasks, nil
+}
+
+func (f *fakeTaskRepository) AppendEvent(_ context.Context, taskID, eventType, payload string) error {
+	f.appendedEvents = append(f.appendedEvents, fakeTaskEvent{
+		taskID:    taskID,
+		eventType: eventType,
+		payload:   payload,
+	})
 	return nil
 }
 
+type fakeTaskEvent struct {
+	taskID    string
+	eventType string
+	payload   string
+}
+
 type fakeGitRepository struct {
-	isAvailableErr    error
-	detectRepoErr     error
-	createWorktreeErr error
-	branchExists      bool
-	repoContext       RepoContext
+	isAvailableErr      error
+	detectRepoErr       error
+	createWorktreeErr   error
+	removeWorktreeErr   error
+	removeWorktreeHook  func(string)
+	branchExists        bool
+	repoContext         RepoContext
 	createWorktreeInput CreateWorktreeInput
+	removedWorktrees    []string
 }
 
 func (f *fakeGitRepository) IsAvailable(context.Context) error { return f.isAvailableErr }
@@ -107,14 +138,29 @@ func (f *fakeGitRepository) CreateWorktree(_ context.Context, input CreateWorktr
 	return f.createWorktreeErr
 }
 
+func (f *fakeGitRepository) RemoveWorktree(_ context.Context, _ string, path string) error {
+	f.removedWorktrees = append(f.removedWorktrees, path)
+	if f.removeWorktreeHook != nil {
+		f.removeWorktreeHook(path)
+	}
+	if f.removeWorktreeErr != nil {
+		return f.removeWorktreeErr
+	}
+
+	return os.RemoveAll(path)
+}
+
 type fakeTmuxRepository struct {
 	isAvailableErr   error
 	createSessionErr error
+	killSessionErr   error
+	killSessionHook  func()
 	sendKeysErr      error
 	sessionExists    bool
 	attachedSession  string
 	createdSession   CreateSessionInput
 	sentCommand      []string
+	killedSessions   []string
 }
 
 func (f *fakeTmuxRepository) IsAvailable(context.Context) error { return f.isAvailableErr }
@@ -125,6 +171,20 @@ func (f *fakeTmuxRepository) CreateSession(_ context.Context, input CreateSessio
 	f.createdSession = input
 	return f.createSessionErr
 }
+
+func (f *fakeTmuxRepository) KillSession(_ context.Context, session string) error {
+	f.killedSessions = append(f.killedSessions, session)
+	if f.killSessionHook != nil {
+		f.killSessionHook()
+	}
+	if f.killSessionErr != nil {
+		return f.killSessionErr
+	}
+
+	f.sessionExists = false
+	return nil
+}
+
 func (f *fakeTmuxRepository) AttachOrSwitch(_ context.Context, session string) error {
 	f.attachedSession = session
 	return nil

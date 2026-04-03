@@ -7,8 +7,9 @@ const (
 	TaskStatusReady    TaskStatus = "ready"
 	TaskStatusRunning  TaskStatus = "running"
 	TaskStatusBroken   TaskStatus = "broken"
+	TaskStatusCleaned  TaskStatus = "cleaned"
 )
 
 func (s TaskStatus) IsTerminal() bool {
-	return s == TaskStatusBroken
+	return s == TaskStatusBroken || s == TaskStatusCleaned
 }

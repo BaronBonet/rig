@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"strings"
@@ -103,6 +104,15 @@ func (r *runtimeService) OpenTask(ctx context.Context, idOrSlug string) error {
 	return service.OpenTask(ctx, idOrSlug)
 }
 
+func (r *runtimeService) DeleteTaskResources(ctx context.Context, idOrSlug string) (*core.Task, error) {
+	service, err := r.newService(true)
+	if err != nil {
+		return nil, err
+	}
+
+	return service.DeleteTaskResources(ctx, idOrSlug)
+}
+
 func (r *runtimeService) newService(withSQLite bool) (*core.Service, error) {
 	var taskRepo core.TaskRepository = noopTaskRepository{}
 	if withSQLite {
@@ -135,9 +145,13 @@ func (r *runtimeTmuxRepository) IsAvailable(ctx context.Context) error {
 }
 
 func (r *runtimeTmuxRepository) SessionExists(ctx context.Context, session string) (bool, error) {
-	_, err := r.runner.Run(ctx, "", "tmux", "has-session", "-t", tmuxSessionName(session))
+	result, err := r.runner.Run(ctx, "", "tmux", "has-session", "-t", tmuxSessionName(session))
 	if err != nil {
-		return false, nil
+		if isRuntimeMissingSession(result, err) {
+			return false, nil
+		}
+
+		return false, err
 	}
 
 	return true, nil
@@ -207,6 +221,16 @@ func (r *runtimeTmuxRepository) SendKeys(ctx context.Context, session string, co
 
 func tmuxSessionName(session string) string {
 	return strings.ReplaceAll(session, ":", "-")
+}
+
+func isRuntimeMissingSession(result execx.Result, err error) bool {
+	var commandErr execx.CommandError
+	if !errors.As(err, &commandErr) {
+		return false
+	}
+
+	output := strings.ToLower(result.Stderr + "\n" + result.Stdout + "\n" + commandErr.Stderr + "\n" + commandErr.Stdout)
+	return strings.Contains(output, "can't find session")
 }
 
 type noopTaskRepository struct{}

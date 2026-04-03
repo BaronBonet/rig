@@ -51,13 +51,15 @@ func TestRepositoryRemoveWorktree_UsesExpectedGitCommand(t *testing.T) {
 	runner := execx.NewFakeRunner([]execx.Result{{}})
 	repo := NewRepository(runner)
 
-	err := repo.RemoveWorktree(context.Background(), "/tmp/repo-billing-retry-flow")
+	err := repo.RemoveWorktree(context.Background(), "/tmp/repo", "/tmp/repo-billing-retry-flow")
 	require.NoError(t, err)
 	require.Len(t, runner.Calls, 1)
 	require.Equal(t, "git", runner.Calls[0].Name)
+	require.Equal(t, "/tmp/repo", runner.Calls[0].Cwd)
 	require.Equal(t, []string{
 		"worktree",
 		"remove",
+		"--force",
 		"/tmp/repo-billing-retry-flow",
 	}, runner.Calls[0].Args)
 }

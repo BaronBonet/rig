@@ -1,16 +1,16 @@
 package core
 
 import (
-	"fmt"
 	"context"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"slices"
 	"strings"
 
-	"agent/internal/pkg/timeutil"
 	"agent/internal/pkg/slug"
+	"agent/internal/pkg/timeutil"
 )
 
 type DoctorResult struct {
@@ -68,19 +68,19 @@ func (s *Service) NewTask(ctx context.Context, input NewTaskInput) (*Task, error
 	now := s.clock.Now().UTC()
 	taskSlug := slug.EnsureUnique(slug.FromDisplayName(displayName), existingSlugs)
 	task := &Task{
-		ID:            fmt.Sprintf("%d", now.UnixNano()),
-		Prompt:        input.Prompt,
-		DisplayName:   displayName,
-		Slug:          taskSlug,
-		RepoRoot:      repoCtx.Root,
-		BaseBranch:    repoCtx.BaseBranch,
-		BranchName:    "feat/" + taskSlug,
-		WorktreePath:  filepath.Join(filepath.Dir(repoCtx.Root), repoCtx.Name+"-"+taskSlug),
-		TmuxSession:   repoCtx.Name + "-" + taskSlug,
-		Provider:      "codex",
-		Status:        TaskStatusCreating,
-		CreatedAt:     now,
-		UpdatedAt:     now,
+		ID:           fmt.Sprintf("%d", now.UnixNano()),
+		Prompt:       input.Prompt,
+		DisplayName:  displayName,
+		Slug:         taskSlug,
+		RepoRoot:     repoCtx.Root,
+		BaseBranch:   repoCtx.BaseBranch,
+		BranchName:   "feat/" + taskSlug,
+		WorktreePath: filepath.Join(filepath.Dir(repoCtx.Root), repoCtx.Name+"-"+taskSlug),
+		TmuxSession:  repoCtx.Name + "-" + taskSlug,
+		Provider:     "codex",
+		Status:       TaskStatusCreating,
+		CreatedAt:    now,
+		UpdatedAt:    now,
 	}
 
 	if err := s.tasks.CreateTask(ctx, task); err != nil {
@@ -171,11 +171,70 @@ func (s *Service) OpenTask(ctx context.Context, idOrSlug string) error {
 		return err
 	}
 
+	if task.Status == TaskStatusCleaned {
+		return ErrCleanedTask
+	}
+
 	if !task.SessionExists {
 		return ErrBrokenTask
 	}
 
 	return s.tmux.AttachOrSwitch(ctx, task.TmuxSession)
+}
+
+func (s *Service) DeleteTaskResources(ctx context.Context, idOrSlug string) (*Task, error) {
+	task, err := s.tasks.GetTask(ctx, idOrSlug)
+	if err != nil {
+		return nil, err
+	}
+
+	task, err = s.reconcileTask(ctx, task)
+	if err != nil {
+		return nil, err
+	}
+
+	_ = s.tasks.AppendEvent(ctx, task.ID, "cleanup_requested", string(task.Status))
+
+	if task.SessionExists {
+		if err := s.tmux.KillSession(ctx, task.TmuxSession); err != nil {
+			sessionExists, checkErr := s.tmux.SessionExists(ctx, task.TmuxSession)
+			if checkErr != nil || sessionExists {
+				return s.markCleanupBroken(ctx, task, fmt.Errorf("kill tmux session: %w", err))
+			}
+		}
+
+		task.SessionExists = false
+		task.UpdatedAt = s.clock.Now().UTC()
+		if err := s.tasks.UpdateTask(ctx, task); err != nil {
+			return task, err
+		}
+	}
+
+	if task.WorktreeExists {
+		if err := s.git.RemoveWorktree(ctx, task.RepoRoot, task.WorktreePath); err != nil {
+			worktreeExists, checkErr := worktreePresence(task.WorktreePath)
+			if checkErr != nil || worktreeExists {
+				return s.markCleanupBroken(ctx, task, fmt.Errorf("remove worktree: %w", err))
+			}
+		}
+
+		task.WorktreeExists = false
+		task.UpdatedAt = s.clock.Now().UTC()
+		if err := s.tasks.UpdateTask(ctx, task); err != nil {
+			return task, err
+		}
+	}
+
+	task.Status = TaskStatusCleaned
+	task.LastError = ""
+	task.UpdatedAt = s.clock.Now().UTC()
+	if err := s.tasks.UpdateTask(ctx, task); err != nil {
+		return task, err
+	}
+
+	_ = s.tasks.AppendEvent(ctx, task.ID, "cleanup_completed", string(task.Status))
+
+	return task, nil
 }
 
 func NewService(
@@ -234,7 +293,8 @@ func ensureDatabasePath(path string) error {
 
 func (s *Service) reconcileTask(ctx context.Context, task *Task) (*Task, error) {
 	reconciled := *task
-	reconciled.WorktreeExists = worktreeExists(reconciled.WorktreePath)
+	worktreeExists, worktreeErr := worktreePresence(reconciled.WorktreePath)
+	reconciled.WorktreeExists = worktreeExists
 
 	branchExists, err := s.git.BranchExists(ctx, reconciled.RepoRoot, reconciled.BranchName)
 	if err != nil {
@@ -249,24 +309,51 @@ func (s *Service) reconcileTask(ctx context.Context, task *Task) (*Task, error) 
 	reconciled.SessionExists = sessionExists
 	reconciled.LastReconciledAt = s.clock.Now().UTC()
 	reconciled.UpdatedAt = s.clock.Now().UTC()
-
-	missing := make([]string, 0, 3)
-	if !reconciled.WorktreeExists {
-		missing = append(missing, "missing worktree")
-	}
-	if !reconciled.BranchExists {
-		missing = append(missing, "missing branch")
-	}
-	if !reconciled.SessionExists {
-		missing = append(missing, "missing tmux session")
+	problems := make([]string, 0, 1)
+	if worktreeErr != nil {
+		reconciled.WorktreeExists = true
+		problems = append(problems, "worktree check failed")
 	}
 
-	if len(missing) > 0 {
-		reconciled.Status = TaskStatusBroken
-		reconciled.LastError = strings.Join(missing, ", ")
+	if task.Status == TaskStatusCleaned {
+		if len(problems) == 0 && !reconciled.WorktreeExists && !reconciled.SessionExists {
+			reconciled.Status = TaskStatusCleaned
+			reconciled.LastError = ""
+		} else {
+			unexpected := append([]string{}, problems...)
+			if reconciled.WorktreeExists {
+				unexpected = append(unexpected, "unexpected worktree")
+			}
+			if reconciled.SessionExists {
+				unexpected = append(unexpected, "unexpected tmux session")
+			}
+
+			reconciled.Status = TaskStatusBroken
+			reconciled.LastError = strings.Join(unexpected, ", ")
+		}
 	} else {
-		reconciled.Status = TaskStatusRunning
-		reconciled.LastError = ""
+		missing := append([]string{}, problems...)
+		if !reconciled.WorktreeExists {
+			missing = append(missing, "missing worktree")
+		}
+		if !reconciled.BranchExists {
+			missing = append(missing, "missing branch")
+		}
+		if !reconciled.SessionExists {
+			missing = append(missing, "missing tmux session")
+		}
+
+		if len(missing) > 0 {
+			reconciled.Status = TaskStatusBroken
+			if task.Status == TaskStatusBroken && isCleanupFailure(task.LastError) {
+				reconciled.LastError = task.LastError
+			} else {
+				reconciled.LastError = strings.Join(missing, ", ")
+			}
+		} else {
+			reconciled.Status = TaskStatusRunning
+			reconciled.LastError = ""
+		}
 	}
 
 	if err := s.tasks.UpdateTask(ctx, &reconciled); err != nil && !errors.Is(err, ErrTaskNotFound) {
@@ -290,6 +377,20 @@ func (s *Service) markBroken(ctx context.Context, task *Task, failure error) (*T
 	return task, failure
 }
 
+func (s *Service) markCleanupBroken(ctx context.Context, task *Task, failure error) (*Task, error) {
+	task.Status = TaskStatusBroken
+	task.LastError = "cleanup failed: " + failure.Error()
+	task.UpdatedAt = s.clock.Now().UTC()
+
+	if err := s.tasks.UpdateTask(ctx, task); err != nil {
+		return task, err
+	}
+
+	_ = s.tasks.AppendEvent(ctx, task.ID, "cleanup_failed", task.LastError)
+
+	return task, failure
+}
+
 func fallbackDisplayName(prompt string) string {
 	normalized := strings.ToLower(strings.TrimSpace(prompt))
 	replacer := strings.NewReplacer("-", " ", "_", " ", "/", " ", ":", " ")
@@ -309,14 +410,27 @@ func fallbackDisplayName(prompt string) string {
 }
 
 func worktreeExists(path string) bool {
+	exists, _ := worktreePresence(path)
+	return exists
+}
+
+func worktreePresence(path string) (bool, error) {
 	if strings.TrimSpace(path) == "" {
-		return false
+		return false, nil
 	}
 
 	info, err := os.Stat(path)
 	if err != nil {
-		return false
+		if os.IsNotExist(err) {
+			return false, nil
+		}
+
+		return false, err
 	}
 
-	return info.IsDir()
+	return info.IsDir(), nil
+}
+
+func isCleanupFailure(message string) bool {
+	return strings.HasPrefix(message, "cleanup failed: ")
 }

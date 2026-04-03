@@ -43,6 +43,9 @@ func (f fakeListCLIService) SuggestTaskName(context.Context, string) (string, er
 func (f fakeListCLIService) NewTask(context.Context, core.NewTaskInput) (*core.Task, error) {
 	return nil, nil
 }
-func (f fakeListCLIService) ListTasks(context.Context) ([]*core.Task, error) { return f.tasks, nil }
+func (f fakeListCLIService) ListTasks(context.Context) ([]*core.Task, error)     { return f.tasks, nil }
 func (f fakeListCLIService) GetTask(context.Context, string) (*core.Task, error) { return nil, nil }
-func (f fakeListCLIService) OpenTask(context.Context, string) error { return nil }
+func (f fakeListCLIService) OpenTask(context.Context, string) error              { return nil }
+func (f fakeListCLIService) DeleteTaskResources(context.Context, string) (*core.Task, error) {
+	return nil, nil
+}

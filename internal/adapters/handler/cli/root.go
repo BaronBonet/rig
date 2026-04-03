@@ -16,6 +16,7 @@ type TaskService interface {
 	ListTasks(ctx context.Context) ([]*core.Task, error)
 	GetTask(ctx context.Context, idOrSlug string) (*core.Task, error)
 	OpenTask(ctx context.Context, idOrSlug string) error
+	DeleteTaskResources(ctx context.Context, idOrSlug string) (*core.Task, error)
 }
 
 type Dependencies struct {
@@ -44,6 +45,7 @@ func NewRootCommand(deps Dependencies) *cobra.Command {
 	cmd.AddCommand(newOpenCommand(deps))
 	cmd.AddCommand(newStatusCommand(deps))
 	cmd.AddCommand(newDoctorCommand(deps))
+	cmd.AddCommand(newTUICommand(deps))
 
 	return cmd
 }

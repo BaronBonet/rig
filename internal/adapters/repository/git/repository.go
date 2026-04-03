@@ -66,7 +66,7 @@ func (r *Repository) CreateWorktree(ctx context.Context, in core.CreateWorktreeI
 	return err
 }
 
-func (r *Repository) RemoveWorktree(ctx context.Context, path string) error {
-	_, err := r.runner.Run(ctx, "", "git", "worktree", "remove", path)
+func (r *Repository) RemoveWorktree(ctx context.Context, repoRoot, path string) error {
+	_, err := r.runner.Run(ctx, repoRoot, "git", "worktree", "remove", "--force", path)
 	return err
 }

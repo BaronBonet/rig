@@ -34,9 +34,12 @@ func (*fakeOpenCLIService) SuggestTaskName(context.Context, string) (string, err
 func (*fakeOpenCLIService) NewTask(context.Context, core.NewTaskInput) (*core.Task, error) {
 	return nil, nil
 }
-func (*fakeOpenCLIService) ListTasks(context.Context) ([]*core.Task, error) { return nil, nil }
+func (*fakeOpenCLIService) ListTasks(context.Context) ([]*core.Task, error)     { return nil, nil }
 func (*fakeOpenCLIService) GetTask(context.Context, string) (*core.Task, error) { return nil, nil }
 func (f *fakeOpenCLIService) OpenTask(_ context.Context, slug string) error {
 	f.openedSlug = slug
 	return nil
+}
+func (*fakeOpenCLIService) DeleteTaskResources(context.Context, string) (*core.Task, error) {
+	return nil, nil
 }

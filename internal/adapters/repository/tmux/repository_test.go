@@ -2,6 +2,7 @@ package tmux
 
 import (
 	"context"
+	"errors"
 	"testing"
 
 	"agent/internal/core"
@@ -71,6 +72,36 @@ func TestRepositorySessionExists_UsesExactSessionTarget(t *testing.T) {
 		"-t",
 		"=repo-billing-retry-flow",
 	}, runner.Calls[0].Args)
+}
+
+func TestRepositorySessionExists_ReturnsFalseForMissingSessionOnly(t *testing.T) {
+	runner := execx.NewFakeRunner([]execx.Result{{Stderr: "can't find session: repo-billing-retry-flow\n"}})
+	runner.Errors = []error{execx.CommandError{
+		Name:   "tmux",
+		Args:   []string{"has-session", "-t", "=repo-billing-retry-flow"},
+		Stderr: "can't find session: repo-billing-retry-flow\n",
+		Err:    errors.New("exit status 1"),
+	}}
+	repo := NewRepository(runner)
+
+	exists, err := repo.SessionExists(context.Background(), "repo-billing-retry-flow")
+	require.NoError(t, err)
+	require.False(t, exists)
+}
+
+func TestRepositorySessionExists_ReturnsErrorForTmuxFailure(t *testing.T) {
+	runner := execx.NewFakeRunner([]execx.Result{{Stderr: "failed to connect to server\n"}})
+	runner.Errors = []error{execx.CommandError{
+		Name:   "tmux",
+		Args:   []string{"has-session", "-t", "=repo-billing-retry-flow"},
+		Stderr: "failed to connect to server\n",
+		Err:    errors.New("exit status 1"),
+	}}
+	repo := NewRepository(runner)
+
+	exists, err := repo.SessionExists(context.Background(), "repo-billing-retry-flow")
+	require.Error(t, err)
+	require.False(t, exists)
 }
 
 func TestRepositoryKillSession_UsesExactSessionTarget(t *testing.T) {

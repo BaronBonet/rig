@@ -2,6 +2,7 @@ package core
 
 import (
 	"errors"
+	"os"
 	"path/filepath"
 	"testing"
 
@@ -59,6 +60,66 @@ func TestServiceDeleteTaskResources_CleansSessionWhenWorktreeAlreadyMissing(t *t
 	require.False(t, task.SessionExists)
 	require.Equal(t, []string{"repo-billing-retry-flow"}, svc.tmuxRepo.killedSessions)
 	require.Empty(t, svc.gitRepo.removedWorktrees)
+}
+
+func TestServiceDeleteTaskResources_TreatsMissingSessionAfterKillErrorAsSuccess(t *testing.T) {
+	worktree := t.TempDir()
+	svc := newTestService()
+	svc.taskRepo.getTask = cleanupTestTask(worktree)
+	svc.gitRepo.branchExists = true
+	svc.tmuxRepo.sessionExists = true
+	svc.tmuxRepo.killSessionErr = errors.New("can't find session")
+	svc.tmuxRepo.killSessionHook = func() {
+		svc.tmuxRepo.sessionExists = false
+	}
+
+	task, err := svc.service.DeleteTaskResources(t.Context(), "billing-retry-flow")
+
+	require.NoError(t, err)
+	require.Equal(t, TaskStatusCleaned, task.Status)
+	require.False(t, task.SessionExists)
+	require.False(t, task.WorktreeExists)
+	require.Empty(t, task.LastError)
+	require.Equal(t, []string{"repo-billing-retry-flow"}, svc.tmuxRepo.killedSessions)
+	require.Equal(t, []string{worktree}, svc.gitRepo.removedWorktrees)
+}
+
+func TestServiceDeleteTaskResources_TreatsMissingWorktreeAfterRemoveErrorAsSuccess(t *testing.T) {
+	worktree := t.TempDir()
+	svc := newTestService()
+	svc.taskRepo.getTask = cleanupTestTask(worktree)
+	svc.gitRepo.branchExists = true
+	svc.gitRepo.removeWorktreeErr = errors.New("already gone")
+	svc.gitRepo.removeWorktreeHook = func(path string) {
+		require.NoError(t, os.RemoveAll(path))
+	}
+	svc.tmuxRepo.sessionExists = false
+
+	task, err := svc.service.DeleteTaskResources(t.Context(), "billing-retry-flow")
+
+	require.NoError(t, err)
+	require.Equal(t, TaskStatusCleaned, task.Status)
+	require.False(t, task.SessionExists)
+	require.False(t, task.WorktreeExists)
+	require.Empty(t, task.LastError)
+	require.Empty(t, svc.tmuxRepo.killedSessions)
+	require.Equal(t, []string{worktree}, svc.gitRepo.removedWorktrees)
+}
+
+func TestServiceDeleteTaskResources_KeepsTaskBrokenWhenWorktreeStateCannotBeVerified(t *testing.T) {
+	worktree := string([]byte{'/', 't', 'm', 'p', '/', 0, 'b', 'a', 'd'})
+	svc := newTestService()
+	svc.taskRepo.getTask = cleanupTestTask(worktree)
+	svc.gitRepo.branchExists = true
+	svc.gitRepo.removeWorktreeErr = errors.New("permission denied")
+	svc.tmuxRepo.sessionExists = false
+
+	task, err := svc.service.DeleteTaskResources(t.Context(), "billing-retry-flow")
+
+	require.Error(t, err)
+	require.Equal(t, TaskStatusBroken, task.Status)
+	require.True(t, task.WorktreeExists)
+	require.Contains(t, task.LastError, "permission denied")
 }
 
 func TestServiceDeleteTaskResources_MarksTaskBrokenWhenWorktreeRemovalFailsAfterTmuxCleanup(t *testing.T) {
