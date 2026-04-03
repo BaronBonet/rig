@@ -65,3 +65,8 @@ func (r *Repository) CreateWorktree(ctx context.Context, in core.CreateWorktreeI
 	)
 	return err
 }
+
+func (r *Repository) RemoveWorktree(ctx context.Context, path string) error {
+	_, err := r.runner.Run(ctx, "", "git", "worktree", "remove", path)
+	return err
+}

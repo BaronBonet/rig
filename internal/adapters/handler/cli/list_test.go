@@ -17,7 +17,7 @@ func TestListCommand_PrintsTaskTable(t *testing.T) {
 			DisplayName: "billing retry flow",
 			Provider:    "codex",
 			Status:      core.TaskStatusRunning,
-			TmuxSession: "repo:billing-retry-flow",
+			TmuxSession: "repo-billing-retry-flow",
 			BranchName:  "feat/billing-retry-flow",
 		}},
 	}

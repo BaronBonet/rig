@@ -20,10 +20,10 @@ func TestServiceNewTask_CreatesWorktreeSessionAndPersistsTask(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, "feat/billing-retry-flow", task.BranchName)
 	require.Equal(t, "/tmp/repo-billing-retry-flow", task.WorktreePath)
-	require.Equal(t, "repo:billing-retry-flow", task.TmuxSession)
+	require.Equal(t, "repo-billing-retry-flow", task.TmuxSession)
 	require.Equal(t, TaskStatusRunning, task.Status)
 	require.Equal(t, "/tmp/repo-billing-retry-flow", svc.gitRepo.createWorktreeInput.WorktreePath)
-	require.Equal(t, "repo:billing-retry-flow", svc.tmuxRepo.createdSession.SessionName)
+	require.Equal(t, "repo-billing-retry-flow", svc.tmuxRepo.createdSession.SessionName)
 	require.Equal(t, []string{"codex", "add billing retry flow"}, svc.tmuxRepo.sentCommand)
 	require.Equal(t, "billing retry flow", svc.taskRepo.createdTask.DisplayName)
 }

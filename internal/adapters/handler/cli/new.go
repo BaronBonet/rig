@@ -37,7 +37,7 @@ func newNewCommand(deps Dependencies) *cobra.Command {
 					return err
 				}
 
-				if _, err = fmt.Fprintf(cmd.OutOrStdout(), "Proposed name [%s]: ", suggested); err != nil {
+				if _, err = fmt.Fprintf(cmd.OutOrStdout(), "Proposed name [%s] (press Enter to accept or type a replacement): ", suggested); err != nil {
 					return err
 				}
 
@@ -47,7 +47,7 @@ func newNewCommand(deps Dependencies) *cobra.Command {
 				}
 
 				line = strings.TrimSpace(line)
-				if line == "" {
+				if line == "" || strings.EqualFold(line, "y") || strings.EqualFold(line, "yes") {
 					line = suggested
 				}
 				input.ConfirmedDisplayName = line

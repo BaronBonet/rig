@@ -28,7 +28,7 @@ The CLI expects these binaries to be available on `PATH`:
 - SQLite state path defaults to `~/.local/share/agent/state.db`.
 - Worktrees default to sibling directories such as `../repo-billing-retry-flow`.
 - Branches default to `feat/<slug>`.
-- tmux sessions default to `<repo>:<slug>`.
+- tmux sessions default to `<repo>-<slug>`.
 
 ## Usage
 
@@ -43,6 +43,9 @@ Create a task interactively:
 ```bash
 go run ./cmd/agent new "add billing retry flow"
 ```
+
+When prompted for the proposed name, press Enter to accept it or type a replacement.
+Typing `y` or `yes` also accepts the suggested name.
 
 Create a task non-interactively and print JSON:
 

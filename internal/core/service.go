@@ -76,7 +76,7 @@ func (s *Service) NewTask(ctx context.Context, input NewTaskInput) (*Task, error
 		BaseBranch:    repoCtx.BaseBranch,
 		BranchName:    "feat/" + taskSlug,
 		WorktreePath:  filepath.Join(filepath.Dir(repoCtx.Root), repoCtx.Name+"-"+taskSlug),
-		TmuxSession:   repoCtx.Name + ":" + taskSlug,
+		TmuxSession:   repoCtx.Name + "-" + taskSlug,
 		Provider:      "codex",
 		Status:        TaskStatusCreating,
 		CreatedAt:     now,

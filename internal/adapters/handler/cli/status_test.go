@@ -18,7 +18,7 @@ func TestStatusCommand_PrintsTaskDetails(t *testing.T) {
 			Slug:          "billing-retry-flow",
 			Status:        core.TaskStatusRunning,
 			WorktreePath:  "/tmp/repo-billing-retry-flow",
-			TmuxSession:   "repo:billing-retry-flow",
+			TmuxSession:   "repo-billing-retry-flow",
 			WorktreeExists: true,
 			BranchExists:   true,
 			SessionExists:  true,
@@ -33,7 +33,7 @@ func TestStatusCommand_PrintsTaskDetails(t *testing.T) {
 	err := cmd.Execute()
 	require.NoError(t, err)
 	require.Contains(t, out.String(), "billing retry flow")
-	require.Contains(t, out.String(), "repo:billing-retry-flow")
+	require.Contains(t, out.String(), "repo-billing-retry-flow")
 }
 
 type fakeStatusCLIService struct {

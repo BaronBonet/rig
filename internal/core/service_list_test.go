@@ -15,7 +15,7 @@ func TestServiceListTasks_MarksMissingTmuxSessionAsBroken(t *testing.T) {
 		RepoRoot:    "/tmp/repo",
 		BranchName:  "feat/billing-retry-flow",
 		WorktreePath: worktree,
-		TmuxSession: "repo:billing-retry-flow",
+		TmuxSession: "repo-billing-retry-flow",
 		Status:      TaskStatusRunning,
 	}}
 	svc.gitRepo.branchExists = true

@@ -22,7 +22,7 @@ func (r *Repository) IsAvailable(ctx context.Context) error {
 }
 
 func (r *Repository) SessionExists(ctx context.Context, session string) (bool, error) {
-	_, err := r.runner.Run(ctx, "", "tmux", "has-session", "-t", session)
+	_, err := r.runner.Run(ctx, "", "tmux", "has-session", "-t", exactSessionTarget(session))
 	if err != nil {
 		return false, nil
 	}
@@ -45,8 +45,13 @@ func (r *Repository) CreateSession(ctx context.Context, in core.CreateSessionInp
 	return err
 }
 
+func (r *Repository) KillSession(ctx context.Context, session string) error {
+	_, err := r.runner.Run(ctx, "", "tmux", "kill-session", "-t", exactSessionTarget(session))
+	return err
+}
+
 func (r *Repository) AttachOrSwitch(ctx context.Context, session string) error {
-	_, err := r.runner.Run(ctx, "", "tmux", "switch-client", "-t", session)
+	_, err := r.runner.Run(ctx, "", "tmux", "switch-client", "-t", exactSessionTarget(session))
 	return err
 }
 
@@ -67,9 +72,17 @@ func (r *Repository) SendKeys(ctx context.Context, session string, command []str
 		"tmux",
 		"send-keys",
 		"-t",
-		session,
+		firstPaneTarget(session),
 		strings.Join(quoted, " "),
 		"C-m",
 	)
 	return err
+}
+
+func exactSessionTarget(session string) string {
+	return "=" + session
+}
+
+func firstPaneTarget(session string) string {
+	return session + ":0.0"
 }

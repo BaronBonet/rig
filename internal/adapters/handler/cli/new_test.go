@@ -19,7 +19,7 @@ func TestNewCommand_InteractiveAcceptsSuggestedName(t *testing.T) {
 		newTask: &core.Task{
 			DisplayName: "billing retry flow",
 			Slug:        "billing-retry-flow",
-			TmuxSession: "repo:billing-retry-flow",
+			TmuxSession: "repo-billing-retry-flow",
 		},
 	}
 
@@ -37,7 +37,35 @@ func TestNewCommand_InteractiveAcceptsSuggestedName(t *testing.T) {
 	err := cmd.Execute()
 	require.NoError(t, err)
 	require.Equal(t, "billing retry flow", service.newTaskInput.ConfirmedDisplayName)
-	require.Contains(t, out.String(), "repo:billing-retry-flow")
+	require.Contains(t, out.String(), "repo-billing-retry-flow")
+}
+
+func TestNewCommand_InteractiveTreatsYesAsAcceptSuggestedName(t *testing.T) {
+	out := &bytes.Buffer{}
+	in := bytes.NewBufferString("yes\n")
+	service := &fakeNewCLIService{
+		suggestedName: "billing retry flow",
+		newTask: &core.Task{
+			DisplayName: "billing retry flow",
+			Slug:        "billing-retry-flow",
+			TmuxSession: "repo-billing-retry-flow",
+		},
+	}
+
+	cmd := newNewCommand(Dependencies{
+		Service: service,
+		Stdout:  out,
+		Stderr:  out,
+		Cwd:     "/tmp/repo",
+	})
+	cmd.SetIn(in)
+	cmd.SetOut(out)
+	cmd.SetErr(out)
+	cmd.SetArgs([]string{"add billing retry flow"})
+
+	err := cmd.Execute()
+	require.NoError(t, err)
+	require.Equal(t, "billing retry flow", service.newTaskInput.ConfirmedDisplayName)
 }
 
 func TestNewCommand_JSONModePrintsTask(t *testing.T) {
@@ -47,7 +75,7 @@ func TestNewCommand_JSONModePrintsTask(t *testing.T) {
 		newTask: &core.Task{
 			DisplayName: "billing retry flow",
 			Slug:        "billing-retry-flow",
-			TmuxSession: "repo:billing-retry-flow",
+			TmuxSession: "repo-billing-retry-flow",
 		},
 	}
 

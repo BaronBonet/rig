@@ -15,7 +15,7 @@ func TestServiceOpenTask_AttachesWhenSessionExists(t *testing.T) {
 		RepoRoot:     "/tmp/repo",
 		BranchName:   "feat/billing-retry-flow",
 		WorktreePath: worktree,
-		TmuxSession:  "repo:billing-retry-flow",
+		TmuxSession:  "repo-billing-retry-flow",
 		Status:       TaskStatusRunning,
 	}
 	svc.gitRepo.branchExists = true
@@ -23,5 +23,5 @@ func TestServiceOpenTask_AttachesWhenSessionExists(t *testing.T) {
 
 	err := svc.service.OpenTask(t.Context(), "billing-retry-flow")
 	require.NoError(t, err)
-	require.Equal(t, "repo:billing-retry-flow", svc.tmuxRepo.attachedSession)
+	require.Equal(t, "repo-billing-retry-flow", svc.tmuxRepo.attachedSession)
 }

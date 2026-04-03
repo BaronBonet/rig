@@ -31,3 +31,43 @@ func TestRepositoryProposeTaskName_TrimsRunnerOutput(t *testing.T) {
 	require.Equal(t, "billing retry flow", name)
 	require.Equal(t, "codex", runner.Calls[0].Name)
 }
+
+func TestRepositoryProposeTaskName_ExtractsFinalTitleFromTranscriptOutput(t *testing.T) {
+	runner := execx.NewFakeRunner([]execx.Result{
+		{Stdout: `OpenAI Codex v0.118.0 (research preview)
+--------
+workdir: /Users/ebon/personal_software/tmux-llm-session
+model: gpt-5.4
+provider: openai
+--------
+user
+Reply with only a short task title: i want you to switch the sqlite repo to use sqlc
+codex
+Migrate SQLite Repo to sqlc
+tokens used
+26,736
+`},
+	})
+	repo := NewRepository(runner, "codex")
+
+	name, err := repo.ProposeTaskName(t.Context(), "i want you to switch the sqlite repo to use sqlc")
+	require.NoError(t, err)
+	require.Equal(t, "Migrate SQLite Repo to sqlc", name)
+}
+
+func TestRepositoryProposeTaskName_StripsMarkdownTicksFromTitle(t *testing.T) {
+	runner := execx.NewFakeRunner([]execx.Result{
+		{Stdout: "Migrate SQLite Repo to `sqlc`\n"},
+	})
+	repo := NewRepository(runner, "codex")
+
+	name, err := repo.ProposeTaskName(t.Context(), "switch the sqlite repo to use sqlc")
+	require.NoError(t, err)
+	require.Equal(t, "Migrate SQLite Repo to sqlc", name)
+}
+
+func TestExtractCodexTitle_ReturnsLastUsefulLine(t *testing.T) {
+	raw := "OpenAI Codex v0.118.0\n--------\nuser: prompt\nbilling retry flow\nexit status 1\n"
+
+	require.Equal(t, "billing retry flow", extractCodexTitle(raw))
+}
