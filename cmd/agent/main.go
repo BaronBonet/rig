@@ -77,6 +77,20 @@ func (r *runtimeService) NewTask(ctx context.Context, input core.NewTaskInput) (
 	return service.NewTask(ctx, input)
 }
 
+func (r *runtimeService) CreateTaskWithProgress(
+	ctx context.Context,
+	input core.NewTaskInput,
+	options core.CreateTaskOptions,
+	progress func(core.TaskProgress),
+) (*core.Task, error) {
+	service, err := r.newService(true)
+	if err != nil {
+		return nil, err
+	}
+
+	return service.CreateTaskWithProgress(ctx, input, options, progress)
+}
+
 func (r *runtimeService) ListTasks(ctx context.Context) ([]*core.Task, error) {
 	service, err := r.newService(true)
 	if err != nil {
@@ -186,7 +200,12 @@ func (r *runtimeTmuxRepository) KillSession(ctx context.Context, session string)
 }
 
 func (r *runtimeTmuxRepository) AttachOrSwitch(ctx context.Context, session string) error {
-	_, err := r.runner.Run(ctx, "", "tmux", "switch-client", "-t", tmuxSessionName(session))
+	command := "attach-session"
+	if runningInsideTmux() {
+		command = "switch-client"
+	}
+
+	_, err := r.runner.Run(ctx, "", "tmux", command, "-t", tmuxSessionName(session))
 	return err
 }
 
@@ -221,6 +240,10 @@ func (r *runtimeTmuxRepository) SendKeys(ctx context.Context, session string, co
 
 func tmuxSessionName(session string) string {
 	return strings.ReplaceAll(session, ":", "-")
+}
+
+func runningInsideTmux() bool {
+	return strings.TrimSpace(os.Getenv("TMUX")) != ""
 }
 
 func isRuntimeMissingSession(result execx.Result, err error) bool {

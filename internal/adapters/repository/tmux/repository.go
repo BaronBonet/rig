@@ -3,6 +3,7 @@ package tmux
 import (
 	"context"
 	"errors"
+	"os"
 	"strings"
 
 	"agent/internal/core"
@@ -56,7 +57,12 @@ func (r *Repository) KillSession(ctx context.Context, session string) error {
 }
 
 func (r *Repository) AttachOrSwitch(ctx context.Context, session string) error {
-	_, err := r.runner.Run(ctx, "", "tmux", "switch-client", "-t", exactSessionTarget(session))
+	command := "attach-session"
+	if insideTmux() {
+		command = "switch-client"
+	}
+
+	_, err := r.runner.Run(ctx, "", "tmux", command, "-t", exactSessionTarget(session))
 	return err
 }
 
@@ -100,4 +106,8 @@ func isMissingSession(result execx.Result, err error) bool {
 
 	output := strings.ToLower(result.Stderr + "\n" + result.Stdout + "\n" + commandErr.Stderr + "\n" + commandErr.Stdout)
 	return strings.Contains(output, "can't find session")
+}
+
+func insideTmux() bool {
+	return strings.TrimSpace(os.Getenv("TMUX")) != ""
 }

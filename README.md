@@ -14,7 +14,7 @@ The first version supports:
 - `agent tui`
 
 The first release only supports `codex` as the provider, uses SQLite for persisted task state, and defaults to a single-window tmux session per task.
-`agent tui` is the first TUI and is cleanup-focused: it shows tracked tasks, live tmux/worktree state, and lets you remove runtime resources for a task.
+`agent tui` is the first TUI: it shows tracked tasks, live tmux/worktree state, lets you jump into a selected session, and lets you remove runtime resources for a task.
 
 ## Requirements
 
@@ -46,6 +46,8 @@ Create a task interactively:
 go run ./cmd/agent new "add billing retry flow"
 ```
 
+The command now prints stage-by-stage progress to stderr and then opens the tmux session automatically.
+
 When prompted for the proposed name, press Enter to accept it or type a replacement.
 Typing `y` or `yes` also accepts the suggested name.
 
@@ -54,6 +56,8 @@ Create a task non-interactively and print JSON:
 ```bash
 go run ./cmd/agent new --non-interactive --json "add billing retry flow"
 ```
+
+`--json` keeps stdout machine-readable and does not auto-open the tmux session.
 
 List tasks:
 
@@ -83,6 +87,7 @@ Keybindings in the TUI:
 
 - `j` / `k` or arrow keys move between tasks
 - `g` / `G` or home/end jump to the top or bottom
+- `Enter` opens the selected task session
 - `x` starts cleanup for the selected task
 - `y` confirms cleanup
 - `n`, `esc`, or `q` cancel the confirmation prompt

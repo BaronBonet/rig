@@ -12,6 +12,10 @@ import (
 	"github.com/spf13/cobra"
 )
 
+type taskCreationService interface {
+	CreateTaskWithProgress(ctx context.Context, input core.NewTaskInput, options core.CreateTaskOptions, progress func(core.TaskProgress)) (*core.Task, error)
+}
+
 func newNewCommand(deps Dependencies) *cobra.Command {
 	var nonInteractive bool
 	var jsonOutput bool
@@ -24,6 +28,10 @@ func newNewCommand(deps Dependencies) *cobra.Command {
 			if deps.Service == nil {
 				return fmt.Errorf("service not configured")
 			}
+			creator, ok := deps.Service.(taskCreationService)
+			if !ok {
+				return fmt.Errorf("service does not support progress-aware task creation")
+			}
 
 			prompt := args[0]
 			input := core.NewTaskInput{
@@ -32,6 +40,9 @@ func newNewCommand(deps Dependencies) *cobra.Command {
 			}
 
 			if !nonInteractive {
+				if _, err := fmt.Fprintln(cmd.ErrOrStderr(), "Naming task..."); err != nil {
+					return err
+				}
 				suggested, err := deps.Service.SuggestTaskName(context.Background(), prompt)
 				if err != nil {
 					return err
@@ -53,7 +64,17 @@ func newNewCommand(deps Dependencies) *cobra.Command {
 				input.ConfirmedDisplayName = line
 			}
 
-			task, err := deps.Service.NewTask(context.Background(), input)
+			task, err := creator.CreateTaskWithProgress(
+				context.Background(),
+				input,
+				core.CreateTaskOptions{OpenSession: !jsonOutput},
+				func(event core.TaskProgress) {
+					if strings.TrimSpace(event.Message) == "" {
+						return
+					}
+					_, _ = fmt.Fprintln(cmd.ErrOrStderr(), event.Message)
+				},
+			)
 			if err != nil {
 				return err
 			}
@@ -61,14 +82,7 @@ func newNewCommand(deps Dependencies) *cobra.Command {
 			if jsonOutput {
 				return json.NewEncoder(cmd.OutOrStdout()).Encode(task)
 			}
-
-			_, err = fmt.Fprintf(
-				cmd.OutOrStdout(),
-				"created task %s in session %s\n",
-				task.DisplayName,
-				task.TmuxSession,
-			)
-			return err
+			return nil
 		},
 	}
 

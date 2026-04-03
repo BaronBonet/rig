@@ -10,7 +10,7 @@ import (
 func newTUICommand(deps Dependencies) *cobra.Command {
 	return &cobra.Command{
 		Use:   "tui",
-		Short: "Open the cleanup TUI",
+		Short: "Open the task TUI",
 		Args:  cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			if deps.Service == nil {

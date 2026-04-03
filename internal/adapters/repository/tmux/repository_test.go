@@ -48,6 +48,23 @@ func TestRepositorySendKeys_JoinsCommandAndSendsEnter(t *testing.T) {
 }
 
 func TestRepositoryAttachOrSwitch_UsesExactSessionTarget(t *testing.T) {
+	t.Setenv("TMUX", "")
+
+	runner := execx.NewFakeRunner([]execx.Result{{}})
+	repo := NewRepository(runner)
+
+	err := repo.AttachOrSwitch(context.Background(), "repo-billing-retry-flow")
+	require.NoError(t, err)
+	require.Equal(t, []string{
+		"attach-session",
+		"-t",
+		"=repo-billing-retry-flow",
+	}, runner.Calls[0].Args)
+}
+
+func TestRepositoryAttachOrSwitch_UsesSwitchClientInsideTmux(t *testing.T) {
+	t.Setenv("TMUX", "/tmp/tmux-123/default,123,0")
+
 	runner := execx.NewFakeRunner([]execx.Result{{}})
 	repo := NewRepository(runner)
 

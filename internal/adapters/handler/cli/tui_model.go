@@ -30,6 +30,10 @@ type cleanupFinishedMsg struct {
 	err  error
 }
 
+type openFinishedMsg struct {
+	err error
+}
+
 func newTUIModel(service TaskService) model {
 	return model{service: service, loading: true}
 }
@@ -74,6 +78,14 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		m.busy = true
 		return m, refreshTasksCmd(m.service)
+	case openFinishedMsg:
+		m.busy = false
+		m.err = msg.err
+		if msg.err != nil {
+			return m, nil
+		}
+
+		return m, tea.Quit
 	default:
 		return m, nil
 	}
@@ -116,6 +128,15 @@ func (m model) updateKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	switch msg.String() {
 	case "q":
 		return m, tea.Quit
+	case "enter":
+		task := m.selectedTask()
+		if task == nil {
+			return m, nil
+		}
+
+		m.err = nil
+		m.busy = true
+		return m, openTaskCmd(m.service, selectedIDOrSlug(task))
 	case "j", "down":
 		if m.selected < len(m.tasks)-1 {
 			m.selected++
@@ -157,7 +178,7 @@ func (m model) listView() string {
 	var b strings.Builder
 
 	b.WriteString("Task cleanup\n")
-	b.WriteString("j/k: move  g/G: jump  x: clean up  r: refresh  q: quit\n\n")
+	b.WriteString("j/k: move  g/G: jump  enter: open  x: clean up  r: refresh  q: quit\n\n")
 
 	if m.err != nil {
 		b.WriteString("Error: ")
@@ -274,6 +295,12 @@ func cleanupTaskCmd(service TaskService, idOrSlug string) tea.Cmd {
 	return func() tea.Msg {
 		task, err := service.DeleteTaskResources(context.Background(), idOrSlug)
 		return cleanupFinishedMsg{task: task, err: err}
+	}
+}
+
+func openTaskCmd(service TaskService, idOrSlug string) tea.Cmd {
+	return func() tea.Msg {
+		return openFinishedMsg{err: service.OpenTask(context.Background(), idOrSlug)}
 	}
 }
 

@@ -57,3 +57,38 @@ func TestServiceNewTask_PersistsBrokenTaskWhenTmuxCreationFails(t *testing.T) {
 	require.Contains(t, task.LastError, "tmux failed")
 	require.Equal(t, TaskStatusBroken, svc.taskRepo.updatedTask.Status)
 }
+
+func TestServiceCreateTaskWithProgress_EmitsEventsAndOpensSession(t *testing.T) {
+	svc := newTestService()
+	svc.codexRepo.launchCommand = []string{"codex", "add billing retry flow"}
+
+	var events []TaskProgress
+	task, err := svc.service.CreateTaskWithProgress(t.Context(), NewTaskInput{
+		Cwd:                  "/tmp/repo",
+		Prompt:               "add billing retry flow",
+		ConfirmedDisplayName: "billing retry flow",
+	}, CreateTaskOptions{OpenSession: true}, func(event TaskProgress) {
+		events = append(events, event)
+	})
+
+	require.NoError(t, err)
+	require.Equal(t, "repo-billing-retry-flow", svc.tmuxRepo.attachedSession)
+	require.Equal(t, []TaskProgressStep{
+		TaskProgressNameSelected,
+		TaskProgressWorktreeCreating,
+		TaskProgressTmuxStarting,
+		TaskProgressCodexLaunching,
+		TaskProgressTaskCreated,
+		TaskProgressSessionOpening,
+	}, progressSteps(events))
+	require.Equal(t, task.DisplayName, events[len(events)-2].Task.DisplayName)
+}
+
+func progressSteps(events []TaskProgress) []TaskProgressStep {
+	steps := make([]TaskProgressStep, 0, len(events))
+	for _, event := range events {
+		steps = append(steps, event.Step)
+	}
+
+	return steps
+}

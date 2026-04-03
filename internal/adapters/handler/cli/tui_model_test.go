@@ -106,6 +106,50 @@ func TestModelUpdate_RTriggersRefreshCommand(t *testing.T) {
 	require.Equal(t, 1, service.listCalls)
 }
 
+func TestModelUpdate_EnterDispatchesOpenAndQuitsOnSuccess(t *testing.T) {
+	service := &fakeTUIService{
+		tasks: []*core.Task{tuiTask("task-one"), tuiTask("task-two")},
+	}
+	m := newLoadedTUIModel(t, service, service.tasks...)
+	m, _ = updateTUIModel(t, m, keyRunes("j"))
+
+	m, cmd := updateTUIModel(t, m, tea.KeyMsg{Type: tea.KeyEnter})
+	require.NotNil(t, cmd)
+	require.True(t, m.busy)
+
+	msg := cmd()
+	m, cmd = updateTUIModel(t, m, msg)
+	require.Equal(t, "task-two", service.openedIDOrSlug)
+	require.NotNil(t, cmd)
+
+	quitMsg := cmd()
+	_, ok := quitMsg.(tea.QuitMsg)
+	require.True(t, ok)
+}
+
+func TestModelUpdate_EnterFailureRendersInlineErrorAndKeepsTUIOpen(t *testing.T) {
+	service := &fakeTUIService{
+		tasks:    []*core.Task{tuiTask("task-one"), tuiTask("task-two")},
+		openErr:  errors.New("open failed"),
+	}
+	m := newLoadedTUIModel(t, service, service.tasks...)
+	m, _ = updateTUIModel(t, m, keyRunes("j"))
+
+	m, cmd := updateTUIModel(t, m, tea.KeyMsg{Type: tea.KeyEnter})
+	require.NotNil(t, cmd)
+	require.True(t, m.busy)
+
+	msg := cmd()
+	m, followup := updateTUIModel(t, m, msg)
+	require.Equal(t, "task-two", service.openedIDOrSlug)
+	require.Nil(t, followup)
+	require.False(t, m.busy)
+	require.Contains(t, m.View(), "open failed")
+
+	m, _ = updateTUIModel(t, m, keyRunes("k"))
+	require.Equal(t, 0, m.selected)
+}
+
 func TestModelUpdate_QQuitsFromNormalMode(t *testing.T) {
 	m := newLoadedTUIModel(t, &fakeTUIService{}, tuiTask("task-one"))
 
@@ -258,6 +302,8 @@ type fakeTUIService struct {
 	deleteErr       error
 	listErr         error
 	deletedIDOrSlug string
+	openedIDOrSlug  string
+	openErr         error
 	listCalls       int
 }
 
@@ -278,7 +324,10 @@ func (f *fakeTUIService) ListTasks(context.Context) ([]*core.Task, error) {
 
 func (*fakeTUIService) GetTask(context.Context, string) (*core.Task, error) { return nil, nil }
 
-func (*fakeTUIService) OpenTask(context.Context, string) error { return nil }
+func (f *fakeTUIService) OpenTask(_ context.Context, idOrSlug string) error {
+	f.openedIDOrSlug = idOrSlug
+	return f.openErr
+}
 
 func (f *fakeTUIService) DeleteTaskResources(_ context.Context, idOrSlug string) (*core.Task, error) {
 	f.deletedIDOrSlug = idOrSlug

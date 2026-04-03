@@ -42,6 +42,24 @@ func (s *Service) SuggestTaskName(ctx context.Context, prompt string) (string, e
 }
 
 func (s *Service) NewTask(ctx context.Context, input NewTaskInput) (*Task, error) {
+	return s.createTask(ctx, input, CreateTaskOptions{}, nil)
+}
+
+func (s *Service) CreateTaskWithProgress(
+	ctx context.Context,
+	input NewTaskInput,
+	options CreateTaskOptions,
+	progress func(TaskProgress),
+) (*Task, error) {
+	return s.createTask(ctx, input, options, progress)
+}
+
+func (s *Service) createTask(
+	ctx context.Context,
+	input NewTaskInput,
+	options CreateTaskOptions,
+	progress func(TaskProgress),
+) (*Task, error) {
 	repoCtx, err := s.git.DetectRepo(ctx, input.Cwd)
 	if err != nil {
 		return nil, err
@@ -49,6 +67,10 @@ func (s *Service) NewTask(ctx context.Context, input NewTaskInput) (*Task, error
 
 	displayName := strings.TrimSpace(input.ConfirmedDisplayName)
 	if displayName == "" {
+		emitTaskProgress(progress, TaskProgress{
+			Step:    TaskProgressNaming,
+			Message: "Naming task...",
+		})
 		displayName, err = s.SuggestTaskName(ctx, input.Prompt)
 		if err != nil {
 			return nil, err
@@ -83,18 +105,29 @@ func (s *Service) NewTask(ctx context.Context, input NewTaskInput) (*Task, error
 		UpdatedAt:    now,
 	}
 
+	emitTaskProgress(progress, TaskProgress{
+		Step:    TaskProgressNameSelected,
+		Message: fmt.Sprintf("Selected name: %s", task.DisplayName),
+		Task:    cloneTask(task),
+	})
+
 	if err := s.tasks.CreateTask(ctx, task); err != nil {
 		return nil, err
 	}
 	_ = s.tasks.AppendEvent(ctx, task.ID, "task_created", task.DisplayName)
 
+	emitTaskProgress(progress, TaskProgress{
+		Step:    TaskProgressWorktreeCreating,
+		Message: "Creating worktree...",
+		Task:    cloneTask(task),
+	})
 	if err := s.git.CreateWorktree(ctx, CreateWorktreeInput{
 		RepoRoot:     task.RepoRoot,
 		BaseBranch:   task.BaseBranch,
 		BranchName:   task.BranchName,
 		WorktreePath: task.WorktreePath,
 	}); err != nil {
-		return s.markBroken(ctx, task, err)
+		return s.markBroken(ctx, task, fmt.Errorf("create worktree: %w", err))
 	}
 
 	task.WorktreeExists = true
@@ -104,11 +137,16 @@ func (s *Service) NewTask(ctx context.Context, input NewTaskInput) (*Task, error
 		return task, err
 	}
 
+	emitTaskProgress(progress, TaskProgress{
+		Step:    TaskProgressTmuxStarting,
+		Message: "Starting tmux session...",
+		Task:    cloneTask(task),
+	})
 	if err := s.tmux.CreateSession(ctx, CreateSessionInput{
 		SessionName: task.TmuxSession,
 		WorkingDir:  task.WorktreePath,
 	}); err != nil {
-		return s.markBroken(ctx, task, err)
+		return s.markBroken(ctx, task, fmt.Errorf("start tmux session: %w", err))
 	}
 
 	task.SessionExists = true
@@ -119,11 +157,16 @@ func (s *Service) NewTask(ctx context.Context, input NewTaskInput) (*Task, error
 
 	command, err := s.codex.BuildLaunchCommand(task)
 	if err != nil {
-		return s.markBroken(ctx, task, err)
+		return s.markBroken(ctx, task, fmt.Errorf("build codex launch command: %w", err))
 	}
 
+	emitTaskProgress(progress, TaskProgress{
+		Step:    TaskProgressCodexLaunching,
+		Message: "Launching Codex...",
+		Task:    cloneTask(task),
+	})
 	if err := s.tmux.SendKeys(ctx, task.TmuxSession, command); err != nil {
-		return s.markBroken(ctx, task, err)
+		return s.markBroken(ctx, task, fmt.Errorf("launch codex: %w", err))
 	}
 
 	task.Status = TaskStatusRunning
@@ -133,6 +176,23 @@ func (s *Service) NewTask(ctx context.Context, input NewTaskInput) (*Task, error
 	}
 
 	_ = s.tasks.AppendEvent(ctx, task.ID, "codex_launch_requested", strings.Join(command, " "))
+
+	emitTaskProgress(progress, TaskProgress{
+		Step:    TaskProgressTaskCreated,
+		Message: fmt.Sprintf("Created task %s in session %s", task.DisplayName, task.TmuxSession),
+		Task:    cloneTask(task),
+	})
+
+	if options.OpenSession {
+		emitTaskProgress(progress, TaskProgress{
+			Step:    TaskProgressSessionOpening,
+			Message: "Opening tmux session...",
+			Task:    cloneTask(task),
+		})
+		if err := s.tmux.AttachOrSwitch(ctx, task.TmuxSession); err != nil {
+			return s.markBroken(ctx, task, fmt.Errorf("open tmux session: %w", err))
+		}
+	}
 
 	return task, nil
 }
@@ -407,6 +467,23 @@ func fallbackDisplayName(prompt string) string {
 	}
 
 	return strings.Join(words, " ")
+}
+
+func emitTaskProgress(progress func(TaskProgress), event TaskProgress) {
+	if progress == nil {
+		return
+	}
+
+	progress(event)
+}
+
+func cloneTask(task *Task) *Task {
+	if task == nil {
+		return nil
+	}
+
+	clone := *task
+	return &clone
 }
 
 func worktreeExists(path string) bool {
