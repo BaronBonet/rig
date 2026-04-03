@@ -50,7 +50,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 
-		m.tasks = msg.tasks
+		m.tasks = filterVisibleTasks(msg.tasks)
 		if len(m.tasks) == 0 {
 			m.selected = 0
 			m.confirming = false
@@ -234,10 +234,33 @@ func (m model) selectedTask() *core.Task {
 func (m *model) replaceTask(updated *core.Task) {
 	for i, task := range m.tasks {
 		if selectedIDOrSlug(task) == selectedIDOrSlug(updated) {
+			if !isVisibleTask(updated) {
+				m.tasks = append(m.tasks[:i], m.tasks[i+1:]...)
+				if m.selected >= len(m.tasks) && len(m.tasks) > 0 {
+					m.selected = len(m.tasks) - 1
+				}
+				return
+			}
+
 			m.tasks[i] = updated
 			return
 		}
 	}
+}
+
+func filterVisibleTasks(tasks []*core.Task) []*core.Task {
+	filtered := make([]*core.Task, 0, len(tasks))
+	for _, task := range tasks {
+		if isVisibleTask(task) {
+			filtered = append(filtered, task)
+		}
+	}
+
+	return filtered
+}
+
+func isVisibleTask(task *core.Task) bool {
+	return task != nil && (task.SessionExists || task.WorktreeExists)
 }
 
 func refreshTasksCmd(service TaskService) tea.Cmd {

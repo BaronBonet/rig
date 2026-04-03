@@ -176,6 +176,20 @@ func TestModelUpdate_MainListViewRendersTaskDetails(t *testing.T) {
 	require.Contains(t, view, "feat/billing-retry-flow")
 }
 
+func TestModelUpdate_LoadedTasksHideTasksWithoutLiveResources(t *testing.T) {
+	active := tuiTask("active-task")
+	hidden := tuiTask("cleaned-task")
+	hidden.Status = core.TaskStatusCleaned
+	hidden.SessionExists = false
+	hidden.WorktreeExists = false
+
+	m := newLoadedTUIModel(t, &fakeTUIService{}, active, hidden)
+	view := m.View()
+
+	require.Contains(t, view, "active-task")
+	require.NotContains(t, view, "cleaned-task")
+}
+
 func TestModelUpdate_ConfirmationViewExplainsDeletionScope(t *testing.T) {
 	m := newLoadedTUIModel(t, &fakeTUIService{}, tuiTask("billing-retry-flow"))
 	m, _ = updateTUIModel(t, m, keyRunes("x"))
@@ -205,7 +219,7 @@ func TestModelUpdate_CleanupFailureRendersInlineErrorAndKeepsTUIUsable(t *testin
 	require.False(t, m.confirming)
 }
 
-func TestModelUpdate_CleanupSuccessRefreshFailureKeepsUpdatedTaskVisible(t *testing.T) {
+func TestModelUpdate_CleanupSuccessRefreshFailureRemovesTaskFromVisibleList(t *testing.T) {
 	cleaned := tuiTask("task-one")
 	cleaned.Status = core.TaskStatusCleaned
 	cleaned.SessionExists = false
@@ -228,9 +242,7 @@ func TestModelUpdate_CleanupSuccessRefreshFailureKeepsUpdatedTaskVisible(t *test
 	m, _ = updateTUIModel(t, m, refreshMsg)
 
 	view := m.View()
-	require.Contains(t, view, "cleaned")
-	require.Contains(t, view, "tmux: no")
-	require.Contains(t, view, "worktree: no")
+	require.NotContains(t, view, "task-one")
 	require.Contains(t, view, "refresh failed")
 	require.False(t, m.busy)
 }
