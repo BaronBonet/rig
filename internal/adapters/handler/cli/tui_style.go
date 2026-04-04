@@ -65,11 +65,6 @@ var (
 			PaddingLeft(3).
 			Foreground(colorDimmed)
 
-	separatorStyle = lipgloss.NewStyle().
-			Foreground(colorDimmed)
-
-	detailBarStyle = lipgloss.NewStyle().
-			Foreground(colorDimmed)
 )
 
 // statusStyle returns the icon and style for a given task status.
