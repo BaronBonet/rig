@@ -61,12 +61,12 @@ type createFinishedMsg struct {
 
 func newTUIModel(service TaskService, defaultCreationCwd string) model {
 	promptInput := textinput.New()
-	promptInput.Prompt = "> "
+	promptInput.Prompt = titleStyle.Render("❯") + " "
 	promptInput.Placeholder = "Describe the task to create"
 	promptInput.Focus()
 
 	nameInput := textinput.New()
-	nameInput.Prompt = "> "
+	nameInput.Prompt = titleStyle.Render("❯") + " "
 	nameInput.Placeholder = "Confirm or edit the suggested task name"
 
 	return model{
@@ -556,14 +556,6 @@ func (m model) creationCwd() string {
 	return m.defaultCreationCwd
 }
 
-func windowHealth(ok bool) string {
-	if ok {
-		return "healthy"
-	}
-
-	return "missing"
-}
-
 func emptyFallback(value string, fallback string) string {
 	if strings.TrimSpace(value) == "" {
 		return fallback
@@ -572,10 +564,3 @@ func emptyFallback(value string, fallback string) string {
 	return value
 }
 
-func yesNo(ok bool) string {
-	if ok {
-		return "yes"
-	}
-
-	return "no"
-}
