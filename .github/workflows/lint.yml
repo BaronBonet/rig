@@ -1,0 +1,32 @@
+name: lint
+
+on:
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  lint-and-test:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Install dependencies
+        run: make dependencies-install
+
+      - name: Run linters
+        run: |
+          source ./scripts/config-local-dev.sh
+          make lint-all
+
+      - name: Run tests
+        run: go test ./...

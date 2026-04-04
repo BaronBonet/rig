@@ -20,23 +20,24 @@ const (
 	tuiModeNameConfirm    tuiMode = "name_confirm"
 )
 
+// nolint:recvcheck // bubbletea requires value receivers for tea.Model; mutation helpers need pointer receivers.
 type model struct {
 	service            TaskService
+	err                error
+	createInput        core.NewTaskInput
+	defaultCreationCwd string
+	mode               tuiMode
 	tasks              []*core.Task
+	promptInput        textinput.Model
+	nameInput          textinput.Model
 	selected           int
 	loading            bool
 	busy               bool
-	mode               tuiMode
-	promptInput        textinput.Model
-	nameInput          textinput.Model
-	defaultCreationCwd string
-	createInput        core.NewTaskInput
-	err                error
 }
 
 type tasksLoadedMsg struct {
-	tasks []*core.Task
 	err   error
+	tasks []*core.Task
 }
 
 type cleanupFinishedMsg struct {
@@ -49,9 +50,9 @@ type openFinishedMsg struct {
 }
 
 type suggestNameFinishedMsg struct {
+	err    error
 	prompt string
 	name   string
-	err    error
 }
 
 type createFinishedMsg struct {
@@ -403,7 +404,11 @@ func (m model) promptInputView() string {
 func (m model) nameConfirmView() string {
 	var b strings.Builder
 	b.WriteString(titleStyle.Render(iconHeaderCreate+" Confirm Task Name") + "\n\n")
-	b.WriteString(dimStyle.Render("Edit the suggested name if needed. Press Enter to create and open the session, or Esc to cancel.") + "\n\n")
+	b.WriteString(
+		dimStyle.Render(
+			"Edit the suggested name if needed. Press Enter to create and open the session, or Esc to cancel.",
+		) + "\n\n",
+	)
 	if m.err != nil {
 		b.WriteString(errorStyle.Render("Error: "+m.err.Error()) + "\n\n")
 	}
@@ -423,7 +428,9 @@ func (m model) confirmationView() string {
 	b.WriteString("Task: " + primaryStyle.Render(task.DisplayName) + "\n")
 	b.WriteString(dimStyle.Render("The tmux session and worktree will be deleted.") + "\n")
 	b.WriteString(dimStyle.Render("The branch will be kept.") + "\n\n")
-	b.WriteString(healthyStyle.Render("y") + dimStyle.Render(" confirm · ") + errorStyle.Render("n") + dimStyle.Render(" cancel"))
+	b.WriteString(
+		healthyStyle.Render("y") + dimStyle.Render(" confirm · ") + errorStyle.Render("n") + dimStyle.Render(" cancel"),
+	)
 	return b.String()
 }
 
@@ -526,7 +533,12 @@ func suggestTaskNameCmd(service TaskService, prompt string) tea.Cmd {
 
 func createTaskCmd(service TaskService, input core.NewTaskInput) tea.Cmd {
 	return func() tea.Msg {
-		task, err := service.CreateTaskWithProgress(context.Background(), input, core.CreateTaskOptions{OpenSession: true}, func(core.TaskProgress) {})
+		task, err := service.CreateTaskWithProgress(
+			context.Background(),
+			input,
+			core.CreateTaskOptions{OpenSession: true},
+			func(core.TaskProgress) {},
+		)
 		return createFinishedMsg{task: task, err: err}
 	}
 }
@@ -563,4 +575,3 @@ func emptyFallback(value string, fallback string) string {
 
 	return value
 }
-

@@ -3,6 +3,7 @@ package sqlite
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"os"
 	"path/filepath"
 	"time"
@@ -41,7 +42,8 @@ func NewRepository(path string) (*Repository, error) {
 }
 
 func (r *Repository) initSchema() error {
-	if _, err := r.db.Exec(`
+	ctx := context.Background()
+	if _, err := r.db.ExecContext(ctx, `
 create table if not exists tasks (
   id text primary key,
   prompt text not null,
@@ -104,8 +106,10 @@ func (r *Repository) CreateTask(ctx context.Context, task *core.Task) error {
 		ctx,
 		`insert into tasks (
 			id, prompt, display_name, slug, repo_root, repo_name, base_branch, branch_name,
-			worktree_path, tmux_session, agent_window_name, editor_window_name, provider, status, worktree_exists,
-			branch_exists, session_exists, agent_window_exists, editor_window_exists, last_error, created_at, updated_at, last_reconciled_at
+			worktree_path, tmux_session, agent_window_name, editor_window_name,
+			provider, status, worktree_exists, branch_exists, session_exists,
+			agent_window_exists, editor_window_exists, last_error,
+			created_at, updated_at, last_reconciled_at
 		) values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		task.ID,
 		task.Prompt,
@@ -192,16 +196,19 @@ func (r *Repository) GetTask(ctx context.Context, idOrSlug string) (*core.Task, 
 	row := r.db.QueryRowContext(
 		ctx,
 		`select
-			id, prompt, display_name, slug, repo_root, repo_name, base_branch, branch_name,
-			worktree_path, tmux_session, agent_window_name, editor_window_name, provider, status, worktree_exists,
-			branch_exists, session_exists, agent_window_exists, editor_window_exists, last_error, created_at, updated_at, last_reconciled_at
+			id, prompt, display_name, slug, repo_root, repo_name,
+			base_branch, branch_name, worktree_path, tmux_session,
+			agent_window_name, editor_window_name, provider, status,
+			worktree_exists, branch_exists, session_exists,
+			agent_window_exists, editor_window_exists, last_error,
+			created_at, updated_at, last_reconciled_at
 		from tasks where id = ? or slug = ? limit 1`,
 		idOrSlug,
 		idOrSlug,
 	)
 
 	task, err := scanTask(row)
-	if err == sql.ErrNoRows {
+	if errors.Is(err, sql.ErrNoRows) {
 		return nil, core.ErrTaskNotFound
 	}
 
@@ -212,9 +219,12 @@ func (r *Repository) ListTasks(ctx context.Context) ([]*core.Task, error) {
 	rows, err := r.db.QueryContext(
 		ctx,
 		`select
-			id, prompt, display_name, slug, repo_root, repo_name, base_branch, branch_name,
-			worktree_path, tmux_session, agent_window_name, editor_window_name, provider, status, worktree_exists,
-			branch_exists, session_exists, agent_window_exists, editor_window_exists, last_error, created_at, updated_at, last_reconciled_at
+			id, prompt, display_name, slug, repo_root, repo_name,
+			base_branch, branch_name, worktree_path, tmux_session,
+			agent_window_name, editor_window_name, provider, status,
+			worktree_exists, branch_exists, session_exists,
+			agent_window_exists, editor_window_exists, last_error,
+			created_at, updated_at, last_reconciled_at
 		from tasks
 		order by updated_at desc`,
 	)
@@ -346,7 +356,7 @@ func addColumnIfMissing(db *sql.DB, table, column, statement string) error {
 		return nil
 	}
 
-	_, err = db.Exec(statement)
+	_, err = db.ExecContext(context.Background(), statement)
 	return err
 }
 
@@ -367,7 +377,10 @@ func columnNameFromAlter(statement string) string {
 }
 
 func hasColumn(db *sql.DB, table, column string) (bool, error) {
-	rows, err := db.Query(`pragma table_info(` + table + `)`)
+	rows, err := db.QueryContext(
+		context.Background(),
+		`pragma table_info(`+table+`)`,
+	)
 	if err != nil {
 		return false, err
 	}
@@ -394,7 +407,11 @@ func hasColumn(db *sql.DB, table, column string) (bool, error) {
 }
 
 func (r *Repository) backfillLegacyTaskRows() error {
-	rows, err := r.db.Query(`select id, repo_root, repo_name, agent_window_name, editor_window_name from tasks`)
+	ctx := context.Background()
+	rows, err := r.db.QueryContext(
+		ctx,
+		`select id, repo_root, repo_name, agent_window_name, editor_window_name from tasks`,
+	)
 	if err != nil {
 		return err
 	}
@@ -411,7 +428,10 @@ func (r *Repository) backfillLegacyTaskRows() error {
 	var legacyRows []legacyTaskRow
 	for rows.Next() {
 		var row legacyTaskRow
-		if err := rows.Scan(&row.id, &row.repoRoot, &row.repoName, &row.agentWindowName, &row.editorWindowName); err != nil {
+		if err := rows.Scan(
+			&row.id, &row.repoRoot, &row.repoName,
+			&row.agentWindowName, &row.editorWindowName,
+		); err != nil {
 			return err
 		}
 		legacyRows = append(legacyRows, row)
@@ -435,11 +455,13 @@ func (r *Repository) backfillLegacyTaskRows() error {
 			desiredEditorWindowName = defaultEditorWindowName
 		}
 
-		if desiredRepoName == row.repoName && desiredAgentWindowName == row.agentWindowName && desiredEditorWindowName == row.editorWindowName {
+		if desiredRepoName == row.repoName && desiredAgentWindowName == row.agentWindowName &&
+			desiredEditorWindowName == row.editorWindowName {
 			continue
 		}
 
-		if _, err := r.db.Exec(
+		if _, err := r.db.ExecContext(
+			ctx,
 			`update tasks set repo_name = ?, agent_window_name = ?, editor_window_name = ? where id = ?`,
 			desiredRepoName,
 			desiredAgentWindowName,

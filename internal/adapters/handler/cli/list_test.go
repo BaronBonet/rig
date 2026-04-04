@@ -14,14 +14,14 @@ func TestListCommand_PrintsTaskTable(t *testing.T) {
 	out := &bytes.Buffer{}
 	service := fakeListCLIService{
 		tasks: []*core.Task{{
-			DisplayName:       "billing retry flow",
-			RepoName:          "repo",
-			Provider:          "codex",
-			Status:            core.TaskStatusDegraded,
-			AgentWindowExists: true,
+			DisplayName:        "billing retry flow",
+			RepoName:           "repo",
+			Provider:           "codex",
+			Status:             core.TaskStatusDegraded,
+			AgentWindowExists:  true,
 			EditorWindowExists: false,
-			TmuxSession:       "repo-billing-retry-flow",
-			BranchName:        "feat/billing-retry-flow",
+			TmuxSession:        "repo-billing-retry-flow",
+			BranchName:         "feat/billing-retry-flow",
 		}},
 	}
 

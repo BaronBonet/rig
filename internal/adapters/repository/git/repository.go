@@ -2,6 +2,7 @@ package git
 
 import (
 	"context"
+	"errors"
 	"path/filepath"
 	"strings"
 
@@ -45,7 +46,14 @@ func (r *Repository) DetectRepo(ctx context.Context, cwd string) (core.RepoConte
 func (r *Repository) BranchExists(ctx context.Context, repoRoot, branch string) (bool, error) {
 	_, err := r.runner.Run(ctx, repoRoot, "git", "show-ref", "--verify", "--quiet", "refs/heads/"+branch)
 	if err != nil {
-		return false, nil
+		// git show-ref exits non-zero when the ref does not exist;
+		// treat CommandError (expected) as "branch not found".
+		var cmdErr execx.CommandError
+		if errors.As(err, &cmdErr) {
+			return false, nil
+		}
+
+		return false, err
 	}
 
 	return true, nil

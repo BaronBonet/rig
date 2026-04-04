@@ -9,8 +9,8 @@ type RepoContext struct {
 }
 
 type RepoConfig struct {
-	Exists bool
 	Seed   SeedConfig
+	Exists bool
 }
 
 type SeedConfig struct {

@@ -54,13 +54,17 @@ func TestDoctorCommand_PrintsNotesBeforeOk(t *testing.T) {
 	err := cmd.Execute()
 	require.NoError(t, err)
 	require.Less(t, strings.Index(out.String(), "config: loaded agent.yaml"), strings.Index(out.String(), "doctor: ok"))
-	require.Less(t, strings.Index(out.String(), "config: seed path ok: .env"), strings.Index(out.String(), "doctor: ok"))
+	require.Less(
+		t,
+		strings.Index(out.String(), "config: seed path ok: .env"),
+		strings.Index(out.String(), "doctor: ok"),
+	)
 	require.Contains(t, out.String(), "doctor: ok")
 }
 
 type fakeCLIService struct {
-	doctorResult core.DoctorResult
 	doctorErr    error
+	doctorResult core.DoctorResult
 }
 
 func (f fakeCLIService) Doctor(context.Context, string) (core.DoctorResult, error) {

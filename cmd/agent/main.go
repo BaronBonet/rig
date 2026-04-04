@@ -45,8 +45,8 @@ func buildDependencies() (cli.Dependencies, error) {
 }
 
 type runtimeService struct {
-	cfg    core.Config
 	runner execx.ExecRunner
+	cfg    core.Config
 }
 
 func (r *runtimeService) Doctor(ctx context.Context, cwd string) (core.DoctorResult, error) {

@@ -503,22 +503,22 @@ func TestModelView_ShowsLoadingBeforeInitialLoadCompletes(t *testing.T) {
 }
 
 type fakeTUIService struct {
-	tasks           []*core.Task
-	deleteTask      *core.Task
 	deleteErr       error
 	listErr         error
-	suggestedName   string
+	openErr         error
 	suggestErr      error
-	suggestedPrompt string
+	createErr       error
+	deleteTask      *core.Task
 	createdTask     *core.Task
 	createdInput    core.NewTaskInput
-	createOptions   core.CreateTaskOptions
-	createErr       error
-	createCalls     int
+	suggestedName   string
+	suggestedPrompt string
 	deletedIDOrSlug string
 	openedIDOrSlug  string
-	openErr         error
+	tasks           []*core.Task
+	createCalls     int
 	listCalls       int
+	createOptions   core.CreateTaskOptions
 }
 
 func (*fakeTUIService) Doctor(context.Context, string) (core.DoctorResult, error) {

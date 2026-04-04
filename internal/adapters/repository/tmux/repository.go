@@ -39,7 +39,16 @@ func (r *Repository) SessionExists(ctx context.Context, session string) (bool, e
 func (r *Repository) WindowExists(ctx context.Context, session, window string) (bool, error) {
 	window = windowOrDefault(window, "agent")
 
-	result, err := r.runner.Run(ctx, "", "tmux", "list-windows", "-t", exactSessionTarget(session), "-F", "#{window_name}")
+	result, err := r.runner.Run(
+		ctx,
+		"",
+		"tmux",
+		"list-windows",
+		"-t",
+		exactSessionTarget(session),
+		"-F",
+		"#{window_name}",
+	)
 	if err != nil {
 		if isMissingSession(result, err) {
 			return false, nil
@@ -171,7 +180,9 @@ func isMissingSession(result execx.Result, err error) bool {
 		return false
 	}
 
-	output := strings.ToLower(result.Stderr + "\n" + result.Stdout + "\n" + commandErr.Stderr + "\n" + commandErr.Stdout)
+	output := strings.ToLower(
+		result.Stderr + "\n" + result.Stdout + "\n" + commandErr.Stderr + "\n" + commandErr.Stdout,
+	)
 	return strings.Contains(output, "can't find session")
 }
 
