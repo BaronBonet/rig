@@ -47,18 +47,38 @@ func TestNewTUICommand_RunsAndQuitsWithMinimalService(t *testing.T) {
 	require.Equal(t, 1, service.listCalls)
 }
 
-func (fakeCLIService) CreateTaskWithProgress(context.Context, core.NewTaskInput, core.CreateTaskOptions, func(core.TaskProgress)) (*core.Task, error) {
+func (fakeCLIService) CreateTaskWithProgress(
+	context.Context,
+	core.NewTaskInput,
+	core.CreateTaskOptions,
+	func(core.TaskProgress),
+) (*core.Task, error) {
 	return nil, nil
 }
 
-func (fakeListCLIService) CreateTaskWithProgress(context.Context, core.NewTaskInput, core.CreateTaskOptions, func(core.TaskProgress)) (*core.Task, error) {
+func (fakeListCLIService) CreateTaskWithProgress(
+	context.Context,
+	core.NewTaskInput,
+	core.CreateTaskOptions,
+	func(core.TaskProgress),
+) (*core.Task, error) {
 	return nil, nil
 }
 
-func (*fakeOpenCLIService) CreateTaskWithProgress(context.Context, core.NewTaskInput, core.CreateTaskOptions, func(core.TaskProgress)) (*core.Task, error) {
+func (*fakeOpenCLIService) CreateTaskWithProgress(
+	context.Context,
+	core.NewTaskInput,
+	core.CreateTaskOptions,
+	func(core.TaskProgress),
+) (*core.Task, error) {
 	return nil, nil
 }
 
-func (fakeStatusCLIService) CreateTaskWithProgress(context.Context, core.NewTaskInput, core.CreateTaskOptions, func(core.TaskProgress)) (*core.Task, error) {
+func (fakeStatusCLIService) CreateTaskWithProgress(
+	context.Context,
+	core.NewTaskInput,
+	core.CreateTaskOptions,
+	func(core.TaskProgress),
+) (*core.Task, error) {
 	return nil, nil
 }

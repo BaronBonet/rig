@@ -40,7 +40,11 @@ func newNewCommand(deps Dependencies) *cobra.Command {
 					return err
 				}
 
-				if _, err = fmt.Fprintf(cmd.OutOrStdout(), "Proposed name [%s] (press Enter to accept or type a replacement): ", suggested); err != nil {
+				msg := fmt.Sprintf(
+					"Proposed name [%s] (press Enter to accept or type a replacement): ",
+					suggested,
+				)
+				if _, err = fmt.Fprint(cmd.OutOrStdout(), msg); err != nil {
 					return err
 				}
 

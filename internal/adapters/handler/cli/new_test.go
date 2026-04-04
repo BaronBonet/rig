@@ -89,7 +89,10 @@ func TestNewCommand_PrintsProgressAndUsesProgressCreatePath(t *testing.T) {
 			{Step: core.TaskProgressWorkspaceSeeded, Message: "Copied local/"},
 			{Step: core.TaskProgressTmuxStarting, Message: "Starting tmux session..."},
 			{Step: core.TaskProgressCodexLaunching, Message: "Launching Codex..."},
-			{Step: core.TaskProgressTaskCreated, Message: "Created task billing retry flow in session repo-billing-retry-flow"},
+			{
+				Step:    core.TaskProgressTaskCreated,
+				Message: "Created task billing retry flow in session repo-billing-retry-flow",
+			},
 			{Step: core.TaskProgressSessionOpening, Message: "Opening tmux session..."},
 		},
 	}
@@ -131,7 +134,10 @@ func TestNewCommand_JSONModePrintsTask(t *testing.T) {
 		progressEvents: []core.TaskProgress{
 			{Step: core.TaskProgressNameSelected, Message: "Selected name: billing retry flow"},
 			{Step: core.TaskProgressWorktreeCreating, Message: "Creating worktree..."},
-			{Step: core.TaskProgressTaskCreated, Message: "Created task billing retry flow in session repo-billing-retry-flow"},
+			{
+				Step:    core.TaskProgressTaskCreated,
+				Message: "Created task billing retry flow in session repo-billing-retry-flow",
+			},
 		},
 	}
 
@@ -157,14 +163,14 @@ func TestNewCommand_JSONModePrintsTask(t *testing.T) {
 }
 
 type fakeNewCLIService struct {
-	suggestedName            string
-	createdTask              *core.Task
 	createErr                error
+	createdTask              *core.Task
 	createdInput             core.NewTaskInput
+	suggestedName            string
+	progressEvents           []core.TaskProgress
 	newTaskCalled            bool
 	createWithProgressCalled bool
 	createOptions            core.CreateTaskOptions
-	progressEvents           []core.TaskProgress
 }
 
 func (f *fakeNewCLIService) Doctor(context.Context, string) (core.DoctorResult, error) {

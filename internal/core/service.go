@@ -438,12 +438,20 @@ func (s *Service) reconcileTask(ctx context.Context, task *Task) (*Task, error) 
 	}
 	reconciled.SessionExists = sessionExists
 	if reconciled.SessionExists {
-		agentWindowExists, err := s.tmux.WindowExists(ctx, reconciled.TmuxSession, windowOrDefault(reconciled.AgentWindowName, "agent"))
+		agentWindowExists, err := s.tmux.WindowExists(
+			ctx,
+			reconciled.TmuxSession,
+			windowOrDefault(reconciled.AgentWindowName, "agent"),
+		)
 		if err != nil {
 			return nil, err
 		}
 		reconciled.AgentWindowExists = agentWindowExists
-		editorWindowExists, err := s.tmux.WindowExists(ctx, reconciled.TmuxSession, windowOrDefault(reconciled.EditorWindowName, "editor"))
+		editorWindowExists, err := s.tmux.WindowExists(
+			ctx,
+			reconciled.TmuxSession,
+			windowOrDefault(reconciled.EditorWindowName, "editor"),
+		)
 		if err != nil {
 			return nil, err
 		}
@@ -589,11 +597,6 @@ func cloneTask(task *Task) *Task {
 
 	clone := *task
 	return &clone
-}
-
-func worktreeExists(path string) bool {
-	exists, _ := worktreePresence(path)
-	return exists
 }
 
 func worktreePresence(path string) (bool, error) {

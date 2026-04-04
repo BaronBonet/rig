@@ -118,7 +118,10 @@ func TestRepositoryNormalizesColonSessionNamesAcrossTmuxCommands(t *testing.T) {
 	require.True(t, exists)
 
 	require.NoError(t, repo.AttachOrSwitch(context.Background(), input.SessionName))
-	require.NoError(t, repo.SendKeysToWindow(context.Background(), input.SessionName, "editor", []string{"codex", "fix bug"}))
+	require.NoError(
+		t,
+		repo.SendKeysToWindow(context.Background(), input.SessionName, "editor", []string{"codex", "fix bug"}),
+	)
 	require.NoError(t, repo.KillSession(context.Background(), input.SessionName))
 
 	require.Len(t, runner.Calls, 7)
@@ -191,7 +194,12 @@ func TestRepositorySendKeysToWindow_UsesNamedWindowTarget(t *testing.T) {
 	runner := execx.NewFakeRunner([]execx.Result{{}})
 	repo := NewRepository(runner)
 
-	err := repo.SendKeysToWindow(context.Background(), "repo-billing-retry-flow", "editor", []string{"codex", "fix bug"})
+	err := repo.SendKeysToWindow(
+		context.Background(),
+		"repo-billing-retry-flow",
+		"editor",
+		[]string{"codex", "fix bug"},
+	)
 	require.NoError(t, err)
 	require.Equal(t, []string{
 		"send-keys",

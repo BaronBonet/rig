@@ -1,19 +1,25 @@
 {
   "permissions": {
     "allow": [
-      "Bash(wc -l /Users/ericbonet/software/tmux-llm-polish-tui-visual-design/internal/adapters/handler/cli/*.go)",
-      "Bash(/Users/ericbonet/.claude/plugins/cache/claude-plugins-official/superpowers/5.0.7/skills/brainstorming/scripts/start-server.sh:*)",
-      "Bash(deno --version)",
-      "Bash(brew:*)",
-      "Bash(ls /Users/ericbonet/software/tmux-llm-polish-tui-visual-design/.superpowers/brainstorm/*/state/server-info)",
-      "Bash(xargs cat:*)",
-      "Bash(ls -td /Users/ericbonet/software/tmux-llm-polish-tui-visual-design/.superpowers/brainstorm/*/state/server-info)",
-      "Bash(git add:*)",
-      "Bash(git commit -m ':*)",
+      "Bash(chmod +x:*)",
+      "Bash(go get:*)",
+      "Bash(go mod:*)",
+      "Bash(make format:*)",
+      "Bash(make lint-all:*)",
       "Bash(go build:*)",
       "Bash(go test:*)",
-      "Bash(git commit:*)",
-      "Bash(go vet:*)"
+      "Bash(golangci-lint run:*)",
+      "Bash(go tool:*)",
+      "Bash(make test:*)",
+      "Bash(bash:*)",
+      "Bash(xargs -I{} git checkout main -- {})",
+      "Bash(git checkout:*)",
+      "Bash(go install:*)",
+      "Bash(fieldalignment -fix ./internal/adapters/handler/cli/)",
+      "Bash(fieldalignment -fix ./internal/pkg/execx/)",
+      "Bash(git stash:*)",
+      "Bash(git add:*)",
+      "Bash(git rebase:*)"
     ]
   }
 }

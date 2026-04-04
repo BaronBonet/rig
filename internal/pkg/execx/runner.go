@@ -22,12 +22,12 @@ type Runner interface {
 }
 
 type CommandError struct {
+	Err    error
 	Cwd    string
 	Name   string
-	Args   []string
 	Stdout string
 	Stderr string
-	Err    error
+	Args   []string
 }
 
 func (e CommandError) Error() string {

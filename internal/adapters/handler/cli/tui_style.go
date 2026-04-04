@@ -64,7 +64,6 @@ var (
 	normalRowStyle = lipgloss.NewStyle().
 			PaddingLeft(3).
 			Foreground(colorDimmed)
-
 )
 
 // statusStyle returns the icon and style for a given task status.

@@ -22,9 +22,16 @@ func newStatusCommand(deps Dependencies) *cobra.Command {
 				return err
 			}
 
+			format := "Name: %s\nSlug: %s\nRepo: %s\n" +
+				"Status: %s\nSession: %s\n" +
+				"AgentWindow: %s\nEditorWindow: %s\n" +
+				"Worktree: %s\nWorktreeExists: %t\n" +
+				"BranchExists: %t\nSessionExists: %t\n" +
+				"AgentWindowExists: %t\n" +
+				"EditorWindowExists: %t\n"
 			_, err = fmt.Fprintf(
 				cmd.OutOrStdout(),
-				"Name: %s\nSlug: %s\nRepo: %s\nStatus: %s\nSession: %s\nAgentWindow: %s\nEditorWindow: %s\nWorktree: %s\nWorktreeExists: %t\nBranchExists: %t\nSessionExists: %t\nAgentWindowExists: %t\nEditorWindowExists: %t\n",
+				format,
 				task.DisplayName,
 				task.Slug,
 				task.RepoName,

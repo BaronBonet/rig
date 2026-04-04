@@ -15,9 +15,9 @@ const (
 )
 
 type TaskProgress struct {
+	Task    *Task
 	Step    TaskProgressStep
 	Message string
-	Task    *Task
 }
 
 type CreateTaskOptions struct {

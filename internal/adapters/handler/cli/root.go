@@ -12,7 +12,12 @@ import (
 type TaskService interface {
 	Doctor(ctx context.Context, cwd string) (core.DoctorResult, error)
 	SuggestTaskName(ctx context.Context, prompt string) (string, error)
-	CreateTaskWithProgress(ctx context.Context, input core.NewTaskInput, options core.CreateTaskOptions, progress func(core.TaskProgress)) (*core.Task, error)
+	CreateTaskWithProgress(
+		ctx context.Context,
+		input core.NewTaskInput,
+		options core.CreateTaskOptions,
+		progress func(core.TaskProgress),
+	) (*core.Task, error)
 	NewTask(ctx context.Context, input core.NewTaskInput) (*core.Task, error)
 	ListTasks(ctx context.Context) ([]*core.Task, error)
 	GetTask(ctx context.Context, idOrSlug string) (*core.Task, error)

@@ -21,7 +21,9 @@ func newListCommand(deps Dependencies) *cobra.Command {
 				return err
 			}
 
-			if _, err = fmt.Fprintln(cmd.OutOrStdout(), "NAME\tREPO\tPROVIDER\tSTATUS\tAGENT\tEDITOR\tSESSION\tBRANCH"); err != nil {
+			header := "NAME\tREPO\tPROVIDER\tSTATUS\t" +
+				"AGENT\tEDITOR\tSESSION\tBRANCH"
+			if _, err = fmt.Fprintln(cmd.OutOrStdout(), header); err != nil {
 				return err
 			}
 

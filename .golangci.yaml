@@ -1,0 +1,94 @@
+version: "2"
+run:
+  modules-download-mode: readonly
+linters:
+  enable:
+    - asasalint
+    - asciicheck
+    - bidichk
+    - bodyclose
+    - durationcheck
+    - errchkjson
+    - errorlint
+    - exhaustive
+    - gocheckcompilerdirectives
+    - gochecksumtype
+    - gosec
+    - gosmopolitan
+    - lll
+    - makezero
+    - musttag
+    - nilerr
+    - nilnesserr
+    - noctx
+    - reassign
+    - recvcheck
+    - spancheck
+    - testifylint
+  disable:
+    - contextcheck
+  settings:
+    gosec:
+      includes:
+        - G101
+    govet:
+      enable:
+        - nilness
+        - defers
+        - lostcancel
+        - bools
+        - fieldalignment
+        - nilfunc
+        - httpresponse
+        - printf
+        - timeformat
+        - unmarshal
+        - unreachable
+        - unsafeptr
+        - unusedresult
+        - unusedwrite
+        - waitgroup
+    lll:
+      line-length: 120
+      tab-width: 4
+    staticcheck:
+      checks:
+        - all
+  exclusions:
+    generated: lax
+    presets:
+      - comments
+      - common-false-positives
+      - legacy
+      - std-error-handling
+    rules:
+      - linters:
+          - staticcheck
+        text: "QF1008:"
+      - linters:
+          - errcheck
+          - gosec
+          - govet
+          - lll
+        path: _test\.go
+      - linters:
+          - contextcheck
+          - exhaustive
+        path: .go
+    paths:
+      - third_party$
+      - builtin$
+      - examples$
+issues:
+  max-issues-per-linter: 0
+  max-same-issues: 0
+formatters:
+  enable:
+    - gofmt
+    - goimports
+  exclusions:
+    generated: lax
+    paths:
+      - third_party$
+      - builtin$
+      - examples$

@@ -1,5 +1,6 @@
 bin/
 dist/
+local/
 .DS_Store
 *.db
 *.db-shm

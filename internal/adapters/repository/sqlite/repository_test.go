@@ -172,7 +172,7 @@ func TestNewRepository_MigratesLegacyTaskRow(t *testing.T) {
 	db, err := sql.Open("sqlite", path)
 	require.NoError(t, err)
 
-	_, err = db.Exec(`
+	_, err = db.ExecContext(context.Background(), `
 create table tasks (
   id text primary key,
   prompt text not null,
@@ -195,7 +195,7 @@ create table tasks (
 );
 `)
 	require.NoError(t, err)
-	_, err = db.Exec(`
+	_, err = db.ExecContext(context.Background(), `
 insert into tasks (
   id, prompt, display_name, slug, repo_root, base_branch, branch_name,
   worktree_path, tmux_session, provider, status, worktree_exists,
@@ -272,7 +272,7 @@ insert into tasks (
 func taskTableColumns(t *testing.T, db *sql.DB) map[string]struct{} {
 	t.Helper()
 
-	rows, err := db.Query(`pragma table_info(tasks)`)
+	rows, err := db.QueryContext(context.Background(), `pragma table_info(tasks)`)
 	require.NoError(t, err)
 	defer rows.Close()
 
