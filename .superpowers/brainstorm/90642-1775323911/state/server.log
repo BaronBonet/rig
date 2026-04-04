@@ -1,0 +1,2 @@
+{"type":"server-started","port":63063,"host":"127.0.0.1","url_host":"localhost","url":"http://localhost:63063","screen_dir":"/Users/ericbonet/software/tmux-llm-polish-tui-visual-design/.superpowers/brainstorm/90642-1775323911/content","state_dir":"/Users/ericbonet/software/tmux-llm-polish-tui-visual-design/.superpowers/brainstorm/90642-1775323911/state"}
+{"type":"server-stopped","reason":"idle timeout"}
