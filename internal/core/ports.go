@@ -25,8 +25,10 @@ type CreateWorktreeInput struct {
 }
 
 type CreateSessionInput struct {
-	SessionName string
-	WorkingDir  string
+	SessionName      string
+	WorkingDir       string
+	AgentWindowName  string
+	EditorWindowName string
 }
 
 type SeedWorkspaceInput struct {
@@ -63,10 +65,12 @@ type GitRepository interface {
 type TmuxRepository interface {
 	IsAvailable(ctx context.Context) error
 	SessionExists(ctx context.Context, session string) (bool, error)
+	WindowExists(ctx context.Context, session, window string) (bool, error)
 	CreateSession(ctx context.Context, in CreateSessionInput) error
 	KillSession(ctx context.Context, session string) error
 	AttachOrSwitch(ctx context.Context, session string) error
 	SendKeys(ctx context.Context, session string, command []string) error
+	SendKeysToWindow(ctx context.Context, session, window string, command []string) error
 }
 
 type CodexRepository interface {

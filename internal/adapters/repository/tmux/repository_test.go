@@ -16,20 +16,35 @@ func TestRepositoryCreateSession_UsesDetachedSessionInWorkingDir(t *testing.T) {
 	repo := NewRepository(runner)
 
 	err := repo.CreateSession(context.Background(), core.CreateSessionInput{
-		SessionName: "repo-billing-retry-flow",
-		WorkingDir:  "/tmp/repo-billing-retry-flow",
+		SessionName:      "repo-billing-retry-flow",
+		WorkingDir:       "/tmp/repo-billing-retry-flow",
+		AgentWindowName:  "agent",
+		EditorWindowName: "editor",
 	})
 	require.NoError(t, err)
-	require.Len(t, runner.Calls, 1)
+	require.Len(t, runner.Calls, 2)
 	require.Equal(t, "tmux", runner.Calls[0].Name)
 	require.Equal(t, []string{
 		"new-session",
 		"-d",
 		"-s",
 		"repo-billing-retry-flow",
+		"-n",
+		"agent",
 		"-c",
 		"/tmp/repo-billing-retry-flow",
 	}, runner.Calls[0].Args)
+	require.Equal(t, "tmux", runner.Calls[1].Name)
+	require.Equal(t, []string{
+		"new-window",
+		"-d",
+		"-t",
+		"=repo-billing-retry-flow",
+		"-n",
+		"editor",
+		"-c",
+		"/tmp/repo-billing-retry-flow",
+	}, runner.Calls[1].Args)
 }
 
 func TestRepositorySendKeys_JoinsCommandAndSendsEnter(t *testing.T) {
@@ -41,8 +56,23 @@ func TestRepositorySendKeys_JoinsCommandAndSendsEnter(t *testing.T) {
 	require.Equal(t, []string{
 		"send-keys",
 		"-t",
-		"repo-billing-retry-flow:0.0",
+		"=repo-billing-retry-flow:agent",
 		"codex 'add billing retry flow'",
+		"C-m",
+	}, runner.Calls[0].Args)
+}
+
+func TestRepositorySendKeysToWindow_UsesNamedWindowTarget(t *testing.T) {
+	runner := execx.NewFakeRunner([]execx.Result{{}})
+	repo := NewRepository(runner)
+
+	err := repo.SendKeysToWindow(context.Background(), "repo-billing-retry-flow", "editor", []string{"codex", "fix bug"})
+	require.NoError(t, err)
+	require.Equal(t, []string{
+		"send-keys",
+		"-t",
+		"=repo-billing-retry-flow:editor",
+		"codex 'fix bug'",
 		"C-m",
 	}, runner.Calls[0].Args)
 }
@@ -118,6 +148,37 @@ func TestRepositorySessionExists_ReturnsErrorForTmuxFailure(t *testing.T) {
 
 	exists, err := repo.SessionExists(context.Background(), "repo-billing-retry-flow")
 	require.Error(t, err)
+	require.False(t, exists)
+}
+
+func TestRepositoryWindowExists_UsesExactSessionTarget(t *testing.T) {
+	runner := execx.NewFakeRunner([]execx.Result{{Stdout: "agent\neditor\n"}})
+	repo := NewRepository(runner)
+
+	exists, err := repo.WindowExists(context.Background(), "repo-billing-retry-flow", "agent")
+	require.NoError(t, err)
+	require.True(t, exists)
+	require.Equal(t, []string{
+		"list-windows",
+		"-t",
+		"=repo-billing-retry-flow",
+		"-F",
+		"#{window_name}",
+	}, runner.Calls[0].Args)
+}
+
+func TestRepositoryWindowExists_ReturnsFalseForMissingSessionOnly(t *testing.T) {
+	runner := execx.NewFakeRunner([]execx.Result{{Stderr: "can't find session: repo-billing-retry-flow\n"}})
+	runner.Errors = []error{execx.CommandError{
+		Name:   "tmux",
+		Args:   []string{"list-windows", "-t", "=repo-billing-retry-flow", "-F", "#{window_name}"},
+		Stderr: "can't find session: repo-billing-retry-flow\n",
+		Err:    errors.New("exit status 1"),
+	}}
+	repo := NewRepository(runner)
+
+	exists, err := repo.WindowExists(context.Background(), "repo-billing-retry-flow", "agent")
+	require.NoError(t, err)
 	require.False(t, exists)
 }
 

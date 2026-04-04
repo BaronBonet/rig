@@ -160,27 +160,67 @@ func (f *fakeGitRepository) RemoveWorktree(_ context.Context, _ string, path str
 }
 
 type fakeTmuxRepository struct {
-	isAvailableErr   error
-	createSessionErr error
+	isAvailableErr    error
+	createSessionErr  error
 	createSessionHook func()
-	killSessionErr   error
-	killSessionHook  func()
-	sendKeysErr      error
-	sessionExists    bool
-	attachedSession  string
-	createdSession   CreateSessionInput
-	sentCommand      []string
-	killedSessions   []string
+	killSessionErr    error
+	killSessionHook   func()
+	sendKeysErr       error
+	sessionExists     bool
+	windowExists      map[string]map[string]bool
+	attachedSession   string
+	createdSession    CreateSessionInput
+	sentCommand       []string
+	sentSession       string
+	sentWindow        string
+	sentWindows       []fakeTmuxWindowCommand
+	killedSessions    []string
 }
 
 func (f *fakeTmuxRepository) IsAvailable(context.Context) error { return f.isAvailableErr }
 func (f *fakeTmuxRepository) SessionExists(context.Context, string) (bool, error) {
 	return f.sessionExists, nil
 }
+func (f *fakeTmuxRepository) WindowExists(_ context.Context, session, window string) (bool, error) {
+	if f.windowExists == nil {
+		return false, nil
+	}
+
+	windows, ok := f.windowExists[session]
+	if !ok {
+		return false, nil
+	}
+
+	return windows[window], nil
+}
 func (f *fakeTmuxRepository) CreateSession(_ context.Context, input CreateSessionInput) error {
 	f.createdSession = input
 	if f.createSessionHook != nil {
 		f.createSessionHook()
+	}
+	if f.createSessionErr == nil {
+		f.sessionExists = true
+		if f.windowExists == nil {
+			f.windowExists = make(map[string]map[string]bool)
+		}
+
+		windows := f.windowExists[input.SessionName]
+		if windows == nil {
+			windows = make(map[string]bool)
+			f.windowExists[input.SessionName] = windows
+		}
+
+		agentWindow := input.AgentWindowName
+		if agentWindow == "" {
+			agentWindow = "agent"
+		}
+		editorWindow := input.EditorWindowName
+		if editorWindow == "" {
+			editorWindow = "editor"
+		}
+
+		windows[agentWindow] = true
+		windows[editorWindow] = true
 	}
 	return f.createSessionErr
 }
@@ -195,6 +235,9 @@ func (f *fakeTmuxRepository) KillSession(_ context.Context, session string) erro
 	}
 
 	f.sessionExists = false
+	if f.windowExists != nil {
+		delete(f.windowExists, session)
+	}
 	return nil
 }
 
@@ -202,9 +245,26 @@ func (f *fakeTmuxRepository) AttachOrSwitch(_ context.Context, session string) e
 	f.attachedSession = session
 	return nil
 }
-func (f *fakeTmuxRepository) SendKeys(_ context.Context, _ string, command []string) error {
+func (f *fakeTmuxRepository) SendKeys(ctx context.Context, session string, command []string) error {
+	return f.SendKeysToWindow(ctx, session, "agent", command)
+}
+
+func (f *fakeTmuxRepository) SendKeysToWindow(_ context.Context, session, window string, command []string) error {
+	f.sentSession = session
+	f.sentWindow = window
 	f.sentCommand = append([]string(nil), command...)
+	f.sentWindows = append(f.sentWindows, fakeTmuxWindowCommand{
+		session: session,
+		window:  window,
+		command: append([]string(nil), command...),
+	})
 	return f.sendKeysErr
+}
+
+type fakeTmuxWindowCommand struct {
+	session string
+	window  string
+	command []string
 }
 
 type fakeCodexRepository struct {
