@@ -361,14 +361,14 @@ func (m model) listView() string {
 	task := m.selectedTask()
 	details := fmt.Sprintf(
 		"%s %s  %s %s  %s %s  %s %s  %s %s  %s %s",
-		iconRepo, emptyFallback(taskRepoName(task), "-"),
+		iconRepo, taskRepoName(task),
 		iconAgent, healthStyle(task.AgentWindowExists),
 		iconEditor, healthStyle(task.EditorWindowExists),
 		iconBranch, dimStyle.Render(emptyFallback(task.BranchName, "-")),
 		iconTmux, yesNoStyled(task.SessionExists),
 		iconWorktree, yesNoStyled(task.WorktreeExists),
 	)
-	b.WriteString(detailBarStyle.Render(details) + "\n\n")
+	b.WriteString(details + "\n\n")
 
 	// Task rows
 	for i, task := range m.tasks {
