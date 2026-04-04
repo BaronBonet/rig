@@ -148,9 +148,16 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case createFinishedMsg:
 		m.busy = false
 		m.err = msg.err
+		if msg.task != nil {
+			m.upsertTask(msg.task)
+		}
 		if msg.err != nil {
-			m.mode = tuiModeNameConfirm
-			m.nameInput.Focus()
+			if msg.task != nil {
+				m.mode = tuiModeList
+			} else {
+				m.mode = tuiModeNameConfirm
+				m.nameInput.Focus()
+			}
 			return m, nil
 		}
 
@@ -449,6 +456,28 @@ func (m *model) replaceTask(updated *core.Task) {
 			m.tasks[i] = updated
 			return
 		}
+	}
+}
+
+func (m *model) upsertTask(updated *core.Task) {
+	for i, task := range m.tasks {
+		if selectedIDOrSlug(task) == selectedIDOrSlug(updated) {
+			if !isVisibleTask(updated) {
+				m.tasks = append(m.tasks[:i], m.tasks[i+1:]...)
+				if m.selected >= len(m.tasks) && len(m.tasks) > 0 {
+					m.selected = len(m.tasks) - 1
+				}
+				return
+			}
+
+			m.tasks[i] = updated
+			return
+		}
+	}
+
+	if isVisibleTask(updated) {
+		m.tasks = append(m.tasks, updated)
+		m.selected = len(m.tasks) - 1
 	}
 }
 

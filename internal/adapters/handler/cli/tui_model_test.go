@@ -173,6 +173,41 @@ func TestModelUpdate_CreateFailureReturnsToNameConfirmModeAndRendersError(t *tes
 	require.Contains(t, m.View(), "create failed")
 }
 
+func TestModelUpdate_CreateFailureWithPersistedTaskReturnsToListModeAndPreservesError(t *testing.T) {
+	service := &fakeTUIService{
+		suggestedName: "billing retry flow",
+		createdTask:   tuiTask("billing-retry-flow"),
+		createErr:     errors.New("create failed after persist"),
+	}
+	existing := tuiTask("existing-task")
+	existing.RepoRoot = "/tmp/repo"
+	m := newLoadedTUIModel(t, service, existing)
+
+	m, _ = updateTUIModel(t, m, keyRunes("n"))
+	m.promptInput.SetValue("add billing retry flow")
+
+	m, suggestCmd := updateTUIModel(t, m, tea.KeyMsg{Type: tea.KeyEnter})
+	msg := suggestCmd()
+	m, _ = updateTUIModel(t, m, msg)
+
+	m, createCmd := updateTUIModel(t, m, tea.KeyMsg{Type: tea.KeyEnter})
+	require.NotNil(t, createCmd)
+	require.True(t, m.busy)
+
+	createMsg := createCmd()
+	m, followup := updateTUIModel(t, m, createMsg)
+	require.Nil(t, followup)
+	require.Equal(t, tuiModeList, m.mode)
+	require.False(t, m.busy)
+	require.NotContains(t, m.View(), "Confirm Task Name")
+	require.Contains(t, m.View(), "create failed after persist")
+	require.Contains(t, m.View(), "billing-retry-flow")
+
+	_, duplicateCmd := updateTUIModel(t, m, tea.KeyMsg{Type: tea.KeyEnter})
+	require.NotNil(t, duplicateCmd)
+	require.Equal(t, 1, service.createCalls)
+}
+
 func TestModelUpdate_PromptModeEscapeReturnsToListMode(t *testing.T) {
 	m := newLoadedTUIModel(t, &fakeTUIService{}, tuiTask("existing-task"))
 
@@ -477,6 +512,7 @@ type fakeTUIService struct {
 	createdInput    core.NewTaskInput
 	createOptions   core.CreateTaskOptions
 	createErr       error
+	createCalls     int
 	deletedIDOrSlug string
 	openedIDOrSlug  string
 	openErr         error
@@ -504,6 +540,7 @@ func (f *fakeTUIService) CreateTaskWithProgress(
 ) (*core.Task, error) {
 	f.createdInput = input
 	f.createOptions = options
+	f.createCalls++
 	return f.createdTask, f.createErr
 }
 
