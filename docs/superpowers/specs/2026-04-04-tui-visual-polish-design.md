@@ -170,8 +170,19 @@ The existing tests in `tui_model_test.go` assert on view output using `strings.C
 - Alternatively, assert on the presence of key content strings which will still be embedded within the ANSI sequences — `strings.Contains` works through ANSI codes for the text payload
 - Verify: read the existing tests to confirm which approach is simpler before implementing
 
+## Status Display
+
+Status indicators are purely cosmetic mappings of the existing `task.Status` string. No new status detection logic is added. The color mapping is:
+
+- Green (`●`): status values indicating active/running states
+- Amber (`◐`): status values indicating transitional states
+- Dimmed (`○`): everything else (idle, unknown, empty)
+
+The exact mapping will be determined by reading the existing status values in the codebase.
+
 ## Out of Scope
 
 - Terminal size / responsive layout (not needed for current views)
 - Configurable themes / user color preferences
 - Animated transitions or spinners
+- New status detection logic (e.g., LLM active vs waiting for input)
