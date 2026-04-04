@@ -2,6 +2,28 @@
 
 `agent` is a Go CLI for creating Codex-backed git worktrees and tmux sessions from a task prompt.
 
+## Install
+
+Install the latest GitHub Release on macOS:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/BaronBonet/tmux-llm/main/install.sh | sh
+```
+
+The installer places `agent` in `~/.local/bin` by default. If that directory is not on your `PATH`, add it before using the CLI.
+
+This prototype release path uses unsigned binaries. If macOS blocks the installed binary on first run, clear the quarantine flag once:
+
+```bash
+xattr -d com.apple.quarantine ~/.local/bin/agent
+```
+
+After installation, verify the environment with:
+
+```bash
+agent doctor
+```
+
 ## V1 Scope
 
 The first version supports:
@@ -53,13 +75,13 @@ If a configured source path is missing, the `new` command fails. If the destinat
 Show environment health:
 
 ```bash
-go run ./cmd/agent doctor
+agent doctor
 ```
 
 Create a task interactively:
 
 ```bash
-go run ./cmd/agent new "add billing retry flow"
+agent new "add billing retry flow"
 ```
 
 The command now prints stage-by-stage progress to stderr and then opens the tmux session automatically.
@@ -71,7 +93,7 @@ Typing `y` or `yes` also accepts the suggested name.
 Create a task non-interactively and print JSON:
 
 ```bash
-go run ./cmd/agent new --non-interactive --json "add billing retry flow"
+agent new --non-interactive --json "add billing retry flow"
 ```
 
 `--json` keeps stdout machine-readable and does not auto-open the tmux session.
@@ -79,25 +101,31 @@ go run ./cmd/agent new --non-interactive --json "add billing retry flow"
 List tasks:
 
 ```bash
-go run ./cmd/agent ls
+agent ls
 ```
 
 Show task status:
 
 ```bash
-go run ./cmd/agent status billing-retry-flow
+agent status billing-retry-flow
 ```
 
 Open a task session:
 
 ```bash
-go run ./cmd/agent open billing-retry-flow
+agent open billing-retry-flow
 ```
 
 Open the cleanup TUI:
 
 ```bash
-go run ./cmd/agent tui
+agent tui
+```
+
+For local iteration during development, run the command from source:
+
+```bash
+go run ./cmd/agent <command>
 ```
 
 Keybindings in the TUI:
