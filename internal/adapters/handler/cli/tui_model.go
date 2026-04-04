@@ -391,12 +391,10 @@ func (m model) listView() string {
 
 func (m model) promptInputView() string {
 	var b strings.Builder
-	b.WriteString("Create Task\n\n")
-	b.WriteString("Enter the task prompt. Press Enter to suggest a name, or Esc to cancel.\n\n")
+	b.WriteString(titleStyle.Render(iconHeaderCreate+" Create Task") + "\n\n")
+	b.WriteString(dimStyle.Render("Enter the task prompt. Press Enter to suggest a name, or Esc to cancel.") + "\n\n")
 	if m.err != nil {
-		b.WriteString("Error: ")
-		b.WriteString(m.err.Error())
-		b.WriteString("\n\n")
+		b.WriteString(errorStyle.Render("Error: "+m.err.Error()) + "\n\n")
 	}
 	b.WriteString(m.promptInput.View())
 	return b.String()
@@ -404,14 +402,12 @@ func (m model) promptInputView() string {
 
 func (m model) nameConfirmView() string {
 	var b strings.Builder
-	b.WriteString("Confirm Task Name\n\n")
-	b.WriteString("Edit the suggested name if needed. Press Enter to create and open the session, or Esc to cancel.\n\n")
+	b.WriteString(titleStyle.Render(iconHeaderCreate+" Confirm Task Name") + "\n\n")
+	b.WriteString(dimStyle.Render("Edit the suggested name if needed. Press Enter to create and open the session, or Esc to cancel.") + "\n\n")
 	if m.err != nil {
-		b.WriteString("Error: ")
-		b.WriteString(m.err.Error())
-		b.WriteString("\n\n")
+		b.WriteString(errorStyle.Render("Error: "+m.err.Error()) + "\n\n")
 	}
-	fmt.Fprintf(&b, "prompt: %s\n\n", m.createInput.Prompt)
+	b.WriteString(dimStyle.Render("prompt: "+m.createInput.Prompt) + "\n\n")
 	b.WriteString(m.nameInput.View())
 	return b.String()
 }
@@ -419,15 +415,15 @@ func (m model) nameConfirmView() string {
 func (m model) confirmationView() string {
 	task := m.selectedTask()
 	if task == nil {
-		return "No task selected."
+		return dimStyle.Render("No task selected.")
 	}
 
 	var b strings.Builder
-	b.WriteString("Confirm cleanup\n\n")
-	fmt.Fprintf(&b, "Task: %s\n", task.DisplayName)
-	b.WriteString("The tmux session and worktree will be deleted.\n")
-	b.WriteString("The branch will be kept.\n\n")
-	b.WriteString("Press y to confirm. Press n, esc, or q to cancel.")
+	b.WriteString(warningStyle.Render(iconHeaderCleanup+" Confirm Cleanup") + "\n\n")
+	b.WriteString("Task: " + primaryStyle.Render(task.DisplayName) + "\n")
+	b.WriteString(dimStyle.Render("The tmux session and worktree will be deleted.") + "\n")
+	b.WriteString(dimStyle.Render("The branch will be kept.") + "\n\n")
+	b.WriteString(healthyStyle.Render("y") + dimStyle.Render(" confirm · ") + errorStyle.Render("n") + dimStyle.Render(" cancel"))
 	return b.String()
 }
 
