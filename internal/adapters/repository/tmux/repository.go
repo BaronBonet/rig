@@ -37,6 +37,8 @@ func (r *Repository) SessionExists(ctx context.Context, session string) (bool, e
 }
 
 func (r *Repository) WindowExists(ctx context.Context, session, window string) (bool, error) {
+	window = windowOrDefault(window, "agent")
+
 	result, err := r.runner.Run(ctx, "", "tmux", "list-windows", "-t", exactSessionTarget(session), "-F", "#{window_name}")
 	if err != nil {
 		if isMissingSession(result, err) {
@@ -56,15 +58,8 @@ func (r *Repository) WindowExists(ctx context.Context, session, window string) (
 }
 
 func (r *Repository) CreateSession(ctx context.Context, in core.CreateSessionInput) error {
-	agentWindowName := in.AgentWindowName
-	if agentWindowName == "" {
-		agentWindowName = "agent"
-	}
-
-	editorWindowName := in.EditorWindowName
-	if editorWindowName == "" {
-		editorWindowName = "editor"
-	}
+	agentWindowName := windowOrDefault(in.AgentWindowName, "agent")
+	editorWindowName := windowOrDefault(in.EditorWindowName, "editor")
 
 	_, err := r.runner.Run(
 		ctx,
@@ -96,6 +91,15 @@ func (r *Repository) CreateSession(ctx context.Context, in core.CreateSessionInp
 		"-c",
 		in.WorkingDir,
 	)
+	if err == nil {
+		return nil
+	}
+
+	_, cleanupErr := r.runner.Run(ctx, "", "tmux", "kill-session", "-t", exactSessionTarget(in.SessionName))
+	if cleanupErr != nil {
+		return errors.Join(err, cleanupErr)
+	}
+
 	return err
 }
 
@@ -115,6 +119,8 @@ func (r *Repository) AttachOrSwitch(ctx context.Context, session string) error {
 }
 
 func (r *Repository) SendKeysToWindow(ctx context.Context, session, window string, command []string) error {
+	window = windowOrDefault(window, "agent")
+
 	quoted := make([]string, 0, len(command))
 	for _, part := range command {
 		if strings.ContainsRune(part, ' ') {
@@ -144,6 +150,14 @@ func exactSessionTarget(session string) string {
 
 func exactWindowTarget(session, window string) string {
 	return "=" + session + ":" + window
+}
+
+func windowOrDefault(window, fallback string) string {
+	if strings.TrimSpace(window) == "" {
+		return fallback
+	}
+
+	return window
 }
 
 func isMissingSession(result execx.Result, err error) bool {

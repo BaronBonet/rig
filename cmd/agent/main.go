@@ -2,23 +2,20 @@ package main
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"os"
-	"strings"
 
 	"agent/internal/adapters/handler/cli"
 	agentconfigrepo "agent/internal/adapters/repository/agentconfig"
 	codexrepo "agent/internal/adapters/repository/codex"
 	gitrepo "agent/internal/adapters/repository/git"
 	sqliterepo "agent/internal/adapters/repository/sqlite"
+	tmuxrepo "agent/internal/adapters/repository/tmux"
 	workspacerepo "agent/internal/adapters/repository/workspace"
 	"agent/internal/core"
 	"agent/internal/pkg/execx"
 	"agent/internal/pkg/timeutil"
 )
-
-var _ core.TmuxRepository = (*runtimeTmuxRepository)(nil)
 
 func main() {
 	deps, err := buildDependencies()
@@ -143,121 +140,13 @@ func (r *runtimeService) newService(withSQLite bool) (*core.Service, error) {
 	return core.NewService(
 		taskRepo,
 		gitrepo.NewRepository(r.runner),
-		&runtimeTmuxRepository{runner: r.runner, paneIDs: map[string]string{}},
+		tmuxrepo.NewRepository(r.runner),
 		codexrepo.NewRepository(r.runner, r.cfg.CodexBinary),
 		agentconfigrepo.NewRepository(),
 		workspacerepo.NewRepository(),
 		timeutil.RealClock{},
 		r.cfg,
 	), nil
-}
-
-type runtimeTmuxRepository struct {
-	runner  execx.Runner
-	paneIDs map[string]string
-}
-
-func (r *runtimeTmuxRepository) IsAvailable(ctx context.Context) error {
-	_, err := r.runner.Run(ctx, "", "tmux", "-V")
-	return err
-}
-
-func (r *runtimeTmuxRepository) SessionExists(ctx context.Context, session string) (bool, error) {
-	result, err := r.runner.Run(ctx, "", "tmux", "has-session", "-t", tmuxSessionName(session))
-	if err != nil {
-		if isRuntimeMissingSession(result, err) {
-			return false, nil
-		}
-
-		return false, err
-	}
-
-	return true, nil
-}
-
-func (r *runtimeTmuxRepository) CreateSession(ctx context.Context, in core.CreateSessionInput) error {
-	result, err := r.runner.Run(
-		ctx,
-		"",
-		"tmux",
-		"new-session",
-		"-d",
-		"-P",
-		"-F",
-		"#{pane_id}",
-		"-s",
-		tmuxSessionName(in.SessionName),
-		"-c",
-		in.WorkingDir,
-	)
-	if err != nil {
-		return err
-	}
-
-	r.paneIDs[in.SessionName] = strings.TrimSpace(result.Stdout)
-	return nil
-}
-
-func (r *runtimeTmuxRepository) KillSession(ctx context.Context, session string) error {
-	_, err := r.runner.Run(ctx, "", "tmux", "kill-session", "-t", tmuxSessionName(session))
-	return err
-}
-
-func (r *runtimeTmuxRepository) AttachOrSwitch(ctx context.Context, session string) error {
-	command := "attach-session"
-	if runningInsideTmux() {
-		command = "switch-client"
-	}
-
-	_, err := r.runner.Run(ctx, "", "tmux", command, "-t", tmuxSessionName(session))
-	return err
-}
-
-func (r *runtimeTmuxRepository) SendKeys(ctx context.Context, session string, command []string) error {
-	target := r.paneIDs[session]
-	if target == "" {
-		target = tmuxSessionName(session)
-	}
-
-	quoted := make([]string, 0, len(command))
-	for _, part := range command {
-		if strings.ContainsRune(part, ' ') {
-			quoted = append(quoted, "'"+strings.ReplaceAll(part, "'", "'\\''")+"'")
-			continue
-		}
-
-		quoted = append(quoted, part)
-	}
-
-	_, err := r.runner.Run(
-		ctx,
-		"",
-		"tmux",
-		"send-keys",
-		"-t",
-		target,
-		strings.Join(quoted, " "),
-		"C-m",
-	)
-	return err
-}
-
-func tmuxSessionName(session string) string {
-	return strings.ReplaceAll(session, ":", "-")
-}
-
-func runningInsideTmux() bool {
-	return strings.TrimSpace(os.Getenv("TMUX")) != ""
-}
-
-func isRuntimeMissingSession(result execx.Result, err error) bool {
-	var commandErr execx.CommandError
-	if !errors.As(err, &commandErr) {
-		return false
-	}
-
-	output := strings.ToLower(result.Stderr + "\n" + result.Stdout + "\n" + commandErr.Stderr + "\n" + commandErr.Stdout)
-	return strings.Contains(output, "can't find session")
 }
 
 type noopTaskRepository struct{}

@@ -437,16 +437,21 @@ func (s *Service) reconcileTask(ctx context.Context, task *Task) (*Task, error) 
 		return nil, err
 	}
 	reconciled.SessionExists = sessionExists
-	agentWindowExists, err := s.tmux.WindowExists(ctx, reconciled.TmuxSession, windowOrDefault(reconciled.AgentWindowName, "agent"))
-	if err != nil {
-		return nil, err
+	if reconciled.SessionExists {
+		agentWindowExists, err := s.tmux.WindowExists(ctx, reconciled.TmuxSession, windowOrDefault(reconciled.AgentWindowName, "agent"))
+		if err != nil {
+			return nil, err
+		}
+		reconciled.AgentWindowExists = agentWindowExists
+		editorWindowExists, err := s.tmux.WindowExists(ctx, reconciled.TmuxSession, windowOrDefault(reconciled.EditorWindowName, "editor"))
+		if err != nil {
+			return nil, err
+		}
+		reconciled.EditorWindowExists = editorWindowExists
+	} else {
+		reconciled.AgentWindowExists = false
+		reconciled.EditorWindowExists = false
 	}
-	reconciled.AgentWindowExists = agentWindowExists
-	editorWindowExists, err := s.tmux.WindowExists(ctx, reconciled.TmuxSession, windowOrDefault(reconciled.EditorWindowName, "editor"))
-	if err != nil {
-		return nil, err
-	}
-	reconciled.EditorWindowExists = editorWindowExists
 	reconciled.LastReconciledAt = s.clock.Now().UTC()
 	reconciled.UpdatedAt = s.clock.Now().UTC()
 	problems := make([]string, 0, 1)

@@ -47,6 +47,45 @@ func TestRepositoryCreateSession_UsesDetachedSessionInWorkingDir(t *testing.T) {
 	}, runner.Calls[1].Args)
 }
 
+func TestRepositoryCreateSession_KillsSessionIfEditorWindowCreationFails(t *testing.T) {
+	runner := execx.NewFakeRunner([]execx.Result{{}, {}, {}})
+	runner.Errors = []error{nil, errors.New("new-window failed"), nil}
+	repo := NewRepository(runner)
+
+	err := repo.CreateSession(context.Background(), core.CreateSessionInput{
+		SessionName:      "repo-billing-retry-flow",
+		WorkingDir:       "/tmp/repo-billing-retry-flow",
+		AgentWindowName:  "agent",
+		EditorWindowName: "editor",
+	})
+
+	require.EqualError(t, err, "new-window failed")
+	require.Len(t, runner.Calls, 3)
+	require.Equal(t, []string{
+		"kill-session",
+		"-t",
+		"=repo-billing-retry-flow",
+	}, runner.Calls[2].Args)
+}
+
+func TestRepositoryCreateSession_JoinsWindowCreationAndCleanupErrors(t *testing.T) {
+	runner := execx.NewFakeRunner([]execx.Result{{}, {}, {}})
+	runner.Errors = []error{nil, errors.New("new-window failed"), errors.New("kill-session failed")}
+	repo := NewRepository(runner)
+
+	err := repo.CreateSession(context.Background(), core.CreateSessionInput{
+		SessionName:      "repo-billing-retry-flow",
+		WorkingDir:       "/tmp/repo-billing-retry-flow",
+		AgentWindowName:  "agent",
+		EditorWindowName: "editor",
+	})
+
+	require.Error(t, err)
+	require.ErrorContains(t, err, "new-window failed")
+	require.ErrorContains(t, err, "kill-session failed")
+	require.Len(t, runner.Calls, 3)
+}
+
 func TestRepositorySendKeysToWindow_UsesNamedWindowTarget(t *testing.T) {
 	runner := execx.NewFakeRunner([]execx.Result{{}})
 	repo := NewRepository(runner)
@@ -57,6 +96,21 @@ func TestRepositorySendKeysToWindow_UsesNamedWindowTarget(t *testing.T) {
 		"send-keys",
 		"-t",
 		"=repo-billing-retry-flow:editor",
+		"codex 'fix bug'",
+		"C-m",
+	}, runner.Calls[0].Args)
+}
+
+func TestRepositorySendKeysToWindow_DefaultsEmptyWindowToAgent(t *testing.T) {
+	runner := execx.NewFakeRunner([]execx.Result{{}})
+	repo := NewRepository(runner)
+
+	err := repo.SendKeysToWindow(context.Background(), "repo-billing-retry-flow", "", []string{"codex", "fix bug"})
+	require.NoError(t, err)
+	require.Equal(t, []string{
+		"send-keys",
+		"-t",
+		"=repo-billing-retry-flow:agent",
 		"codex 'fix bug'",
 		"C-m",
 	}, runner.Calls[0].Args)
