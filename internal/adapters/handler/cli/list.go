@@ -21,17 +21,20 @@ func newListCommand(deps Dependencies) *cobra.Command {
 				return err
 			}
 
-			if _, err = fmt.Fprintln(cmd.OutOrStdout(), "NAME\tPROVIDER\tSTATUS\tSESSION\tBRANCH"); err != nil {
+			if _, err = fmt.Fprintln(cmd.OutOrStdout(), "NAME\tREPO\tPROVIDER\tSTATUS\tAGENT\tEDITOR\tSESSION\tBRANCH"); err != nil {
 				return err
 			}
 
 			for _, task := range tasks {
 				if _, err = fmt.Fprintf(
 					cmd.OutOrStdout(),
-					"%s\t%s\t%s\t%s\t%s\n",
+					"%s\t%s\t%s\t%s\t%t\t%t\t%s\t%s\n",
 					task.DisplayName,
+					task.RepoName,
 					task.Provider,
 					task.Status,
+					task.AgentWindowExists,
+					task.EditorWindowExists,
 					task.TmuxSession,
 					task.BranchName,
 				); err != nil {

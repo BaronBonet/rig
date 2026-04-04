@@ -14,14 +14,19 @@ func TestStatusCommand_PrintsTaskDetails(t *testing.T) {
 	out := &bytes.Buffer{}
 	service := fakeStatusCLIService{
 		task: &core.Task{
-			DisplayName:    "billing retry flow",
-			Slug:           "billing-retry-flow",
-			Status:         core.TaskStatusRunning,
-			WorktreePath:   "/tmp/repo-billing-retry-flow",
-			TmuxSession:    "repo-billing-retry-flow",
-			WorktreeExists: true,
-			BranchExists:   true,
-			SessionExists:  true,
+			DisplayName:       "billing retry flow",
+			Slug:              "billing-retry-flow",
+			RepoName:          "repo",
+			Status:            core.TaskStatusDegraded,
+			WorktreePath:      "/tmp/repo-billing-retry-flow",
+			TmuxSession:       "repo-billing-retry-flow",
+			AgentWindowName:   "agent",
+			EditorWindowName:  "editor",
+			WorktreeExists:    true,
+			BranchExists:      true,
+			SessionExists:     true,
+			AgentWindowExists: true,
+			EditorWindowExists: false,
 		},
 	}
 
@@ -32,8 +37,23 @@ func TestStatusCommand_PrintsTaskDetails(t *testing.T) {
 
 	err := cmd.Execute()
 	require.NoError(t, err)
-	require.Contains(t, out.String(), "billing retry flow")
-	require.Contains(t, out.String(), "repo-billing-retry-flow")
+	require.Equal(
+		t,
+		"Name: billing retry flow\n"+
+			"Slug: billing-retry-flow\n"+
+			"Repo: repo\n"+
+			"Status: degraded\n"+
+			"Session: repo-billing-retry-flow\n"+
+			"AgentWindow: agent\n"+
+			"EditorWindow: editor\n"+
+			"Worktree: /tmp/repo-billing-retry-flow\n"+
+			"WorktreeExists: true\n"+
+			"BranchExists: true\n"+
+			"SessionExists: true\n"+
+			"AgentWindowExists: true\n"+
+			"EditorWindowExists: false\n",
+		out.String(),
+	)
 }
 
 type fakeStatusCLIService struct {

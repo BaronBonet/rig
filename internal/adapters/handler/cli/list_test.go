@@ -14,11 +14,14 @@ func TestListCommand_PrintsTaskTable(t *testing.T) {
 	out := &bytes.Buffer{}
 	service := fakeListCLIService{
 		tasks: []*core.Task{{
-			DisplayName: "billing retry flow",
-			Provider:    "codex",
-			Status:      core.TaskStatusRunning,
-			TmuxSession: "repo-billing-retry-flow",
-			BranchName:  "feat/billing-retry-flow",
+			DisplayName:       "billing retry flow",
+			RepoName:          "repo",
+			Provider:          "codex",
+			Status:            core.TaskStatusDegraded,
+			AgentWindowExists: true,
+			EditorWindowExists: false,
+			TmuxSession:       "repo-billing-retry-flow",
+			BranchName:        "feat/billing-retry-flow",
 		}},
 	}
 
@@ -28,8 +31,11 @@ func TestListCommand_PrintsTaskTable(t *testing.T) {
 
 	err := cmd.Execute()
 	require.NoError(t, err)
-	require.Contains(t, out.String(), "billing retry flow")
-	require.Contains(t, out.String(), "feat/billing-retry-flow")
+	require.Equal(
+		t,
+		"NAME\tREPO\tPROVIDER\tSTATUS\tAGENT\tEDITOR\tSESSION\tBRANCH\nbilling retry flow\trepo\tcodex\tdegraded\ttrue\tfalse\trepo-billing-retry-flow\tfeat/billing-retry-flow\n",
+		out.String(),
+	)
 }
 
 type fakeListCLIService struct {

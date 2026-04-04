@@ -24,15 +24,20 @@ func newStatusCommand(deps Dependencies) *cobra.Command {
 
 			_, err = fmt.Fprintf(
 				cmd.OutOrStdout(),
-				"Name: %s\nSlug: %s\nStatus: %s\nSession: %s\nWorktree: %s\nWorktreeExists: %t\nBranchExists: %t\nSessionExists: %t\n",
+				"Name: %s\nSlug: %s\nRepo: %s\nStatus: %s\nSession: %s\nAgentWindow: %s\nEditorWindow: %s\nWorktree: %s\nWorktreeExists: %t\nBranchExists: %t\nSessionExists: %t\nAgentWindowExists: %t\nEditorWindowExists: %t\n",
 				task.DisplayName,
 				task.Slug,
+				task.RepoName,
 				task.Status,
 				task.TmuxSession,
+				task.AgentWindowName,
+				task.EditorWindowName,
 				task.WorktreePath,
 				task.WorktreeExists,
 				task.BranchExists,
 				task.SessionExists,
+				task.AgentWindowExists,
+				task.EditorWindowExists,
 			)
 			return err
 		},

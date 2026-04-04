@@ -1,6 +1,6 @@
 # Agent
 
-`agent` is a Go CLI for creating Codex-backed git worktrees and tmux sessions from a task prompt.
+`agent` is a Go CLI and TUI for managing Codex-backed git worktrees and tmux task sessions.
 
 ## Install
 
@@ -35,8 +35,16 @@ The first version supports:
 - `agent doctor`
 - `agent tui`
 
-The first release only supports `codex` as the provider, uses SQLite for persisted task state, and defaults to a single-window tmux session per task.
-`agent tui` is the first TUI: it shows tracked tasks, live tmux/worktree state, lets you jump into a selected session, and lets you remove runtime resources for a task.
+The first release only supports `codex` as the provider and uses SQLite for persisted task state.
+
+The product is centered on `agent tui`:
+
+- each task maps to a git worktree
+- each task maps to a tmux session
+- each managed session has a required `agent` window for automation
+- each managed session also gets a seeded `editor` window by default
+
+`agent` owns the `agent` window contract. The rest of the tmux session is user-customizable.
 
 ## Requirements
 
@@ -71,6 +79,27 @@ Each `seed.copy` entry is copied from the repo root into the new worktree after 
 If a configured source path is missing, the `new` command fails. If the destination already exists in the worktree, the command also fails. Symlink sources are rejected explicitly.
 
 ## Usage
+
+The primary daily workflow is the TUI:
+
+```bash
+agent tui
+```
+
+Inside the TUI:
+
+- `j` / `k` or arrow keys move between tasks
+- `g` / `G` or home/end jump to the top or bottom
+- `Enter` opens the selected task session
+- `n` starts task creation
+- `x` starts cleanup for the selected task
+- `y` confirms cleanup
+- `n`, `esc`, or `q` cancel the cleanup confirmation prompt
+- `esc` cancels TUI task creation screens
+- `r` refreshes task state
+- `q` quits the TUI from the main view
+
+The main screen shows repo, status, tmux/worktree presence, and `agent` / `editor` window health for each tracked task.
 
 Show environment health:
 
@@ -116,33 +145,16 @@ Open a task session:
 agent open billing-retry-flow
 ```
 
-Open the cleanup TUI:
-
-```bash
-agent tui
-```
-
 For local iteration during development, run the command from source:
 
 ```bash
 go run ./cmd/agent <command>
 ```
 
-Keybindings in the TUI:
-
-- `j` / `k` or arrow keys move between tasks
-- `g` / `G` or home/end jump to the top or bottom
-- `Enter` opens the selected task session
-- `x` starts cleanup for the selected task
-- `y` confirms cleanup
-- `n`, `esc`, or `q` cancel the confirmation prompt
-- `r` refreshes task state
-- `q` quits the TUI from the main view
-
 Cleanup deletes the tmux session and worktree for the selected task, but keeps the branch.
 
 ## Current Limitations
 
-- No multi-window tmux layouts yet
+- Single-repo task creation is the primary workflow today; broader multi-repo control-center behavior can come later
 - No Claude provider yet
 - `agent.yaml` only supports `seed.copy` in v1
