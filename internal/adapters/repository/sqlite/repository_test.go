@@ -165,7 +165,7 @@ func TestNewRepository_CreatesParentDirectory(t *testing.T) {
 	require.NotNil(t, repo)
 }
 
-func TestNewRepository_BackfillsTaskColumns(t *testing.T) {
+func TestNewRepository_MigratesLegacyTaskRow(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "state.db")
 
@@ -195,16 +195,69 @@ create table tasks (
 );
 `)
 	require.NoError(t, err)
+	_, err = db.Exec(`
+insert into tasks (
+  id, prompt, display_name, slug, repo_root, base_branch, branch_name,
+  worktree_path, tmux_session, provider, status, worktree_exists,
+  branch_exists, session_exists, last_error, created_at, updated_at, last_reconciled_at
+) values (
+  'legacy-task',
+  'legacy prompt',
+  'legacy task',
+  'legacy-task',
+  '/tmp/repo',
+  'main',
+  'feat/legacy-task',
+  '/tmp/repo-legacy-task',
+  'repo-legacy-task',
+  'codex',
+  'ready',
+  1,
+  0,
+  0,
+  '',
+  '2026-04-04T10:00:00Z',
+  '2026-04-04T10:00:00Z',
+  ''
+);
+`)
+	require.NoError(t, err)
 	require.NoError(t, db.Close())
 
 	repo, err := NewRepository(path)
 	require.NoError(t, err)
 	require.NotNil(t, repo)
 
+	got, err := repo.GetTask(context.Background(), "legacy-task")
+	require.NoError(t, err)
+	require.Equal(t, "repo", got.RepoName)
+	require.Equal(t, defaultAgentWindowName, got.AgentWindowName)
+	require.Equal(t, defaultEditorWindowName, got.EditorWindowName)
+	require.False(t, got.AgentWindowExists)
+	require.False(t, got.EditorWindowExists)
+
+	got.RepoName = "repo-updated"
+	got.AgentWindowName = "agent-updated"
+	got.EditorWindowName = "editor-updated"
+	got.AgentWindowExists = true
+	got.EditorWindowExists = true
+	got.UpdatedAt = time.Now().UTC()
+
+	require.NoError(t, repo.UpdateTask(context.Background(), got))
+
+	updated, err := repo.GetTask(context.Background(), "legacy-task")
+	require.NoError(t, err)
+	require.Equal(t, "repo-updated", updated.RepoName)
+	require.Equal(t, "agent-updated", updated.AgentWindowName)
+	require.Equal(t, "editor-updated", updated.EditorWindowName)
+	require.True(t, updated.AgentWindowExists)
+	require.True(t, updated.EditorWindowExists)
+
 	db, err = sql.Open("sqlite", path)
 	require.NoError(t, err)
 	defer db.Close()
 
+	columns := taskTableColumns(t, db)
 	for _, column := range []string{
 		"repo_name",
 		"agent_window_name",
@@ -212,30 +265,31 @@ create table tasks (
 		"agent_window_exists",
 		"editor_window_exists",
 	} {
-		var name string
-		rows, err := db.Query(`pragma table_info(tasks)`)
-		require.NoError(t, err)
-
-		found := false
-		for rows.Next() {
-			var (
-				cid          int
-				colName      string
-				colType      string
-				notNull      int
-				defaultValue sql.NullString
-				pk           int
-			)
-			require.NoError(t, rows.Scan(&cid, &colName, &colType, &notNull, &defaultValue, &pk))
-			if colName == column {
-				name = colName
-				found = true
-				break
-			}
-		}
-		require.NoError(t, rows.Err())
-		require.True(t, found, column)
-		require.NoError(t, err)
-		require.Equal(t, column, name)
+		require.Contains(t, columns, column)
 	}
+}
+
+func taskTableColumns(t *testing.T, db *sql.DB) map[string]struct{} {
+	t.Helper()
+
+	rows, err := db.Query(`pragma table_info(tasks)`)
+	require.NoError(t, err)
+	defer rows.Close()
+
+	columns := make(map[string]struct{})
+	for rows.Next() {
+		var (
+			cid          int
+			colName      string
+			colType      string
+			notNull      int
+			defaultValue sql.NullString
+			pk           int
+		)
+		require.NoError(t, rows.Scan(&cid, &colName, &colType, &notNull, &defaultValue, &pk))
+		columns[colName] = struct{}{}
+	}
+	require.NoError(t, rows.Err())
+
+	return columns
 }

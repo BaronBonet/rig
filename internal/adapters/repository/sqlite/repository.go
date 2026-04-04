@@ -16,6 +16,11 @@ type Repository struct {
 	db *sql.DB
 }
 
+const (
+	defaultAgentWindowName  = "agent"
+	defaultEditorWindowName = "editor"
+)
+
 func NewRepository(path string) (*Repository, error) {
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 		return nil, err
@@ -48,8 +53,8 @@ create table if not exists tasks (
   branch_name text not null,
   worktree_path text not null,
   tmux_session text not null,
-  agent_window_name text not null default '',
-  editor_window_name text not null default '',
+  agent_window_name text not null default 'agent',
+  editor_window_name text not null default 'editor',
   provider text not null,
   status text not null,
   worktree_exists integer not null,
@@ -76,8 +81,8 @@ create table if not exists events (
 
 	for _, stmt := range []string{
 		`alter table tasks add column repo_name text not null default ''`,
-		`alter table tasks add column agent_window_name text not null default ''`,
-		`alter table tasks add column editor_window_name text not null default ''`,
+		`alter table tasks add column agent_window_name text not null default 'agent'`,
+		`alter table tasks add column editor_window_name text not null default 'editor'`,
 		`alter table tasks add column agent_window_exists integer not null default 0`,
 		`alter table tasks add column editor_window_exists integer not null default 0`,
 	} {
@@ -85,6 +90,10 @@ create table if not exists events (
 		if err := addColumnIfMissing(r.db, "tasks", column, stmt); err != nil {
 			return err
 		}
+	}
+
+	if err := r.backfillLegacyTaskRows(); err != nil {
+		return err
 	}
 
 	return nil
@@ -382,4 +391,73 @@ func hasColumn(db *sql.DB, table, column string) (bool, error) {
 	}
 
 	return false, rows.Err()
+}
+
+func (r *Repository) backfillLegacyTaskRows() error {
+	rows, err := r.db.Query(`select id, repo_root, repo_name, agent_window_name, editor_window_name from tasks`)
+	if err != nil {
+		return err
+	}
+	defer rows.Close()
+
+	type legacyTaskRow struct {
+		id               string
+		repoRoot         string
+		repoName         string
+		agentWindowName  string
+		editorWindowName string
+	}
+
+	var legacyRows []legacyTaskRow
+	for rows.Next() {
+		var row legacyTaskRow
+		if err := rows.Scan(&row.id, &row.repoRoot, &row.repoName, &row.agentWindowName, &row.editorWindowName); err != nil {
+			return err
+		}
+		legacyRows = append(legacyRows, row)
+	}
+
+	if err := rows.Err(); err != nil {
+		return err
+	}
+
+	for _, row := range legacyRows {
+		desiredRepoName := row.repoName
+		if desiredRepoName == "" {
+			desiredRepoName = defaultRepoName(row.repoRoot)
+		}
+		desiredAgentWindowName := row.agentWindowName
+		if desiredAgentWindowName == "" {
+			desiredAgentWindowName = defaultAgentWindowName
+		}
+		desiredEditorWindowName := row.editorWindowName
+		if desiredEditorWindowName == "" {
+			desiredEditorWindowName = defaultEditorWindowName
+		}
+
+		if desiredRepoName == row.repoName && desiredAgentWindowName == row.agentWindowName && desiredEditorWindowName == row.editorWindowName {
+			continue
+		}
+
+		if _, err := r.db.Exec(
+			`update tasks set repo_name = ?, agent_window_name = ?, editor_window_name = ? where id = ?`,
+			desiredRepoName,
+			desiredAgentWindowName,
+			desiredEditorWindowName,
+			row.id,
+		); err != nil {
+			return err
+		}
+	}
+
+	return nil
+}
+
+func defaultRepoName(repoRoot string) string {
+	name := filepath.Base(repoRoot)
+	if name == "." || name == string(filepath.Separator) || name == "" {
+		return ""
+	}
+
+	return name
 }
