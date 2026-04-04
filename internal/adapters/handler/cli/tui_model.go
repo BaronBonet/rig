@@ -332,53 +332,58 @@ func (m model) updateNameConfirmKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 func (m model) listView() string {
 	var b strings.Builder
 
-	b.WriteString("Control Center\n")
-	b.WriteString("j/k: move  g/G: jump  enter: open  n: new task  x: clean up  r: refresh  q: quit\n\n")
+	// Header
+	header := titleStyle.Render(iconHeaderList + " Control Center")
+	keys := dimStyle.Render("j/k move · enter open · n new · x clean · r refresh · q quit")
+	b.WriteString(header + "  " + keys + "\n")
+	b.WriteString(dimStyle.Render(strings.Repeat("─", 72)) + "\n")
 
 	if m.err != nil {
-		b.WriteString("Error: ")
-		b.WriteString(m.err.Error())
-		b.WriteString("\n\n")
+		b.WriteString(errorStyle.Render("Error: "+m.err.Error()) + "\n\n")
 	}
 
 	if m.loading {
-		b.WriteString("Loading tasks...")
+		b.WriteString(dimStyle.Render("Loading tasks..."))
 		return b.String()
 	}
 
 	if m.busy {
-		b.WriteString("Working...\n\n")
+		b.WriteString(dimStyle.Render("Working...") + "\n\n")
 	}
 
 	if len(m.tasks) == 0 {
-		b.WriteString("No tasks found.\n")
-		b.WriteString("Press n to create one.")
+		b.WriteString(dimStyle.Render("No tasks found.") + "\n")
+		b.WriteString(dimStyle.Render("Press n to create one."))
 		return b.String()
 	}
 
+	// Detail bar for selected task
 	task := m.selectedTask()
-	fmt.Fprintf(&b, "repo: %s  agent: %s  editor: %s\n", taskRepoName(task), windowHealth(task.AgentWindowExists), windowHealth(task.EditorWindowExists))
-	fmt.Fprintf(&b, "selected: %s  branch: %s  tmux: %s  worktree: %s\n\n", task.DisplayName, emptyFallback(task.BranchName, "-"), yesNo(task.SessionExists), yesNo(task.WorktreeExists))
+	details := fmt.Sprintf(
+		"%s %s  %s %s  %s %s  %s %s  %s %s  %s %s",
+		iconRepo, emptyFallback(taskRepoName(task), "-"),
+		iconAgent, healthStyle(task.AgentWindowExists),
+		iconEditor, healthStyle(task.EditorWindowExists),
+		iconBranch, dimStyle.Render(emptyFallback(task.BranchName, "-")),
+		iconTmux, yesNoStyled(task.SessionExists),
+		iconWorktree, yesNoStyled(task.WorktreeExists),
+	)
+	b.WriteString(detailBarStyle.Render(details) + "\n\n")
 
+	// Task rows
 	for i, task := range m.tasks {
-		marker := " "
-		if i == m.selected {
-			marker = ">"
-		}
+		icon, style := statusStyle(string(task.Status))
+		status := style.Render(icon + " " + string(task.Status))
 
-		fmt.Fprintf(
-			&b,
-			"%s %-24s repo:%-12s status:%-8s agent:%-7s editor:%-7s tmux:%-3s worktree:%-3s branch:%s\n",
-			marker,
-			task.DisplayName,
-			taskRepoName(task),
-			task.Status,
-			windowHealth(task.AgentWindowExists),
-			windowHealth(task.EditorWindowExists),
-			yesNo(task.SessionExists),
-			yesNo(task.WorktreeExists),
-			emptyFallback(task.BranchName, "-"),
-		)
+		if i == m.selected {
+			name := iconSelected + " " + task.DisplayName
+			row := fmt.Sprintf("%-40s %s", name, status)
+			b.WriteString(selectedRowStyle.Render(row) + "\n")
+		} else {
+			name := "  " + task.DisplayName
+			row := fmt.Sprintf("%-40s %s", name, status)
+			b.WriteString(normalRowStyle.Render(row) + "\n")
+		}
 	}
 
 	return strings.TrimRight(b.String(), "\n")
