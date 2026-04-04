@@ -6,6 +6,7 @@ const (
 	TaskStatusCreating TaskStatus = "creating"
 	TaskStatusReady    TaskStatus = "ready"
 	TaskStatusRunning  TaskStatus = "running"
+	TaskStatusDegraded TaskStatus = "degraded"
 	TaskStatusBroken   TaskStatus = "broken"
 	TaskStatusCleaned  TaskStatus = "cleaned"
 )

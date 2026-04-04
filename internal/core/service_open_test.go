@@ -21,6 +21,39 @@ func TestServiceOpenTask_AttachesWhenSessionExists(t *testing.T) {
 	}
 	svc.gitRepo.branchExists = true
 	svc.tmuxRepo.sessionExists = true
+	svc.tmuxRepo.windowExists = map[string]map[string]bool{
+		"repo-billing-retry-flow": {
+			"agent":  true,
+			"editor": true,
+		},
+	}
+
+	err := svc.service.OpenTask(t.Context(), "billing-retry-flow")
+	require.NoError(t, err)
+	require.Equal(t, "repo-billing-retry-flow", svc.tmuxRepo.attachedSession)
+}
+
+func TestServiceOpenTask_AllowsDegradedWhenAgentWindowExists(t *testing.T) {
+	worktree := t.TempDir()
+	svc := newTestService()
+	svc.taskRepo.getTask = &Task{
+		ID:               "task-1",
+		Slug:             "billing-retry-flow",
+		RepoRoot:         "/tmp/repo",
+		BranchName:       "feat/billing-retry-flow",
+		WorktreePath:     worktree,
+		TmuxSession:      "repo-billing-retry-flow",
+		AgentWindowName:  "agent",
+		EditorWindowName: "editor",
+		Status:           TaskStatus("degraded"),
+	}
+	svc.gitRepo.branchExists = true
+	svc.tmuxRepo.sessionExists = true
+	svc.tmuxRepo.windowExists = map[string]map[string]bool{
+		"repo-billing-retry-flow": {
+			"agent": true,
+		},
+	}
 
 	err := svc.service.OpenTask(t.Context(), "billing-retry-flow")
 	require.NoError(t, err)

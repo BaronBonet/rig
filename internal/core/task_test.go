@@ -9,4 +9,5 @@ import (
 func TestTaskStatusIsTerminal_BrokenIsTerminal(t *testing.T) {
 	require.True(t, TaskStatusBroken.IsTerminal())
 	require.False(t, TaskStatusRunning.IsTerminal())
+	require.False(t, TaskStatusDegraded.IsTerminal())
 }

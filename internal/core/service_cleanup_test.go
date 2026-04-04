@@ -15,6 +15,12 @@ func TestServiceDeleteTaskResources_CleansRunningTaskResources(t *testing.T) {
 	svc.taskRepo.getTask = cleanupTestTask(worktree)
 	svc.gitRepo.branchExists = true
 	svc.tmuxRepo.sessionExists = true
+	svc.tmuxRepo.windowExists = map[string]map[string]bool{
+		"repo-billing-retry-flow": {
+			"agent":  true,
+			"editor": true,
+		},
+	}
 
 	task, err := svc.service.DeleteTaskResources(t.Context(), "billing-retry-flow")
 
@@ -23,6 +29,8 @@ func TestServiceDeleteTaskResources_CleansRunningTaskResources(t *testing.T) {
 	require.False(t, task.WorktreeExists)
 	require.True(t, task.BranchExists)
 	require.False(t, task.SessionExists)
+	require.False(t, task.AgentWindowExists)
+	require.False(t, task.EditorWindowExists)
 	require.Empty(t, task.LastError)
 	require.Equal(t, []string{"repo-billing-retry-flow"}, svc.tmuxRepo.killedSessions)
 	require.Equal(t, []string{worktree}, svc.gitRepo.removedWorktrees)

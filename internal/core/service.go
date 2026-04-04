@@ -103,19 +103,22 @@ func (s *Service) createTask(
 	now := s.clock.Now().UTC()
 	taskSlug := slug.EnsureUnique(slug.FromDisplayName(displayName), existingSlugs)
 	task := &Task{
-		ID:           fmt.Sprintf("%d", now.UnixNano()),
-		Prompt:       input.Prompt,
-		DisplayName:  displayName,
-		Slug:         taskSlug,
-		RepoRoot:     repoCtx.Root,
-		BaseBranch:   repoCtx.BaseBranch,
-		BranchName:   "feat/" + taskSlug,
-		WorktreePath: filepath.Join(filepath.Dir(repoCtx.Root), repoCtx.Name+"-"+taskSlug),
-		TmuxSession:  repoCtx.Name + "-" + taskSlug,
-		Provider:     "codex",
-		Status:       TaskStatusCreating,
-		CreatedAt:    now,
-		UpdatedAt:    now,
+		ID:               fmt.Sprintf("%d", now.UnixNano()),
+		Prompt:           input.Prompt,
+		DisplayName:      displayName,
+		Slug:             taskSlug,
+		RepoRoot:         repoCtx.Root,
+		RepoName:         repoCtx.Name,
+		BaseBranch:       repoCtx.BaseBranch,
+		BranchName:       "feat/" + taskSlug,
+		WorktreePath:     filepath.Join(filepath.Dir(repoCtx.Root), repoCtx.Name+"-"+taskSlug),
+		TmuxSession:      repoCtx.Name + "-" + taskSlug,
+		AgentWindowName:  "agent",
+		EditorWindowName: "editor",
+		Provider:         "codex",
+		Status:           TaskStatusCreating,
+		CreatedAt:        now,
+		UpdatedAt:        now,
 	}
 
 	emitTaskProgress(progress, TaskProgress{
@@ -179,13 +182,17 @@ func (s *Service) createTask(
 		Task:    cloneTask(task),
 	})
 	if err := s.tmux.CreateSession(ctx, CreateSessionInput{
-		SessionName: task.TmuxSession,
-		WorkingDir:  task.WorktreePath,
+		SessionName:      task.TmuxSession,
+		WorkingDir:       task.WorktreePath,
+		AgentWindowName:  task.AgentWindowName,
+		EditorWindowName: task.EditorWindowName,
 	}); err != nil {
 		return s.markBroken(ctx, task, fmt.Errorf("start tmux session: %w", err))
 	}
 
 	task.SessionExists = true
+	task.AgentWindowExists = true
+	task.EditorWindowExists = true
 	task.UpdatedAt = s.clock.Now().UTC()
 	if err := s.tasks.UpdateTask(ctx, task); err != nil {
 		return task, err
@@ -201,7 +208,7 @@ func (s *Service) createTask(
 		Message: "Launching Codex...",
 		Task:    cloneTask(task),
 	})
-	if err := s.tmux.SendKeys(ctx, task.TmuxSession, command); err != nil {
+	if err := s.tmux.SendKeysToWindow(ctx, task.TmuxSession, task.AgentWindowName, command); err != nil {
 		return s.markBroken(ctx, task, fmt.Errorf("launch codex: %w", err))
 	}
 
@@ -271,7 +278,11 @@ func (s *Service) OpenTask(ctx context.Context, idOrSlug string) error {
 		return ErrCleanedTask
 	}
 
-	if !task.SessionExists {
+	if task.Status != TaskStatusRunning && task.Status != TaskStatusDegraded {
+		return ErrBrokenTask
+	}
+
+	if !task.SessionExists || !task.AgentWindowExists {
 		return ErrBrokenTask
 	}
 
@@ -300,6 +311,8 @@ func (s *Service) DeleteTaskResources(ctx context.Context, idOrSlug string) (*Ta
 		}
 
 		task.SessionExists = false
+		task.AgentWindowExists = false
+		task.EditorWindowExists = false
 		task.UpdatedAt = s.clock.Now().UTC()
 		if err := s.tasks.UpdateTask(ctx, task); err != nil {
 			return task, err
@@ -424,6 +437,16 @@ func (s *Service) reconcileTask(ctx context.Context, task *Task) (*Task, error) 
 		return nil, err
 	}
 	reconciled.SessionExists = sessionExists
+	agentWindowExists, err := s.tmux.WindowExists(ctx, reconciled.TmuxSession, windowOrDefault(reconciled.AgentWindowName, "agent"))
+	if err != nil {
+		return nil, err
+	}
+	reconciled.AgentWindowExists = agentWindowExists
+	editorWindowExists, err := s.tmux.WindowExists(ctx, reconciled.TmuxSession, windowOrDefault(reconciled.EditorWindowName, "editor"))
+	if err != nil {
+		return nil, err
+	}
+	reconciled.EditorWindowExists = editorWindowExists
 	reconciled.LastReconciledAt = s.clock.Now().UTC()
 	reconciled.UpdatedAt = s.clock.Now().UTC()
 	problems := make([]string, 0, 1)
@@ -444,6 +467,12 @@ func (s *Service) reconcileTask(ctx context.Context, task *Task) (*Task, error) 
 			if reconciled.SessionExists {
 				unexpected = append(unexpected, "unexpected tmux session")
 			}
+			if reconciled.AgentWindowExists {
+				unexpected = append(unexpected, "unexpected tmux agent window")
+			}
+			if reconciled.EditorWindowExists {
+				unexpected = append(unexpected, "unexpected tmux editor window")
+			}
 
 			reconciled.Status = TaskStatusBroken
 			reconciled.LastError = strings.Join(unexpected, ", ")
@@ -459,6 +488,9 @@ func (s *Service) reconcileTask(ctx context.Context, task *Task) (*Task, error) 
 		if !reconciled.SessionExists {
 			missing = append(missing, "missing tmux session")
 		}
+		if !reconciled.AgentWindowExists {
+			missing = append(missing, "missing tmux agent window")
+		}
 
 		if len(missing) > 0 {
 			reconciled.Status = TaskStatusBroken
@@ -467,6 +499,9 @@ func (s *Service) reconcileTask(ctx context.Context, task *Task) (*Task, error) 
 			} else {
 				reconciled.LastError = strings.Join(missing, ", ")
 			}
+		} else if !reconciled.EditorWindowExists {
+			reconciled.Status = TaskStatusDegraded
+			reconciled.LastError = "missing tmux editor window"
 		} else {
 			reconciled.Status = TaskStatusRunning
 			reconciled.LastError = ""
@@ -506,6 +541,14 @@ func (s *Service) markCleanupBroken(ctx context.Context, task *Task, failure err
 	_ = s.tasks.AppendEvent(ctx, task.ID, "cleanup_failed", task.LastError)
 
 	return task, failure
+}
+
+func windowOrDefault(window, fallback string) string {
+	if strings.TrimSpace(window) == "" {
+		return fallback
+	}
+
+	return window
 }
 
 func fallbackDisplayName(prompt string) string {

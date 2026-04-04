@@ -21,11 +21,21 @@ func TestServiceNewTask_CreatesWorktreeSessionAndPersistsTask(t *testing.T) {
 	require.Equal(t, "feat/billing-retry-flow", task.BranchName)
 	require.Equal(t, "/tmp/repo-billing-retry-flow", task.WorktreePath)
 	require.Equal(t, "repo-billing-retry-flow", task.TmuxSession)
+	require.Equal(t, "repo", task.RepoName)
+	require.Equal(t, "agent", task.AgentWindowName)
+	require.Equal(t, "editor", task.EditorWindowName)
 	require.Equal(t, TaskStatusRunning, task.Status)
 	require.Equal(t, "/tmp/repo-billing-retry-flow", svc.gitRepo.createWorktreeInput.WorktreePath)
 	require.Equal(t, "repo-billing-retry-flow", svc.tmuxRepo.createdSession.SessionName)
+	require.Equal(t, "agent", svc.tmuxRepo.createdSession.AgentWindowName)
+	require.Equal(t, "editor", svc.tmuxRepo.createdSession.EditorWindowName)
+	require.Equal(t, "repo-billing-retry-flow", svc.tmuxRepo.sentSession)
+	require.Equal(t, "agent", svc.tmuxRepo.sentWindow)
 	require.Equal(t, []string{"codex", "add billing retry flow"}, svc.tmuxRepo.sentCommand)
 	require.Equal(t, "billing retry flow", svc.taskRepo.createdTask.DisplayName)
+	require.Equal(t, "repo", svc.taskRepo.createdTask.RepoName)
+	require.Equal(t, "agent", svc.taskRepo.createdTask.AgentWindowName)
+	require.Equal(t, "editor", svc.taskRepo.createdTask.EditorWindowName)
 }
 
 func TestServiceNewTask_FallsBackWhenCodexNameProposalFails(t *testing.T) {
