@@ -12,10 +12,6 @@ import (
 	"github.com/spf13/cobra"
 )
 
-type taskCreationService interface {
-	CreateTaskWithProgress(ctx context.Context, input core.NewTaskInput, options core.CreateTaskOptions, progress func(core.TaskProgress)) (*core.Task, error)
-}
-
 func newNewCommand(deps Dependencies) *cobra.Command {
 	var nonInteractive bool
 	var jsonOutput bool
@@ -27,10 +23,6 @@ func newNewCommand(deps Dependencies) *cobra.Command {
 		RunE: func(cmd *cobra.Command, args []string) error {
 			if deps.Service == nil {
 				return fmt.Errorf("service not configured")
-			}
-			creator, ok := deps.Service.(taskCreationService)
-			if !ok {
-				return fmt.Errorf("service does not support progress-aware task creation")
 			}
 
 			prompt := args[0]
@@ -64,7 +56,7 @@ func newNewCommand(deps Dependencies) *cobra.Command {
 				input.ConfirmedDisplayName = line
 			}
 
-			task, err := creator.CreateTaskWithProgress(
+			task, err := deps.Service.CreateTaskWithProgress(
 				context.Background(),
 				input,
 				core.CreateTaskOptions{OpenSession: !jsonOutput},

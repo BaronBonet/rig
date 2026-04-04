@@ -7,17 +7,30 @@ import (
 
 	"agent/internal/core"
 
+	textinput "github.com/charmbracelet/bubbles/textinput"
 	tea "github.com/charmbracelet/bubbletea"
 )
 
+type tuiMode string
+
+const (
+	tuiModeList           tuiMode = "list"
+	tuiModeCleanupConfirm tuiMode = "cleanup_confirm"
+	tuiModePromptInput    tuiMode = "prompt_input"
+	tuiModeNameConfirm    tuiMode = "name_confirm"
+)
+
 type model struct {
-	service    TaskService
-	tasks      []*core.Task
-	selected   int
-	loading    bool
-	busy       bool
-	confirming bool
-	err        error
+	service     TaskService
+	tasks       []*core.Task
+	selected    int
+	loading     bool
+	busy        bool
+	mode        tuiMode
+	promptInput textinput.Model
+	nameInput   textinput.Model
+	createInput core.NewTaskInput
+	err         error
 }
 
 type tasksLoadedMsg struct {
@@ -34,8 +47,34 @@ type openFinishedMsg struct {
 	err error
 }
 
+type suggestNameFinishedMsg struct {
+	prompt string
+	name   string
+	err    error
+}
+
+type createFinishedMsg struct {
+	task *core.Task
+	err  error
+}
+
 func newTUIModel(service TaskService) model {
-	return model{service: service, loading: true}
+	promptInput := textinput.New()
+	promptInput.Prompt = "> "
+	promptInput.Placeholder = "Describe the task to create"
+	promptInput.Focus()
+
+	nameInput := textinput.New()
+	nameInput.Prompt = "> "
+	nameInput.Placeholder = "Confirm or edit the suggested task name"
+
+	return model{
+		service:     service,
+		loading:     true,
+		mode:        tuiModeList,
+		promptInput: promptInput,
+		nameInput:   nameInput,
+	}
 }
 
 func (m model) Init() tea.Cmd {
@@ -57,7 +96,9 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.tasks = filterVisibleTasks(msg.tasks)
 		if len(m.tasks) == 0 {
 			m.selected = 0
-			m.confirming = false
+			if m.mode == tuiModeCleanupConfirm {
+				m.mode = tuiModeList
+			}
 			return m, nil
 		}
 
@@ -67,7 +108,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 		return m, nil
 	case cleanupFinishedMsg:
-		m.confirming = false
+		m.mode = tuiModeList
 		m.err = msg.err
 		if msg.task != nil {
 			m.replaceTask(msg.task)
@@ -86,45 +127,75 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 
 		return m, tea.Quit
+	case suggestNameFinishedMsg:
+		m.busy = false
+		m.err = msg.err
+		if msg.err != nil {
+			m.mode = tuiModePromptInput
+			m.promptInput.Focus()
+			return m, nil
+		}
+
+		m.createInput = core.NewTaskInput{
+			Cwd:    selectedTaskCwd(m.selectedTask()),
+			Prompt: msg.prompt,
+		}
+		m.nameInput.SetValue(msg.name)
+		m.nameInput.CursorEnd()
+		m.nameInput.Focus()
+		m.promptInput.Blur()
+		m.mode = tuiModeNameConfirm
+		return m, nil
+	case createFinishedMsg:
+		m.busy = false
+		m.err = msg.err
+		if msg.err != nil {
+			m.mode = tuiModeNameConfirm
+			m.nameInput.Focus()
+			return m, nil
+		}
+
+		return m, tea.Quit
 	default:
 		return m, nil
 	}
 }
 
 func (m model) View() string {
-	if m.confirming {
+	switch m.mode {
+	case tuiModeCleanupConfirm:
 		return m.confirmationView()
+	case tuiModePromptInput:
+		return m.promptInputView()
+	case tuiModeNameConfirm:
+		return m.nameConfirmView()
+	default:
+		return m.listView()
 	}
-
-	return m.listView()
 }
 
 func (m model) updateKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
-	if m.confirming {
-		switch msg.String() {
-		case "q", "n", "esc":
-			m.confirming = false
-			return m, nil
-		case "y":
-			task := m.selectedTask()
-			if task == nil {
-				m.confirming = false
-				return m, nil
-			}
-
-			m.confirming = false
-			m.busy = true
-			m.err = nil
-			return m, cleanupTaskCmd(m.service, selectedIDOrSlug(task))
-		default:
-			return m, nil
-		}
+	if msg.Type == tea.KeyCtrlC {
+		return m, tea.Quit
 	}
 
 	if m.busy {
 		return m, nil
 	}
 
+	switch m.mode {
+	case tuiModeCleanupConfirm:
+		return m.updateCleanupConfirmKey(msg)
+	case tuiModePromptInput:
+		return m.updatePromptInputKey(msg)
+	case tuiModeNameConfirm:
+		return m.updateNameConfirmKey(msg)
+	default:
+		return m.updateListKey(msg)
+	}
+}
+
+func (m model) updateListKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	switch msg.String() {
 	case "q":
 		return m, tea.Quit
@@ -162,7 +233,14 @@ func (m model) updateKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 
-		m.confirming = true
+		m.mode = tuiModeCleanupConfirm
+		return m, nil
+	case "n":
+		m.err = nil
+		m.mode = tuiModePromptInput
+		m.promptInput.SetValue("")
+		m.promptInput.Focus()
+		m.nameInput.Blur()
 		return m, nil
 	case "r":
 		m.err = nil
@@ -174,11 +252,80 @@ func (m model) updateKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	}
 }
 
+func (m model) updateCleanupConfirmKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	switch msg.String() {
+	case "q", "n", "esc":
+		m.mode = tuiModeList
+		return m, nil
+	case "y":
+		task := m.selectedTask()
+		if task == nil {
+			m.mode = tuiModeList
+			return m, nil
+		}
+
+		m.mode = tuiModeList
+		m.busy = true
+		m.err = nil
+		return m, cleanupTaskCmd(m.service, selectedIDOrSlug(task))
+	default:
+		return m, nil
+	}
+}
+
+func (m model) updatePromptInputKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	switch msg.Type {
+	case tea.KeyEsc:
+		m.mode = tuiModeList
+		m.promptInput.Blur()
+		return m, nil
+	case tea.KeyEnter:
+		prompt := strings.TrimSpace(m.promptInput.Value())
+		if prompt == "" {
+			return m, nil
+		}
+
+		m.err = nil
+		m.busy = true
+		m.promptInput.Blur()
+		return m, suggestTaskNameCmd(m.service, prompt)
+	}
+
+	var cmd tea.Cmd
+	m.promptInput, cmd = m.promptInput.Update(msg)
+	return m, cmd
+}
+
+func (m model) updateNameConfirmKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	switch msg.Type {
+	case tea.KeyEsc:
+		m.mode = tuiModeList
+		m.nameInput.Blur()
+		return m, nil
+	case tea.KeyEnter:
+		name := strings.TrimSpace(m.nameInput.Value())
+		if name == "" {
+			return m, nil
+		}
+
+		m.err = nil
+		m.busy = true
+		m.nameInput.Blur()
+		input := m.createInput
+		input.ConfirmedDisplayName = name
+		return m, createTaskCmd(m.service, input)
+	}
+
+	var cmd tea.Cmd
+	m.nameInput, cmd = m.nameInput.Update(msg)
+	return m, cmd
+}
+
 func (m model) listView() string {
 	var b strings.Builder
 
-	b.WriteString("Task cleanup\n")
-	b.WriteString("j/k: move  g/G: jump  enter: open  x: clean up  r: refresh  q: quit\n\n")
+	b.WriteString("Control Center\n")
+	b.WriteString("j/k: move  g/G: jump  enter: open  n: new task  x: clean up  r: refresh  q: quit\n\n")
 
 	if m.err != nil {
 		b.WriteString("Error: ")
@@ -196,9 +343,14 @@ func (m model) listView() string {
 	}
 
 	if len(m.tasks) == 0 {
-		b.WriteString("No tasks found.")
+		b.WriteString("No tasks found.\n")
+		b.WriteString("Press n to create one.")
 		return b.String()
 	}
+
+	task := m.selectedTask()
+	fmt.Fprintf(&b, "repo: %s  agent: %s  editor: %s\n", taskRepoName(task), windowHealth(task.AgentWindowExists), windowHealth(task.EditorWindowExists))
+	fmt.Fprintf(&b, "selected: %s  branch: %s  tmux: %s  worktree: %s\n\n", task.DisplayName, emptyFallback(task.BranchName, "-"), yesNo(task.SessionExists), yesNo(task.WorktreeExists))
 
 	for i, task := range m.tasks {
 		marker := " "
@@ -208,17 +360,47 @@ func (m model) listView() string {
 
 		fmt.Fprintf(
 			&b,
-			"%s %s | status: %s | tmux: %s | worktree: %s | branch: %s\n",
+			"%s %-24s repo:%-12s status:%-8s agent:%-7s editor:%-7s tmux:%-3s worktree:%-3s branch:%s\n",
 			marker,
 			task.DisplayName,
+			taskRepoName(task),
 			task.Status,
+			windowHealth(task.AgentWindowExists),
+			windowHealth(task.EditorWindowExists),
 			yesNo(task.SessionExists),
 			yesNo(task.WorktreeExists),
-			task.BranchName,
+			emptyFallback(task.BranchName, "-"),
 		)
 	}
 
 	return strings.TrimRight(b.String(), "\n")
+}
+
+func (m model) promptInputView() string {
+	var b strings.Builder
+	b.WriteString("Create Task\n\n")
+	b.WriteString("Enter the task prompt. Press Enter to suggest a name, or Esc to cancel.\n\n")
+	if m.err != nil {
+		b.WriteString("Error: ")
+		b.WriteString(m.err.Error())
+		b.WriteString("\n\n")
+	}
+	b.WriteString(m.promptInput.View())
+	return b.String()
+}
+
+func (m model) nameConfirmView() string {
+	var b strings.Builder
+	b.WriteString("Confirm Task Name\n\n")
+	b.WriteString("Edit the suggested name if needed. Press Enter to create and open the session, or Esc to cancel.\n\n")
+	if m.err != nil {
+		b.WriteString("Error: ")
+		b.WriteString(m.err.Error())
+		b.WriteString("\n\n")
+	}
+	fmt.Fprintf(&b, "prompt: %s\n\n", m.createInput.Prompt)
+	b.WriteString(m.nameInput.View())
+	return b.String()
 }
 
 func (m model) confirmationView() string {
@@ -304,12 +486,58 @@ func openTaskCmd(service TaskService, idOrSlug string) tea.Cmd {
 	}
 }
 
+func suggestTaskNameCmd(service TaskService, prompt string) tea.Cmd {
+	return func() tea.Msg {
+		name, err := service.SuggestTaskName(context.Background(), prompt)
+		return suggestNameFinishedMsg{prompt: prompt, name: name, err: err}
+	}
+}
+
+func createTaskCmd(service TaskService, input core.NewTaskInput) tea.Cmd {
+	return func() tea.Msg {
+		task, err := service.CreateTaskWithProgress(context.Background(), input, core.CreateTaskOptions{OpenSession: true}, func(core.TaskProgress) {})
+		return createFinishedMsg{task: task, err: err}
+	}
+}
+
 func selectedIDOrSlug(task *core.Task) string {
 	if strings.TrimSpace(task.Slug) != "" {
 		return task.Slug
 	}
 
 	return task.ID
+}
+
+func taskRepoName(task *core.Task) string {
+	if task == nil {
+		return "-"
+	}
+
+	return emptyFallback(task.RepoName, "-")
+}
+
+func selectedTaskCwd(task *core.Task) string {
+	if task == nil || strings.TrimSpace(task.RepoRoot) == "" {
+		return "."
+	}
+
+	return task.RepoRoot
+}
+
+func windowHealth(ok bool) string {
+	if ok {
+		return "healthy"
+	}
+
+	return "missing"
+}
+
+func emptyFallback(value string, fallback string) string {
+	if strings.TrimSpace(value) == "" {
+		return fallback
+	}
+
+	return value
 }
 
 func yesNo(ok bool) string {

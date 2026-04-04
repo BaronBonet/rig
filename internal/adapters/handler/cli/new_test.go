@@ -17,7 +17,7 @@ func TestNewCommand_InteractiveAcceptsSuggestedName(t *testing.T) {
 	in := bytes.NewBufferString("\n")
 	service := &fakeNewCLIService{
 		suggestedName: "billing retry flow",
-		newTask: &core.Task{
+		createdTask: &core.Task{
 			DisplayName: "billing retry flow",
 			Slug:        "billing-retry-flow",
 			TmuxSession: "repo-billing-retry-flow",
@@ -37,7 +37,7 @@ func TestNewCommand_InteractiveAcceptsSuggestedName(t *testing.T) {
 
 	err := cmd.Execute()
 	require.NoError(t, err)
-	require.Equal(t, "billing retry flow", service.createInput.ConfirmedDisplayName)
+	require.Equal(t, "billing retry flow", service.createdInput.ConfirmedDisplayName)
 	require.True(t, service.createWithProgressCalled)
 	require.Contains(t, errOut.String(), "Naming task")
 }
@@ -48,7 +48,7 @@ func TestNewCommand_InteractiveTreatsYesAsAcceptSuggestedName(t *testing.T) {
 	in := bytes.NewBufferString("yes\n")
 	service := &fakeNewCLIService{
 		suggestedName: "billing retry flow",
-		newTask: &core.Task{
+		createdTask: &core.Task{
 			DisplayName: "billing retry flow",
 			Slug:        "billing-retry-flow",
 			TmuxSession: "repo-billing-retry-flow",
@@ -68,7 +68,7 @@ func TestNewCommand_InteractiveTreatsYesAsAcceptSuggestedName(t *testing.T) {
 
 	err := cmd.Execute()
 	require.NoError(t, err)
-	require.Equal(t, "billing retry flow", service.createInput.ConfirmedDisplayName)
+	require.Equal(t, "billing retry flow", service.createdInput.ConfirmedDisplayName)
 	require.True(t, service.createWithProgressCalled)
 }
 
@@ -76,7 +76,7 @@ func TestNewCommand_PrintsProgressAndUsesProgressCreatePath(t *testing.T) {
 	out := &bytes.Buffer{}
 	errOut := &bytes.Buffer{}
 	service := &fakeNewCLIService{
-		newTask: &core.Task{
+		createdTask: &core.Task{
 			DisplayName: "billing retry flow",
 			Slug:        "billing-retry-flow",
 			TmuxSession: "repo-billing-retry-flow",
@@ -123,7 +123,7 @@ func TestNewCommand_JSONModePrintsTask(t *testing.T) {
 	errOut := &bytes.Buffer{}
 	service := &fakeNewCLIService{
 		suggestedName: "billing retry flow",
-		newTask: &core.Task{
+		createdTask: &core.Task{
 			DisplayName: "billing retry flow",
 			Slug:        "billing-retry-flow",
 			TmuxSession: "repo-billing-retry-flow",
@@ -158,12 +158,11 @@ func TestNewCommand_JSONModePrintsTask(t *testing.T) {
 
 type fakeNewCLIService struct {
 	suggestedName            string
-	newTask                  *core.Task
-	newTaskErr               error
-	newTaskInput             core.NewTaskInput
+	createdTask              *core.Task
+	createErr                error
+	createdInput             core.NewTaskInput
 	newTaskCalled            bool
 	createWithProgressCalled bool
-	createInput              core.NewTaskInput
 	createOptions            core.CreateTaskOptions
 	progressEvents           []core.TaskProgress
 }
@@ -178,8 +177,8 @@ func (f *fakeNewCLIService) SuggestTaskName(context.Context, string) (string, er
 
 func (f *fakeNewCLIService) NewTask(_ context.Context, input core.NewTaskInput) (*core.Task, error) {
 	f.newTaskCalled = true
-	f.newTaskInput = input
-	return f.newTask, f.newTaskErr
+	f.createdInput = input
+	return f.createdTask, f.createErr
 }
 
 func (f *fakeNewCLIService) CreateTaskWithProgress(
@@ -189,12 +188,12 @@ func (f *fakeNewCLIService) CreateTaskWithProgress(
 	progress func(core.TaskProgress),
 ) (*core.Task, error) {
 	f.createWithProgressCalled = true
-	f.createInput = input
+	f.createdInput = input
 	f.createOptions = options
 	for _, event := range f.progressEvents {
 		progress(event)
 	}
-	return f.newTask, f.newTaskErr
+	return f.createdTask, f.createErr
 }
 
 func (*fakeNewCLIService) ListTasks(context.Context) ([]*core.Task, error) { return nil, nil }
