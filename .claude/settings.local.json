@@ -11,14 +11,6 @@
       "Bash(golangci-lint run:*)",
       "Bash(go tool:*)",
       "Bash(make test:*)",
-      "Bash(bash:*)",
-      "Bash(xargs -I{} git checkout main -- {})",
-      "Bash(git checkout:*)",
-      "Bash(go install:*)",
-      "Bash(fieldalignment -fix ./internal/adapters/handler/cli/)",
-      "Bash(fieldalignment -fix ./internal/pkg/execx/)",
-      "Bash(git stash:*)",
-      "Bash(git add:*)",
       "Bash(git rebase:*)"
     ]
   }
