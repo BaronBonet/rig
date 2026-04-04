@@ -41,6 +41,7 @@ main() {
     require_cmd curl
     require_cmd tar
     require_cmd shasum
+    require_cmd install
 
     goos="$(detect_goos)"
     goarch="$(detect_goarch)"
@@ -53,7 +54,7 @@ main() {
     curl -fsSL "$download_base/$archive" -o "$tmpdir/$archive"
     curl -fsSL "$download_base/checksums.txt" -o "$tmpdir/checksums.txt"
 
-    grep "  $archive\$" "$tmpdir/checksums.txt" >"$tmpdir/checksum.txt" || fail "missing checksum for $archive"
+    grep -F "  $archive" "$tmpdir/checksums.txt" >"$tmpdir/checksum.txt" || fail "missing checksum for $archive"
     (
         cd "$tmpdir"
         shasum -a 256 -c checksum.txt >/dev/null

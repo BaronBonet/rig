@@ -12,10 +12,12 @@ echo doctor: ok
 EOF
 chmod +x "$tmpdir/work/agent"
 tar -C "$tmpdir/work" -czf "$tmpdir/release/v0.1.0/agent_v0.1.0_darwin_arm64.tar.gz" agent
+tar -C "$tmpdir/work" -czf "$tmpdir/release/v0.1.0/agent_v0.1.0_darwin_amd64.tar.gz" agent
 
 (
     cd "$tmpdir/release/v0.1.0"
     shasum -a 256 agent_v0.1.0_darwin_arm64.tar.gz >checksums.txt
+    shasum -a 256 agent_v0.1.0_darwin_amd64.tar.gz >>checksums.txt
 )
 
 cat >"$tmpdir/latest.json" <<'EOF'
@@ -35,6 +37,7 @@ output="$("$tmpdir/prefix/bin/agent")"
 
 cat >"$tmpdir/release/v0.1.0/checksums.txt" <<'EOF'
 0000000000000000000000000000000000000000000000000000000000000000  agent_v0.1.0_darwin_arm64.tar.gz
+0000000000000000000000000000000000000000000000000000000000000000  agent_v0.1.0_darwin_amd64.tar.gz
 EOF
 
 if PATH="/usr/bin:/bin:/usr/sbin:/sbin" \
