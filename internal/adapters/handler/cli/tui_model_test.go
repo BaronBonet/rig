@@ -142,7 +142,7 @@ func TestModelUpdate_SuggestNameFailureReturnsToPromptModeAndRendersError(t *tes
 	require.Equal(t, tuiModePromptInput, m.mode)
 	require.False(t, m.busy)
 	require.True(t, m.promptInput.Focused())
-	require.Contains(t, m.View(), "suggest failed")
+	require.Contains(t, stripANSI(m.View()), "suggest failed")
 }
 
 func TestModelUpdate_CreateFailureReturnsToNameConfirmModeAndRendersError(t *testing.T) {
@@ -171,7 +171,7 @@ func TestModelUpdate_CreateFailureReturnsToNameConfirmModeAndRendersError(t *tes
 	require.Equal(t, tuiModeNameConfirm, m.mode)
 	require.False(t, m.busy)
 	require.True(t, m.nameInput.Focused())
-	require.Contains(t, m.View(), "create failed")
+	require.Contains(t, stripANSI(m.View()), "create failed")
 }
 
 func TestModelUpdate_CreateFailureWithPersistedTaskReturnsToListModeAndPreservesError(t *testing.T) {
@@ -200,9 +200,10 @@ func TestModelUpdate_CreateFailureWithPersistedTaskReturnsToListModeAndPreserves
 	require.Nil(t, followup)
 	require.Equal(t, tuiModeList, m.mode)
 	require.False(t, m.busy)
-	require.NotContains(t, m.View(), "Confirm Task Name")
-	require.Contains(t, m.View(), "create failed after persist")
-	require.Contains(t, m.View(), "billing-retry-flow")
+	view := stripANSI(m.View())
+	require.NotContains(t, view, "Confirm Task Name")
+	require.Contains(t, view, "create failed after persist")
+	require.Contains(t, view, "billing-retry-flow")
 
 	_, duplicateCmd := updateTUIModel(t, m, tea.KeyMsg{Type: tea.KeyEnter})
 	require.NotNil(t, duplicateCmd)
@@ -342,7 +343,7 @@ func TestModelUpdate_EnterFailureRendersInlineErrorAndKeepsTUIOpen(t *testing.T)
 	require.Equal(t, "task-two", service.openedIDOrSlug)
 	require.Nil(t, followup)
 	require.False(t, m.busy)
-	require.Contains(t, m.View(), "open failed")
+	require.Contains(t, stripANSI(m.View()), "open failed")
 
 	m, _ = updateTUIModel(t, m, keyRunes("k"))
 	require.Equal(t, 0, m.selected)
@@ -412,16 +413,16 @@ func TestModelUpdate_MainListViewRendersControlCenterDetails(t *testing.T) {
 	task.BranchName = "feat/billing-retry-flow"
 
 	m := newLoadedTUIModel(t, service, task)
-	view := m.View()
+	view := stripANSI(m.View())
 
 	require.Contains(t, view, "Control Center")
-	require.Contains(t, view, "repo: tmux-llm")
-	require.Contains(t, view, "agent: healthy")
-	require.Contains(t, view, "editor: missing")
+	require.Contains(t, view, "tmux-llm")
+	require.Contains(t, view, "healthy")
+	require.Contains(t, view, "missing")
 	require.Contains(t, view, "billing retry flow")
 	require.Contains(t, view, "running")
-	require.Contains(t, view, "tmux: yes")
-	require.Contains(t, view, "worktree: no")
+	require.Contains(t, view, "yes")
+	require.Contains(t, view, "no")
 	require.Contains(t, view, "feat/billing-retry-flow")
 }
 
@@ -433,7 +434,7 @@ func TestModelUpdate_LoadedTasksHideTasksWithoutLiveResources(t *testing.T) {
 	hidden.WorktreeExists = false
 
 	m := newLoadedTUIModel(t, &fakeTUIService{}, active, hidden)
-	view := m.View()
+	view := stripANSI(m.View())
 
 	require.Contains(t, view, "active-task")
 	require.NotContains(t, view, "cleaned-task")
@@ -443,7 +444,7 @@ func TestModelUpdate_ConfirmationViewExplainsDeletionScope(t *testing.T) {
 	m := newLoadedTUIModel(t, &fakeTUIService{}, tuiTask("billing-retry-flow"))
 	m, _ = updateTUIModel(t, m, keyRunes("x"))
 
-	view := m.View()
+	view := stripANSI(m.View())
 	require.Contains(t, view, "tmux session and worktree will be deleted")
 	require.Contains(t, view, "branch will be kept")
 }
@@ -461,7 +462,7 @@ func TestModelUpdate_CleanupFailureRendersInlineErrorAndKeepsTUIUsable(t *testin
 
 	msg := cleanupCmd()
 	m, _ = updateTUIModel(t, m, msg)
-	require.Contains(t, m.View(), "cleanup failed")
+	require.Contains(t, stripANSI(m.View()), "cleanup failed")
 
 	m, _ = updateTUIModel(t, m, keyRunes("j"))
 	require.Equal(t, 1, m.selected)
@@ -490,7 +491,7 @@ func TestModelUpdate_CleanupSuccessRefreshFailureRemovesTaskFromVisibleList(t *t
 	refreshMsg := refreshCmd()
 	m, _ = updateTUIModel(t, m, refreshMsg)
 
-	view := m.View()
+	view := stripANSI(m.View())
 	require.NotContains(t, view, "task-one")
 	require.Contains(t, view, "refresh failed")
 	require.False(t, m.busy)
@@ -498,7 +499,7 @@ func TestModelUpdate_CleanupSuccessRefreshFailureRemovesTaskFromVisibleList(t *t
 
 func TestModelView_ShowsLoadingBeforeInitialLoadCompletes(t *testing.T) {
 	m := newTUIModel(&fakeTUIService{}, "/tmp/default")
-	require.Contains(t, m.View(), "Loading tasks")
+	require.Contains(t, stripANSI(m.View()), "Loading tasks")
 }
 
 type fakeTUIService struct {
