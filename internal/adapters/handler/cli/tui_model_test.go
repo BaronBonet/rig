@@ -3,6 +3,7 @@ package cli
 import (
 	"context"
 	"errors"
+	"regexp"
 	"testing"
 
 	"agent/internal/core"
@@ -590,6 +591,13 @@ func keyRunes(chars string) tea.KeyMsg {
 		Type:  tea.KeyRunes,
 		Runes: []rune(chars),
 	}
+}
+
+// stripANSI removes ANSI escape sequences so view assertions can match plain text.
+var ansiPattern = regexp.MustCompile(`\x1b\[[0-9;]*m`)
+
+func stripANSI(s string) string {
+	return ansiPattern.ReplaceAllString(s, "")
 }
 
 func tuiTask(slug string) *core.Task {
