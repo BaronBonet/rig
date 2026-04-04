@@ -1,0 +1,19 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(wc -l /Users/ericbonet/software/tmux-llm-polish-tui-visual-design/internal/adapters/handler/cli/*.go)",
+      "Bash(/Users/ericbonet/.claude/plugins/cache/claude-plugins-official/superpowers/5.0.7/skills/brainstorming/scripts/start-server.sh:*)",
+      "Bash(deno --version)",
+      "Bash(brew:*)",
+      "Bash(ls /Users/ericbonet/software/tmux-llm-polish-tui-visual-design/.superpowers/brainstorm/*/state/server-info)",
+      "Bash(xargs cat:*)",
+      "Bash(ls -td /Users/ericbonet/software/tmux-llm-polish-tui-visual-design/.superpowers/brainstorm/*/state/server-info)",
+      "Bash(git add:*)",
+      "Bash(git commit -m ':*)",
+      "Bash(go build:*)",
+      "Bash(go test:*)",
+      "Bash(git commit:*)",
+      "Bash(go vet:*)"
+    ]
+  }
+}

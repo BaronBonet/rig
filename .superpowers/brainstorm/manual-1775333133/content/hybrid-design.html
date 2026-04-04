@@ -1,0 +1,108 @@
+<h2>Minimal & Clean + Icons</h2>
+<p class="subtitle">The calm, muted palette of Option A with tasteful iconography from Option B</p>
+
+<div class="mockup">
+  <div class="mockup-header">Task List View</div>
+  <div class="mockup-body" style="background: #1a1a2e; color: #c8c8d4; font-family: monospace; font-size: 13px; padding: 20px; line-height: 1.7;">
+    <div style="color: #7b7b8e; border-bottom: 1px solid #2a2a3e; padding-bottom: 8px; margin-bottom: 12px;">
+      <span style="color: #e0e0ec; font-weight: bold;">◈ Control Center</span>
+      <span style="float: right; font-size: 11px;">j/k move · enter open · n new · x clean · q quit</span>
+    </div>
+
+    <!-- Selected task detail bar -->
+    <div style="margin-bottom: 12px; padding: 8px 12px; background: #20203a; border-radius: 4px; font-size: 12px; color: #9090a0;">
+      <span>📁 myapp</span>
+      <span style="margin-left: 16px;">🤖 <span style="color: #5a9e6f;">healthy</span></span>
+      <span style="margin-left: 16px;">📝 <span style="color: #5a9e6f;">healthy</span></span>
+      <span style="margin-left: 16px;">🌿 feat/fix-auth</span>
+      <span style="margin-left: 16px;">💻 <span style="color: #5a9e6f;">yes</span></span>
+      <span style="margin-left: 16px;">🌳 <span style="color: #5a9e6f;">yes</span></span>
+    </div>
+
+    <!-- Task list -->
+    <div style="padding: 5px 10px; background: #252540; border-left: 2px solid #6c6ce0; margin-bottom: 3px; border-radius: 0 4px 4px 0;">
+      <span style="color: #e0e0ec;">▸ fix-auth-bug</span>
+      <span style="float: right;">
+        <span style="color: #5a9e6f;">● active</span>
+      </span>
+    </div>
+    <div style="padding: 5px 10px; margin-bottom: 3px;">
+      <span style="color: #9090a0;">  add-user-profile</span>
+      <span style="float: right;">
+        <span style="color: #7b7b8e;">○ idle</span>
+      </span>
+    </div>
+    <div style="padding: 5px 10px; margin-bottom: 3px;">
+      <span style="color: #9090a0;">  refactor-db-layer</span>
+      <span style="float: right;">
+        <span style="color: #7b7b8e;">○ idle</span>
+      </span>
+    </div>
+    <div style="padding: 5px 10px; margin-bottom: 3px;">
+      <span style="color: #9090a0;">  migrate-to-postgres</span>
+      <span style="float: right;">
+        <span style="color: #c4a24e;">◐ creating</span>
+      </span>
+    </div>
+  </div>
+</div>
+
+<div style="margin-top: 24px;"></div>
+
+<div class="split">
+  <div class="mockup">
+    <div class="mockup-header">Create Task — Prompt Input</div>
+    <div class="mockup-body" style="background: #1a1a2e; color: #c8c8d4; font-family: monospace; font-size: 13px; padding: 20px; line-height: 1.7;">
+      <div style="color: #e0e0ec; font-weight: bold; margin-bottom: 12px;">✦ Create Task</div>
+      <div style="color: #9090a0; margin-bottom: 16px;">Enter the task prompt. Press Enter to continue, Esc to cancel.</div>
+      <div style="background: #252540; border: 1px solid #3a3a5e; border-radius: 4px; padding: 8px 12px;">
+        <span style="color: #6c6ce0;">❯</span> <span style="color: #7b7b8e; opacity: 0.6;">Describe the task to create</span><span style="color: #6c6ce0;">▌</span>
+      </div>
+    </div>
+  </div>
+
+  <div class="mockup">
+    <div class="mockup-header">Cleanup Confirmation</div>
+    <div class="mockup-body" style="background: #1a1a2e; color: #c8c8d4; font-family: monospace; font-size: 13px; padding: 20px; line-height: 1.7;">
+      <div style="color: #d4a04e; font-weight: bold; margin-bottom: 12px;">⚠ Confirm Cleanup</div>
+      <div style="margin-bottom: 8px;">Task: <span style="color: #e0e0ec;">fix-auth-bug</span></div>
+      <div style="color: #9090a0; margin-bottom: 4px;">The tmux session and worktree will be deleted.</div>
+      <div style="color: #9090a0; margin-bottom: 16px;">The branch will be kept.</div>
+      <div style="color: #7b7b8e; font-size: 12px;">
+        <span style="color: #5a9e6f;">y</span> confirm · <span style="color: #c05050;">n</span> cancel
+      </div>
+    </div>
+  </div>
+</div>
+
+<div style="margin-top: 24px;"></div>
+
+<h3>Design Elements</h3>
+<p class="subtitle">Key visual decisions in this hybrid</p>
+
+<div class="cards">
+  <div class="card">
+    <div class="card-body">
+      <h3>🎨 Color Palette</h3>
+      <p>Deep navy background (#1a1a2e), muted text (#c8c8d4), soft purple accent (#6c6ce0), green for healthy (#5a9e6f), amber for warnings (#d4a04e), red for errors (#c05050)</p>
+    </div>
+  </div>
+  <div class="card">
+    <div class="card-body">
+      <h3>📐 Borders & Layout</h3>
+      <p>Thin left-accent on selected row, subtle separators, rounded corners on info bars. No heavy box borders — whitespace defines sections.</p>
+    </div>
+  </div>
+  <div class="card">
+    <div class="card-body">
+      <h3>✨ Icons</h3>
+      <p>Unicode icons for context: 📁 repo, 🤖 agent, 📝 editor, 🌿 branch, 💻 tmux, 🌳 worktree. Status dots: ● active, ○ idle, ◐ in-progress.</p>
+    </div>
+  </div>
+  <div class="card">
+    <div class="card-body">
+      <h3>🏷️ View Headers</h3>
+      <p>Each view gets a distinctive icon: ◈ list, ✦ create, ⚠ cleanup confirm. Keeps navigation clear without heavy chrome.</p>
+    </div>
+  </div>
+</div>
