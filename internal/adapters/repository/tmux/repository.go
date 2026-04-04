@@ -58,6 +58,7 @@ func (r *Repository) WindowExists(ctx context.Context, session, window string) (
 }
 
 func (r *Repository) CreateSession(ctx context.Context, in core.CreateSessionInput) error {
+	sessionName := normalizedSessionName(in.SessionName)
 	agentWindowName := windowOrDefault(in.AgentWindowName, "agent")
 	editorWindowName := windowOrDefault(in.EditorWindowName, "editor")
 
@@ -68,7 +69,7 @@ func (r *Repository) CreateSession(ctx context.Context, in core.CreateSessionInp
 		"new-session",
 		"-d",
 		"-s",
-		in.SessionName,
+		sessionName,
 		"-n",
 		agentWindowName,
 		"-c",
@@ -85,7 +86,7 @@ func (r *Repository) CreateSession(ctx context.Context, in core.CreateSessionInp
 		"new-window",
 		"-d",
 		"-t",
-		exactSessionTarget(in.SessionName),
+		exactSessionTarget(sessionName),
 		"-n",
 		editorWindowName,
 		"-c",
@@ -95,7 +96,7 @@ func (r *Repository) CreateSession(ctx context.Context, in core.CreateSessionInp
 		return nil
 	}
 
-	_, cleanupErr := r.runner.Run(ctx, "", "tmux", "kill-session", "-t", exactSessionTarget(in.SessionName))
+	_, cleanupErr := r.runner.Run(ctx, "", "tmux", "kill-session", "-t", exactSessionTarget(sessionName))
 	if cleanupErr != nil {
 		return errors.Join(err, cleanupErr)
 	}
@@ -145,11 +146,15 @@ func (r *Repository) SendKeysToWindow(ctx context.Context, session, window strin
 }
 
 func exactSessionTarget(session string) string {
-	return "=" + session
+	return "=" + normalizedSessionName(session)
 }
 
 func exactWindowTarget(session, window string) string {
-	return "=" + session + ":" + window
+	return "=" + normalizedSessionName(session) + ":" + window
+}
+
+func normalizedSessionName(session string) string {
+	return strings.ReplaceAll(session, ":", "-")
 }
 
 func windowOrDefault(window, fallback string) string {

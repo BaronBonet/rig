@@ -86,6 +86,107 @@ func TestRepositoryCreateSession_JoinsWindowCreationAndCleanupErrors(t *testing.
 	require.Len(t, runner.Calls, 3)
 }
 
+func TestRepositoryNormalizesColonSessionNamesAcrossTmuxCommands(t *testing.T) {
+	t.Setenv("TMUX", "")
+
+	runner := execx.NewFakeRunner([]execx.Result{
+		{},
+		{},
+		{},
+		{Stdout: "agent\neditor\n"},
+		{},
+		{},
+		{},
+	})
+	repo := NewRepository(runner)
+
+	input := core.CreateSessionInput{
+		SessionName:      "repo:billing-retry-flow",
+		WorkingDir:       "/tmp/repo-billing-retry-flow",
+		AgentWindowName:  "agent",
+		EditorWindowName: "editor",
+	}
+
+	require.NoError(t, repo.CreateSession(context.Background(), input))
+
+	exists, err := repo.SessionExists(context.Background(), input.SessionName)
+	require.NoError(t, err)
+	require.True(t, exists)
+
+	exists, err = repo.WindowExists(context.Background(), input.SessionName, "editor")
+	require.NoError(t, err)
+	require.True(t, exists)
+
+	require.NoError(t, repo.AttachOrSwitch(context.Background(), input.SessionName))
+	require.NoError(t, repo.SendKeysToWindow(context.Background(), input.SessionName, "editor", []string{"codex", "fix bug"}))
+	require.NoError(t, repo.KillSession(context.Background(), input.SessionName))
+
+	require.Len(t, runner.Calls, 7)
+	require.Equal(t, []string{
+		"new-session",
+		"-d",
+		"-s",
+		"repo-billing-retry-flow",
+		"-n",
+		"agent",
+		"-c",
+		"/tmp/repo-billing-retry-flow",
+	}, runner.Calls[0].Args)
+	require.Equal(t, []string{
+		"new-window",
+		"-d",
+		"-t",
+		"=repo-billing-retry-flow",
+		"-n",
+		"editor",
+		"-c",
+		"/tmp/repo-billing-retry-flow",
+	}, runner.Calls[1].Args)
+	require.Equal(t, []string{
+		"has-session",
+		"-t",
+		"=repo-billing-retry-flow",
+	}, runner.Calls[2].Args)
+	require.Equal(t, []string{
+		"list-windows",
+		"-t",
+		"=repo-billing-retry-flow",
+		"-F",
+		"#{window_name}",
+	}, runner.Calls[3].Args)
+	require.Equal(t, []string{
+		"attach-session",
+		"-t",
+		"=repo-billing-retry-flow",
+	}, runner.Calls[4].Args)
+	require.Equal(t, []string{
+		"send-keys",
+		"-t",
+		"=repo-billing-retry-flow:editor",
+		"codex 'fix bug'",
+		"C-m",
+	}, runner.Calls[5].Args)
+	require.Equal(t, []string{
+		"kill-session",
+		"-t",
+		"=repo-billing-retry-flow",
+	}, runner.Calls[6].Args)
+}
+
+func TestRepositoryNormalizesColonSessionNamesForSwitchClientInsideTmux(t *testing.T) {
+	t.Setenv("TMUX", "/tmp/tmux-123/default,123,0")
+
+	runner := execx.NewFakeRunner([]execx.Result{{}})
+	repo := NewRepository(runner)
+
+	require.NoError(t, repo.AttachOrSwitch(context.Background(), "repo:billing-retry-flow"))
+	require.Equal(t, []string{
+		"switch-client",
+		"-t",
+		"=repo-billing-retry-flow",
+	}, runner.Calls[0].Args)
+}
+
 func TestRepositorySendKeysToWindow_UsesNamedWindowTarget(t *testing.T) {
 	runner := execx.NewFakeRunner([]execx.Result{{}})
 	repo := NewRepository(runner)
