@@ -245,10 +245,6 @@ func (f *fakeTmuxRepository) AttachOrSwitch(_ context.Context, session string) e
 	f.attachedSession = session
 	return nil
 }
-func (f *fakeTmuxRepository) SendKeys(ctx context.Context, session string, command []string) error {
-	return f.SendKeysToWindow(ctx, session, "agent", command)
-}
-
 func (f *fakeTmuxRepository) SendKeysToWindow(_ context.Context, session, window string, command []string) error {
 	f.sentSession = session
 	f.sentWindow = window

@@ -69,7 +69,6 @@ type TmuxRepository interface {
 	CreateSession(ctx context.Context, in CreateSessionInput) error
 	KillSession(ctx context.Context, session string) error
 	AttachOrSwitch(ctx context.Context, session string) error
-	SendKeys(ctx context.Context, session string, command []string) error
 	SendKeysToWindow(ctx context.Context, session, window string, command []string) error
 }
 

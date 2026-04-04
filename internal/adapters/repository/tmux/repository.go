@@ -114,10 +114,6 @@ func (r *Repository) AttachOrSwitch(ctx context.Context, session string) error {
 	return err
 }
 
-func (r *Repository) SendKeys(ctx context.Context, session string, command []string) error {
-	return r.SendKeysToWindow(ctx, session, "agent", command)
-}
-
 func (r *Repository) SendKeysToWindow(ctx context.Context, session, window string, command []string) error {
 	quoted := make([]string, 0, len(command))
 	for _, part := range command {

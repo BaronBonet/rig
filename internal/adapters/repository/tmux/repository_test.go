@@ -47,21 +47,6 @@ func TestRepositoryCreateSession_UsesDetachedSessionInWorkingDir(t *testing.T) {
 	}, runner.Calls[1].Args)
 }
 
-func TestRepositorySendKeys_JoinsCommandAndSendsEnter(t *testing.T) {
-	runner := execx.NewFakeRunner([]execx.Result{{}})
-	repo := NewRepository(runner)
-
-	err := repo.SendKeys(context.Background(), "repo-billing-retry-flow", []string{"codex", "add billing retry flow"})
-	require.NoError(t, err)
-	require.Equal(t, []string{
-		"send-keys",
-		"-t",
-		"=repo-billing-retry-flow:agent",
-		"codex 'add billing retry flow'",
-		"C-m",
-	}, runner.Calls[0].Args)
-}
-
 func TestRepositorySendKeysToWindow_UsesNamedWindowTarget(t *testing.T) {
 	runner := execx.NewFakeRunner([]execx.Result{{}})
 	repo := NewRepository(runner)
