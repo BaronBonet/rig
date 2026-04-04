@@ -21,16 +21,17 @@ const (
 )
 
 type model struct {
-	service     TaskService
-	tasks       []*core.Task
-	selected    int
-	loading     bool
-	busy        bool
-	mode        tuiMode
-	promptInput textinput.Model
-	nameInput   textinput.Model
-	createInput core.NewTaskInput
-	err         error
+	service            TaskService
+	tasks              []*core.Task
+	selected           int
+	loading            bool
+	busy               bool
+	mode               tuiMode
+	promptInput        textinput.Model
+	nameInput          textinput.Model
+	defaultCreationCwd string
+	createInput        core.NewTaskInput
+	err                error
 }
 
 type tasksLoadedMsg struct {
@@ -58,7 +59,7 @@ type createFinishedMsg struct {
 	err  error
 }
 
-func newTUIModel(service TaskService) model {
+func newTUIModel(service TaskService, defaultCreationCwd string) model {
 	promptInput := textinput.New()
 	promptInput.Prompt = "> "
 	promptInput.Placeholder = "Describe the task to create"
@@ -69,11 +70,12 @@ func newTUIModel(service TaskService) model {
 	nameInput.Placeholder = "Confirm or edit the suggested task name"
 
 	return model{
-		service:     service,
-		loading:     true,
-		mode:        tuiModeList,
-		promptInput: promptInput,
-		nameInput:   nameInput,
+		service:            service,
+		loading:            true,
+		mode:               tuiModeList,
+		promptInput:        promptInput,
+		nameInput:          nameInput,
+		defaultCreationCwd: emptyFallback(defaultCreationCwd, "."),
 	}
 }
 
@@ -136,10 +138,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 
-		m.createInput = core.NewTaskInput{
-			Cwd:    selectedTaskCwd(m.selectedTask()),
-			Prompt: msg.prompt,
-		}
+		m.createInput.Prompt = msg.prompt
 		m.nameInput.SetValue(msg.name)
 		m.nameInput.CursorEnd()
 		m.nameInput.Focus()
@@ -238,6 +237,7 @@ func (m model) updateListKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case "n":
 		m.err = nil
 		m.mode = tuiModePromptInput
+		m.createInput = core.NewTaskInput{Cwd: m.creationCwd()}
 		m.promptInput.SetValue("")
 		m.promptInput.Focus()
 		m.nameInput.Blur()
@@ -287,6 +287,7 @@ func (m model) updatePromptInputKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 
 		m.err = nil
 		m.busy = true
+		m.createInput.Prompt = prompt
 		m.promptInput.Blur()
 		return m, suggestTaskNameCmd(m.service, prompt)
 	}
@@ -516,12 +517,13 @@ func taskRepoName(task *core.Task) string {
 	return emptyFallback(task.RepoName, "-")
 }
 
-func selectedTaskCwd(task *core.Task) string {
-	if task == nil || strings.TrimSpace(task.RepoRoot) == "" {
-		return "."
+func (m model) creationCwd() string {
+	task := m.selectedTask()
+	if task != nil && strings.TrimSpace(task.RepoRoot) != "" {
+		return task.RepoRoot
 	}
 
-	return task.RepoRoot
+	return m.defaultCreationCwd
 }
 
 func windowHealth(ok bool) string {

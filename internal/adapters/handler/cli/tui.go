@@ -18,7 +18,7 @@ func newTUICommand(deps Dependencies) *cobra.Command {
 			}
 
 			program := tea.NewProgram(
-				newTUIModel(deps.Service),
+				newTUIModel(deps.Service, deps.Cwd),
 				tea.WithAltScreen(),
 				tea.WithInput(cmd.InOrStdin()),
 				tea.WithOutput(cmd.OutOrStdout()),

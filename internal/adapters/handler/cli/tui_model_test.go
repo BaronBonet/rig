@@ -53,7 +53,11 @@ func TestModelUpdate_CreateFlowSuggestsNameThenCreatesTask(t *testing.T) {
 		suggestedName: "billing retry flow",
 		createdTask:   tuiTask("billing-retry-flow"),
 	}
-	m := newLoadedTUIModel(t, service, tuiTask("existing-task"))
+	existing := tuiTask("existing-task")
+	existing.RepoRoot = "/tmp/repo"
+	other := tuiTask("other-task")
+	other.RepoRoot = "/tmp/other-repo"
+	m := newLoadedTUIModel(t, service, existing, other)
 
 	m, _ = updateTUIModel(t, m, keyRunes("n"))
 	m.promptInput.SetValue("add billing retry flow")
@@ -61,6 +65,7 @@ func TestModelUpdate_CreateFlowSuggestsNameThenCreatesTask(t *testing.T) {
 	m, suggestCmd := updateTUIModel(t, m, tea.KeyMsg{Type: tea.KeyEnter})
 	require.NotNil(t, suggestCmd)
 
+	m.selected = 1
 	suggestMsg := suggestCmd()
 	require.Equal(t, "add billing retry flow", service.suggestedPrompt)
 	m, _ = updateTUIModel(t, m, suggestMsg)
@@ -73,6 +78,7 @@ func TestModelUpdate_CreateFlowSuggestsNameThenCreatesTask(t *testing.T) {
 
 	createMsg := createCmd()
 	m, quitCmd := updateTUIModel(t, m, createMsg)
+	require.Equal(t, "/tmp/repo", service.createdInput.Cwd)
 	require.Equal(t, "add billing retry flow", service.createdInput.Prompt)
 	require.Equal(t, "billing retry flow", service.createdInput.ConfirmedDisplayName)
 	require.True(t, service.createOptions.OpenSession)
@@ -81,6 +87,85 @@ func TestModelUpdate_CreateFlowSuggestsNameThenCreatesTask(t *testing.T) {
 	quitMsg := quitCmd()
 	_, ok := quitMsg.(tea.QuitMsg)
 	require.True(t, ok)
+}
+
+func TestModelUpdate_SuggestNameFailureReturnsToPromptModeAndRendersError(t *testing.T) {
+	service := &fakeTUIService{
+		suggestErr: errors.New("suggest failed"),
+	}
+	m := newLoadedTUIModel(t, service, tuiTask("existing-task"))
+
+	m, _ = updateTUIModel(t, m, keyRunes("n"))
+	m.promptInput.SetValue("add billing retry flow")
+
+	m, suggestCmd := updateTUIModel(t, m, tea.KeyMsg{Type: tea.KeyEnter})
+	require.NotNil(t, suggestCmd)
+	require.True(t, m.busy)
+
+	msg := suggestCmd()
+	m, followup := updateTUIModel(t, m, msg)
+	require.Nil(t, followup)
+	require.Equal(t, tuiModePromptInput, m.mode)
+	require.False(t, m.busy)
+	require.True(t, m.promptInput.Focused())
+	require.Contains(t, m.View(), "suggest failed")
+}
+
+func TestModelUpdate_CreateFailureReturnsToNameConfirmModeAndRendersError(t *testing.T) {
+	service := &fakeTUIService{
+		suggestedName: "billing retry flow",
+		createErr:     errors.New("create failed"),
+	}
+	existing := tuiTask("existing-task")
+	existing.RepoRoot = "/tmp/repo"
+	m := newLoadedTUIModel(t, service, existing)
+
+	m, _ = updateTUIModel(t, m, keyRunes("n"))
+	m.promptInput.SetValue("add billing retry flow")
+
+	m, suggestCmd := updateTUIModel(t, m, tea.KeyMsg{Type: tea.KeyEnter})
+	msg := suggestCmd()
+	m, _ = updateTUIModel(t, m, msg)
+
+	m, createCmd := updateTUIModel(t, m, tea.KeyMsg{Type: tea.KeyEnter})
+	require.NotNil(t, createCmd)
+	require.True(t, m.busy)
+
+	createMsg := createCmd()
+	m, followup := updateTUIModel(t, m, createMsg)
+	require.Nil(t, followup)
+	require.Equal(t, tuiModeNameConfirm, m.mode)
+	require.False(t, m.busy)
+	require.True(t, m.nameInput.Focused())
+	require.Contains(t, m.View(), "create failed")
+}
+
+func TestModelUpdate_PromptModeEscapeReturnsToListMode(t *testing.T) {
+	m := newLoadedTUIModel(t, &fakeTUIService{}, tuiTask("existing-task"))
+
+	m, _ = updateTUIModel(t, m, keyRunes("n"))
+	m, cmd := updateTUIModel(t, m, tea.KeyMsg{Type: tea.KeyEsc})
+	require.Equal(t, tuiModeList, m.mode)
+	require.Nil(t, cmd)
+}
+
+func TestModelUpdate_NameConfirmModeEscapeReturnsToListMode(t *testing.T) {
+	service := &fakeTUIService{
+		suggestedName: "billing retry flow",
+	}
+	existing := tuiTask("existing-task")
+	existing.RepoRoot = "/tmp/repo"
+	m := newLoadedTUIModel(t, service, existing)
+
+	m, _ = updateTUIModel(t, m, keyRunes("n"))
+	m.promptInput.SetValue("add billing retry flow")
+	m, suggestCmd := updateTUIModel(t, m, tea.KeyMsg{Type: tea.KeyEnter})
+	msg := suggestCmd()
+	m, _ = updateTUIModel(t, m, msg)
+
+	m, cmd := updateTUIModel(t, m, tea.KeyMsg{Type: tea.KeyEsc})
+	require.Equal(t, tuiModeList, m.mode)
+	require.Nil(t, cmd)
 }
 
 func TestModelUpdate_ConfirmationCancelKeysDismissWithoutQuitting(t *testing.T) {
@@ -343,7 +428,7 @@ func TestModelUpdate_CleanupSuccessRefreshFailureRemovesTaskFromVisibleList(t *t
 }
 
 func TestModelView_ShowsLoadingBeforeInitialLoadCompletes(t *testing.T) {
-	m := newTUIModel(&fakeTUIService{})
+	m := newTUIModel(&fakeTUIService{}, "/tmp/default")
 	require.Contains(t, m.View(), "Loading tasks")
 }
 
@@ -413,7 +498,7 @@ func (f *fakeTUIService) DeleteTaskResources(_ context.Context, idOrSlug string)
 func newLoadedTUIModel(t *testing.T, service TaskService, tasks ...*core.Task) model {
 	t.Helper()
 
-	next, cmd := newTUIModel(service).Update(tasksLoadedMsg{tasks: tasks})
+	next, cmd := newTUIModel(service, "/tmp/default").Update(tasksLoadedMsg{tasks: tasks})
 	require.Nil(t, cmd)
 
 	m, ok := next.(model)
