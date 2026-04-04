@@ -39,5 +39,12 @@ PATH="$tmpdir/bin:$PATH" VERSION="v0.1.0" DIST_DIR="$tmpdir/dist" sh ./scripts/r
 tar -xzf "$tmpdir/dist/agent_v0.1.0_darwin_arm64.tar.gz" -C "$tmpdir"
 [ -x "$tmpdir/agent" ]
 
-grep -q 'agent_v0.1.0_darwin_arm64.tar.gz' "$tmpdir/dist/checksums.txt"
-grep -q 'agent_v0.1.0_darwin_amd64.tar.gz' "$tmpdir/dist/checksums.txt"
+(
+    cd "$tmpdir/dist"
+
+    set -- $(shasum -a 256 ./agent_v0.1.0_darwin_arm64.tar.gz)
+    grep -Fx "$1  $2" checksums.txt
+
+    set -- $(shasum -a 256 ./agent_v0.1.0_darwin_amd64.tar.gz)
+    grep -Fx "$1  $2" checksums.txt
+)
