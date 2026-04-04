@@ -89,6 +89,39 @@ func TestModelUpdate_CreateFlowSuggestsNameThenCreatesTask(t *testing.T) {
 	require.True(t, ok)
 }
 
+func TestModelUpdate_CreateFlowWithoutTasksUsesModelCwdFallback(t *testing.T) {
+	service := &fakeTUIService{
+		suggestedName: "billing retry flow",
+		createdTask:   tuiTask("billing-retry-flow"),
+	}
+	m := newTUIModel(service, "/tmp/fallback-repo")
+	m.loading = false
+
+	m, _ = updateTUIModel(t, m, keyRunes("n"))
+	m.promptInput.SetValue("add billing retry flow")
+
+	m, suggestCmd := updateTUIModel(t, m, tea.KeyMsg{Type: tea.KeyEnter})
+	require.NotNil(t, suggestCmd)
+
+	suggestMsg := suggestCmd()
+	m, _ = updateTUIModel(t, m, suggestMsg)
+	require.Equal(t, tuiModeNameConfirm, m.mode)
+
+	m, createCmd := updateTUIModel(t, m, tea.KeyMsg{Type: tea.KeyEnter})
+	require.NotNil(t, createCmd)
+
+	createMsg := createCmd()
+	m, quitCmd := updateTUIModel(t, m, createMsg)
+	require.Equal(t, "/tmp/fallback-repo", service.createdInput.Cwd)
+	require.Equal(t, "add billing retry flow", service.createdInput.Prompt)
+	require.Equal(t, "billing retry flow", service.createdInput.ConfirmedDisplayName)
+	require.NotNil(t, quitCmd)
+
+	quitMsg := quitCmd()
+	_, ok := quitMsg.(tea.QuitMsg)
+	require.True(t, ok)
+}
+
 func TestModelUpdate_SuggestNameFailureReturnsToPromptModeAndRendersError(t *testing.T) {
 	service := &fakeTUIService{
 		suggestErr: errors.New("suggest failed"),
