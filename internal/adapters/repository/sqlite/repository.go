@@ -36,22 +36,27 @@ func NewRepository(path string) (*Repository, error) {
 }
 
 func (r *Repository) initSchema() error {
-	_, err := r.db.Exec(`
+	if _, err := r.db.Exec(`
 create table if not exists tasks (
   id text primary key,
   prompt text not null,
   display_name text not null,
   slug text not null unique,
   repo_root text not null,
+  repo_name text not null default '',
   base_branch text not null,
   branch_name text not null,
   worktree_path text not null,
   tmux_session text not null,
+  agent_window_name text not null default '',
+  editor_window_name text not null default '',
   provider text not null,
   status text not null,
   worktree_exists integer not null,
   branch_exists integer not null,
   session_exists integer not null,
+  agent_window_exists integer not null default 0,
+  editor_window_exists integer not null default 0,
   last_error text not null default '',
   created_at text not null,
   updated_at text not null,
@@ -65,32 +70,53 @@ create table if not exists events (
   payload text not null,
   created_at text not null
 );
-`)
-	return err
+`); err != nil {
+		return err
+	}
+
+	for _, stmt := range []string{
+		`alter table tasks add column repo_name text not null default ''`,
+		`alter table tasks add column agent_window_name text not null default ''`,
+		`alter table tasks add column editor_window_name text not null default ''`,
+		`alter table tasks add column agent_window_exists integer not null default 0`,
+		`alter table tasks add column editor_window_exists integer not null default 0`,
+	} {
+		column := columnNameFromAlter(stmt)
+		if err := addColumnIfMissing(r.db, "tasks", column, stmt); err != nil {
+			return err
+		}
+	}
+
+	return nil
 }
 
 func (r *Repository) CreateTask(ctx context.Context, task *core.Task) error {
 	_, err := r.db.ExecContext(
 		ctx,
 		`insert into tasks (
-			id, prompt, display_name, slug, repo_root, base_branch, branch_name,
-			worktree_path, tmux_session, provider, status, worktree_exists,
-			branch_exists, session_exists, last_error, created_at, updated_at, last_reconciled_at
-		) values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+			id, prompt, display_name, slug, repo_root, repo_name, base_branch, branch_name,
+			worktree_path, tmux_session, agent_window_name, editor_window_name, provider, status, worktree_exists,
+			branch_exists, session_exists, agent_window_exists, editor_window_exists, last_error, created_at, updated_at, last_reconciled_at
+		) values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		task.ID,
 		task.Prompt,
 		task.DisplayName,
 		task.Slug,
 		task.RepoRoot,
+		task.RepoName,
 		task.BaseBranch,
 		task.BranchName,
 		task.WorktreePath,
 		task.TmuxSession,
+		task.AgentWindowName,
+		task.EditorWindowName,
 		task.Provider,
 		string(task.Status),
 		boolToInt(task.WorktreeExists),
 		boolToInt(task.BranchExists),
 		boolToInt(task.SessionExists),
+		boolToInt(task.AgentWindowExists),
+		boolToInt(task.EditorWindowExists),
 		task.LastError,
 		formatTime(task.CreatedAt),
 		formatTime(task.UpdatedAt),
@@ -107,15 +133,20 @@ func (r *Repository) UpdateTask(ctx context.Context, task *core.Task) error {
 			display_name = ?,
 			slug = ?,
 			repo_root = ?,
+			repo_name = ?,
 			base_branch = ?,
 			branch_name = ?,
 			worktree_path = ?,
 			tmux_session = ?,
+			agent_window_name = ?,
+			editor_window_name = ?,
 			provider = ?,
 			status = ?,
 			worktree_exists = ?,
 			branch_exists = ?,
 			session_exists = ?,
+			agent_window_exists = ?,
+			editor_window_exists = ?,
 			last_error = ?,
 			created_at = ?,
 			updated_at = ?,
@@ -125,15 +156,20 @@ func (r *Repository) UpdateTask(ctx context.Context, task *core.Task) error {
 		task.DisplayName,
 		task.Slug,
 		task.RepoRoot,
+		task.RepoName,
 		task.BaseBranch,
 		task.BranchName,
 		task.WorktreePath,
 		task.TmuxSession,
+		task.AgentWindowName,
+		task.EditorWindowName,
 		task.Provider,
 		string(task.Status),
 		boolToInt(task.WorktreeExists),
 		boolToInt(task.BranchExists),
 		boolToInt(task.SessionExists),
+		boolToInt(task.AgentWindowExists),
+		boolToInt(task.EditorWindowExists),
 		task.LastError,
 		formatTime(task.CreatedAt),
 		formatTime(task.UpdatedAt),
@@ -147,9 +183,9 @@ func (r *Repository) GetTask(ctx context.Context, idOrSlug string) (*core.Task, 
 	row := r.db.QueryRowContext(
 		ctx,
 		`select
-			id, prompt, display_name, slug, repo_root, base_branch, branch_name,
-			worktree_path, tmux_session, provider, status, worktree_exists,
-			branch_exists, session_exists, last_error, created_at, updated_at, last_reconciled_at
+			id, prompt, display_name, slug, repo_root, repo_name, base_branch, branch_name,
+			worktree_path, tmux_session, agent_window_name, editor_window_name, provider, status, worktree_exists,
+			branch_exists, session_exists, agent_window_exists, editor_window_exists, last_error, created_at, updated_at, last_reconciled_at
 		from tasks where id = ? or slug = ? limit 1`,
 		idOrSlug,
 		idOrSlug,
@@ -167,9 +203,9 @@ func (r *Repository) ListTasks(ctx context.Context) ([]*core.Task, error) {
 	rows, err := r.db.QueryContext(
 		ctx,
 		`select
-			id, prompt, display_name, slug, repo_root, base_branch, branch_name,
-			worktree_path, tmux_session, provider, status, worktree_exists,
-			branch_exists, session_exists, last_error, created_at, updated_at, last_reconciled_at
+			id, prompt, display_name, slug, repo_root, repo_name, base_branch, branch_name,
+			worktree_path, tmux_session, agent_window_name, editor_window_name, provider, status, worktree_exists,
+			branch_exists, session_exists, agent_window_exists, editor_window_exists, last_error, created_at, updated_at, last_reconciled_at
 		from tasks
 		order by updated_at desc`,
 	)
@@ -209,14 +245,16 @@ type rowScanner interface {
 
 func scanTask(scanner rowScanner) (*core.Task, error) {
 	var (
-		task             core.Task
-		status           string
-		worktreeExists   int
-		branchExists     int
-		sessionExists    int
-		createdAt        string
-		updatedAt        string
-		lastReconciledAt string
+		task               core.Task
+		status             string
+		worktreeExists     int
+		branchExists       int
+		sessionExists      int
+		agentWindowExists  int
+		editorWindowExists int
+		createdAt          string
+		updatedAt          string
+		lastReconciledAt   string
 	)
 
 	err := scanner.Scan(
@@ -225,15 +263,20 @@ func scanTask(scanner rowScanner) (*core.Task, error) {
 		&task.DisplayName,
 		&task.Slug,
 		&task.RepoRoot,
+		&task.RepoName,
 		&task.BaseBranch,
 		&task.BranchName,
 		&task.WorktreePath,
 		&task.TmuxSession,
+		&task.AgentWindowName,
+		&task.EditorWindowName,
 		&task.Provider,
 		&status,
 		&worktreeExists,
 		&branchExists,
 		&sessionExists,
+		&agentWindowExists,
+		&editorWindowExists,
 		&task.LastError,
 		&createdAt,
 		&updatedAt,
@@ -247,6 +290,8 @@ func scanTask(scanner rowScanner) (*core.Task, error) {
 	task.WorktreeExists = worktreeExists == 1
 	task.BranchExists = branchExists == 1
 	task.SessionExists = sessionExists == 1
+	task.AgentWindowExists = agentWindowExists == 1
+	task.EditorWindowExists = editorWindowExists == 1
 	task.CreatedAt = parseTime(createdAt)
 	task.UpdatedAt = parseTime(updatedAt)
 	task.LastReconciledAt = parseTime(lastReconciledAt)
@@ -281,4 +326,60 @@ func parseTime(raw string) time.Time {
 	}
 
 	return parsed
+}
+
+func addColumnIfMissing(db *sql.DB, table, column, statement string) error {
+	exists, err := hasColumn(db, table, column)
+	if err != nil {
+		return err
+	}
+	if exists {
+		return nil
+	}
+
+	_, err = db.Exec(statement)
+	return err
+}
+
+func columnNameFromAlter(statement string) string {
+	const prefix = `alter table tasks add column `
+	if len(statement) <= len(prefix) || statement[:len(prefix)] != prefix {
+		return ""
+	}
+
+	rest := statement[len(prefix):]
+	for i, r := range rest {
+		if r == ' ' {
+			return rest[:i]
+		}
+	}
+
+	return rest
+}
+
+func hasColumn(db *sql.DB, table, column string) (bool, error) {
+	rows, err := db.Query(`pragma table_info(` + table + `)`)
+	if err != nil {
+		return false, err
+	}
+	defer rows.Close()
+
+	for rows.Next() {
+		var (
+			cid          int
+			name         string
+			colType      string
+			notNull      int
+			defaultValue sql.NullString
+			pk           int
+		)
+		if err := rows.Scan(&cid, &name, &colType, &notNull, &defaultValue, &pk); err != nil {
+			return false, err
+		}
+		if name == column {
+			return true, nil
+		}
+	}
+
+	return false, rows.Err()
 }
