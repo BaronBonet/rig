@@ -11,6 +11,8 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 )
 
+var availableProviders = []string{"codex", "claude"}
+
 type tuiMode string
 
 const (
@@ -25,6 +27,7 @@ type model struct {
 	service            TaskService
 	err                error
 	createInput        core.NewTaskInput
+	provider           string
 	defaultCreationCwd string
 	mode               tuiMode
 	tasks              []*core.Task
@@ -77,6 +80,7 @@ func newTUIModel(service TaskService, defaultCreationCwd string) model {
 		promptInput:        promptInput,
 		nameInput:          nameInput,
 		defaultCreationCwd: emptyFallback(defaultCreationCwd, "."),
+		provider:           "codex",
 	}
 }
 
@@ -287,6 +291,9 @@ func (m model) updatePromptInputKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.mode = tuiModeList
 		m.promptInput.Blur()
 		return m, nil
+	case tea.KeyTab:
+		m.provider = nextProvider(m.provider)
+		return m, nil
 	case tea.KeyEnter:
 		prompt := strings.TrimSpace(m.promptInput.Value())
 		if prompt == "" {
@@ -296,6 +303,7 @@ func (m model) updatePromptInputKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.err = nil
 		m.busy = true
 		m.createInput.Prompt = prompt
+		m.createInput.Provider = m.provider
 		m.promptInput.Blur()
 		return m, suggestTaskNameCmd(m.service, prompt)
 	}
@@ -322,6 +330,7 @@ func (m model) updateNameConfirmKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.nameInput.Blur()
 		input := m.createInput
 		input.ConfirmedDisplayName = name
+		input.Provider = m.provider
 		return m, createTaskCmd(m.service, input)
 	}
 
@@ -393,7 +402,9 @@ func (m model) listView() string {
 func (m model) promptInputView() string {
 	var b strings.Builder
 	b.WriteString(titleStyle.Render(iconHeaderCreate+" Create Task") + "\n\n")
-	b.WriteString(dimStyle.Render("Enter the task prompt. Press Enter to suggest a name, or Esc to cancel.") + "\n\n")
+	b.WriteString(dimStyle.Render("Enter the task prompt. Press Enter to suggest a name, or Esc to cancel.") + "\n")
+	providerLabel := providerIcon(m.provider) + " " + m.provider
+	b.WriteString(dimStyle.Render("tab to switch provider: ") + primaryStyle.Render(providerLabel) + "\n\n")
 	if m.err != nil {
 		b.WriteString(errorStyle.Render("Error: "+m.err.Error()) + "\n\n")
 	}
@@ -486,6 +497,25 @@ func (m *model) upsertTask(updated *core.Task) {
 	if isVisibleTask(updated) {
 		m.tasks = append(m.tasks, updated)
 		m.selected = len(m.tasks) - 1
+	}
+}
+
+func nextProvider(current string) string {
+	for i, p := range availableProviders {
+		if p == current {
+			return availableProviders[(i+1)%len(availableProviders)]
+		}
+	}
+
+	return availableProviders[0]
+}
+
+func providerIcon(provider string) string {
+	switch provider {
+	case "claude":
+		return iconProviderClaude
+	default:
+		return iconProviderCodex
 	}
 }
 
