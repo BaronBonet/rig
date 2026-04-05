@@ -403,8 +403,7 @@ func (m model) promptInputView() string {
 	var b strings.Builder
 	b.WriteString(titleStyle.Render(iconHeaderCreate+" Create Task") + "\n\n")
 	b.WriteString(dimStyle.Render("Enter the task prompt. Press Enter to suggest a name, or Esc to cancel.") + "\n")
-	providerLabel := providerIcon(m.provider) + " " + m.provider
-	b.WriteString(dimStyle.Render("tab to switch provider: ") + primaryStyle.Render(providerLabel) + "\n\n")
+	b.WriteString(dimStyle.Render("tab to switch provider: ") + providerToggle(m.provider) + "\n\n")
 	if m.err != nil {
 		b.WriteString(errorStyle.Render("Error: "+m.err.Error()) + "\n\n")
 	}
@@ -517,6 +516,20 @@ func providerIcon(provider string) string {
 	default:
 		return iconProviderCodex
 	}
+}
+
+func providerToggle(selected string) string {
+	var parts []string
+	for _, p := range availableProviders {
+		label := providerIcon(p) + " " + p
+		if p == selected {
+			parts = append(parts, primaryStyle.Render(label))
+		} else {
+			parts = append(parts, dimStyle.Render(label))
+		}
+	}
+
+	return strings.Join(parts, dimStyle.Render(" / "))
 }
 
 func filterVisibleTasks(tasks []*core.Task) []*core.Task {
