@@ -36,7 +36,22 @@ func TestRuntimeDetector_Detect_ReturnsNeedsInputForPromptWithoutRecentOutput(t 
 	require.Equal(t, core.RuntimeStateNeedsInput, state)
 }
 
-func TestRuntimeDetector_Detect_ReturnsFinishedWhenPaneReturnsToShell(t *testing.T) {
+func TestRuntimeDetector_Detect_ReturnsFinishedWhenPaneReturnsToShellAfterReusedBinding(t *testing.T) {
+	detector := NewRuntimeDetector(2 * time.Second)
+
+	state := detector.Detect(core.RuntimeSnapshot{
+		PaneID:            "%24",
+		ReusedBinding:     true,
+		ForegroundCommand: "zsh",
+		Content:           "done\n",
+		ObservedAt:        time.Date(2026, 4, 5, 10, 0, 0, 0, time.UTC),
+		LastOutputAt:      time.Date(2026, 4, 5, 9, 59, 50, 0, time.UTC),
+	})
+
+	require.Equal(t, core.RuntimeStateFinished, state)
+}
+
+func TestRuntimeDetector_Detect_ReturnsEmptyForFirstShellObservation(t *testing.T) {
 	detector := NewRuntimeDetector(2 * time.Second)
 
 	state := detector.Detect(core.RuntimeSnapshot{
@@ -47,7 +62,21 @@ func TestRuntimeDetector_Detect_ReturnsFinishedWhenPaneReturnsToShell(t *testing
 		LastOutputAt:      time.Date(2026, 4, 5, 9, 59, 50, 0, time.UTC),
 	})
 
-	require.Equal(t, core.RuntimeStateFinished, state)
+	require.Equal(t, core.RuntimeStateNone, state)
+}
+
+func TestRuntimeDetector_Detect_ReturnsNeedsInputForContinuePrompt(t *testing.T) {
+	detector := NewRuntimeDetector(2 * time.Second)
+
+	state := detector.Detect(core.RuntimeSnapshot{
+		PaneID:            "%24",
+		ForegroundCommand: "codex",
+		Content:           "Continue?\n",
+		ObservedAt:        time.Date(2026, 4, 5, 10, 0, 0, 0, time.UTC),
+		LastOutputAt:      time.Date(2026, 4, 5, 9, 59, 50, 0, time.UTC),
+	})
+
+	require.Equal(t, core.RuntimeStateNeedsInput, state)
 }
 
 func TestRuntimeDetector_Detect_ReturnsEmptyForUnclassifiedSnapshot(t *testing.T) {
@@ -57,6 +86,7 @@ func TestRuntimeDetector_Detect_ReturnsEmptyForUnclassifiedSnapshot(t *testing.T
 		PaneID:            "%24",
 		ForegroundCommand: "codex",
 		Content:           "some unrelated output\n",
+		ReusedBinding:     false,
 		ObservedAt:        time.Date(2026, 4, 5, 10, 0, 0, 0, time.UTC),
 		LastOutputAt:      time.Date(2026, 4, 5, 9, 59, 40, 0, time.UTC),
 	})
