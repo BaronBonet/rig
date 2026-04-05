@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"time"
 
 	"agent/internal/adapters/handler/cli"
 	agentconfigrepo "agent/internal/adapters/repository/agentconfig"
@@ -33,9 +34,14 @@ func main() {
 
 func buildDependencies() (cli.Dependencies, error) {
 	cfg := core.DefaultConfig()
+	runtimeMonitor := tmuxrepo.NewRuntimeMonitor()
 	service := &runtimeService{
-		cfg:    cfg,
-		runner: execx.ExecRunner{},
+		cfg:            cfg,
+		runner:         execx.ExecRunner{},
+		runtimeMonitor: runtimeMonitor,
+		runtimeDetectors: map[string]core.RuntimeStateDetector{
+			"codex": codexrepo.NewRuntimeDetector(2 * time.Second),
+		},
 	}
 
 	return cli.Dependencies{
@@ -46,8 +52,10 @@ func buildDependencies() (cli.Dependencies, error) {
 }
 
 type runtimeService struct {
-	runner execx.ExecRunner
-	cfg    core.Config
+	runner           execx.ExecRunner
+	cfg              core.Config
+	runtimeMonitor   core.RuntimeMonitor
+	runtimeDetectors map[string]core.RuntimeStateDetector
 }
 
 func (r *runtimeService) Doctor(ctx context.Context, cwd string) (core.DoctorResult, error) {
@@ -148,8 +156,8 @@ func (r *runtimeService) newService(withSQLite bool) (*core.Service, error) {
 		gitrepo.NewRepository(r.runner),
 		tmuxrepo.NewRepository(r.runner),
 		providers,
-		nil,
-		nil,
+		r.runtimeMonitor,
+		r.runtimeDetectors,
 		agentconfigrepo.NewRepository(),
 		workspacerepo.NewRepository(),
 		timeutil.RealClock{},
