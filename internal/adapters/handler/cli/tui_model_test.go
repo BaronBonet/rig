@@ -426,6 +426,33 @@ func TestModelUpdate_MainListViewRendersControlCenterDetails(t *testing.T) {
 	require.Contains(t, view, "feat/billing-retry-flow")
 }
 
+func TestModelView_ShowsRuntimeBadgeOnTaskRow(t *testing.T) {
+	task := tuiTask("billing-retry-flow")
+	task.Status = core.TaskStatusDegraded
+	task.RuntimeState = core.RuntimeStateRunning
+
+	m := newLoadedTUIModel(t, &fakeTUIService{}, task)
+	view := stripANSI(m.View())
+
+	require.Contains(t, view, "billing-retry-flow")
+	require.Contains(t, view, "● running")
+	require.Contains(t, view, "◐ degraded")
+}
+
+func TestModelView_OmitsRuntimeBadgeWhenRuntimeStateIsEmpty(t *testing.T) {
+	task := tuiTask("billing-retry-flow")
+	task.Status = core.TaskStatusDegraded
+	task.RuntimeState = core.RuntimeStateNone
+
+	m := newLoadedTUIModel(t, &fakeTUIService{}, task)
+	view := stripANSI(m.View())
+
+	require.Contains(t, view, "◐ degraded")
+	require.NotContains(t, view, "● running")
+	require.NotContains(t, view, "◐ needs input")
+	require.NotContains(t, view, "○ finished")
+}
+
 func TestModelUpdate_LoadedTasksHideTasksWithoutLiveResources(t *testing.T) {
 	active := tuiTask("active-task")
 	hidden := tuiTask("cleaned-task")

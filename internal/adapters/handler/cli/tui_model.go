@@ -384,14 +384,19 @@ func (m model) listView() string {
 	for i, task := range m.tasks {
 		icon, style := statusStyle(string(task.Status))
 		status := style.Render(icon + " " + string(task.Status))
+		runtime := ""
+		if task.RuntimeState != core.RuntimeStateNone {
+			runtimeIcon, runtimeStyle := runtimeStateStyle(string(task.RuntimeState))
+			runtime = "  " + runtimeStyle.Render(runtimeIcon+" "+strings.ReplaceAll(string(task.RuntimeState), "_", " "))
+		}
 
 		if i == m.selected {
 			name := iconSelected + " " + task.DisplayName
-			row := fmt.Sprintf("%-40s %s", name, status)
+			row := fmt.Sprintf("%-40s %s%s", name, status, runtime)
 			b.WriteString(selectedRowStyle.Render(row) + "\n")
 		} else {
 			name := "  " + task.DisplayName
-			row := fmt.Sprintf("%-40s %s", name, status)
+			row := fmt.Sprintf("%-40s %s%s", name, status, runtime)
 			b.WriteString(normalRowStyle.Render(row) + "\n")
 		}
 	}
