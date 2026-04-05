@@ -14,6 +14,8 @@ type testServiceHarness struct {
 	gitRepo         *fakeGitRepository
 	tmuxRepo        *fakeTmuxRepository
 	providerRepo    *fakeProviderRepository
+	runtimeMonitor  *fakeRuntimeMonitor
+	runtimeDetector *fakeRuntimeStateDetector
 	configRepo      *fakeRepoConfigRepository
 	workspaceSeeder *fakeWorkspaceSeeder
 }
@@ -29,6 +31,8 @@ func newTestService() *testServiceHarness {
 	}
 	tmuxRepo := &fakeTmuxRepository{}
 	providerRepo := &fakeProviderRepository{}
+	runtimeMonitor := &fakeRuntimeMonitor{}
+	runtimeDetector := &fakeRuntimeStateDetector{}
 	configRepo := &fakeRepoConfigRepository{}
 	workspaceSeeder := &fakeWorkspaceSeeder{}
 	tmuxRepo.createSessionHook = func() {
@@ -38,6 +42,8 @@ func newTestService() *testServiceHarness {
 	return &testServiceHarness{
 		service: NewService(taskRepo, gitRepo, tmuxRepo, map[string]ProviderRepository{
 			"codex": providerRepo,
+		}, runtimeMonitor, map[string]RuntimeStateDetector{
+			"codex": runtimeDetector,
 		}, configRepo, workspaceSeeder, fakeClock{
 			now: time.Date(2026, 4, 2, 12, 0, 0, 0, time.UTC),
 		}, Config{
@@ -48,6 +54,8 @@ func newTestService() *testServiceHarness {
 		gitRepo:         gitRepo,
 		tmuxRepo:        tmuxRepo,
 		providerRepo:    providerRepo,
+		runtimeMonitor:  runtimeMonitor,
+		runtimeDetector: runtimeDetector,
 		configRepo:      configRepo,
 		workspaceSeeder: workspaceSeeder,
 	}
@@ -288,6 +296,25 @@ func (f *fakeProviderRepository) BuildLaunchCommand(task *Task) ([]string, error
 	return []string{"codex", task.Prompt}, nil
 }
 func (f *fakeProviderRepository) IsAvailable(context.Context) error { return f.isAvailableErr }
+
+type fakeRuntimeMonitor struct {
+	snapshot RuntimeSnapshot
+	err      error
+}
+
+func (f *fakeRuntimeMonitor) Snapshot(context.Context, *Task) (RuntimeSnapshot, error) {
+	return f.snapshot, f.err
+}
+
+func (*fakeRuntimeMonitor) Close() error { return nil }
+
+type fakeRuntimeStateDetector struct {
+	state RuntimeState
+}
+
+func (f *fakeRuntimeStateDetector) Detect(RuntimeSnapshot) RuntimeState {
+	return f.state
+}
 
 type fakeClock struct {
 	now time.Time

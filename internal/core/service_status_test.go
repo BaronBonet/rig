@@ -117,3 +117,32 @@ func TestServiceGetTask_MarksTaskBrokenWhenSessionMissing(t *testing.T) {
 	require.Equal(t, TaskStatusBroken, task.Status)
 	require.Contains(t, task.LastError, "missing tmux session")
 }
+
+func TestServiceGetTask_LeavesRuntimeStateEmptyForUnsupportedProvider(t *testing.T) {
+	worktree := t.TempDir()
+	svc := newTestService()
+	svc.taskRepo.getTask = &Task{
+		ID:               "task-1",
+		Slug:             "billing-retry-flow",
+		RepoRoot:         "/tmp/repo",
+		BranchName:       "feat/billing-retry-flow",
+		WorktreePath:     worktree,
+		TmuxSession:      "repo-billing-retry-flow",
+		AgentWindowName:  "agent",
+		EditorWindowName: "editor",
+		Provider:         "claude",
+		Status:           TaskStatusRunning,
+	}
+	svc.gitRepo.branchExists = true
+	svc.tmuxRepo.sessionExists = true
+	svc.tmuxRepo.windowExists = map[string]map[string]bool{
+		"repo-billing-retry-flow": {
+			"agent":  true,
+			"editor": true,
+		},
+	}
+
+	task, err := svc.service.GetTask(t.Context(), "billing-retry-flow")
+	require.NoError(t, err)
+	require.Equal(t, RuntimeStateNone, task.RuntimeState)
+}
