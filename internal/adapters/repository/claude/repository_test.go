@@ -22,7 +22,9 @@ func TestRepositoryBuildLaunchCommand_IncludesPrompt(t *testing.T) {
 
 func TestRepositoryProposeTaskName_ParsesJSONOutput(t *testing.T) {
 	runner := execx.NewFakeRunner([]execx.Result{
-		{Stdout: `{"type":"result","subtype":"success","cost_usd":0.002,"duration_ms":1500,"duration_api_ms":1200,"is_error":false,"num_turns":1,"result":"Billing Retry Flow","session_id":"abc123","total_cost_usd":0.002}` + "\n"},
+		{
+			Stdout: `{"type":"result","subtype":"success","cost_usd":0.002,"duration_ms":1500,"duration_api_ms":1200,"is_error":false,"num_turns":1,"result":"Billing Retry Flow","session_id":"abc123","total_cost_usd":0.002}` + "\n",
+		},
 	})
 	repo := NewRepository(runner, "claude")
 
@@ -37,7 +39,9 @@ func TestRepositoryProposeTaskName_ParsesJSONOutput(t *testing.T) {
 
 func TestRepositoryProposeTaskName_StripsMarkdownTicks(t *testing.T) {
 	runner := execx.NewFakeRunner([]execx.Result{
-		{Stdout: `{"type":"result","subtype":"success","result":"Migrate to ` + "`sqlc`" + `","is_error":false}` + "\n"},
+		{
+			Stdout: `{"type":"result","subtype":"success","result":"Migrate to ` + "`sqlc`" + `","is_error":false}` + "\n",
+		},
 	})
 	repo := NewRepository(runner, "claude")
 

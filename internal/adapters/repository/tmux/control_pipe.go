@@ -145,7 +145,10 @@ func (p *execControlPipe) scan() {
 		case strings.HasPrefix(line, "%error"):
 			collecting = false
 			p.completePending(controlResponse{
-				err: fmt.Errorf("tmux control command failed: %s", strings.TrimSpace(strings.Join(responseLines, "\n"))),
+				err: fmt.Errorf(
+					"tmux control command failed: %s",
+					strings.TrimSpace(strings.Join(responseLines, "\n")),
+				),
 			})
 			responseLines = responseLines[:0]
 		case strings.HasPrefix(line, "%end"):

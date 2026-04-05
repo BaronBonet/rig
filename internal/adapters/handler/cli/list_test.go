@@ -45,7 +45,9 @@ type fakeListCLIService struct {
 func (f fakeListCLIService) Doctor(context.Context, string) (core.DoctorResult, error) {
 	return core.DoctorResult{}, nil
 }
-func (f fakeListCLIService) SuggestTaskName(context.Context, string, string) (string, error) { return "", nil }
+func (f fakeListCLIService) SuggestTaskName(context.Context, string, string) (string, error) {
+	return "", nil
+}
 func (f fakeListCLIService) NewTask(context.Context, core.NewTaskInput) (*core.Task, error) {
 	return nil, nil
 }
