@@ -177,7 +177,7 @@ func (f *fakeNewCLIService) Doctor(context.Context, string) (core.DoctorResult, 
 	return core.DoctorResult{}, nil
 }
 
-func (f *fakeNewCLIService) SuggestTaskName(context.Context, string) (string, error) {
+func (f *fakeNewCLIService) SuggestTaskName(context.Context, string, string) (string, error) {
 	return f.suggestedName, nil
 }
 

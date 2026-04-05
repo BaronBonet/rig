@@ -59,13 +59,13 @@ func (r *runtimeService) Doctor(ctx context.Context, cwd string) (core.DoctorRes
 	return service.Doctor(ctx, cwd)
 }
 
-func (r *runtimeService) SuggestTaskName(ctx context.Context, prompt string) (string, error) {
+func (r *runtimeService) SuggestTaskName(ctx context.Context, prompt string, provider string) (string, error) {
 	service, err := r.newService(false)
 	if err != nil {
 		return "", err
 	}
 
-	return service.SuggestTaskName(ctx, prompt)
+	return service.SuggestTaskName(ctx, prompt, provider)
 }
 
 func (r *runtimeService) NewTask(ctx context.Context, input core.NewTaskInput) (*core.Task, error) {
@@ -138,19 +138,16 @@ func (r *runtimeService) newService(withSQLite bool) (*core.Service, error) {
 		taskRepo = sqliteRepo
 	}
 
-	var providerRepo core.ProviderRepository
-	switch r.cfg.Provider {
-	case "claude":
-		providerRepo = clauderepo.NewRepository(r.runner, r.cfg.ClaudeBinary)
-	default:
-		providerRepo = codexrepo.NewRepository(r.runner, r.cfg.CodexBinary)
+	providers := map[string]core.ProviderRepository{
+		"codex":  codexrepo.NewRepository(r.runner, r.cfg.CodexBinary),
+		"claude": clauderepo.NewRepository(r.runner, r.cfg.ClaudeBinary),
 	}
 
 	return core.NewService(
 		taskRepo,
 		gitrepo.NewRepository(r.runner),
 		tmuxrepo.NewRepository(r.runner),
-		providerRepo,
+		providers,
 		agentconfigrepo.NewRepository(),
 		workspacerepo.NewRepository(),
 		timeutil.RealClock{},

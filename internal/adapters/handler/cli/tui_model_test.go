@@ -525,7 +525,7 @@ func (*fakeTUIService) Doctor(context.Context, string) (core.DoctorResult, error
 	return core.DoctorResult{}, nil
 }
 
-func (f *fakeTUIService) SuggestTaskName(_ context.Context, prompt string) (string, error) {
+func (f *fakeTUIService) SuggestTaskName(_ context.Context, prompt string, _ string) (string, error) {
 	f.suggestedPrompt = prompt
 	return f.suggestedName, f.suggestErr
 }

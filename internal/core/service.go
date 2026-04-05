@@ -29,20 +29,36 @@ type Service struct {
 	tasks      TaskRepository
 	git        GitRepository
 	tmux       TmuxRepository
-	provider   ProviderRepository
+	providers  map[string]ProviderRepository
 	repoConfig RepoConfigRepository
 	workspace  WorkspaceSeeder
 	clock      timeutil.Clock
 	cfg        Config
 }
 
-func (s *Service) SuggestTaskName(ctx context.Context, prompt string) (string, error) {
-	name, err := s.provider.ProposeTaskName(ctx, prompt)
+func (s *Service) SuggestTaskName(ctx context.Context, prompt string, provider string) (string, error) {
+	repo := s.resolveProvider(provider)
+	name, err := repo.ProposeTaskName(ctx, prompt)
 	if err == nil && strings.TrimSpace(name) != "" {
 		return strings.TrimSpace(name), nil
 	}
 
 	return fallbackDisplayName(prompt), nil
+}
+
+func (s *Service) resolveProvider(name string) ProviderRepository {
+	if name != "" {
+		if repo, ok := s.providers[name]; ok {
+			return repo
+		}
+	}
+	if repo, ok := s.providers[s.cfg.Provider]; ok {
+		return repo
+	}
+	for _, repo := range s.providers {
+		return repo
+	}
+	return nil
 }
 
 func (s *Service) NewTask(ctx context.Context, input NewTaskInput) (*Task, error) {
@@ -85,7 +101,7 @@ func (s *Service) createTask(
 			Step:    TaskProgressNaming,
 			Message: "Naming task...",
 		})
-		displayName, err = s.SuggestTaskName(ctx, input.Prompt)
+		displayName, err = s.SuggestTaskName(ctx, input.Prompt, input.Provider)
 		if err != nil {
 			return nil, err
 		}
@@ -204,7 +220,7 @@ func (s *Service) createTask(
 		return task, err
 	}
 
-	command, err := s.provider.BuildLaunchCommand(task)
+	command, err := s.resolveProvider(task.Provider).BuildLaunchCommand(task)
 	if err != nil {
 		return s.markBroken(ctx, task, fmt.Errorf("build launch command: %w", err))
 	}
@@ -356,7 +372,7 @@ func NewService(
 	tasks TaskRepository,
 	git GitRepository,
 	tmux TmuxRepository,
-	provider ProviderRepository,
+	providers map[string]ProviderRepository,
 	repoConfig RepoConfigRepository,
 	workspace WorkspaceSeeder,
 	clock timeutil.Clock,
@@ -366,7 +382,7 @@ func NewService(
 		tasks:      tasks,
 		git:        git,
 		tmux:       tmux,
-		provider:   provider,
+		providers:  providers,
 		repoConfig: repoConfig,
 		workspace:  workspace,
 		clock:      clock,
@@ -385,8 +401,10 @@ func (s *Service) Doctor(ctx context.Context, cwd string) (DoctorResult, error) 
 		result.Failures = append(result.Failures, "tmux: "+err.Error())
 	}
 
-	if err := s.provider.IsAvailable(ctx); err != nil {
-		result.Failures = append(result.Failures, "provider: "+err.Error())
+	for name, repo := range s.providers {
+		if err := repo.IsAvailable(ctx); err != nil {
+			result.Failures = append(result.Failures, "provider("+name+"): "+err.Error())
+		}
 	}
 
 	if err := ensureDatabasePath(s.cfg.DatabasePath); err != nil {

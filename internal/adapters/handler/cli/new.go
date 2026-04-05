@@ -37,7 +37,7 @@ func newNewCommand(deps Dependencies) *cobra.Command {
 				if _, err := fmt.Fprintln(cmd.ErrOrStderr(), "Naming task..."); err != nil {
 					return err
 				}
-				suggested, err := deps.Service.SuggestTaskName(context.Background(), prompt)
+				suggested, err := deps.Service.SuggestTaskName(context.Background(), prompt, provider)
 				if err != nil {
 					return err
 				}

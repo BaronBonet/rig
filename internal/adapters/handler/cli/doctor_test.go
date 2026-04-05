@@ -71,7 +71,7 @@ func (f fakeCLIService) Doctor(context.Context, string) (core.DoctorResult, erro
 	return f.doctorResult, f.doctorErr
 }
 
-func (fakeCLIService) SuggestTaskName(context.Context, string) (string, error) {
+func (fakeCLIService) SuggestTaskName(context.Context, string, string) (string, error) {
 	return "", nil
 }
 

@@ -305,7 +305,7 @@ func (m model) updatePromptInputKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.createInput.Prompt = prompt
 		m.createInput.Provider = m.provider
 		m.promptInput.Blur()
-		return m, suggestTaskNameCmd(m.service, prompt)
+		return m, suggestTaskNameCmd(m.service, prompt, m.provider)
 	}
 
 	var cmd tea.Cmd
@@ -567,9 +567,9 @@ func openTaskCmd(service TaskService, idOrSlug string) tea.Cmd {
 	}
 }
 
-func suggestTaskNameCmd(service TaskService, prompt string) tea.Cmd {
+func suggestTaskNameCmd(service TaskService, prompt string, provider string) tea.Cmd {
 	return func() tea.Msg {
-		name, err := service.SuggestTaskName(context.Background(), prompt)
+		name, err := service.SuggestTaskName(context.Background(), prompt, provider)
 		return suggestNameFinishedMsg{prompt: prompt, name: name, err: err}
 	}
 }
