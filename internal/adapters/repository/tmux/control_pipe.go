@@ -54,8 +54,10 @@ func (execControlPipeFactory) Attach(session string) (controlPipe, error) {
 		stdout:  stdout,
 		stderr:  stderr,
 		timeout: 5 * time.Second,
+		readyCh: make(chan struct{}),
 	}
 	go pipe.scan()
+	time.AfterFunc(100*time.Millisecond, pipe.markReady)
 	return pipe, nil
 }
 
@@ -70,6 +72,8 @@ type execControlPipe struct {
 
 	lastOutputAt    time.Time
 	pendingResponse chan controlResponse
+	readyCh         chan struct{}
+	readyOnce       sync.Once
 	closeOnce       sync.Once
 	closeErr        error
 }
@@ -82,6 +86,8 @@ type controlResponse struct {
 func (p *execControlPipe) SendCommand(command string) (string, error) {
 	p.sendMu.Lock()
 	defer p.sendMu.Unlock()
+
+	p.waitReady()
 
 	responseCh := make(chan controlResponse, 1)
 	p.setPendingResponse(responseCh)
@@ -136,6 +142,7 @@ func (p *execControlPipe) scan() {
 		line := scanner.Text()
 		switch {
 		case strings.HasPrefix(line, "%output"):
+			p.markReady()
 			p.mu.Lock()
 			p.lastOutputAt = time.Now().UTC()
 			p.mu.Unlock()
@@ -143,6 +150,7 @@ func (p *execControlPipe) scan() {
 			collecting = true
 			responseLines = responseLines[:0]
 		case strings.HasPrefix(line, "%error"):
+			p.markReady()
 			collecting = false
 			p.completePending(controlResponse{
 				err: fmt.Errorf(
@@ -152,10 +160,14 @@ func (p *execControlPipe) scan() {
 			})
 			responseLines = responseLines[:0]
 		case strings.HasPrefix(line, "%end"):
+			p.markReady()
 			collecting = false
 			p.completePending(controlResponse{output: strings.Join(responseLines, "\n")})
 			responseLines = responseLines[:0]
 		default:
+			if strings.HasPrefix(line, "%") {
+				p.markReady()
+			}
 			if collecting {
 				responseLines = append(responseLines, line)
 			}
@@ -173,6 +185,24 @@ func (p *execControlPipe) setPendingResponse(responseCh chan controlResponse) {
 	p.mu.Lock()
 	p.pendingResponse = responseCh
 	p.mu.Unlock()
+}
+
+func (p *execControlPipe) waitReady() {
+	if p.readyCh == nil {
+		return
+	}
+
+	<-p.readyCh
+}
+
+func (p *execControlPipe) markReady() {
+	if p.readyCh == nil {
+		return
+	}
+
+	p.readyOnce.Do(func() {
+		close(p.readyCh)
+	})
 }
 
 func (p *execControlPipe) clearPendingResponse(responseCh chan controlResponse) {

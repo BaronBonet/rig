@@ -36,6 +36,48 @@ func TestRuntimeDetector_Detect_ReturnsNeedsInputForPromptWithoutRecentOutput(t 
 	require.Equal(t, core.RuntimeStateNeedsInput, state)
 }
 
+func TestRuntimeDetector_Detect_ReturnsNeedsInputForPromptEvenWithRecentOutput(t *testing.T) {
+	detector := NewRuntimeDetector(2 * time.Second)
+
+	state := detector.Detect(core.RuntimeSnapshot{
+		PaneID:            "%24",
+		ForegroundCommand: "codex",
+		Content:           "› review current changes\n  gpt-5.4 high · 82% left",
+		ObservedAt:        time.Date(2026, 4, 5, 10, 0, 0, 0, time.UTC),
+		LastOutputAt:      time.Date(2026, 4, 5, 9, 59, 59, 0, time.UTC),
+	})
+
+	require.Equal(t, core.RuntimeStateNeedsInput, state)
+}
+
+func TestRuntimeDetector_Detect_ReturnsNeedsInputForCodexAliasCommand(t *testing.T) {
+	detector := NewRuntimeDetector(2 * time.Second)
+
+	state := detector.Detect(core.RuntimeSnapshot{
+		PaneID:            "%24",
+		ForegroundCommand: "codex-aarch64-a",
+		Content:           "› review current changes\n  gpt-5.4 high · 82% left",
+		ObservedAt:        time.Date(2026, 4, 5, 10, 0, 0, 0, time.UTC),
+		LastOutputAt:      time.Date(2026, 4, 5, 9, 59, 50, 0, time.UTC),
+	})
+
+	require.Equal(t, core.RuntimeStateNeedsInput, state)
+}
+
+func TestRuntimeDetector_Detect_ReturnsNeedsInputForANSIPrompt(t *testing.T) {
+	detector := NewRuntimeDetector(2 * time.Second)
+
+	state := detector.Detect(core.RuntimeSnapshot{
+		PaneID:            "%24",
+		ForegroundCommand: "codex-aarch64-a",
+		Content:           "\x1b[1m›\x1b[0m\x1b[48;2;53;54;64m \x1b[2mImplement {feature}\x1b[0m\n\x1b[2m  gpt-5.4 high · 70% left\x1b[0m\n",
+		ObservedAt:        time.Date(2026, 4, 5, 10, 0, 0, 0, time.UTC),
+		LastOutputAt:      time.Date(2026, 4, 5, 9, 59, 50, 0, time.UTC),
+	})
+
+	require.Equal(t, core.RuntimeStateNeedsInput, state)
+}
+
 func TestRuntimeDetector_Detect_ReturnsFinishedWhenPaneReturnsToShellAfterReusedBinding(t *testing.T) {
 	detector := NewRuntimeDetector(2 * time.Second)
 

@@ -49,6 +49,57 @@ func TestExecControlPipeSendCommand_ReturnsPromptErrorOnErrorTerminator(t *testi
 	}
 }
 
+func TestExecControlPipeSendCommand_WaitsForInitialAttachHandshake(t *testing.T) {
+	stdinR, stdinW := io.Pipe()
+	stdoutR, stdoutW := io.Pipe()
+	defer stdinR.Close()
+	defer stdinW.Close()
+	defer stdoutW.Close()
+
+	pipe := &execControlPipe{
+		stdin:   stdinW,
+		stdout:  stdoutR,
+		stderr:  io.NopCloser(strings.NewReader("")),
+		timeout: time.Second,
+		readyCh: make(chan struct{}),
+	}
+	go pipe.scan()
+
+	resultCh := make(chan string, 1)
+	errCh := make(chan error, 1)
+	go func() {
+		result, err := pipe.SendCommand(`list-panes -t =session:agent -F "#{pane_id}\t#{pane_current_command}"`)
+		if err != nil {
+			errCh <- err
+			return
+		}
+		resultCh <- result
+	}()
+
+	go func() {
+		_, _ = stdoutW.Write([]byte("%begin 1 1 0\n"))
+		_, _ = stdoutW.Write([]byte("%end 1 1 0\n"))
+
+		reader := bufio.NewReader(stdinR)
+		_, _ = reader.ReadString('\n')
+
+		_, _ = stdoutW.Write([]byte("%begin 1 2 1\n"))
+		_, _ = stdoutW.Write([]byte("%24\tcodex-aarch64-a\n"))
+		_, _ = stdoutW.Write([]byte("%31\tzsh\n"))
+		_, _ = stdoutW.Write([]byte("%end 1 2 1\n"))
+		_ = stdoutW.Close()
+	}()
+
+	select {
+	case err := <-errCh:
+		require.NoError(t, err)
+	case result := <-resultCh:
+		require.Equal(t, "%24\tcodex-aarch64-a\n%31\tzsh", result)
+	case <-time.After(2 * time.Second):
+		t.Fatal("timed out waiting for startup handshake command result")
+	}
+}
+
 func TestExecControlPipeSendCommand_SerializesOverlappingCommands(t *testing.T) {
 	stdinR, stdinW := io.Pipe()
 	stdoutR, stdoutW := io.Pipe()

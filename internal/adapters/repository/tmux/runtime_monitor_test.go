@@ -11,10 +11,18 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+func TestPaneListCommand_QuotesFormatForTmuxControlMode(t *testing.T) {
+	require.Equal(
+		t,
+		`list-panes -t =repo-billing-retry-flow:agent -F "#{pane_id}\t#{pane_current_command}\t#{pane_active}"`,
+		paneListCommand("repo-billing-retry-flow", "agent"),
+	)
+}
+
 func TestRuntimeMonitorSnapshot_BindsOnlyCodexPaneInSplitAgentWindow(t *testing.T) {
 	pipe := &fakeControlPipe{
 		output: map[string]string{
-			"list-panes -t =repo-billing-retry-flow:agent -F #{pane_id}\t#{pane_current_command}": "%24\tcodex\n%31\tzsh",
+			paneListCommand("repo-billing-retry-flow", "agent"): "%24\tcodex\t1\n%31\tzsh\t0",
 			"capture-pane -t %24 -p -e": "› review my changes\nWorking (26s • esc to interrupt)\n",
 		},
 		lastOutputAt: time.Date(2026, 4, 5, 9, 59, 55, 0, time.UTC),
@@ -41,10 +49,35 @@ func TestRuntimeMonitorSnapshot_BindsOnlyCodexPaneInSplitAgentWindow(t *testing.
 	require.Equal(t, time.Date(2026, 4, 5, 9, 59, 55, 0, time.UTC), snapshot.LastOutputAt)
 }
 
+func TestRuntimeMonitorSnapshot_BindsCodexAliasPaneInSplitAgentWindow(t *testing.T) {
+	pipe := &fakeControlPipe{
+		output: map[string]string{
+			paneListCommand("repo-billing-retry-flow", "agent"): "%24\tcodex-aarch64-a\t1\n%31\tzsh\t0",
+			"capture-pane -t %24 -p -e": "› review my changes\n",
+		},
+		lastOutputAt: time.Date(2026, 4, 5, 9, 59, 55, 0, time.UTC),
+	}
+	monitor := NewRuntimeMonitorWithFactory(&fakeControlPipeFactory{
+		pipes: map[string]controlPipe{"repo-billing-retry-flow": pipe},
+	}, func() time.Time {
+		return time.Date(2026, 4, 5, 10, 0, 0, 0, time.UTC)
+	})
+
+	snapshot, err := monitor.Snapshot(context.Background(), &core.Task{
+		TmuxSession:      "repo-billing-retry-flow",
+		AgentWindowName:  "agent",
+		EditorWindowName: "editor",
+	})
+	require.NoError(t, err)
+	require.Equal(t, "%24", snapshot.PaneID)
+	require.True(t, snapshot.HadCodexBinding)
+	require.Equal(t, "codex", snapshot.ForegroundCommand)
+}
+
 func TestRuntimeMonitorSnapshot_ReturnsEmptyWhenMultipleCodexPanesExist(t *testing.T) {
 	pipe := &fakeControlPipe{
 		output: map[string]string{
-			"list-panes -t =repo-billing-retry-flow:agent -F #{pane_id}\t#{pane_current_command}": "%24\tcodex\n%31\tcodex",
+			paneListCommand("repo-billing-retry-flow", "agent"): "%24\tcodex\t1\n%31\tcodex\t0",
 		},
 	}
 	monitor := NewRuntimeMonitorWithFactory(&fakeControlPipeFactory{
@@ -64,7 +97,7 @@ func TestRuntimeMonitorSnapshot_ReturnsEmptyWhenMultipleCodexPanesExist(t *testi
 func TestRuntimeMonitorSnapshot_ReusesBoundPaneAfterCodexReturnsToShell(t *testing.T) {
 	pipe := &fakeControlPipe{
 		output: map[string]string{
-			"list-panes -t =repo-billing-retry-flow:agent -F #{pane_id}\t#{pane_current_command}": "%24\tcodex",
+			paneListCommand("repo-billing-retry-flow", "agent"): "%24\tcodex\t1",
 			"capture-pane -t %24 -p -e": "› review my changes\nWorking (26s • esc to interrupt)\n",
 		},
 	}
@@ -81,7 +114,7 @@ func TestRuntimeMonitorSnapshot_ReusesBoundPaneAfterCodexReturnsToShell(t *testi
 	require.True(t, first.HadCodexBinding)
 	require.Equal(t, "codex", first.ForegroundCommand)
 
-	pipe.output["list-panes -t =repo-billing-retry-flow:agent -F #{pane_id}\t#{pane_current_command}"] = "%24\tzsh"
+	pipe.output[paneListCommand("repo-billing-retry-flow", "agent")] = "%24\tzsh\t1"
 	pipe.output["capture-pane -t %24 -p -e"] = "done\n"
 
 	second, err := monitor.Snapshot(context.Background(), &core.Task{
@@ -98,7 +131,7 @@ func TestRuntimeMonitorSnapshot_ReusesBoundPaneAfterCodexReturnsToShell(t *testi
 func TestRuntimeMonitorSnapshot_PreservesShellOnlyHistoryAcrossRepeatedObservations(t *testing.T) {
 	pipe := &fakeControlPipe{
 		output: map[string]string{
-			"list-panes -t =repo-billing-retry-flow:agent -F #{pane_id}\t#{pane_current_command}": "%24\tzsh",
+			paneListCommand("repo-billing-retry-flow", "agent"): "%24\tzsh\t1",
 			"capture-pane -t %24 -p -e": "done\n",
 		},
 	}
@@ -127,7 +160,7 @@ func TestRuntimeMonitorSnapshot_PreservesShellOnlyHistoryAcrossRepeatedObservati
 func TestRuntimeMonitorSnapshot_MarksCodexHistoryAfterPaneTransitionsFromShellToCodex(t *testing.T) {
 	pipe := &fakeControlPipe{
 		output: map[string]string{
-			"list-panes -t =repo-billing-retry-flow:agent -F #{pane_id}\t#{pane_current_command}": "%24\tzsh",
+			paneListCommand("repo-billing-retry-flow", "agent"): "%24\tzsh\t1",
 			"capture-pane -t %24 -p -e": "done\n",
 		},
 	}
@@ -142,7 +175,7 @@ func TestRuntimeMonitorSnapshot_MarksCodexHistoryAfterPaneTransitionsFromShellTo
 	require.NoError(t, err)
 	require.False(t, first.HadCodexBinding)
 
-	pipe.output["list-panes -t =repo-billing-retry-flow:agent -F #{pane_id}\t#{pane_current_command}"] = "%24\tcodex"
+	pipe.output[paneListCommand("repo-billing-retry-flow", "agent")] = "%24\tcodex\t1"
 	pipe.output["capture-pane -t %24 -p -e"] = "› review my changes\nWorking (26s • esc to interrupt)\n"
 
 	second, err := monitor.Snapshot(context.Background(), &core.Task{
@@ -153,7 +186,7 @@ func TestRuntimeMonitorSnapshot_MarksCodexHistoryAfterPaneTransitionsFromShellTo
 	require.True(t, second.HadCodexBinding)
 	require.Equal(t, "codex", second.ForegroundCommand)
 
-	pipe.output["list-panes -t =repo-billing-retry-flow:agent -F #{pane_id}\t#{pane_current_command}"] = "%24\tzsh"
+	pipe.output[paneListCommand("repo-billing-retry-flow", "agent")] = "%24\tzsh\t1"
 	pipe.output["capture-pane -t %24 -p -e"] = "done again\n"
 
 	third, err := monitor.Snapshot(context.Background(), &core.Task{
@@ -168,7 +201,7 @@ func TestRuntimeMonitorSnapshot_MarksCodexHistoryAfterPaneTransitionsFromShellTo
 func TestRuntimeMonitorSnapshot_UsesLatestLastOutputAt(t *testing.T) {
 	pipe := &fakeControlPipe{
 		output: map[string]string{
-			"list-panes -t =repo-billing-retry-flow:agent -F #{pane_id}\t#{pane_current_command}": "%24\tcodex",
+			paneListCommand("repo-billing-retry-flow", "agent"): "%24\tcodex\t1",
 			"capture-pane -t %24 -p -e": "› review my changes\n",
 		},
 		lastOutputAt: time.Date(2026, 4, 5, 9, 59, 55, 0, time.UTC),
@@ -198,7 +231,7 @@ func TestRuntimeMonitorSnapshot_UsesLatestLastOutputAt(t *testing.T) {
 func TestRuntimeMonitor_CloseClosesBoundControlPipes(t *testing.T) {
 	pipe := &fakeControlPipe{
 		output: map[string]string{
-			"list-panes -t =repo-billing-retry-flow:agent -F #{pane_id}\t#{pane_current_command}": "%24\tcodex",
+			paneListCommand("repo-billing-retry-flow", "agent"): "%24\tcodex\t1",
 			"capture-pane -t %24 -p -e": "› review my changes\n",
 		},
 	}
@@ -219,7 +252,7 @@ func TestRuntimeMonitor_CloseClosesBoundControlPipes(t *testing.T) {
 func TestRuntimeMonitorSnapshot_EvictsDeadPipeAndReattaches(t *testing.T) {
 	firstPipe := &fakeControlPipe{
 		output: map[string]string{
-			"list-panes -t =repo-billing-retry-flow:agent -F #{pane_id}\t#{pane_current_command}": "%24\tcodex",
+			paneListCommand("repo-billing-retry-flow", "agent"): "%24\tcodex\t1",
 		},
 		errors: map[string]error{
 			"capture-pane -t %24 -p -e": io.ErrClosedPipe,
@@ -227,7 +260,7 @@ func TestRuntimeMonitorSnapshot_EvictsDeadPipeAndReattaches(t *testing.T) {
 	}
 	secondPipe := &fakeControlPipe{
 		output: map[string]string{
-			"list-panes -t =repo-billing-retry-flow:agent -F #{pane_id}\t#{pane_current_command}": "%24\tcodex",
+			paneListCommand("repo-billing-retry-flow", "agent"): "%24\tcodex\t1",
 			"capture-pane -t %24 -p -e": "› review my changes\n",
 		},
 	}
@@ -254,6 +287,27 @@ func TestRuntimeMonitorSnapshot_EvictsDeadPipeAndReattaches(t *testing.T) {
 	require.Equal(t, "› review my changes\n", snapshot.Content)
 	require.Len(t, factory.calls, 2)
 	require.False(t, secondPipe.closed)
+}
+
+func TestRuntimeMonitorSnapshot_BindsActiveShellPaneAsFinishedFallback(t *testing.T) {
+	pipe := &fakeControlPipe{
+		output: map[string]string{
+			paneListCommand("repo-billing-retry-flow", "agent"): "%24\tzsh\t1\n%31\tzsh\t0",
+			"capture-pane -t %24 -p -e": "done\n",
+		},
+	}
+	monitor := NewRuntimeMonitorWithFactory(&fakeControlPipeFactory{
+		pipes: map[string]controlPipe{"repo-billing-retry-flow": pipe},
+	}, time.Now)
+
+	snapshot, err := monitor.Snapshot(context.Background(), &core.Task{
+		TmuxSession:     "repo-billing-retry-flow",
+		AgentWindowName: "agent",
+	})
+	require.NoError(t, err)
+	require.Equal(t, "%24", snapshot.PaneID)
+	require.True(t, snapshot.HadCodexBinding)
+	require.Equal(t, "zsh", snapshot.ForegroundCommand)
 }
 
 type fakeControlPipe struct {

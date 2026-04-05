@@ -424,7 +424,7 @@ func TestModelUpdate_MainListViewRendersControlCenterDetails(t *testing.T) {
 	require.Contains(t, view, "feat/billing-retry-flow")
 }
 
-func TestModelView_ShowsRuntimeBadgesOnSeparateTaskRows(t *testing.T) {
+func TestModelView_PrefersRuntimeBadgesOnSeparateTaskRows(t *testing.T) {
 	running := tuiTask("task-running")
 	running.DisplayName = "running task"
 	running.Status = core.TaskStatusDegraded
@@ -465,6 +465,21 @@ func TestModelView_ShowsRuntimeBadgesOnSeparateTaskRows(t *testing.T) {
 	requireLineContains("running task", "● running")
 	requireLineContains("needs input task", "◐ needs input")
 	requireLineContains("finished task", "○ finished")
+	requireLineContains("running task", "running task")
+	requireLineContains("needs input task", "needs input task")
+	requireLineContains("finished task", "finished task")
+
+	for _, row := range rows {
+		if strings.Contains(row, "running task") {
+			require.NotContains(t, row, "degraded")
+		}
+		if strings.Contains(row, "needs input task") {
+			require.NotContains(t, row, "degraded")
+		}
+		if strings.Contains(row, "finished task") {
+			require.NotContains(t, row, "degraded")
+		}
+	}
 }
 
 func TestModelView_ShowsProviderBadgeOnEveryTaskRow(t *testing.T) {
