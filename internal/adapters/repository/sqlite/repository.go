@@ -226,7 +226,7 @@ func (r *Repository) ListTasks(ctx context.Context) ([]*core.Task, error) {
 			agent_window_exists, editor_window_exists, last_error,
 			created_at, updated_at, last_reconciled_at
 		from tasks
-		order by updated_at desc`,
+		order by created_at asc`,
 	)
 	if err != nil {
 		return nil, err
