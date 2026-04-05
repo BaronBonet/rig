@@ -146,3 +146,76 @@ func TestServiceGetTask_LeavesRuntimeStateEmptyForUnsupportedProvider(t *testing
 	require.NoError(t, err)
 	require.Equal(t, RuntimeStateNone, task.RuntimeState)
 }
+
+func TestServiceGetTask_LeavesRuntimeStateEmptyForBrokenTask(t *testing.T) {
+	worktree := t.TempDir()
+	svc := newTestService()
+	svc.taskRepo.getTask = &Task{
+		ID:               "task-1",
+		Slug:             "billing-retry-flow",
+		RepoRoot:         "/tmp/repo",
+		BranchName:       "feat/billing-retry-flow",
+		WorktreePath:     worktree,
+		TmuxSession:      "repo-billing-retry-flow",
+		AgentWindowName:  "agent",
+		EditorWindowName: "editor",
+		Provider:         "codex",
+		Status:           TaskStatusRunning,
+	}
+	svc.gitRepo.branchExists = false
+	svc.tmuxRepo.sessionExists = true
+	svc.tmuxRepo.windowExists = map[string]map[string]bool{
+		"repo-billing-retry-flow": {
+			"agent":  true,
+			"editor": true,
+		},
+	}
+	svc.runtimeMonitor.snapshot = RuntimeSnapshot{
+		PaneID:            "%24",
+		ForegroundCommand: "codex",
+		Content:           "› still here",
+	}
+	svc.runtimeDetector.state = RuntimeStateNeedsInput
+
+	task, err := svc.service.GetTask(t.Context(), "billing-retry-flow")
+	require.NoError(t, err)
+	require.Equal(t, TaskStatusBroken, task.Status)
+	require.Equal(t, RuntimeStateNone, task.RuntimeState)
+	require.True(t, task.RuntimeStateUpdatedAt.IsZero())
+}
+
+func TestServiceGetTask_EnrichesRuntimeStateForDegradedTask(t *testing.T) {
+	worktree := t.TempDir()
+	svc := newTestService()
+	svc.taskRepo.getTask = &Task{
+		ID:               "task-1",
+		Slug:             "billing-retry-flow",
+		RepoRoot:         "/tmp/repo",
+		BranchName:       "feat/billing-retry-flow",
+		WorktreePath:     worktree,
+		TmuxSession:      "repo-billing-retry-flow",
+		AgentWindowName:  "agent",
+		EditorWindowName: "editor",
+		Provider:         "codex",
+		Status:           TaskStatusRunning,
+	}
+	svc.gitRepo.branchExists = true
+	svc.tmuxRepo.sessionExists = true
+	svc.tmuxRepo.windowExists = map[string]map[string]bool{
+		"repo-billing-retry-flow": {
+			"agent": true,
+		},
+	}
+	svc.runtimeMonitor.snapshot = RuntimeSnapshot{
+		PaneID:            "%24",
+		ForegroundCommand: "codex",
+		Content:           "› still here",
+	}
+	svc.runtimeDetector.state = RuntimeStateNeedsInput
+
+	task, err := svc.service.GetTask(t.Context(), "billing-retry-flow")
+	require.NoError(t, err)
+	require.Equal(t, TaskStatusDegraded, task.Status)
+	require.Equal(t, RuntimeStateNeedsInput, task.RuntimeState)
+	require.False(t, task.RuntimeStateUpdatedAt.IsZero())
+}

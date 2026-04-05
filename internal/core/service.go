@@ -578,6 +578,9 @@ func (s *Service) enrichRuntimeState(ctx context.Context, task *Task) error {
 	task.RuntimeState = RuntimeStateNone
 	task.RuntimeStateUpdatedAt = time.Time{}
 
+	if task.Status == TaskStatusBroken || task.Status == TaskStatusCleaned {
+		return nil
+	}
 	if s.runtimeMonitor == nil {
 		return nil
 	}
