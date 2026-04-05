@@ -41,7 +41,7 @@ func TestRuntimeDetector_Detect_ReturnsFinishedWhenPaneReturnsToShellAfterReused
 
 	state := detector.Detect(core.RuntimeSnapshot{
 		PaneID:            "%24",
-		ReusedBinding:     true,
+		HadCodexBinding:   true,
 		ForegroundCommand: "zsh",
 		Content:           "done\n",
 		ObservedAt:        time.Date(2026, 4, 5, 10, 0, 0, 0, time.UTC),
@@ -65,6 +65,43 @@ func TestRuntimeDetector_Detect_ReturnsEmptyForFirstShellObservation(t *testing.
 	require.Equal(t, core.RuntimeStateNone, state)
 }
 
+func TestRuntimeDetector_Detect_ReturnsEmptyForShellOnlyRepeatedObservation(t *testing.T) {
+	detector := NewRuntimeDetector(2 * time.Second)
+
+	first := detector.Detect(core.RuntimeSnapshot{
+		PaneID:            "%24",
+		ForegroundCommand: "zsh",
+		Content:           "done\n",
+		ObservedAt:        time.Date(2026, 4, 5, 10, 0, 0, 0, time.UTC),
+		LastOutputAt:      time.Date(2026, 4, 5, 9, 59, 50, 0, time.UTC),
+	})
+	second := detector.Detect(core.RuntimeSnapshot{
+		PaneID:            "%24",
+		ForegroundCommand: "zsh",
+		Content:           "done\n",
+		ObservedAt:        time.Date(2026, 4, 5, 10, 0, 1, 0, time.UTC),
+		LastOutputAt:      time.Date(2026, 4, 5, 9, 59, 50, 0, time.UTC),
+	})
+
+	require.Equal(t, core.RuntimeStateNone, first)
+	require.Equal(t, core.RuntimeStateNone, second)
+}
+
+func TestRuntimeDetector_Detect_ReturnsFinishedOnlyAfterPriorCodexOwnership(t *testing.T) {
+	detector := NewRuntimeDetector(2 * time.Second)
+
+	state := detector.Detect(core.RuntimeSnapshot{
+		PaneID:            "%24",
+		HadCodexBinding:   true,
+		ForegroundCommand: "zsh",
+		Content:           "done\n",
+		ObservedAt:        time.Date(2026, 4, 5, 10, 0, 1, 0, time.UTC),
+		LastOutputAt:      time.Date(2026, 4, 5, 9, 59, 50, 0, time.UTC),
+	})
+
+	require.Equal(t, core.RuntimeStateFinished, state)
+}
+
 func TestRuntimeDetector_Detect_ReturnsNeedsInputForContinuePrompt(t *testing.T) {
 	detector := NewRuntimeDetector(2 * time.Second)
 
@@ -86,7 +123,7 @@ func TestRuntimeDetector_Detect_ReturnsEmptyForUnclassifiedSnapshot(t *testing.T
 		PaneID:            "%24",
 		ForegroundCommand: "codex",
 		Content:           "some unrelated output\n",
-		ReusedBinding:     false,
+		HadCodexBinding:   false,
 		ObservedAt:        time.Date(2026, 4, 5, 10, 0, 0, 0, time.UTC),
 		LastOutputAt:      time.Date(2026, 4, 5, 9, 59, 40, 0, time.UTC),
 	})

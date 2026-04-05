@@ -32,7 +32,7 @@ func TestRuntimeMonitorSnapshot_BindsOnlyCodexPaneInSplitAgentWindow(t *testing.
 	})
 	require.NoError(t, err)
 	require.Equal(t, "%24", snapshot.PaneID)
-	require.False(t, snapshot.ReusedBinding)
+	require.True(t, snapshot.HadCodexBinding)
 	require.Equal(t, "codex", snapshot.ForegroundCommand)
 	require.Equal(t, "repo-billing-retry-flow", snapshot.SessionName)
 	require.Equal(t, "agent", snapshot.WindowName)
@@ -78,7 +78,7 @@ func TestRuntimeMonitorSnapshot_ReusesBoundPaneAfterCodexReturnsToShell(t *testi
 	})
 	require.NoError(t, err)
 	require.Equal(t, "%24", first.PaneID)
-	require.False(t, first.ReusedBinding)
+	require.True(t, first.HadCodexBinding)
 	require.Equal(t, "codex", first.ForegroundCommand)
 
 	pipe.output["list-panes -t =repo-billing-retry-flow:agent -F #{pane_id}\t#{pane_current_command}"] = "%24\tzsh"
@@ -90,12 +90,12 @@ func TestRuntimeMonitorSnapshot_ReusesBoundPaneAfterCodexReturnsToShell(t *testi
 	})
 	require.NoError(t, err)
 	require.Equal(t, "%24", second.PaneID)
-	require.True(t, second.ReusedBinding)
+	require.True(t, second.HadCodexBinding)
 	require.Equal(t, "zsh", second.ForegroundCommand)
 	require.Equal(t, "done\n", second.Content)
 }
 
-func TestRuntimeMonitorSnapshot_DoesNotMarkFirstShellObservationAsReusedBinding(t *testing.T) {
+func TestRuntimeMonitorSnapshot_PreservesShellOnlyHistoryAcrossRepeatedObservations(t *testing.T) {
 	pipe := &fakeControlPipe{
 		output: map[string]string{
 			"list-panes -t =repo-billing-retry-flow:agent -F #{pane_id}\t#{pane_current_command}": "%24\tzsh",
@@ -112,8 +112,57 @@ func TestRuntimeMonitorSnapshot_DoesNotMarkFirstShellObservationAsReusedBinding(
 	})
 	require.NoError(t, err)
 	require.Equal(t, "%24", snapshot.PaneID)
-	require.False(t, snapshot.ReusedBinding)
+	require.False(t, snapshot.HadCodexBinding)
 	require.Equal(t, "zsh", snapshot.ForegroundCommand)
+
+	snapshot, err = monitor.Snapshot(context.Background(), &core.Task{
+		TmuxSession:     "repo-billing-retry-flow",
+		AgentWindowName: "agent",
+	})
+	require.NoError(t, err)
+	require.False(t, snapshot.HadCodexBinding)
+	require.Equal(t, "zsh", snapshot.ForegroundCommand)
+}
+
+func TestRuntimeMonitorSnapshot_MarksCodexHistoryAfterPaneTransitionsFromShellToCodex(t *testing.T) {
+	pipe := &fakeControlPipe{
+		output: map[string]string{
+			"list-panes -t =repo-billing-retry-flow:agent -F #{pane_id}\t#{pane_current_command}": "%24\tzsh",
+			"capture-pane -t %24 -p -e": "done\n",
+		},
+	}
+	monitor := NewRuntimeMonitorWithFactory(&fakeControlPipeFactory{
+		pipes: map[string]controlPipe{"repo-billing-retry-flow": pipe},
+	}, time.Now)
+
+	first, err := monitor.Snapshot(context.Background(), &core.Task{
+		TmuxSession:     "repo-billing-retry-flow",
+		AgentWindowName: "agent",
+	})
+	require.NoError(t, err)
+	require.False(t, first.HadCodexBinding)
+
+	pipe.output["list-panes -t =repo-billing-retry-flow:agent -F #{pane_id}\t#{pane_current_command}"] = "%24\tcodex"
+	pipe.output["capture-pane -t %24 -p -e"] = "› review my changes\nWorking (26s • esc to interrupt)\n"
+
+	second, err := monitor.Snapshot(context.Background(), &core.Task{
+		TmuxSession:     "repo-billing-retry-flow",
+		AgentWindowName: "agent",
+	})
+	require.NoError(t, err)
+	require.True(t, second.HadCodexBinding)
+	require.Equal(t, "codex", second.ForegroundCommand)
+
+	pipe.output["list-panes -t =repo-billing-retry-flow:agent -F #{pane_id}\t#{pane_current_command}"] = "%24\tzsh"
+	pipe.output["capture-pane -t %24 -p -e"] = "done again\n"
+
+	third, err := monitor.Snapshot(context.Background(), &core.Task{
+		TmuxSession:     "repo-billing-retry-flow",
+		AgentWindowName: "agent",
+	})
+	require.NoError(t, err)
+	require.True(t, third.HadCodexBinding)
+	require.Equal(t, "zsh", third.ForegroundCommand)
 }
 
 func TestRuntimeMonitorSnapshot_UsesLatestLastOutputAt(t *testing.T) {
