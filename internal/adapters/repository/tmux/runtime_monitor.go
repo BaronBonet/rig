@@ -53,12 +53,17 @@ func (m *RuntimeMonitor) Snapshot(ctx context.Context, task *core.Task) (core.Ru
 	}
 
 	paneID, command, err := m.resolvePaneBinding(task, pipe)
-	if err != nil || strings.TrimSpace(paneID) == "" {
+	if err != nil {
+		m.evictSession(task.TmuxSession)
+		return core.RuntimeSnapshot{}, err
+	}
+	if strings.TrimSpace(paneID) == "" {
 		return core.RuntimeSnapshot{}, err
 	}
 
 	content, err := pipe.SendCommand(fmt.Sprintf("capture-pane -t %s -p -e", paneID))
 	if err != nil {
+		m.evictSession(task.TmuxSession)
 		return core.RuntimeSnapshot{}, err
 	}
 
@@ -87,6 +92,17 @@ func (m *RuntimeMonitor) Close() error {
 	}
 
 	return err
+}
+
+func (m *RuntimeMonitor) evictSession(session string) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	if pipe, ok := m.pipes[session]; ok {
+		_ = pipe.Close()
+		delete(m.pipes, session)
+	}
+	delete(m.boundPanes, session)
 }
 
 func (m *RuntimeMonitor) pipeForSession(session string) (controlPipe, error) {

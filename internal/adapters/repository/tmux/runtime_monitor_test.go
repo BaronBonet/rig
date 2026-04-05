@@ -2,6 +2,7 @@ package tmux
 
 import (
 	"context"
+	"io"
 	"testing"
 	"time"
 
@@ -14,7 +15,7 @@ func TestRuntimeMonitorSnapshot_BindsOnlyCodexPaneInSplitAgentWindow(t *testing.
 	pipe := &fakeControlPipe{
 		output: map[string]string{
 			"list-panes -t =repo-billing-retry-flow:agent -F #{pane_id}\t#{pane_current_command}": "%24\tcodex\n%31\tzsh",
-			"capture-pane -t %24 -p -e":                                                   "› review my changes\nWorking (26s • esc to interrupt)\n",
+			"capture-pane -t %24 -p -e": "› review my changes\nWorking (26s • esc to interrupt)\n",
 		},
 		lastOutputAt: time.Date(2026, 4, 5, 9, 59, 55, 0, time.UTC),
 	}
@@ -63,7 +64,7 @@ func TestRuntimeMonitorSnapshot_ReusesBoundPaneAfterCodexReturnsToShell(t *testi
 	pipe := &fakeControlPipe{
 		output: map[string]string{
 			"list-panes -t =repo-billing-retry-flow:agent -F #{pane_id}\t#{pane_current_command}": "%24\tcodex",
-			"capture-pane -t %24 -p -e":                                                   "› review my changes\nWorking (26s • esc to interrupt)\n",
+			"capture-pane -t %24 -p -e": "› review my changes\nWorking (26s • esc to interrupt)\n",
 		},
 	}
 	monitor := NewRuntimeMonitorWithFactory(&fakeControlPipeFactory{
@@ -95,7 +96,7 @@ func TestRuntimeMonitorSnapshot_UsesLatestLastOutputAt(t *testing.T) {
 	pipe := &fakeControlPipe{
 		output: map[string]string{
 			"list-panes -t =repo-billing-retry-flow:agent -F #{pane_id}\t#{pane_current_command}": "%24\tcodex",
-			"capture-pane -t %24 -p -e":                                                   "› review my changes\n",
+			"capture-pane -t %24 -p -e": "› review my changes\n",
 		},
 		lastOutputAt: time.Date(2026, 4, 5, 9, 59, 55, 0, time.UTC),
 	}
@@ -125,7 +126,7 @@ func TestRuntimeMonitor_CloseClosesBoundControlPipes(t *testing.T) {
 	pipe := &fakeControlPipe{
 		output: map[string]string{
 			"list-panes -t =repo-billing-retry-flow:agent -F #{pane_id}\t#{pane_current_command}": "%24\tcodex",
-			"capture-pane -t %24 -p -e":                                                   "› review my changes\n",
+			"capture-pane -t %24 -p -e": "› review my changes\n",
 		},
 	}
 	monitor := NewRuntimeMonitorWithFactory(&fakeControlPipeFactory{
@@ -142,13 +143,57 @@ func TestRuntimeMonitor_CloseClosesBoundControlPipes(t *testing.T) {
 	require.True(t, pipe.closed)
 }
 
+func TestRuntimeMonitorSnapshot_EvictsDeadPipeAndReattaches(t *testing.T) {
+	firstPipe := &fakeControlPipe{
+		output: map[string]string{
+			"list-panes -t =repo-billing-retry-flow:agent -F #{pane_id}\t#{pane_current_command}": "%24\tcodex",
+		},
+		errors: map[string]error{
+			"capture-pane -t %24 -p -e": io.ErrClosedPipe,
+		},
+	}
+	secondPipe := &fakeControlPipe{
+		output: map[string]string{
+			"list-panes -t =repo-billing-retry-flow:agent -F #{pane_id}\t#{pane_current_command}": "%24\tcodex",
+			"capture-pane -t %24 -p -e": "› review my changes\n",
+		},
+	}
+	factory := &fakeControlPipeFactory{
+		queue: []controlPipe{firstPipe, secondPipe},
+	}
+	monitor := NewRuntimeMonitorWithFactory(factory, time.Now)
+
+	snapshot, err := monitor.Snapshot(context.Background(), &core.Task{
+		TmuxSession:     "repo-billing-retry-flow",
+		AgentWindowName: "agent",
+	})
+	require.Error(t, err)
+	require.Empty(t, snapshot.PaneID)
+	require.True(t, firstPipe.closed)
+	require.Len(t, factory.calls, 1)
+
+	snapshot, err = monitor.Snapshot(context.Background(), &core.Task{
+		TmuxSession:     "repo-billing-retry-flow",
+		AgentWindowName: "agent",
+	})
+	require.NoError(t, err)
+	require.Equal(t, "%24", snapshot.PaneID)
+	require.Equal(t, "› review my changes\n", snapshot.Content)
+	require.Len(t, factory.calls, 2)
+	require.False(t, secondPipe.closed)
+}
+
 type fakeControlPipe struct {
 	output       map[string]string
+	errors       map[string]error
 	lastOutputAt time.Time
 	closed       bool
 }
 
 func (f *fakeControlPipe) SendCommand(command string) (string, error) {
+	if err, ok := f.errors[command]; ok {
+		return "", err
+	}
 	return f.output[command], nil
 }
 
@@ -163,9 +208,17 @@ func (f *fakeControlPipe) Close() error {
 
 type fakeControlPipeFactory struct {
 	pipes map[string]controlPipe
+	queue []controlPipe
+	calls []string
 }
 
 func (f *fakeControlPipeFactory) Attach(session string) (controlPipe, error) {
+	f.calls = append(f.calls, session)
+	if len(f.queue) > 0 {
+		pipe := f.queue[0]
+		f.queue = f.queue[1:]
+		return pipe, nil
+	}
 	if pipe, ok := f.pipes[session]; ok {
 		return pipe, nil
 	}
