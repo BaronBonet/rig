@@ -1,0 +1,128 @@
+package tmux
+
+import (
+	"bufio"
+	"io"
+	"strings"
+	"sync"
+	"testing"
+	"time"
+
+	"github.com/stretchr/testify/require"
+)
+
+func TestExecControlPipeSendCommand_ReturnsPromptErrorOnErrorTerminator(t *testing.T) {
+	stdinR, stdinW := io.Pipe()
+	stdoutR, stdoutW := io.Pipe()
+	defer stdinR.Close()
+	defer stdinW.Close()
+	defer stdoutW.Close()
+
+	pipe := &execControlPipe{
+		stdin:   stdinW,
+		stdout:  stdoutR,
+		stderr:  io.NopCloser(strings.NewReader("")),
+		timeout: 200 * time.Millisecond,
+	}
+	go pipe.scan()
+
+	errCh := make(chan error, 1)
+	go func() {
+		_, err := pipe.SendCommand("list-panes -t =session:agent -F #{pane_id}")
+		errCh <- err
+	}()
+
+	go func() {
+		_, _ = bufio.NewReader(stdinR).ReadString('\n')
+		_, _ = stdoutW.Write([]byte("%begin\n"))
+		_, _ = stdoutW.Write([]byte("tmux: failed\n"))
+		_, _ = stdoutW.Write([]byte("%error\n"))
+		_ = stdoutW.Close()
+	}()
+
+	select {
+	case err := <-errCh:
+		require.Error(t, err)
+		require.ErrorContains(t, err, "tmux control command failed")
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for tmux error")
+	}
+}
+
+func TestExecControlPipeSendCommand_SerializesOverlappingCommands(t *testing.T) {
+	stdinR, stdinW := io.Pipe()
+	stdoutR, stdoutW := io.Pipe()
+	defer stdinR.Close()
+	defer stdinW.Close()
+	defer stdoutW.Close()
+
+	pipe := &execControlPipe{
+		stdin:   stdinW,
+		stdout:  stdoutR,
+		stderr:  io.NopCloser(strings.NewReader("")),
+		timeout: 200 * time.Millisecond,
+	}
+	go pipe.scan()
+
+	var mu sync.Mutex
+	var commands []string
+	errCh := make(chan error, 2)
+	resultCh := make(chan string, 2)
+
+	go func() {
+		reader := bufio.NewReader(stdinR)
+		for i := 0; i < 2; i++ {
+			command, err := reader.ReadString('\n')
+			if err != nil {
+				errCh <- err
+				return
+			}
+			mu.Lock()
+			commands = append(commands, strings.TrimSpace(command))
+			mu.Unlock()
+
+			_, _ = stdoutW.Write([]byte("%begin\n"))
+			if strings.TrimSpace(command) == "first" {
+				_, _ = stdoutW.Write([]byte("response-first\n"))
+			} else {
+				_, _ = stdoutW.Write([]byte("response-second\n"))
+			}
+			_, _ = stdoutW.Write([]byte("%end\n"))
+		}
+		_ = stdoutW.Close()
+	}()
+
+	go func() {
+		result, err := pipe.SendCommand("first")
+		if err != nil {
+			errCh <- err
+			return
+		}
+		resultCh <- result
+	}()
+	go func() {
+		result, err := pipe.SendCommand("second")
+		if err != nil {
+			errCh <- err
+			return
+		}
+		resultCh <- result
+	}()
+
+	var results []string
+	for len(results) < 2 {
+		select {
+		case err := <-errCh:
+			require.NoError(t, err)
+		case result := <-resultCh:
+			results = append(results, result)
+		case <-time.After(time.Second):
+			t.Fatal("timed out waiting for overlapping command results")
+		}
+	}
+
+	mu.Lock()
+	require.ElementsMatch(t, []string{"first", "second"}, commands)
+	mu.Unlock()
+	require.ElementsMatch(t, []string{"response-first", "response-second"}, results)
+}

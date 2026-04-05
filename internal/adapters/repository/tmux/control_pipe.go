@@ -53,10 +53,6 @@ func (execControlPipeFactory) Attach(session string) (controlPipe, error) {
 		stdin:   stdin,
 		stdout:  stdout,
 		stderr:  stderr,
-		done:    make(chan struct{}),
-		errCh:   make(chan error, 1),
-		waitCh:  make(chan struct{}),
-		closed:  make(chan struct{}),
 		timeout: 5 * time.Second,
 	}
 	go pipe.scan()
@@ -64,42 +60,42 @@ func (execControlPipeFactory) Attach(session string) (controlPipe, error) {
 }
 
 type execControlPipe struct {
-	cmd    *exec.Cmd
-	stdin  io.WriteCloser
-	stdout io.ReadCloser
-	stderr io.ReadCloser
-
-	mu              sync.RWMutex
-	lastOutputAt    time.Time
-	pendingResponse chan string
-
-	done    chan struct{}
-	errCh   chan error
-	waitCh  chan struct{}
-	closed  chan struct{}
+	cmd     *exec.Cmd
+	stdin   io.WriteCloser
+	stdout  io.ReadCloser
+	stderr  io.ReadCloser
+	sendMu  sync.Mutex
+	mu      sync.RWMutex
 	timeout time.Duration
-	closeOnce sync.Once
+
+	lastOutputAt    time.Time
+	pendingResponse chan controlResponse
+	closeOnce       sync.Once
+	closeErr        error
+}
+
+type controlResponse struct {
+	output string
+	err    error
 }
 
 func (p *execControlPipe) SendCommand(command string) (string, error) {
-	p.mu.Lock()
-	responseCh := make(chan string, 1)
-	p.pendingResponse = responseCh
-	p.mu.Unlock()
+	p.sendMu.Lock()
+	defer p.sendMu.Unlock()
+
+	responseCh := make(chan controlResponse, 1)
+	p.setPendingResponse(responseCh)
 
 	if _, err := fmt.Fprintln(p.stdin, command); err != nil {
-		p.mu.Lock()
-		p.pendingResponse = nil
-		p.mu.Unlock()
+		p.clearPendingResponse(responseCh)
 		return "", err
 	}
 
 	select {
-	case output := <-responseCh:
-		return output, nil
-	case err := <-p.errCh:
-		return "", err
+	case response := <-responseCh:
+		return response.output, response.err
 	case <-time.After(p.timeout):
+		p.clearPendingResponse(responseCh)
 		return "", fmt.Errorf("tmux control command timed out: %s", command)
 	}
 }
@@ -111,9 +107,7 @@ func (p *execControlPipe) LastOutputAt() time.Time {
 }
 
 func (p *execControlPipe) Close() error {
-	var err error
 	p.closeOnce.Do(func() {
-		close(p.closed)
 		if p.stdin != nil {
 			_ = p.stdin.Close()
 		}
@@ -124,13 +118,13 @@ func (p *execControlPipe) Close() error {
 			_ = p.stderr.Close()
 		}
 		if p.cmd != nil && p.cmd.Process != nil {
-			err = p.cmd.Process.Kill()
+			p.closeErr = p.cmd.Process.Kill()
 		}
 		if p.cmd != nil {
 			_, _ = p.cmd.Process.Wait()
 		}
 	})
-	return err
+	return p.closeErr
 }
 
 func (p *execControlPipe) scan() {
@@ -148,15 +142,15 @@ func (p *execControlPipe) scan() {
 		case strings.HasPrefix(line, "%begin"):
 			collecting = true
 			responseLines = responseLines[:0]
+		case strings.HasPrefix(line, "%error"):
+			collecting = false
+			p.completePending(controlResponse{
+				err: fmt.Errorf("tmux control command failed: %s", strings.TrimSpace(strings.Join(responseLines, "\n"))),
+			})
+			responseLines = responseLines[:0]
 		case strings.HasPrefix(line, "%end"):
 			collecting = false
-			p.mu.Lock()
-			pending := p.pendingResponse
-			p.pendingResponse = nil
-			p.mu.Unlock()
-			if pending != nil {
-				pending <- strings.Join(responseLines, "\n")
-			}
+			p.completePending(controlResponse{output: strings.Join(responseLines, "\n")})
 			responseLines = responseLines[:0]
 		default:
 			if collecting {
@@ -166,10 +160,37 @@ func (p *execControlPipe) scan() {
 	}
 
 	if err := scanner.Err(); err != nil {
-		select {
-		case p.errCh <- err:
-		default:
-		}
+		p.completePending(controlResponse{err: err})
+		return
 	}
-	close(p.done)
+	p.completePending(controlResponse{err: io.EOF})
+}
+
+func (p *execControlPipe) setPendingResponse(responseCh chan controlResponse) {
+	p.mu.Lock()
+	p.pendingResponse = responseCh
+	p.mu.Unlock()
+}
+
+func (p *execControlPipe) clearPendingResponse(responseCh chan controlResponse) {
+	p.mu.Lock()
+	if p.pendingResponse == responseCh {
+		p.pendingResponse = nil
+	}
+	p.mu.Unlock()
+}
+
+func (p *execControlPipe) completePending(response controlResponse) {
+	p.mu.Lock()
+	pending := p.pendingResponse
+	p.pendingResponse = nil
+	p.mu.Unlock()
+	if pending == nil {
+		return
+	}
+
+	select {
+	case pending <- response:
+	default:
+	}
 }
