@@ -15,6 +15,7 @@ import (
 func newNewCommand(deps Dependencies) *cobra.Command {
 	var nonInteractive bool
 	var jsonOutput bool
+	var provider string
 
 	cmd := &cobra.Command{
 		Use:   "new <prompt>",
@@ -27,8 +28,9 @@ func newNewCommand(deps Dependencies) *cobra.Command {
 
 			prompt := args[0]
 			input := core.NewTaskInput{
-				Cwd:    deps.Cwd,
-				Prompt: prompt,
+				Cwd:      deps.Cwd,
+				Prompt:   prompt,
+				Provider: provider,
 			}
 
 			if !nonInteractive {
@@ -84,6 +86,7 @@ func newNewCommand(deps Dependencies) *cobra.Command {
 
 	cmd.Flags().BoolVar(&nonInteractive, "non-interactive", false, "accept the suggested name without prompting")
 	cmd.Flags().BoolVar(&jsonOutput, "json", false, "print the created task as JSON")
+	cmd.Flags().StringVar(&provider, "provider", "", "provider to use (codex, claude)")
 
 	return cmd
 }

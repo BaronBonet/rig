@@ -35,7 +35,7 @@ type Dependencies struct {
 func NewRootCommand(deps Dependencies) *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "agent",
-		Short: "Manage task worktrees and tmux sessions for Codex-driven work",
+		Short: "Manage task worktrees and tmux sessions for agent-driven work",
 	}
 
 	if deps.Stdout != nil {
