@@ -16,7 +16,7 @@ type RuntimeMonitor struct {
 	now        func() time.Time
 	mu         sync.Mutex
 	pipes      map[string]controlPipe
-	boundPanes map[string]string
+	boundPanes map[string]*boundPaneState
 }
 
 func NewRuntimeMonitor() *RuntimeMonitor {
@@ -31,7 +31,7 @@ func NewRuntimeMonitorWithFactory(factory controlPipeFactory, now func() time.Ti
 		factory:    factory,
 		now:        now,
 		pipes:      make(map[string]controlPipe),
-		boundPanes: make(map[string]string),
+		boundPanes: make(map[string]*boundPaneState),
 	}
 }
 
@@ -52,7 +52,7 @@ func (m *RuntimeMonitor) Snapshot(ctx context.Context, task *core.Task) (core.Ru
 		return core.RuntimeSnapshot{}, err
 	}
 
-	paneID, command, reusedBinding, err := m.resolvePaneBinding(task, pipe)
+	paneID, command, hadCodexBinding, err := m.resolvePaneBinding(task, pipe)
 	if err != nil {
 		m.evictSession(task.TmuxSession)
 		return core.RuntimeSnapshot{}, err
@@ -71,7 +71,7 @@ func (m *RuntimeMonitor) Snapshot(ctx context.Context, task *core.Task) (core.Ru
 		SessionName:       task.TmuxSession,
 		WindowName:        windowOrDefault(task.AgentWindowName, "agent"),
 		PaneID:            paneID,
-		ReusedBinding:     reusedBinding,
+		HadCodexBinding:   hadCodexBinding,
 		ForegroundCommand: command,
 		Content:           content,
 		ObservedAt:        m.now().UTC(),
@@ -137,13 +137,24 @@ func (m *RuntimeMonitor) resolvePaneBinding(task *core.Task, pipe controlPipe) (
 	m.mu.Lock()
 	bound := m.boundPanes[sessionKey]
 	m.mu.Unlock()
-	if strings.TrimSpace(bound) != "" {
+	if bound != nil && strings.TrimSpace(bound.paneID) != "" {
 		output, err := pipe.SendCommand(listCommand)
 		if err != nil {
 			return "", "", false, err
 		}
-		if paneID, command, ok := findPane(output, bound); ok {
-			return paneID, command, true, nil
+		if paneID, command, ok := findPane(output, bound.paneID); ok {
+			hadCodexBinding := false
+			if command == "codex" {
+				m.mu.Lock()
+				bound.hadCodex = true
+				hadCodexBinding = true
+				m.mu.Unlock()
+			} else {
+				m.mu.Lock()
+				hadCodexBinding = bound.hadCodex
+				m.mu.Unlock()
+			}
+			return paneID, command, hadCodexBinding, nil
 		}
 
 		m.mu.Lock()
@@ -160,17 +171,28 @@ func (m *RuntimeMonitor) resolvePaneBinding(task *core.Task, pipe controlPipe) (
 	switch {
 	case len(codexPanes) == 1:
 		m.mu.Lock()
-		m.boundPanes[sessionKey] = codexPanes[0].id
+		m.boundPanes[sessionKey] = &boundPaneState{
+			paneID:   codexPanes[0].id,
+			hadCodex: true,
+		}
 		m.mu.Unlock()
-		return codexPanes[0].id, codexPanes[0].command, false, nil
+		return codexPanes[0].id, codexPanes[0].command, true, nil
 	case len(panes) == 1:
 		m.mu.Lock()
-		m.boundPanes[sessionKey] = panes[0].id
+		m.boundPanes[sessionKey] = &boundPaneState{
+			paneID:   panes[0].id,
+			hadCodex: false,
+		}
 		m.mu.Unlock()
 		return panes[0].id, panes[0].command, false, nil
 	default:
 		return "", "", false, nil
 	}
+}
+
+type boundPaneState struct {
+	paneID   string
+	hadCodex bool
 }
 
 type paneInfo struct {

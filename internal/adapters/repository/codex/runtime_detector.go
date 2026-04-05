@@ -22,7 +22,7 @@ func (d *RuntimeDetector) Detect(snapshot core.RuntimeSnapshot) core.RuntimeStat
 	}
 
 	if isShellCommand(command) {
-		if strings.TrimSpace(snapshot.PaneID) != "" && snapshot.ReusedBinding {
+		if strings.TrimSpace(snapshot.PaneID) != "" && snapshot.HadCodexBinding {
 			return core.RuntimeStateFinished
 		}
 		return core.RuntimeStateNone
