@@ -128,11 +128,7 @@ func (m *RuntimeMonitor) pipeForSession(session string) (controlPipe, error) {
 func (m *RuntimeMonitor) resolvePaneBinding(task *core.Task, pipe controlPipe) (string, string, bool, error) {
 	sessionKey := task.TmuxSession
 	windowName := windowOrDefault(task.AgentWindowName, "agent")
-	listCommand := fmt.Sprintf(
-		"list-panes -t %s:%s -F #{pane_id}\t#{pane_current_command}",
-		exactSessionTarget(task.TmuxSession),
-		windowName,
-	)
+	listCommand := paneListCommand(task.TmuxSession, windowName)
 
 	m.mu.Lock()
 	bound := m.boundPanes[sessionKey]
@@ -185,6 +181,15 @@ func (m *RuntimeMonitor) resolvePaneBinding(task *core.Task, pipe controlPipe) (
 		}
 		m.mu.Unlock()
 		return panes[0].id, panes[0].command, false, nil
+	case hasSingleActiveShellPane(panes):
+		activePane := activeShellPane(panes)
+		m.mu.Lock()
+		m.boundPanes[sessionKey] = &boundPaneState{
+			paneID:   activePane.id,
+			hadCodex: true,
+		}
+		m.mu.Unlock()
+		return activePane.id, activePane.command, true, nil
 	default:
 		return "", "", false, nil
 	}
@@ -195,9 +200,18 @@ type boundPaneState struct {
 	hadCodex bool
 }
 
+func paneListCommand(session, windowName string) string {
+	return fmt.Sprintf(
+		`list-panes -t %s:%s -F "#{pane_id}\t#{pane_current_command}\t#{pane_active}"`,
+		exactSessionTarget(session),
+		windowName,
+	)
+}
+
 type paneInfo struct {
 	id      string
 	command string
+	active  bool
 }
 
 func parsePanes(output string) ([]paneInfo, []paneInfo) {
@@ -208,13 +222,14 @@ func parsePanes(output string) ([]paneInfo, []paneInfo) {
 		if strings.TrimSpace(line) == "" {
 			continue
 		}
-		parts := strings.SplitN(line, "\t", 2)
-		if len(parts) != 2 {
+		parts := strings.SplitN(line, "\t", 3)
+		if len(parts) != 3 {
 			continue
 		}
 		info := paneInfo{
 			id:      strings.TrimSpace(parts[0]),
 			command: normalizeForegroundCommand(parts[1]),
+			active:  strings.TrimSpace(parts[2]) == "1",
 		}
 		panes = append(panes, info)
 		if info.command == "codex" {
@@ -230,8 +245,8 @@ func findPane(output, paneID string) (string, string, bool) {
 		if strings.TrimSpace(pane) == "" {
 			continue
 		}
-		parts := strings.SplitN(pane, "\t", 2)
-		if len(parts) != 2 {
+		parts := strings.SplitN(pane, "\t", 3)
+		if len(parts) < 2 {
 			continue
 		}
 		id := strings.TrimSpace(parts[0])
@@ -244,11 +259,48 @@ func findPane(output, paneID string) (string, string, bool) {
 	return "", "", false
 }
 
+func hasSingleActiveShellPane(panes []paneInfo) bool {
+	activeCount := 0
+	for _, pane := range panes {
+		if !isShellLikeCommand(pane.command) {
+			return false
+		}
+		if pane.active {
+			activeCount++
+		}
+	}
+
+	return len(panes) > 0 && activeCount == 1
+}
+
+func activeShellPane(panes []paneInfo) paneInfo {
+	for _, pane := range panes {
+		if pane.active {
+			return pane
+		}
+	}
+
+	return paneInfo{}
+}
+
+func isShellLikeCommand(command string) bool {
+	switch command {
+	case "sh", "bash", "zsh", "fish", "dash", "ksh":
+		return true
+	default:
+		return false
+	}
+}
+
 func normalizeForegroundCommand(command string) string {
 	command = strings.TrimSpace(command)
 	if command == "" {
 		return ""
 	}
 	command = filepath.Base(command)
-	return strings.ToLower(command)
+	command = strings.ToLower(command)
+	if command == "codex" || strings.HasPrefix(command, "codex-") {
+		return "codex"
+	}
+	return command
 }

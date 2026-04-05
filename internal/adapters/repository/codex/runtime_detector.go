@@ -1,6 +1,7 @@
 package codex
 
 import (
+	"regexp"
 	"strings"
 	"time"
 
@@ -10,6 +11,8 @@ import (
 type RuntimeDetector struct {
 	activityWindow time.Duration
 }
+
+var ansiEscapePattern = regexp.MustCompile(`\x1b\[[0-9;?]*[ -/]*[@-~]`)
 
 func NewRuntimeDetector(activityWindow time.Duration) *RuntimeDetector {
 	return &RuntimeDetector{activityWindow: activityWindow}
@@ -32,22 +35,30 @@ func (d *RuntimeDetector) Detect(snapshot core.RuntimeSnapshot) core.RuntimeStat
 		return core.RuntimeStateNone
 	}
 
-	content := strings.ToLower(snapshot.Content)
+	content := strings.ToLower(stripANSI(snapshot.Content))
 	if hasCodexBusyMarker(content) {
-		return core.RuntimeStateRunning
-	}
-	if hasRecentOutput(snapshot.ObservedAt, snapshot.LastOutputAt, d.activityWindow) {
 		return core.RuntimeStateRunning
 	}
 	if hasCodexPromptMarker(content) {
 		return core.RuntimeStateNeedsInput
+	}
+	if hasRecentOutput(snapshot.ObservedAt, snapshot.LastOutputAt, d.activityWindow) {
+		return core.RuntimeStateRunning
 	}
 
 	return core.RuntimeStateNone
 }
 
 func normalizeCommand(command string) string {
-	return strings.ToLower(strings.TrimSpace(command))
+	command = strings.ToLower(strings.TrimSpace(command))
+	if command == "codex" || strings.HasPrefix(command, "codex-") {
+		return "codex"
+	}
+	return command
+}
+
+func stripANSI(content string) string {
+	return ansiEscapePattern.ReplaceAllString(content, "")
 }
 
 func isShellCommand(command string) bool {
