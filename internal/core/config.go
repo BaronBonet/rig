@@ -10,6 +10,8 @@ type Config struct {
 	DatabasePath   string
 	WorktreeMode   string
 	CodexBinary    string
+	ClaudeBinary   string
+	Provider       string
 	AttachOnNew    bool
 	NonInteractive bool
 }
@@ -20,6 +22,8 @@ func DefaultConfig() Config {
 		DatabasePath: defaultDatabasePath(),
 		WorktreeMode: "sibling",
 		CodexBinary:  "codex",
+		ClaudeBinary: "claude",
+		Provider:     "codex",
 		AttachOnNew:  true,
 	}
 }
