@@ -36,10 +36,13 @@ func newTestService() *testServiceHarness {
 	}
 
 	return &testServiceHarness{
-		service: NewService(taskRepo, gitRepo, tmuxRepo, providerRepo, configRepo, workspaceSeeder, fakeClock{
+		service: NewService(taskRepo, gitRepo, tmuxRepo, map[string]ProviderRepository{
+			"codex": providerRepo,
+		}, configRepo, workspaceSeeder, fakeClock{
 			now: time.Date(2026, 4, 2, 12, 0, 0, 0, time.UTC),
 		}, Config{
 			DatabasePath: "/tmp/agent/state.db",
+			Provider:     "codex",
 		}),
 		taskRepo:        taskRepo,
 		gitRepo:         gitRepo,

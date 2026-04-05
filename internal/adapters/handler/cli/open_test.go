@@ -30,7 +30,7 @@ type fakeOpenCLIService struct {
 func (*fakeOpenCLIService) Doctor(context.Context, string) (core.DoctorResult, error) {
 	return core.DoctorResult{}, nil
 }
-func (*fakeOpenCLIService) SuggestTaskName(context.Context, string) (string, error) { return "", nil }
+func (*fakeOpenCLIService) SuggestTaskName(context.Context, string, string) (string, error) { return "", nil }
 func (*fakeOpenCLIService) NewTask(context.Context, core.NewTaskInput) (*core.Task, error) {
 	return nil, nil
 }

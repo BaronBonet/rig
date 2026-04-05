@@ -13,7 +13,7 @@ func TestServiceDoctor_ReturnsMissingBinaryFailures(t *testing.T) {
 
 	result, err := svc.service.Doctor(t.Context(), "/tmp/repo")
 	require.NoError(t, err)
-	require.Contains(t, result.Failures, "provider: missing codex")
+	require.Contains(t, result.Failures, "provider(codex): missing codex")
 }
 
 func TestServiceDoctor_ReportsRepoDetectionFailure(t *testing.T) {

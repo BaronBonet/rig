@@ -63,7 +63,7 @@ type fakeStatusCLIService struct {
 func (f fakeStatusCLIService) Doctor(context.Context, string) (core.DoctorResult, error) {
 	return core.DoctorResult{}, nil
 }
-func (f fakeStatusCLIService) SuggestTaskName(context.Context, string) (string, error) {
+func (f fakeStatusCLIService) SuggestTaskName(context.Context, string, string) (string, error) {
 	return "", nil
 }
 func (f fakeStatusCLIService) NewTask(context.Context, core.NewTaskInput) (*core.Task, error) {
