@@ -11,7 +11,12 @@
       "Bash(golangci-lint run:*)",
       "Bash(go tool:*)",
       "Bash(make test:*)",
-      "Bash(git rebase:*)"
+      "Bash(git rebase:*)",
+      "Bash(git add:*)",
+      "Bash(git commit -m ':*)",
+      "Bash(git commit:*)",
+      "Bash(git stash:*)",
+      "Bash(/tmp/agent-test new:*)"
     ]
   }
 }
