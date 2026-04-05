@@ -30,6 +30,9 @@ const (
 	iconHeaderCleanup = "⚠"
 
 	iconSelected = "▸"
+
+	iconProviderCodex  = "⚡"
+	iconProviderClaude = "✦"
 )
 
 // Styles
