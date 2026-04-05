@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"regexp"
+	"strings"
 	"testing"
 
 	"agent/internal/core"
@@ -426,17 +427,47 @@ func TestModelUpdate_MainListViewRendersControlCenterDetails(t *testing.T) {
 	require.Contains(t, view, "feat/billing-retry-flow")
 }
 
-func TestModelView_ShowsRuntimeBadgeOnTaskRow(t *testing.T) {
-	task := tuiTask("billing-retry-flow")
-	task.Status = core.TaskStatusDegraded
-	task.RuntimeState = core.RuntimeStateRunning
+func TestModelView_ShowsRuntimeBadgesOnSeparateTaskRows(t *testing.T) {
+	running := tuiTask("task-running")
+	running.DisplayName = "running task"
+	running.Status = core.TaskStatusDegraded
+	running.RuntimeState = core.RuntimeStateRunning
+	running.BranchName = "branch-running"
 
-	m := newLoadedTUIModel(t, &fakeTUIService{}, task)
+	needsInput := tuiTask("task-needs-input")
+	needsInput.DisplayName = "needs input task"
+	needsInput.Status = core.TaskStatusDegraded
+	needsInput.RuntimeState = core.RuntimeStateNeedsInput
+	needsInput.BranchName = "branch-needs-input"
+
+	finished := tuiTask("task-finished")
+	finished.DisplayName = "finished task"
+	finished.Status = core.TaskStatusDegraded
+	finished.RuntimeState = core.RuntimeStateFinished
+	finished.BranchName = "branch-finished"
+
+	m := newLoadedTUIModel(t, &fakeTUIService{}, running, needsInput, finished)
 	view := stripANSI(m.View())
 
-	require.Contains(t, view, "billing-retry-flow")
-	require.Contains(t, view, "● running")
-	require.Contains(t, view, "◐ degraded")
+	require.Contains(t, view, "running task")
+	require.Contains(t, view, "needs input task")
+	require.Contains(t, view, "finished task")
+
+	rows := strings.Split(view, "\n")
+	requireLineContains := func(name, want string) {
+		t.Helper()
+		for _, row := range rows {
+			if strings.Contains(row, name) {
+				require.Contains(t, row, want)
+				return
+			}
+		}
+		t.Fatalf("did not find row for %q in view:\n%s", name, view)
+	}
+
+	requireLineContains("running task", "● running")
+	requireLineContains("needs input task", "◐ needs input")
+	requireLineContains("finished task", "○ finished")
 }
 
 func TestModelView_OmitsRuntimeBadgeWhenRuntimeStateIsEmpty(t *testing.T) {
