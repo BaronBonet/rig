@@ -85,6 +85,20 @@ func statusStyle(status string) (string, lipgloss.Style) {
 	}
 }
 
+// runtimeStateStyle returns the icon and style for a task runtime state badge.
+func runtimeStateStyle(state string) (string, lipgloss.Style) {
+	switch state {
+	case "running":
+		return iconStatusActive, healthyStyle
+	case "needs_input":
+		return iconStatusProgress, warningStyle
+	case "finished":
+		return iconStatusIdle, dimStyle
+	default:
+		return "", dimStyle
+	}
+}
+
 // healthStyle returns the styled string for a boolean health indicator.
 func healthStyle(ok bool) string {
 	if ok {
