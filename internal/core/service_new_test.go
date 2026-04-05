@@ -9,7 +9,7 @@ import (
 
 func TestServiceNewTask_CreatesWorktreeSessionAndPersistsTask(t *testing.T) {
 	svc := newTestService()
-	svc.codexRepo.proposedName = "billing retry flow"
+	svc.providerRepo.proposedName = "billing retry flow"
 
 	task, err := svc.service.NewTask(t.Context(), NewTaskInput{
 		Cwd:                  "/tmp/repo",
@@ -40,7 +40,7 @@ func TestServiceNewTask_CreatesWorktreeSessionAndPersistsTask(t *testing.T) {
 
 func TestServiceNewTask_FallsBackWhenCodexNameProposalFails(t *testing.T) {
 	svc := newTestService()
-	svc.codexRepo.proposeErr = errors.New("codex unavailable")
+	svc.providerRepo.proposeErr = errors.New("codex unavailable")
 
 	task, err := svc.service.NewTask(t.Context(), NewTaskInput{
 		Cwd:    "/tmp/repo",
@@ -53,7 +53,7 @@ func TestServiceNewTask_FallsBackWhenCodexNameProposalFails(t *testing.T) {
 
 func TestServiceNewTask_PersistsBrokenTaskWhenTmuxCreationFails(t *testing.T) {
 	svc := newTestService()
-	svc.codexRepo.proposedName = "billing retry flow"
+	svc.providerRepo.proposedName = "billing retry flow"
 	svc.tmuxRepo.createSessionErr = errors.New("tmux failed")
 
 	task, err := svc.service.NewTask(t.Context(), NewTaskInput{
@@ -70,7 +70,7 @@ func TestServiceNewTask_PersistsBrokenTaskWhenTmuxCreationFails(t *testing.T) {
 
 func TestServiceCreateTaskWithProgress_EmitsEventsAndOpensSession(t *testing.T) {
 	svc := newTestService()
-	svc.codexRepo.launchCommand = []string{"codex", "add billing retry flow"}
+	svc.providerRepo.launchCommand = []string{"codex", "add billing retry flow"}
 
 	var events []TaskProgress
 	task, err := svc.service.CreateTaskWithProgress(t.Context(), NewTaskInput{
@@ -87,7 +87,7 @@ func TestServiceCreateTaskWithProgress_EmitsEventsAndOpensSession(t *testing.T) 
 		TaskProgressNameSelected,
 		TaskProgressWorktreeCreating,
 		TaskProgressTmuxStarting,
-		TaskProgressCodexLaunching,
+		TaskProgressAgentLaunching,
 		TaskProgressTaskCreated,
 		TaskProgressSessionOpening,
 	}, progressSteps(events))
@@ -125,7 +125,7 @@ func TestServiceCreateTaskWithProgress_SeedsWorkspaceBeforeTmux(t *testing.T) {
 		TaskProgressWorkspaceSeeded,
 		TaskProgressWorkspaceSeeded,
 		TaskProgressTmuxStarting,
-		TaskProgressCodexLaunching,
+		TaskProgressAgentLaunching,
 		TaskProgressTaskCreated,
 	}, progressSteps(events))
 	require.Equal(t, "Seeding workspace...", events[2].Message)

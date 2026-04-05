@@ -28,7 +28,7 @@ type Service struct {
 	tasks      TaskRepository
 	git        GitRepository
 	tmux       TmuxRepository
-	codex      CodexRepository
+	provider   ProviderRepository
 	repoConfig RepoConfigRepository
 	workspace  WorkspaceSeeder
 	clock      timeutil.Clock
@@ -36,7 +36,7 @@ type Service struct {
 }
 
 func (s *Service) SuggestTaskName(ctx context.Context, prompt string) (string, error) {
-	name, err := s.codex.ProposeTaskName(ctx, prompt)
+	name, err := s.provider.ProposeTaskName(ctx, prompt)
 	if err == nil && strings.TrimSpace(name) != "" {
 		return strings.TrimSpace(name), nil
 	}
@@ -198,18 +198,18 @@ func (s *Service) createTask(
 		return task, err
 	}
 
-	command, err := s.codex.BuildLaunchCommand(task)
+	command, err := s.provider.BuildLaunchCommand(task)
 	if err != nil {
-		return s.markBroken(ctx, task, fmt.Errorf("build codex launch command: %w", err))
+		return s.markBroken(ctx, task, fmt.Errorf("build launch command: %w", err))
 	}
 
 	emitTaskProgress(progress, TaskProgress{
-		Step:    TaskProgressCodexLaunching,
-		Message: "Launching Codex...",
+		Step:    TaskProgressAgentLaunching,
+		Message: "Launching agent...",
 		Task:    cloneTask(task),
 	})
 	if err := s.tmux.SendKeysToWindow(ctx, task.TmuxSession, task.AgentWindowName, command); err != nil {
-		return s.markBroken(ctx, task, fmt.Errorf("launch codex: %w", err))
+		return s.markBroken(ctx, task, fmt.Errorf("launch agent: %w", err))
 	}
 
 	task.Status = TaskStatusRunning
@@ -218,7 +218,7 @@ func (s *Service) createTask(
 		return task, err
 	}
 
-	_ = s.tasks.AppendEvent(ctx, task.ID, "codex_launch_requested", strings.Join(command, " "))
+	_ = s.tasks.AppendEvent(ctx, task.ID, "agent_launch_requested", strings.Join(command, " "))
 
 	emitTaskProgress(progress, TaskProgress{
 		Step:    TaskProgressTaskCreated,
@@ -350,7 +350,7 @@ func NewService(
 	tasks TaskRepository,
 	git GitRepository,
 	tmux TmuxRepository,
-	codex CodexRepository,
+	provider ProviderRepository,
 	repoConfig RepoConfigRepository,
 	workspace WorkspaceSeeder,
 	clock timeutil.Clock,
@@ -360,7 +360,7 @@ func NewService(
 		tasks:      tasks,
 		git:        git,
 		tmux:       tmux,
-		codex:      codex,
+		provider:   provider,
 		repoConfig: repoConfig,
 		workspace:  workspace,
 		clock:      clock,
@@ -379,8 +379,8 @@ func (s *Service) Doctor(ctx context.Context, cwd string) (DoctorResult, error) 
 		result.Failures = append(result.Failures, "tmux: "+err.Error())
 	}
 
-	if err := s.codex.IsAvailable(ctx); err != nil {
-		result.Failures = append(result.Failures, "codex: "+err.Error())
+	if err := s.provider.IsAvailable(ctx); err != nil {
+		result.Failures = append(result.Failures, "provider: "+err.Error())
 	}
 
 	if err := ensureDatabasePath(s.cfg.DatabasePath); err != nil {

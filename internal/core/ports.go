@@ -72,7 +72,7 @@ type TmuxRepository interface {
 	SendKeysToWindow(ctx context.Context, session, window string, command []string) error
 }
 
-type CodexRepository interface {
+type ProviderRepository interface {
 	ProposeTaskName(ctx context.Context, prompt string) (string, error)
 	BuildLaunchCommand(task *Task) ([]string, error)
 	IsAvailable(ctx context.Context) error
