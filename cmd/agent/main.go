@@ -7,6 +7,7 @@ import (
 
 	"agent/internal/adapters/handler/cli"
 	agentconfigrepo "agent/internal/adapters/repository/agentconfig"
+	clauderepo "agent/internal/adapters/repository/claude"
 	codexrepo "agent/internal/adapters/repository/codex"
 	gitrepo "agent/internal/adapters/repository/git"
 	sqliterepo "agent/internal/adapters/repository/sqlite"
@@ -137,11 +138,19 @@ func (r *runtimeService) newService(withSQLite bool) (*core.Service, error) {
 		taskRepo = sqliteRepo
 	}
 
+	var providerRepo core.ProviderRepository
+	switch r.cfg.Provider {
+	case "claude":
+		providerRepo = clauderepo.NewRepository(r.runner, r.cfg.ClaudeBinary)
+	default:
+		providerRepo = codexrepo.NewRepository(r.runner, r.cfg.CodexBinary)
+	}
+
 	return core.NewService(
 		taskRepo,
 		gitrepo.NewRepository(r.runner),
 		tmuxrepo.NewRepository(r.runner),
-		codexrepo.NewRepository(r.runner, r.cfg.CodexBinary),
+		providerRepo,
 		agentconfigrepo.NewRepository(),
 		workspacerepo.NewRepository(),
 		timeutil.RealClock{},
