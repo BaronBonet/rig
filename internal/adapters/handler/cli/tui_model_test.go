@@ -467,6 +467,77 @@ func TestModelView_ShowsRuntimeBadgesOnSeparateTaskRows(t *testing.T) {
 	requireLineContains("finished task", "○ finished")
 }
 
+func TestModelView_ShowsProviderBadgeOnEveryTaskRow(t *testing.T) {
+	codexTask := tuiTask("task-codex")
+	codexTask.DisplayName = "codex task"
+	codexTask.Provider = "codex"
+	codexTask.Status = core.TaskStatusRunning
+	codexTask.RuntimeState = core.RuntimeStateNone
+
+	claudeTask := tuiTask("task-claude")
+	claudeTask.DisplayName = "claude task"
+	claudeTask.Provider = "claude"
+	claudeTask.Status = core.TaskStatusDegraded
+	claudeTask.RuntimeState = core.RuntimeStateNeedsInput
+
+	m := newLoadedTUIModel(t, &fakeTUIService{}, codexTask, claudeTask)
+	view := stripANSI(m.View())
+	rows := strings.Split(view, "\n")
+
+	requireLineContains := func(name, want string) {
+		t.Helper()
+		for _, row := range rows {
+			if strings.Contains(row, name) {
+				require.Contains(t, row, want)
+				return
+			}
+		}
+		t.Fatalf("did not find row for %q in view:\n%s", name, view)
+	}
+
+	requireLineOrdered := func(name, first, second string) {
+		t.Helper()
+		for _, row := range rows {
+			if strings.Contains(row, name) {
+				firstIndex := strings.Index(row, first)
+				secondIndex := strings.Index(row, second)
+				require.NotEqual(t, -1, firstIndex, "row %q missing %q", row, first)
+				require.NotEqual(t, -1, secondIndex, "row %q missing %q", row, second)
+				require.Less(t, firstIndex, secondIndex, "row %q has %q after %q", row, first, second)
+				return
+			}
+		}
+		t.Fatalf("did not find row for %q in view:\n%s", name, view)
+	}
+
+	requireLineOrdered("codex task", "⚡ codex", "● running")
+	requireLineOrdered("claude task", "✦ claude", "◐ degraded")
+	requireLineContains("claude task", "◐ needs input")
+}
+
+func TestModelView_ProviderBadgeCoexistsWithRuntimeBadge(t *testing.T) {
+	task := tuiTask("task-running")
+	task.DisplayName = "running task"
+	task.Provider = "claude"
+	task.Status = core.TaskStatusDegraded
+	task.RuntimeState = core.RuntimeStateFinished
+
+	m := newLoadedTUIModel(t, &fakeTUIService{}, task)
+	view := stripANSI(m.View())
+	for _, row := range strings.Split(view, "\n") {
+		if !strings.Contains(row, "running task") {
+			continue
+		}
+
+		require.Contains(t, row, "✦ claude")
+		require.Contains(t, row, "◐ degraded")
+		require.Contains(t, row, "○ finished")
+		return
+	}
+
+	t.Fatalf("did not find row for %q in view:\n%s", "running task", view)
+}
+
 func TestModelView_OmitsRuntimeBadgeWhenRuntimeStateIsEmpty(t *testing.T) {
 	task := tuiTask("billing-retry-flow")
 	task.Status = core.TaskStatusDegraded
