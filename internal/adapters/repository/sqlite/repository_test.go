@@ -109,7 +109,7 @@ func TestRepositoryUpdateTask_RoundTripsNewMetadata(t *testing.T) {
 	require.Equal(t, task.EditorWindowExists, got.EditorWindowExists)
 }
 
-func TestRepositoryListTasks_OrdersByUpdatedAtDescending(t *testing.T) {
+func TestRepositoryListTasks_OrdersByCreatedAtAscending(t *testing.T) {
 	repo := newTestRepository(t)
 
 	older := &core.Task{
@@ -151,8 +151,8 @@ func TestRepositoryListTasks_OrdersByUpdatedAtDescending(t *testing.T) {
 	tasks, err := repo.ListTasks(context.Background())
 	require.NoError(t, err)
 	require.Len(t, tasks, 2)
-	require.Equal(t, "second-task", tasks[0].Slug)
-	require.Equal(t, "first-task", tasks[1].Slug)
+	require.Equal(t, "first-task", tasks[0].Slug)
+	require.Equal(t, "second-task", tasks[1].Slug)
 	require.Equal(t, "repo", tasks[0].RepoName)
 	require.Equal(t, "repo", tasks[1].RepoName)
 }
