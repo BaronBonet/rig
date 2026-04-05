@@ -9,11 +9,11 @@ import (
 
 func TestServiceDoctor_ReturnsMissingBinaryFailures(t *testing.T) {
 	svc := newTestService()
-	svc.codexRepo.isAvailableErr = errors.New("missing codex")
+	svc.providerRepo.isAvailableErr = errors.New("missing codex")
 
 	result, err := svc.service.Doctor(t.Context(), "/tmp/repo")
 	require.NoError(t, err)
-	require.Contains(t, result.Failures, "codex: missing codex")
+	require.Contains(t, result.Failures, "provider: missing codex")
 }
 
 func TestServiceDoctor_ReportsRepoDetectionFailure(t *testing.T) {

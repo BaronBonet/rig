@@ -9,7 +9,7 @@ const (
 	TaskProgressWorkspaceSeeding TaskProgressStep = "workspace_seeding"
 	TaskProgressWorkspaceSeeded  TaskProgressStep = "workspace_seeded"
 	TaskProgressTmuxStarting     TaskProgressStep = "tmux_starting"
-	TaskProgressCodexLaunching   TaskProgressStep = "codex_launching"
+	TaskProgressAgentLaunching   TaskProgressStep = "agent_launching"
 	TaskProgressTaskCreated      TaskProgressStep = "task_created"
 	TaskProgressSessionOpening   TaskProgressStep = "session_opening"
 )

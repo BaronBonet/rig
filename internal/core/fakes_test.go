@@ -13,7 +13,7 @@ type testServiceHarness struct {
 	taskRepo        *fakeTaskRepository
 	gitRepo         *fakeGitRepository
 	tmuxRepo        *fakeTmuxRepository
-	codexRepo       *fakeCodexRepository
+	providerRepo    *fakeProviderRepository
 	configRepo      *fakeRepoConfigRepository
 	workspaceSeeder *fakeWorkspaceSeeder
 }
@@ -28,7 +28,7 @@ func newTestService() *testServiceHarness {
 		},
 	}
 	tmuxRepo := &fakeTmuxRepository{}
-	codexRepo := &fakeCodexRepository{}
+	providerRepo := &fakeProviderRepository{}
 	configRepo := &fakeRepoConfigRepository{}
 	workspaceSeeder := &fakeWorkspaceSeeder{}
 	tmuxRepo.createSessionHook = func() {
@@ -36,7 +36,7 @@ func newTestService() *testServiceHarness {
 	}
 
 	return &testServiceHarness{
-		service: NewService(taskRepo, gitRepo, tmuxRepo, codexRepo, configRepo, workspaceSeeder, fakeClock{
+		service: NewService(taskRepo, gitRepo, tmuxRepo, providerRepo, configRepo, workspaceSeeder, fakeClock{
 			now: time.Date(2026, 4, 2, 12, 0, 0, 0, time.UTC),
 		}, Config{
 			DatabasePath: "/tmp/agent/state.db",
@@ -44,7 +44,7 @@ func newTestService() *testServiceHarness {
 		taskRepo:        taskRepo,
 		gitRepo:         gitRepo,
 		tmuxRepo:        tmuxRepo,
-		codexRepo:       codexRepo,
+		providerRepo:    providerRepo,
 		configRepo:      configRepo,
 		workspaceSeeder: workspaceSeeder,
 	}
@@ -263,28 +263,28 @@ type fakeTmuxWindowCommand struct {
 	command []string
 }
 
-type fakeCodexRepository struct {
+type fakeProviderRepository struct {
 	isAvailableErr error
 	proposeErr     error
 	proposedName   string
 	launchCommand  []string
 }
 
-func (f *fakeCodexRepository) ProposeTaskName(context.Context, string) (string, error) {
+func (f *fakeProviderRepository) ProposeTaskName(context.Context, string) (string, error) {
 	if f.proposeErr != nil {
 		return "", f.proposeErr
 	}
 
 	return f.proposedName, nil
 }
-func (f *fakeCodexRepository) BuildLaunchCommand(task *Task) ([]string, error) {
+func (f *fakeProviderRepository) BuildLaunchCommand(task *Task) ([]string, error) {
 	if len(f.launchCommand) > 0 {
 		return append([]string(nil), f.launchCommand...), nil
 	}
 
 	return []string{"codex", task.Prompt}, nil
 }
-func (f *fakeCodexRepository) IsAvailable(context.Context) error { return f.isAvailableErr }
+func (f *fakeProviderRepository) IsAvailable(context.Context) error { return f.isAvailableErr }
 
 type fakeClock struct {
 	now time.Time
