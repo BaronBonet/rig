@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"slices"
 	"strings"
+	"time"
 
 	"agent/internal/pkg/slug"
 	"agent/internal/pkg/timeutil"
@@ -26,14 +27,16 @@ type NewTaskInput struct {
 }
 
 type Service struct {
-	tasks      TaskRepository
-	git        GitRepository
-	tmux       TmuxRepository
-	providers  map[string]ProviderRepository
-	repoConfig RepoConfigRepository
-	workspace  WorkspaceSeeder
-	clock      timeutil.Clock
-	cfg        Config
+	tasks            TaskRepository
+	git              GitRepository
+	tmux             TmuxRepository
+	providers        map[string]ProviderRepository
+	runtimeMonitor   RuntimeMonitor
+	runtimeDetectors map[string]RuntimeStateDetector
+	repoConfig       RepoConfigRepository
+	workspace        WorkspaceSeeder
+	clock            timeutil.Clock
+	cfg              Config
 }
 
 func (s *Service) SuggestTaskName(ctx context.Context, prompt string, provider string) (string, error) {
@@ -274,6 +277,9 @@ func (s *Service) ListTasks(ctx context.Context) ([]*Task, error) {
 		if reconcileErr != nil {
 			return nil, reconcileErr
 		}
+		if err := s.enrichRuntimeState(ctx, nextTask); err != nil {
+			return nil, err
+		}
 
 		reconciled = append(reconciled, nextTask)
 	}
@@ -287,7 +293,15 @@ func (s *Service) GetTask(ctx context.Context, idOrSlug string) (*Task, error) {
 		return nil, err
 	}
 
-	return s.reconcileTask(ctx, task)
+	task, err = s.reconcileTask(ctx, task)
+	if err != nil {
+		return nil, err
+	}
+	if err := s.enrichRuntimeState(ctx, task); err != nil {
+		return nil, err
+	}
+
+	return task, nil
 }
 
 func (s *Service) OpenTask(ctx context.Context, idOrSlug string) error {
@@ -373,20 +387,24 @@ func NewService(
 	git GitRepository,
 	tmux TmuxRepository,
 	providers map[string]ProviderRepository,
+	runtimeMonitor RuntimeMonitor,
+	runtimeDetectors map[string]RuntimeStateDetector,
 	repoConfig RepoConfigRepository,
 	workspace WorkspaceSeeder,
 	clock timeutil.Clock,
 	cfg Config,
 ) *Service {
 	return &Service{
-		tasks:      tasks,
-		git:        git,
-		tmux:       tmux,
-		providers:  providers,
-		repoConfig: repoConfig,
-		workspace:  workspace,
-		clock:      clock,
-		cfg:        cfg,
+		tasks:            tasks,
+		git:              git,
+		tmux:             tmux,
+		providers:        providers,
+		runtimeMonitor:   runtimeMonitor,
+		runtimeDetectors: runtimeDetectors,
+		repoConfig:       repoConfig,
+		workspace:        workspace,
+		clock:            clock,
+		cfg:              cfg,
 	}
 }
 
@@ -550,6 +568,41 @@ func (s *Service) reconcileTask(ctx context.Context, task *Task) (*Task, error) 
 	}
 
 	return &reconciled, nil
+}
+
+func (s *Service) enrichRuntimeState(ctx context.Context, task *Task) error {
+	if task == nil {
+		return nil
+	}
+
+	task.RuntimeState = RuntimeStateNone
+	task.RuntimeStateUpdatedAt = time.Time{}
+
+	if s.runtimeMonitor == nil {
+		return nil
+	}
+	if !task.SessionExists || !task.AgentWindowExists {
+		return nil
+	}
+
+	detector, ok := s.runtimeDetectors[task.Provider]
+	if !ok || detector == nil {
+		return nil
+	}
+
+	snapshot, err := s.runtimeMonitor.Snapshot(ctx, task)
+	if err != nil {
+		return nil
+	}
+
+	task.RuntimeState = detector.Detect(snapshot)
+	if !snapshot.ObservedAt.IsZero() {
+		task.RuntimeStateUpdatedAt = snapshot.ObservedAt.UTC()
+		return nil
+	}
+
+	task.RuntimeStateUpdatedAt = s.clock.Now().UTC()
+	return nil
 }
 
 func (s *Service) markBroken(ctx context.Context, task *Task, failure error) (*Task, error) {

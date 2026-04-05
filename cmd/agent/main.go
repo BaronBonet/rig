@@ -148,6 +148,8 @@ func (r *runtimeService) newService(withSQLite bool) (*core.Service, error) {
 		gitrepo.NewRepository(r.runner),
 		tmuxrepo.NewRepository(r.runner),
 		providers,
+		nil,
+		nil,
 		agentconfigrepo.NewRepository(),
 		workspacerepo.NewRepository(),
 		timeutil.RealClock{},
