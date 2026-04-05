@@ -40,7 +40,7 @@ func TestRuntimeMonitorSnapshot_BindsOnlyCodexPaneInSplitAgentWindow(t *testing.
 	})
 	require.NoError(t, err)
 	require.Equal(t, "%24", snapshot.PaneID)
-	require.True(t, snapshot.HadCodexBinding)
+	require.True(t, snapshot.HadAgentBinding)
 	require.Equal(t, "codex", snapshot.ForegroundCommand)
 	require.Equal(t, "repo-billing-retry-flow", snapshot.SessionName)
 	require.Equal(t, "agent", snapshot.WindowName)
@@ -70,7 +70,7 @@ func TestRuntimeMonitorSnapshot_BindsCodexAliasPaneInSplitAgentWindow(t *testing
 	})
 	require.NoError(t, err)
 	require.Equal(t, "%24", snapshot.PaneID)
-	require.True(t, snapshot.HadCodexBinding)
+	require.True(t, snapshot.HadAgentBinding)
 	require.Equal(t, "codex", snapshot.ForegroundCommand)
 }
 
@@ -111,7 +111,7 @@ func TestRuntimeMonitorSnapshot_ReusesBoundPaneAfterCodexReturnsToShell(t *testi
 	})
 	require.NoError(t, err)
 	require.Equal(t, "%24", first.PaneID)
-	require.True(t, first.HadCodexBinding)
+	require.True(t, first.HadAgentBinding)
 	require.Equal(t, "codex", first.ForegroundCommand)
 
 	pipe.output[paneListCommand("repo-billing-retry-flow", "agent")] = "%24\tzsh\t1"
@@ -123,7 +123,7 @@ func TestRuntimeMonitorSnapshot_ReusesBoundPaneAfterCodexReturnsToShell(t *testi
 	})
 	require.NoError(t, err)
 	require.Equal(t, "%24", second.PaneID)
-	require.True(t, second.HadCodexBinding)
+	require.True(t, second.HadAgentBinding)
 	require.Equal(t, "zsh", second.ForegroundCommand)
 	require.Equal(t, "done\n", second.Content)
 }
@@ -145,7 +145,7 @@ func TestRuntimeMonitorSnapshot_PreservesShellOnlyHistoryAcrossRepeatedObservati
 	})
 	require.NoError(t, err)
 	require.Equal(t, "%24", snapshot.PaneID)
-	require.False(t, snapshot.HadCodexBinding)
+	require.False(t, snapshot.HadAgentBinding)
 	require.Equal(t, "zsh", snapshot.ForegroundCommand)
 
 	snapshot, err = monitor.Snapshot(context.Background(), &core.Task{
@@ -153,7 +153,7 @@ func TestRuntimeMonitorSnapshot_PreservesShellOnlyHistoryAcrossRepeatedObservati
 		AgentWindowName: "agent",
 	})
 	require.NoError(t, err)
-	require.False(t, snapshot.HadCodexBinding)
+	require.False(t, snapshot.HadAgentBinding)
 	require.Equal(t, "zsh", snapshot.ForegroundCommand)
 }
 
@@ -173,7 +173,7 @@ func TestRuntimeMonitorSnapshot_MarksCodexHistoryAfterPaneTransitionsFromShellTo
 		AgentWindowName: "agent",
 	})
 	require.NoError(t, err)
-	require.False(t, first.HadCodexBinding)
+	require.False(t, first.HadAgentBinding)
 
 	pipe.output[paneListCommand("repo-billing-retry-flow", "agent")] = "%24\tcodex\t1"
 	pipe.output["capture-pane -t %24 -p -e"] = "› review my changes\nWorking (26s • esc to interrupt)\n"
@@ -183,7 +183,7 @@ func TestRuntimeMonitorSnapshot_MarksCodexHistoryAfterPaneTransitionsFromShellTo
 		AgentWindowName: "agent",
 	})
 	require.NoError(t, err)
-	require.True(t, second.HadCodexBinding)
+	require.True(t, second.HadAgentBinding)
 	require.Equal(t, "codex", second.ForegroundCommand)
 
 	pipe.output[paneListCommand("repo-billing-retry-flow", "agent")] = "%24\tzsh\t1"
@@ -194,7 +194,7 @@ func TestRuntimeMonitorSnapshot_MarksCodexHistoryAfterPaneTransitionsFromShellTo
 		AgentWindowName: "agent",
 	})
 	require.NoError(t, err)
-	require.True(t, third.HadCodexBinding)
+	require.True(t, third.HadAgentBinding)
 	require.Equal(t, "zsh", third.ForegroundCommand)
 }
 
@@ -306,7 +306,7 @@ func TestRuntimeMonitorSnapshot_BindsActiveShellPaneAsFinishedFallback(t *testin
 	})
 	require.NoError(t, err)
 	require.Equal(t, "%24", snapshot.PaneID)
-	require.True(t, snapshot.HadCodexBinding)
+	require.True(t, snapshot.HadAgentBinding)
 	require.Equal(t, "zsh", snapshot.ForegroundCommand)
 }
 
