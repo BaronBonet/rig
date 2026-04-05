@@ -52,7 +52,7 @@ func (m *RuntimeMonitor) Snapshot(ctx context.Context, task *core.Task) (core.Ru
 		return core.RuntimeSnapshot{}, err
 	}
 
-	paneID, command, err := m.resolvePaneBinding(task, pipe)
+	paneID, command, reusedBinding, err := m.resolvePaneBinding(task, pipe)
 	if err != nil {
 		m.evictSession(task.TmuxSession)
 		return core.RuntimeSnapshot{}, err
@@ -71,6 +71,7 @@ func (m *RuntimeMonitor) Snapshot(ctx context.Context, task *core.Task) (core.Ru
 		SessionName:       task.TmuxSession,
 		WindowName:        windowOrDefault(task.AgentWindowName, "agent"),
 		PaneID:            paneID,
+		ReusedBinding:     reusedBinding,
 		ForegroundCommand: command,
 		Content:           content,
 		ObservedAt:        m.now().UTC(),
@@ -124,7 +125,7 @@ func (m *RuntimeMonitor) pipeForSession(session string) (controlPipe, error) {
 	return pipe, nil
 }
 
-func (m *RuntimeMonitor) resolvePaneBinding(task *core.Task, pipe controlPipe) (string, string, error) {
+func (m *RuntimeMonitor) resolvePaneBinding(task *core.Task, pipe controlPipe) (string, string, bool, error) {
 	sessionKey := task.TmuxSession
 	windowName := windowOrDefault(task.AgentWindowName, "agent")
 	listCommand := fmt.Sprintf(
@@ -139,10 +140,10 @@ func (m *RuntimeMonitor) resolvePaneBinding(task *core.Task, pipe controlPipe) (
 	if strings.TrimSpace(bound) != "" {
 		output, err := pipe.SendCommand(listCommand)
 		if err != nil {
-			return "", "", err
+			return "", "", false, err
 		}
 		if paneID, command, ok := findPane(output, bound); ok {
-			return paneID, command, nil
+			return paneID, command, true, nil
 		}
 
 		m.mu.Lock()
@@ -152,7 +153,7 @@ func (m *RuntimeMonitor) resolvePaneBinding(task *core.Task, pipe controlPipe) (
 
 	output, err := pipe.SendCommand(listCommand)
 	if err != nil {
-		return "", "", err
+		return "", "", false, err
 	}
 
 	panes, codexPanes := parsePanes(output)
@@ -161,14 +162,14 @@ func (m *RuntimeMonitor) resolvePaneBinding(task *core.Task, pipe controlPipe) (
 		m.mu.Lock()
 		m.boundPanes[sessionKey] = codexPanes[0].id
 		m.mu.Unlock()
-		return codexPanes[0].id, codexPanes[0].command, nil
+		return codexPanes[0].id, codexPanes[0].command, false, nil
 	case len(panes) == 1:
 		m.mu.Lock()
 		m.boundPanes[sessionKey] = panes[0].id
 		m.mu.Unlock()
-		return panes[0].id, panes[0].command, nil
+		return panes[0].id, panes[0].command, false, nil
 	default:
-		return "", "", nil
+		return "", "", false, nil
 	}
 }
 

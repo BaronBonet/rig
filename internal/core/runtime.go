@@ -18,6 +18,7 @@ type RuntimeSnapshot struct {
 	SessionName       string
 	WindowName        string
 	PaneID            string
+	ReusedBinding     bool
 	ForegroundCommand string
 	Content           string
 	ObservedAt        time.Time

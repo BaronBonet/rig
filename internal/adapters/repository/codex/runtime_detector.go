@@ -22,7 +22,7 @@ func (d *RuntimeDetector) Detect(snapshot core.RuntimeSnapshot) core.RuntimeStat
 	}
 
 	if isShellCommand(command) {
-		if strings.TrimSpace(snapshot.PaneID) != "" {
+		if strings.TrimSpace(snapshot.PaneID) != "" && snapshot.ReusedBinding {
 			return core.RuntimeStateFinished
 		}
 		return core.RuntimeStateNone
@@ -78,12 +78,13 @@ func hasCodexBusyMarker(content string) bool {
 }
 
 func hasCodexPromptMarker(content string) bool {
+	content = strings.ToLower(content)
 	for _, line := range strings.Split(content, "\n") {
 		trimmed := strings.TrimSpace(line)
 		if trimmed == "›" || strings.HasPrefix(trimmed, "› ") {
 			return true
 		}
-		if strings.Contains(trimmed, "Continue?") {
+		if strings.Contains(trimmed, "continue?") {
 			return true
 		}
 	}
