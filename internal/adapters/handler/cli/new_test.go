@@ -88,7 +88,7 @@ func TestNewCommand_PrintsProgressAndUsesProgressCreatePath(t *testing.T) {
 			{Step: core.TaskProgressWorkspaceSeeded, Message: "Copied .env"},
 			{Step: core.TaskProgressWorkspaceSeeded, Message: "Copied local/"},
 			{Step: core.TaskProgressTmuxStarting, Message: "Starting tmux session..."},
-			{Step: core.TaskProgressCodexLaunching, Message: "Launching Codex..."},
+			{Step: core.TaskProgressAgentLaunching, Message: "Launching codex..."},
 			{
 				Step:    core.TaskProgressTaskCreated,
 				Message: "Created task billing retry flow in session repo-billing-retry-flow",
