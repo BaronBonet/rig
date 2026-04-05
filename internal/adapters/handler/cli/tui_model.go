@@ -129,11 +129,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case openFinishedMsg:
 		m.busy = false
 		m.err = msg.err
-		if msg.err != nil {
-			return m, nil
-		}
-
-		return m, tea.Quit
+		return m, nil
 	case suggestNameFinishedMsg:
 		m.busy = false
 		m.err = msg.err

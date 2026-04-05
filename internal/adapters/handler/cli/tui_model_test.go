@@ -306,7 +306,7 @@ func TestModelUpdate_RTriggersRefreshCommand(t *testing.T) {
 	require.Equal(t, 1, service.listCalls)
 }
 
-func TestModelUpdate_EnterDispatchesOpenAndQuitsOnSuccess(t *testing.T) {
+func TestModelUpdate_EnterDispatchesOpenAndKeepsTUIOpen(t *testing.T) {
 	service := &fakeTUIService{
 		tasks: []*core.Task{tuiTask("task-one"), tuiTask("task-two")},
 	}
@@ -320,11 +320,8 @@ func TestModelUpdate_EnterDispatchesOpenAndQuitsOnSuccess(t *testing.T) {
 	msg := cmd()
 	m, cmd = updateTUIModel(t, m, msg)
 	require.Equal(t, "task-two", service.openedIDOrSlug)
-	require.NotNil(t, cmd)
-
-	quitMsg := cmd()
-	_, ok := quitMsg.(tea.QuitMsg)
-	require.True(t, ok)
+	require.Nil(t, cmd)
+	require.False(t, m.busy)
 }
 
 func TestModelUpdate_EnterFailureRendersInlineErrorAndKeepsTUIOpen(t *testing.T) {
