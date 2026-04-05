@@ -382,6 +382,7 @@ func (m model) listView() string {
 
 	// Task rows
 	for i, task := range m.tasks {
+		provider := primaryStyle.Render(providerIcon(task.Provider) + " " + emptyFallback(task.Provider, "-"))
 		icon, style := statusStyle(string(task.Status))
 		status := style.Render(icon + " " + string(task.Status))
 		runtime := ""
@@ -392,11 +393,11 @@ func (m model) listView() string {
 
 		if i == m.selected {
 			name := iconSelected + " " + task.DisplayName
-			row := fmt.Sprintf("%-40s %s%s", name, status, runtime)
+			row := fmt.Sprintf("%-40s %s  %s%s", name, provider, status, runtime)
 			b.WriteString(selectedRowStyle.Render(row) + "\n")
 		} else {
 			name := "  " + task.DisplayName
-			row := fmt.Sprintf("%-40s %s%s", name, status, runtime)
+			row := fmt.Sprintf("%-40s %s  %s%s", name, provider, status, runtime)
 			b.WriteString(normalRowStyle.Render(row) + "\n")
 		}
 	}
