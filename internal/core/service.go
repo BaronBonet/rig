@@ -22,6 +22,7 @@ type NewTaskInput struct {
 	Cwd                  string
 	Prompt               string
 	ConfirmedDisplayName string
+	Provider             string
 }
 
 type Service struct {
@@ -100,6 +101,11 @@ func (s *Service) createTask(
 		existingSlugs[task.Slug] = struct{}{}
 	}
 
+	provider := input.Provider
+	if provider == "" {
+		provider = s.cfg.Provider
+	}
+
 	now := s.clock.Now().UTC()
 	taskSlug := slug.EnsureUnique(slug.FromDisplayName(displayName), existingSlugs)
 	task := &Task{
@@ -115,7 +121,7 @@ func (s *Service) createTask(
 		TmuxSession:      repoCtx.Name + "-" + taskSlug,
 		AgentWindowName:  "agent",
 		EditorWindowName: "editor",
-		Provider:         "codex",
+		Provider:         provider,
 		Status:           TaskStatusCreating,
 		CreatedAt:        now,
 		UpdatedAt:        now,
@@ -205,7 +211,7 @@ func (s *Service) createTask(
 
 	emitTaskProgress(progress, TaskProgress{
 		Step:    TaskProgressAgentLaunching,
-		Message: "Launching agent...",
+		Message: fmt.Sprintf("Launching %s...", task.Provider),
 		Task:    cloneTask(task),
 	})
 	if err := s.tmux.SendKeysToWindow(ctx, task.TmuxSession, task.AgentWindowName, command); err != nil {
