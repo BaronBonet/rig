@@ -14,7 +14,7 @@ func TestBuildDependencies_WiresSharedCodexRuntimeMonitor(t *testing.T) {
 	require.True(t, ok)
 	require.NotNil(t, svc.runtimeMonitor)
 	require.Contains(t, svc.runtimeDetectors, "codex")
-	require.NotContains(t, svc.runtimeDetectors, "claude")
+	require.Contains(t, svc.runtimeDetectors, "claude")
 
 	service1, err := svc.newService(false)
 	require.NoError(t, err)

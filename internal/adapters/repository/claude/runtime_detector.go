@@ -1,4 +1,4 @@
-package codex
+package claude
 
 import (
 	"regexp"
@@ -31,16 +31,19 @@ func (d *RuntimeDetector) Detect(snapshot core.RuntimeSnapshot) core.RuntimeStat
 		return core.RuntimeStateNone
 	}
 
-	if command != "codex" {
+	if command != "claude" {
 		return core.RuntimeStateNone
 	}
 
-	content := strings.ToLower(stripANSI(snapshot.Content))
-	if hasCodexBusyMarker(content) {
-		return core.RuntimeStateRunning
-	}
-	if hasCodexPromptMarker(content) {
+	content := stripANSI(snapshot.Content)
+	tail := lastNLines(content, 5)
+	tailLower := strings.ToLower(tail)
+
+	if hasClaudePromptMarker(tail) {
 		return core.RuntimeStateNeedsInput
+	}
+	if hasClaudeBusyMarker(tailLower) {
+		return core.RuntimeStateRunning
 	}
 	if hasRecentOutput(snapshot.ObservedAt, snapshot.LastOutputAt, d.activityWindow) {
 		return core.RuntimeStateRunning
@@ -51,8 +54,14 @@ func (d *RuntimeDetector) Detect(snapshot core.RuntimeSnapshot) core.RuntimeStat
 
 func normalizeCommand(command string) string {
 	command = strings.ToLower(strings.TrimSpace(command))
-	if command == "codex" || strings.HasPrefix(command, "codex-") {
-		return "codex"
+	if command == "claude" || strings.HasPrefix(command, "claude-") {
+		return "claude"
+	}
+	// Claude Code runs as a Node.js process; tmux reports the interpreter
+	// rather than the script name. This detector is only called for
+	// claude-provider tasks, so treating node/deno as claude is safe.
+	if command == "node" || command == "deno" {
+		return "claude"
 	}
 	return command
 }
@@ -82,23 +91,41 @@ func hasRecentOutput(observedAt, lastOutputAt time.Time, activityWindow time.Dur
 	return observedAt.Sub(lastOutputAt) <= activityWindow
 }
 
-func hasCodexBusyMarker(content string) bool {
+func hasClaudeBusyMarker(content string) bool {
 	return strings.Contains(content, "esc to interrupt") ||
-		strings.Contains(content, "ctrl+c to interrupt") ||
-		strings.Contains(content, "working (")
+		strings.Contains(content, "ctrl+c to interrupt")
 }
 
-func hasCodexPromptMarker(content string) bool {
-	content = strings.ToLower(content)
+func hasClaudePromptMarker(content string) bool {
 	for _, line := range strings.Split(content, "\n") {
 		trimmed := strings.TrimSpace(line)
-		if trimmed == "›" || strings.HasPrefix(trimmed, "› ") {
+		// Claude Code input prompt: ❯ (U+276F)
+		if trimmed == "❯" || strings.HasPrefix(trimmed, "❯ ") {
 			return true
 		}
-		if strings.Contains(trimmed, "continue?") {
+		// Claude Code vim-style insert mode indicator
+		if strings.Contains(trimmed, "-- INSERT --") {
+			return true
+		}
+		if strings.Contains(strings.ToLower(trimmed), "(y/n)") {
+			return true
+		}
+		if strings.Contains(strings.ToLower(trimmed), "do you want to proceed") {
 			return true
 		}
 	}
 
 	return false
+}
+
+func lastNLines(content string, n int) string {
+	lines := strings.Split(content, "\n")
+	// Trim trailing empty lines
+	for len(lines) > 0 && strings.TrimSpace(lines[len(lines)-1]) == "" {
+		lines = lines[:len(lines)-1]
+	}
+	if len(lines) <= n {
+		return strings.Join(lines, "\n")
+	}
+	return strings.Join(lines[len(lines)-n:], "\n")
 }

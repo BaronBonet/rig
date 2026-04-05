@@ -499,17 +499,6 @@ func TestModelView_ShowsProviderBadgeOnEveryTaskRow(t *testing.T) {
 	view := stripANSI(m.View())
 	rows := strings.Split(view, "\n")
 
-	requireLineContains := func(name, want string) {
-		t.Helper()
-		for _, row := range rows {
-			if strings.Contains(row, name) {
-				require.Contains(t, row, want)
-				return
-			}
-		}
-		t.Fatalf("did not find row for %q in view:\n%s", name, view)
-	}
-
 	requireLineOrdered := func(name, first, second string) {
 		t.Helper()
 		for _, row := range rows {
@@ -526,8 +515,7 @@ func TestModelView_ShowsProviderBadgeOnEveryTaskRow(t *testing.T) {
 	}
 
 	requireLineOrdered("codex task", "⚡ codex", "● running")
-	requireLineOrdered("claude task", "✦ claude", "◐ degraded")
-	requireLineContains("claude task", "◐ needs input")
+	requireLineOrdered("claude task", "✦ claude", "◐ needs input")
 }
 
 func TestModelView_ProviderBadgeCoexistsWithRuntimeBadge(t *testing.T) {
@@ -545,7 +533,6 @@ func TestModelView_ProviderBadgeCoexistsWithRuntimeBadge(t *testing.T) {
 		}
 
 		require.Contains(t, row, "✦ claude")
-		require.Contains(t, row, "◐ degraded")
 		require.Contains(t, row, "○ finished")
 		return
 	}

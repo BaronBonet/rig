@@ -52,7 +52,7 @@ func (m *RuntimeMonitor) Snapshot(ctx context.Context, task *core.Task) (core.Ru
 		return core.RuntimeSnapshot{}, err
 	}
 
-	paneID, command, hadCodexBinding, err := m.resolvePaneBinding(task, pipe)
+	paneID, command, hadAgentBinding, err := m.resolvePaneBinding(task, pipe)
 	if err != nil {
 		m.evictSession(task.TmuxSession)
 		return core.RuntimeSnapshot{}, err
@@ -71,7 +71,7 @@ func (m *RuntimeMonitor) Snapshot(ctx context.Context, task *core.Task) (core.Ru
 		SessionName:       task.TmuxSession,
 		WindowName:        windowOrDefault(task.AgentWindowName, "agent"),
 		PaneID:            paneID,
-		HadCodexBinding:   hadCodexBinding,
+		HadAgentBinding:   hadAgentBinding,
 		ForegroundCommand: command,
 		Content:           content,
 		ObservedAt:        m.now().UTC(),
@@ -139,18 +139,18 @@ func (m *RuntimeMonitor) resolvePaneBinding(task *core.Task, pipe controlPipe) (
 			return "", "", false, err
 		}
 		if paneID, command, ok := findPane(output, bound.paneID); ok {
-			hadCodexBinding := false
-			if command == "codex" {
+			hadAgentBinding := false
+			if isAgentCommand(command) {
 				m.mu.Lock()
-				bound.hadCodex = true
-				hadCodexBinding = true
+				bound.hadAgent = true
+				hadAgentBinding = true
 				m.mu.Unlock()
 			} else {
 				m.mu.Lock()
-				hadCodexBinding = bound.hadCodex
+				hadAgentBinding = bound.hadAgent
 				m.mu.Unlock()
 			}
-			return paneID, command, hadCodexBinding, nil
+			return paneID, command, hadAgentBinding, nil
 		}
 
 		m.mu.Lock()
@@ -163,21 +163,21 @@ func (m *RuntimeMonitor) resolvePaneBinding(task *core.Task, pipe controlPipe) (
 		return "", "", false, err
 	}
 
-	panes, codexPanes := parsePanes(output)
+	panes, agentPanes := parsePanes(output)
 	switch {
-	case len(codexPanes) == 1:
+	case len(agentPanes) == 1:
 		m.mu.Lock()
 		m.boundPanes[sessionKey] = &boundPaneState{
-			paneID:   codexPanes[0].id,
-			hadCodex: true,
+			paneID:   agentPanes[0].id,
+			hadAgent: true,
 		}
 		m.mu.Unlock()
-		return codexPanes[0].id, codexPanes[0].command, true, nil
+		return agentPanes[0].id, agentPanes[0].command, true, nil
 	case len(panes) == 1:
 		m.mu.Lock()
 		m.boundPanes[sessionKey] = &boundPaneState{
 			paneID:   panes[0].id,
-			hadCodex: false,
+			hadAgent: false,
 		}
 		m.mu.Unlock()
 		return panes[0].id, panes[0].command, false, nil
@@ -186,7 +186,7 @@ func (m *RuntimeMonitor) resolvePaneBinding(task *core.Task, pipe controlPipe) (
 		m.mu.Lock()
 		m.boundPanes[sessionKey] = &boundPaneState{
 			paneID:   activePane.id,
-			hadCodex: true,
+			hadAgent: true,
 		}
 		m.mu.Unlock()
 		return activePane.id, activePane.command, true, nil
@@ -197,7 +197,7 @@ func (m *RuntimeMonitor) resolvePaneBinding(task *core.Task, pipe controlPipe) (
 
 type boundPaneState struct {
 	paneID   string
-	hadCodex bool
+	hadAgent bool
 }
 
 func paneListCommand(session, windowName string) string {
@@ -216,7 +216,7 @@ type paneInfo struct {
 
 func parsePanes(output string) ([]paneInfo, []paneInfo) {
 	var panes []paneInfo
-	var codexPanes []paneInfo
+	var agentPanes []paneInfo
 
 	for _, line := range strings.Split(strings.TrimSpace(output), "\n") {
 		if strings.TrimSpace(line) == "" {
@@ -232,12 +232,12 @@ func parsePanes(output string) ([]paneInfo, []paneInfo) {
 			active:  strings.TrimSpace(parts[2]) == "1",
 		}
 		panes = append(panes, info)
-		if info.command == "codex" {
-			codexPanes = append(codexPanes, info)
+		if isAgentCommand(info.command) {
+			agentPanes = append(agentPanes, info)
 		}
 	}
 
-	return panes, codexPanes
+	return panes, agentPanes
 }
 
 func findPane(output, paneID string) (string, string, bool) {
@@ -302,5 +302,12 @@ func normalizeForegroundCommand(command string) string {
 	if command == "codex" || strings.HasPrefix(command, "codex-") {
 		return "codex"
 	}
+	if command == "claude" || strings.HasPrefix(command, "claude-") {
+		return "claude"
+	}
 	return command
+}
+
+func isAgentCommand(command string) bool {
+	return command == "codex" || command == "claude" || command == "node"
 }

@@ -18,7 +18,7 @@ type RuntimeSnapshot struct {
 	SessionName       string
 	WindowName        string
 	PaneID            string
-	HadCodexBinding   bool
+	HadAgentBinding   bool
 	ForegroundCommand string
 	Content           string
 	ObservedAt        time.Time

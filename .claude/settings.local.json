@@ -16,7 +16,11 @@
       "Bash(git commit -m ':*)",
       "Bash(git commit:*)",
       "Bash(git stash:*)",
-      "Bash(/tmp/agent-test new:*)"
+      "Bash(/tmp/agent-test new:*)",
+      "Bash(grep:*)",
+      "Bash(tmux list-sessions:*)",
+      "Bash(tmux list-panes:*)",
+      "Bash(tmux capture-pane:*)"
     ]
   }
 }

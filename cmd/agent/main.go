@@ -40,7 +40,8 @@ func buildDependencies() (cli.Dependencies, error) {
 		runner:         execx.ExecRunner{},
 		runtimeMonitor: runtimeMonitor,
 		runtimeDetectors: map[string]core.RuntimeStateDetector{
-			"codex": codexrepo.NewRuntimeDetector(2 * time.Second),
+			"codex":  codexrepo.NewRuntimeDetector(2 * time.Second),
+			"claude": clauderepo.NewRuntimeDetector(2 * time.Second),
 		},
 	}
 

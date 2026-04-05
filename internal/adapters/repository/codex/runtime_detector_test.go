@@ -83,7 +83,7 @@ func TestRuntimeDetector_Detect_ReturnsFinishedWhenPaneReturnsToShellAfterReused
 
 	state := detector.Detect(core.RuntimeSnapshot{
 		PaneID:            "%24",
-		HadCodexBinding:   true,
+		HadAgentBinding:   true,
 		ForegroundCommand: "zsh",
 		Content:           "done\n",
 		ObservedAt:        time.Date(2026, 4, 5, 10, 0, 0, 0, time.UTC),
@@ -134,7 +134,7 @@ func TestRuntimeDetector_Detect_ReturnsFinishedOnlyAfterPriorCodexOwnership(t *t
 
 	state := detector.Detect(core.RuntimeSnapshot{
 		PaneID:            "%24",
-		HadCodexBinding:   true,
+		HadAgentBinding:   true,
 		ForegroundCommand: "zsh",
 		Content:           "done\n",
 		ObservedAt:        time.Date(2026, 4, 5, 10, 0, 1, 0, time.UTC),
@@ -165,7 +165,7 @@ func TestRuntimeDetector_Detect_ReturnsEmptyForUnclassifiedSnapshot(t *testing.T
 		PaneID:            "%24",
 		ForegroundCommand: "codex",
 		Content:           "some unrelated output\n",
-		HadCodexBinding:   false,
+		HadAgentBinding:   false,
 		ObservedAt:        time.Date(2026, 4, 5, 10, 0, 0, 0, time.UTC),
 		LastOutputAt:      time.Date(2026, 4, 5, 9, 59, 40, 0, time.UTC),
 	})
