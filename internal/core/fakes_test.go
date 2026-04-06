@@ -47,8 +47,7 @@ func newTestService() *testServiceHarness {
 		}, configRepo, workspaceSeeder, fakeClock{
 			now: time.Date(2026, 4, 2, 12, 0, 0, 0, time.UTC),
 		}, Config{
-			DatabasePath: "/tmp/agent/state.db",
-			Provider:     "codex",
+			Provider: "codex",
 		}),
 		taskRepo:        taskRepo,
 		gitRepo:         gitRepo,
@@ -171,24 +170,24 @@ func (f *fakeGitRepository) RemoveWorktree(_ context.Context, _ string, path str
 }
 
 type fakeTmuxRepository struct {
-	isAvailableErr    error
-	createSessionErr  error
-	createSessionHook func()
-	killSessionErr    error
-	killSessionHook   func()
-	sendKeysErr       error
+	isAvailableErr      error
+	createSessionErr    error
+	createSessionHook   func()
+	killSessionErr      error
+	killSessionHook     func()
+	sendKeysErr         error
 	typeInErr           error
 	typedCommand        []string
 	capturedPaneContent string
-	sessionExists     bool
-	windowExists      map[string]map[string]bool
-	attachedSession   string
-	createdSession    CreateSessionInput
-	sentCommand       []string
-	sentSession       string
-	sentWindow        string
-	sentWindows       []fakeTmuxWindowCommand
-	killedSessions    []string
+	sessionExists       bool
+	windowExists        map[string]map[string]bool
+	attachedSession     string
+	createdSession      CreateSessionInput
+	sentCommand         []string
+	sentSession         string
+	sentWindow          string
+	sentWindows         []fakeTmuxWindowCommand
+	killedSessions      []string
 }
 
 func (f *fakeTmuxRepository) IsAvailable(context.Context) error { return f.isAvailableErr }
@@ -305,7 +304,7 @@ func (f *fakeProviderRepository) BuildLaunchCommand(task *Task) ([]string, error
 
 	return []string{"codex", task.Prompt}, nil
 }
-func (f *fakeProviderRepository) PromptMarker() string { return "›" }
+func (f *fakeProviderRepository) PromptMarker() string              { return "›" }
 func (f *fakeProviderRepository) IsAvailable(context.Context) error { return f.isAvailableErr }
 
 type fakeRuntimeMonitor struct {
