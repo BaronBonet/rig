@@ -65,12 +65,26 @@ type runtimeService struct {
 }
 
 func (r *runtimeService) Doctor(ctx context.Context, cwd string) (core.DoctorResult, error) {
-	service, err := r.newService(true)
+	result := core.DoctorResult{}
+
+	if err := sqliterepo.ValidateConfig(r.cfg.SQLite); err != nil {
+		result.Failures = append(result.Failures, "database: "+err.Error())
+	}
+
+	service, err := r.newService(false)
 	if err != nil {
 		return core.DoctorResult{}, err
 	}
 
-	return service.Doctor(ctx, cwd)
+	doctorResult, err := service.Doctor(ctx, cwd)
+	if err != nil {
+		return core.DoctorResult{}, err
+	}
+
+	result.Notes = append(result.Notes, doctorResult.Notes...)
+	result.Failures = append(result.Failures, doctorResult.Failures...)
+
+	return result, nil
 }
 
 func (r *runtimeService) SuggestTaskName(ctx context.Context, prompt string, provider string) (string, error) {
