@@ -79,16 +79,14 @@ func TestModelUpdate_CreateFlowSuggestsNameThenCreatesTask(t *testing.T) {
 	require.True(t, m.busy)
 
 	createMsg := createCmd()
-	m, quitCmd := updateTUIModel(t, m, createMsg)
+	m, refreshCmd := updateTUIModel(t, m, createMsg)
 	require.Equal(t, "/tmp/repo", service.createdInput.Cwd)
 	require.Equal(t, "add billing retry flow", service.createdInput.Prompt)
 	require.Equal(t, "billing retry flow", service.createdInput.ConfirmedDisplayName)
 	require.True(t, service.createOptions.OpenSession)
-	require.NotNil(t, quitCmd)
-
-	quitMsg := quitCmd()
-	_, ok := quitMsg.(tea.QuitMsg)
-	require.True(t, ok)
+	require.Equal(t, tuiModeList, m.mode)
+	require.True(t, m.loading)
+	require.NotNil(t, refreshCmd)
 }
 
 func TestModelUpdate_CreateFlowWithoutTasksUsesModelCwdFallback(t *testing.T) {
@@ -113,15 +111,13 @@ func TestModelUpdate_CreateFlowWithoutTasksUsesModelCwdFallback(t *testing.T) {
 	require.NotNil(t, createCmd)
 
 	createMsg := createCmd()
-	m, quitCmd := updateTUIModel(t, m, createMsg)
+	m, refreshCmd := updateTUIModel(t, m, createMsg)
 	require.Equal(t, "/tmp/fallback-repo", service.createdInput.Cwd)
 	require.Equal(t, "add billing retry flow", service.createdInput.Prompt)
 	require.Equal(t, "billing retry flow", service.createdInput.ConfirmedDisplayName)
-	require.NotNil(t, quitCmd)
-
-	quitMsg := quitCmd()
-	_, ok := quitMsg.(tea.QuitMsg)
-	require.True(t, ok)
+	require.Equal(t, tuiModeList, m.mode)
+	require.True(t, m.loading)
+	require.NotNil(t, refreshCmd)
 }
 
 func TestModelUpdate_SuggestNameFailureReturnsToPromptModeAndRendersError(t *testing.T) {

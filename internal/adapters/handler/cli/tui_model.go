@@ -170,7 +170,9 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 
-		return m, tea.Quit
+		m.mode = tuiModeList
+		m.loading = true
+		return m, refreshTasksCmd(m.service)
 	default:
 		return m, nil
 	}
