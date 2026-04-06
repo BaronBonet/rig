@@ -440,10 +440,6 @@ func (s *Service) Doctor(ctx context.Context, cwd string) (DoctorResult, error) 
 		}
 	}
 
-	if err := ensureDatabasePath(s.cfg.DatabasePath); err != nil {
-		result.Failures = append(result.Failures, "database: "+err.Error())
-	}
-
 	if strings.TrimSpace(cwd) != "" {
 		repoCtx, err := s.git.DetectRepo(ctx, cwd)
 		if err != nil {
@@ -468,14 +464,6 @@ func (s *Service) Doctor(ctx context.Context, cwd string) (DoctorResult, error) 
 	}
 
 	return result, nil
-}
-
-func ensureDatabasePath(path string) error {
-	if strings.TrimSpace(path) == "" {
-		return nil
-	}
-
-	return os.MkdirAll(filepath.Dir(path), 0o755)
 }
 
 func (s *Service) reconcileTask(ctx context.Context, task *Task) (*Task, error) {

@@ -38,8 +38,7 @@ func LoadConfig() (*Config, error) {
 
 	return &Config{
 		Service: core.Config{
-			DatabasePath: raw.SQLitePath,
-			Provider:     raw.Provider,
+			Provider: raw.Provider,
 		},
 		SQLite: sqlite.Config{
 			Path: raw.SQLitePath,
