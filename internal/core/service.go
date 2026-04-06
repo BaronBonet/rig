@@ -426,6 +426,10 @@ func NewService(
 func (s *Service) Doctor(ctx context.Context, cwd string) (DoctorResult, error) {
 	result := DoctorResult{}
 
+	if err := s.tasks.IsAvailable(ctx); err != nil {
+		result.Failures = append(result.Failures, "database: "+err.Error())
+	}
+
 	if err := s.git.IsAvailable(ctx); err != nil {
 		result.Failures = append(result.Failures, "git: "+err.Error())
 	}

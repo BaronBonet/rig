@@ -183,6 +183,17 @@ func TestValidateConfig_RejectsFileParent(t *testing.T) {
 	require.Contains(t, err.Error(), "not a directory")
 }
 
+func TestRepositoryIsAvailable_ValidatesConfiguredPath(t *testing.T) {
+	parent := filepath.Join(t.TempDir(), "blocker")
+	require.NoError(t, os.WriteFile(parent, []byte("x"), 0o644))
+
+	repo := &Repository{path: filepath.Join(parent, "state.db")}
+
+	err := repo.IsAvailable(context.Background())
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "not a directory")
+}
+
 func TestNewRepository_MigratesLegacyTaskRow(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "state.db")

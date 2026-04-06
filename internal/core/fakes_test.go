@@ -61,6 +61,7 @@ func newTestService() *testServiceHarness {
 }
 
 type fakeTaskRepository struct {
+	isAvailableErr error
 	createErr      error
 	updateErr      error
 	updateErrAt    int
@@ -71,6 +72,8 @@ type fakeTaskRepository struct {
 	updatedTask    *Task
 	appendedEvents []fakeTaskEvent
 }
+
+func (f *fakeTaskRepository) IsAvailable(context.Context) error { return f.isAvailableErr }
 
 func (f *fakeTaskRepository) CreateTask(_ context.Context, task *Task) error {
 	if f.createErr != nil {

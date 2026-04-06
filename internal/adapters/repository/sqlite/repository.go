@@ -15,7 +15,8 @@ import (
 )
 
 type Repository struct {
-	db *sql.DB
+	db   *sql.DB
+	path string
 }
 
 type Config struct {
@@ -37,7 +38,7 @@ func NewRepository(cfg Config) (*Repository, error) {
 		return nil, err
 	}
 
-	repo := &Repository{db: db}
+	repo := &Repository{db: db, path: cfg.Path}
 	if err := repo.initSchema(); err != nil {
 		_ = db.Close()
 		return nil, err
@@ -56,6 +57,10 @@ func ValidateConfig(cfg Config) error {
 	}
 
 	return nil
+}
+
+func (r *Repository) IsAvailable(context.Context) error {
+	return ValidateConfig(Config{Path: r.path})
 }
 
 func (r *Repository) initSchema() error {

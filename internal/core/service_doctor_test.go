@@ -16,6 +16,15 @@ func TestServiceDoctor_ReturnsMissingBinaryFailures(t *testing.T) {
 	require.Contains(t, result.Failures, "provider(codex): missing codex")
 }
 
+func TestServiceDoctor_ReportsStorageFailure(t *testing.T) {
+	svc := newTestService()
+	svc.taskRepo.isAvailableErr = errors.New("mkdir /tmp/blocker: not a directory")
+
+	result, err := svc.service.Doctor(t.Context(), "/tmp/repo")
+	require.NoError(t, err)
+	require.Contains(t, result.Failures, "database: mkdir /tmp/blocker: not a directory")
+}
+
 func TestServiceDoctor_ReportsRepoDetectionFailure(t *testing.T) {
 	svc := newTestService()
 	svc.gitRepo.detectRepoErr = errors.New("not a git repo")
