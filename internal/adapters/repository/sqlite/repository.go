@@ -66,12 +66,12 @@ func ValidateConfig(cfg Config) error {
 	return nil
 }
 
-func (r *Repository) IsAvailable(context.Context) error {
+func (r *Repository) IsAvailable(ctx context.Context) error {
 	if err := r.unavailableErr(); err != nil {
 		return err
 	}
 
-	return ValidateConfig(Config{Path: r.path})
+	return r.db.PingContext(ctx)
 }
 
 func (r *Repository) initSchema() error {
