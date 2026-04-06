@@ -73,6 +73,10 @@ func (r *Repository) BuildLaunchCommand(task *core.Task) ([]string, error) {
 	return []string{r.binary, task.Prompt}, nil
 }
 
+func (r *Repository) PromptMarker() string {
+	return "❯"
+}
+
 func normalizeTitle(raw string) string {
 	line := strings.TrimSpace(raw)
 	line = strings.ReplaceAll(line, "`", "")

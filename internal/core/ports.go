@@ -71,10 +71,12 @@ type TmuxRepository interface {
 	AttachOrSwitch(ctx context.Context, session string) error
 	SendKeysToWindow(ctx context.Context, session, window string, command []string) error
 	TypeInWindow(ctx context.Context, session, window string, command []string) error
+	CapturePaneContent(ctx context.Context, session, window string) (string, error)
 }
 
 type ProviderRepository interface {
 	ProposeTaskName(ctx context.Context, prompt string) (string, error)
 	BuildLaunchCommand(task *Task) ([]string, error)
+	PromptMarker() string
 	IsAvailable(ctx context.Context) error
 }

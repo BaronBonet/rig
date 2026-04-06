@@ -154,6 +154,25 @@ func (r *Repository) SendKeysToWindow(ctx context.Context, session, window strin
 	return err
 }
 
+func (r *Repository) CapturePaneContent(ctx context.Context, session, window string) (string, error) {
+	window = windowOrDefault(window, "agent")
+
+	result, err := r.runner.Run(
+		ctx,
+		"",
+		"tmux",
+		"capture-pane",
+		"-t",
+		exactWindowTarget(session, window),
+		"-p",
+	)
+	if err != nil {
+		return "", err
+	}
+
+	return result.Stdout, nil
+}
+
 func (r *Repository) TypeInWindow(ctx context.Context, session, window string, command []string) error {
 	window = windowOrDefault(window, "agent")
 
