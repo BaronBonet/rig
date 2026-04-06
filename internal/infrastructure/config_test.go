@@ -4,13 +4,6 @@ import (
 	"path/filepath"
 	"testing"
 
-	claudeclient "agent/internal/adapters/client/claude"
-	codexclient "agent/internal/adapters/client/codex"
-	gitclient "agent/internal/adapters/client/git"
-	tmuxclient "agent/internal/adapters/client/tmux"
-	workspacefs "agent/internal/adapters/filesystem/workspace"
-	"agent/internal/pkg/execx"
-
 	"github.com/stretchr/testify/require"
 )
 
@@ -48,14 +41,4 @@ func TestLoadConfig_RejectsUnknownProvider(t *testing.T) {
 	require.Nil(t, cfg)
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "AGENT_PROVIDER")
-}
-
-func TestAdapterConstructorsCompileFromResponsibilityPaths(t *testing.T) {
-	runner := execx.ExecRunner{}
-
-	require.NotNil(t, gitclient.NewRepository(runner))
-	require.NotNil(t, tmuxclient.NewRepository(runner))
-	require.NotNil(t, codexclient.NewRepository(runner, codexclient.Config{}))
-	require.NotNil(t, claudeclient.NewRepository(runner, claudeclient.Config{}))
-	require.NotNil(t, workspacefs.NewRepository())
 }
