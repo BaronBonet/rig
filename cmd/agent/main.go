@@ -65,7 +65,7 @@ type runtimeService struct {
 }
 
 func (r *runtimeService) Doctor(ctx context.Context, cwd string) (core.DoctorResult, error) {
-	service, err := r.newService(false)
+	service, err := r.newService(true)
 	if err != nil {
 		return core.DoctorResult{}, err
 	}

@@ -1,6 +1,7 @@
 package infrastructure
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 
@@ -35,6 +36,9 @@ func LoadConfig() (*Config, error) {
 	if raw.SQLitePath == "" {
 		raw.SQLitePath = defaultSQLitePath()
 	}
+	if err := validateProvider(raw.Provider); err != nil {
+		return nil, err
+	}
 
 	return &Config{
 		Service: core.Config{
@@ -50,6 +54,15 @@ func LoadConfig() (*Config, error) {
 			Binary: raw.ClaudeBinary,
 		},
 	}, nil
+}
+
+func validateProvider(provider string) error {
+	switch provider {
+	case "codex", "claude":
+		return nil
+	default:
+		return fmt.Errorf("invalid AGENT_PROVIDER %q: expected codex or claude", provider)
+	}
 }
 
 func defaultSQLitePath() string {
