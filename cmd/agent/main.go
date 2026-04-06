@@ -59,8 +59,9 @@ func buildDependencies() (cli.Dependencies, error) {
 	)
 
 	return cli.Dependencies{
-		Service: service,
-		Stdout:  os.Stdout,
-		Stderr:  os.Stderr,
+		Service:         service,
+		Stdout:          os.Stdout,
+		Stderr:          os.Stderr,
+		DefaultProvider: cfg.Service.Provider,
 	}, nil
 }

@@ -26,10 +26,11 @@ type TaskService interface {
 }
 
 type Dependencies struct {
-	Service TaskService
-	Stdout  io.Writer
-	Stderr  io.Writer
-	Cwd     string
+	Service         TaskService
+	Stdout          io.Writer
+	Stderr          io.Writer
+	Cwd             string
+	DefaultProvider string
 }
 
 func NewRootCommand(deps Dependencies) *cobra.Command {
@@ -43,7 +44,7 @@ func NewRootCommand(deps Dependencies) *cobra.Command {
 			}
 
 			program := tea.NewProgram(
-				newTUIModel(deps.Service, deps.Cwd),
+				newTUIModel(deps.Service, deps.Cwd, deps.DefaultProvider),
 				tea.WithInput(cmd.InOrStdin()),
 				tea.WithOutput(cmd.OutOrStdout()),
 			)
