@@ -2,6 +2,7 @@ package codex
 
 import (
 	"testing"
+	"time"
 
 	"agent/internal/core"
 	"agent/internal/pkg/execx"
@@ -18,6 +19,30 @@ func TestRepositoryBuildLaunchCommand_IncludesPrompt(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, "codex", cmd[0])
 	require.Equal(t, "add billing retry flow", cmd[len(cmd)-1])
+}
+
+func TestRepositoryLaunchRequest_UsesBinaryPromptAndTaskPrompt(t *testing.T) {
+	repo := NewRepository(execx.NewFakeRunner(nil), Config{Binary: "codex"})
+
+	launch, err := repo.LaunchRequest(&core.Task{Prompt: "add billing retry flow"})
+	require.NoError(t, err)
+	require.Equal(t, core.LaunchRequest{
+		Command:      []string{"codex"},
+		Prompt:       "›",
+		InitialInput: []string{"add billing retry flow"},
+	}, launch)
+}
+
+func TestRepositoryDetectRuntimeState_ReturnsNeedsInputForPrompt(t *testing.T) {
+	repo := NewRepository(execx.NewFakeRunner(nil), Config{Binary: "codex"})
+
+	state := repo.DetectRuntimeState(core.RuntimeSnapshot{
+		ForegroundCommand: "codex",
+		Content:           "› add billing retry flow\n",
+		ObservedAt:        time.Date(2026, 4, 6, 10, 0, 2, 0, time.UTC),
+		LastOutputAt:      time.Date(2026, 4, 6, 10, 0, 1, 0, time.UTC),
+	})
+	require.Equal(t, core.RuntimeStateNeedsInput, state)
 }
 
 func TestRepositoryProposeTaskName_TrimsRunnerOutput(t *testing.T) {

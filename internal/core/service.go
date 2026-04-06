@@ -6,7 +6,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"os"
 	"path/filepath"
 	"slices"
 	"strings"
@@ -375,7 +374,7 @@ func NewService(
 	tmux TmuxRepository,
 	providers map[string]ProviderRepository,
 	runtimeMonitor RuntimeMonitor,
-	runtimeDetectors map[string]RuntimeStateDetector,
+	_ map[string]RuntimeStateDetector,
 	repoConfig RepoConfigRepository,
 	workspace WorkspaceSeeder,
 	clock timeutil.Clock,
@@ -383,10 +382,7 @@ func NewService(
 ) *Service {
 	wrappedProviders := make(map[string]ProviderClient, len(providers))
 	for name, provider := range providers {
-		wrappedProviders[name] = legacyProviderClient{
-			repo:     provider,
-			detector: runtimeDetectors[name],
-		}
+		wrappedProviders[name] = legacyProviderClient{repo: provider}
 	}
 
 	return newServiceWithPorts(
@@ -395,7 +391,6 @@ func NewService(
 		legacySessionClient{
 			tmux:           tmux,
 			runtimeMonitor: runtimeMonitor,
-			clock:          clock,
 		},
 		wrappedProviders,
 		repoConfig,
@@ -431,6 +426,14 @@ type legacyRepoClient struct {
 	git GitRepository
 }
 
+type taskWorkspaceCreator interface {
+	CreateTaskWorkspace(ctx context.Context, task *Task) error
+}
+
+type taskWorkspaceInspector interface {
+	InspectTaskWorkspace(ctx context.Context, task *Task) (RepoResources, error)
+}
+
 func (c legacyRepoClient) IsAvailable(ctx context.Context) error {
 	return c.git.IsAvailable(ctx)
 }
@@ -440,6 +443,10 @@ func (c legacyRepoClient) DetectRepo(ctx context.Context, cwd string) (RepoConte
 }
 
 func (c legacyRepoClient) CreateTaskWorkspace(ctx context.Context, task *Task) error {
+	if repo, ok := c.git.(taskWorkspaceCreator); ok {
+		return repo.CreateTaskWorkspace(ctx, task)
+	}
+
 	return c.git.CreateWorktree(ctx, CreateWorktreeInput{
 		RepoRoot:     task.RepoRoot,
 		BaseBranch:   task.BaseBranch,
@@ -453,26 +460,20 @@ func (c legacyRepoClient) RemoveTaskWorkspace(ctx context.Context, task *Task) e
 }
 
 func (c legacyRepoClient) InspectTaskWorkspace(ctx context.Context, task *Task) (RepoResources, error) {
-	worktreeExists, err := worktreePresence(task.WorktreePath)
-	if err != nil {
-		return RepoResources{}, err
+	if repo, ok := c.git.(taskWorkspaceInspector); ok {
+		return repo.InspectTaskWorkspace(ctx, task)
 	}
 
-	branchExists, err := c.git.BranchExists(ctx, task.RepoRoot, task.BranchName)
-	if err != nil {
-		return RepoResources{}, err
-	}
-
-	return RepoResources{
-		WorktreeExists: worktreeExists,
-		BranchExists:   branchExists,
-	}, nil
+	return RepoResources{}, fmt.Errorf("git adapter does not implement InspectTaskWorkspace")
 }
 
 type legacySessionClient struct {
 	tmux           TmuxRepository
 	runtimeMonitor RuntimeMonitor
-	clock          timeutil.Clock
+}
+
+type taskSessionStarter interface {
+	StartTaskSession(ctx context.Context, task *Task, launch LaunchRequest) error
 }
 
 func (c legacySessionClient) IsAvailable(ctx context.Context) error {
@@ -480,28 +481,11 @@ func (c legacySessionClient) IsAvailable(ctx context.Context) error {
 }
 
 func (c legacySessionClient) StartTaskSession(ctx context.Context, task *Task, launch LaunchRequest) error {
-	if err := c.tmux.CreateSession(ctx, CreateSessionInput{
-		SessionName:      task.TmuxSession,
-		WorkingDir:       task.WorktreePath,
-		AgentWindowName:  task.AgentWindowName,
-		EditorWindowName: task.EditorWindowName,
-	}); err != nil {
-		return err
+	if session, ok := c.tmux.(taskSessionStarter); ok {
+		return session.StartTaskSession(ctx, task, launch)
 	}
 
-	if err := c.tmux.SendKeysToWindow(ctx, task.TmuxSession, task.AgentWindowName, launch.Command); err != nil {
-		return err
-	}
-
-	if len(launch.InitialInput) == 0 {
-		return nil
-	}
-
-	if err := c.waitForPrompt(ctx, task.TmuxSession, task.AgentWindowName, launch.Prompt); err != nil {
-		return err
-	}
-
-	return c.tmux.TypeInWindow(ctx, task.TmuxSession, task.AgentWindowName, launch.InitialInput)
+	return fmt.Errorf("tmux adapter does not implement StartTaskSession")
 }
 
 func (c legacySessionClient) OpenTaskSession(ctx context.Context, task *Task) error {
@@ -547,34 +531,16 @@ func (c legacySessionClient) SnapshotTaskSession(ctx context.Context, task *Task
 	return c.runtimeMonitor.Snapshot(ctx, task)
 }
 
-func (c legacySessionClient) waitForPrompt(ctx context.Context, session, window, marker string) error {
-	const (
-		pollInterval = 500 * time.Millisecond
-		timeout      = 30 * time.Second
-	)
-
-	deadline := c.clock.Now().Add(timeout)
-	for c.clock.Now().Before(deadline) {
-		select {
-		case <-ctx.Done():
-			return ctx.Err()
-		default:
-		}
-
-		content, err := c.tmux.CapturePaneContent(ctx, session, window)
-		if err == nil && strings.Contains(content, marker) {
-			return nil
-		}
-
-		time.Sleep(pollInterval)
-	}
-
-	return fmt.Errorf("timed out waiting for %s prompt", marker)
+type legacyProviderClient struct {
+	repo ProviderRepository
 }
 
-type legacyProviderClient struct {
-	repo     ProviderRepository
-	detector RuntimeStateDetector
+type launchRequester interface {
+	LaunchRequest(task *Task) (LaunchRequest, error)
+}
+
+type runtimeStateProvider interface {
+	DetectRuntimeState(snapshot RuntimeSnapshot) RuntimeState
 }
 
 func (c legacyProviderClient) IsAvailable(ctx context.Context) error {
@@ -586,6 +552,10 @@ func (c legacyProviderClient) SuggestTaskName(ctx context.Context, prompt string
 }
 
 func (c legacyProviderClient) LaunchRequest(task *Task) (LaunchRequest, error) {
+	if provider, ok := c.repo.(launchRequester); ok {
+		return provider.LaunchRequest(task)
+	}
+
 	command, err := c.repo.BuildLaunchCommand(task)
 	if err != nil {
 		return LaunchRequest{}, err
@@ -605,11 +575,11 @@ func (c legacyProviderClient) LaunchRequest(task *Task) (LaunchRequest, error) {
 }
 
 func (c legacyProviderClient) DetectRuntimeState(snapshot RuntimeSnapshot) RuntimeState {
-	if c.detector == nil {
-		return RuntimeStateNone
+	if provider, ok := c.repo.(runtimeStateProvider); ok {
+		return provider.DetectRuntimeState(snapshot)
 	}
 
-	return c.detector.Detect(snapshot)
+	return RuntimeStateNone
 }
 
 func (s *Service) Doctor(ctx context.Context, cwd string) (DoctorResult, error) {
@@ -843,23 +813,6 @@ func cloneTask(task *Task) *Task {
 
 	clone := *task
 	return &clone
-}
-
-func worktreePresence(path string) (bool, error) {
-	if strings.TrimSpace(path) == "" {
-		return false, nil
-	}
-
-	info, err := os.Stat(path)
-	if err != nil {
-		if os.IsNotExist(err) {
-			return false, nil
-		}
-
-		return false, err
-	}
-
-	return info.IsDir(), nil
 }
 
 func isCleanupFailure(message string) bool {

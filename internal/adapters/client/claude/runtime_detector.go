@@ -12,6 +12,8 @@ type RuntimeDetector struct {
 	activityWindow time.Duration
 }
 
+const defaultActivityWindow = 2 * time.Second
+
 var ansiEscapePattern = regexp.MustCompile(`\x1b\[[0-9;?]*[ -/]*[@-~]`)
 var claudeLiveProgressPattern = regexp.MustCompile(`(?m)^\s*[·•]\s+.+…\s+\([^)]+\)\s*$`)
 
@@ -20,6 +22,14 @@ func NewRuntimeDetector(activityWindow time.Duration) *RuntimeDetector {
 }
 
 func (d *RuntimeDetector) Detect(snapshot core.RuntimeSnapshot) core.RuntimeState {
+	return detectRuntimeStateWithWindow(snapshot, d.activityWindow)
+}
+
+func detectRuntimeState(snapshot core.RuntimeSnapshot) core.RuntimeState {
+	return detectRuntimeStateWithWindow(snapshot, defaultActivityWindow)
+}
+
+func detectRuntimeStateWithWindow(snapshot core.RuntimeSnapshot, activityWindow time.Duration) core.RuntimeState {
 	command := normalizeCommand(snapshot.ForegroundCommand)
 	if command == "" {
 		return core.RuntimeStateNone
@@ -53,7 +63,7 @@ func (d *RuntimeDetector) Detect(snapshot core.RuntimeSnapshot) core.RuntimeStat
 	if hasClaudeBusyMarker(tailLower) {
 		return core.RuntimeStateRunning
 	}
-	if hasRecentOutput(snapshot.ObservedAt, snapshot.LastOutputAt, d.activityWindow) {
+	if hasRecentOutput(snapshot.ObservedAt, snapshot.LastOutputAt, activityWindow) {
 		return core.RuntimeStateRunning
 	}
 

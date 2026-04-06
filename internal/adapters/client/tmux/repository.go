@@ -5,6 +5,7 @@ import (
 	"errors"
 	"os"
 	"strings"
+	"time"
 
 	"agent/internal/core"
 	"agent/internal/pkg/execx"
@@ -12,10 +13,16 @@ import (
 
 type Repository struct {
 	runner execx.Runner
+	now    func() time.Time
+	sleep  func(time.Duration)
 }
 
 func NewRepository(runner execx.Runner) *Repository {
-	return &Repository{runner: runner}
+	return &Repository{
+		runner: runner,
+		now:    time.Now,
+		sleep:  time.Sleep,
+	}
 }
 
 func (r *Repository) IsAvailable(ctx context.Context) error {
@@ -113,6 +120,31 @@ func (r *Repository) CreateSession(ctx context.Context, in core.CreateSessionInp
 	return err
 }
 
+func (r *Repository) StartTaskSession(ctx context.Context, task *core.Task, launch core.LaunchRequest) error {
+	if err := r.CreateSession(ctx, core.CreateSessionInput{
+		SessionName:      task.TmuxSession,
+		WorkingDir:       task.WorktreePath,
+		AgentWindowName:  task.AgentWindowName,
+		EditorWindowName: task.EditorWindowName,
+	}); err != nil {
+		return err
+	}
+
+	if err := r.SendKeysToWindow(ctx, task.TmuxSession, task.AgentWindowName, launch.Command); err != nil {
+		return err
+	}
+
+	if len(launch.InitialInput) == 0 {
+		return nil
+	}
+
+	if err := r.waitForPrompt(ctx, task.TmuxSession, task.AgentWindowName, launch.Prompt); err != nil {
+		return err
+	}
+
+	return r.TypeInWindow(ctx, task.TmuxSession, task.AgentWindowName, launch.InitialInput)
+}
+
 func (r *Repository) KillSession(ctx context.Context, session string) error {
 	_, err := r.runner.Run(ctx, "", "tmux", "kill-session", "-t", exactSessionTarget(session))
 	return err
@@ -196,6 +228,31 @@ func (r *Repository) TypeInWindow(ctx context.Context, session, window string, c
 		strings.Join(quoted, " "),
 	)
 	return err
+}
+
+func (r *Repository) waitForPrompt(ctx context.Context, session, window, marker string) error {
+	const (
+		pollInterval = 500 * time.Millisecond
+		timeout      = 30 * time.Second
+	)
+
+	deadline := r.now().Add(timeout)
+	for r.now().Before(deadline) {
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		default:
+		}
+
+		content, err := r.CapturePaneContent(ctx, session, window)
+		if err == nil && strings.Contains(content, marker) {
+			return nil
+		}
+
+		r.sleep(pollInterval)
+	}
+
+	return errors.New("timed out waiting for " + marker + " prompt")
 }
 
 func exactSessionTarget(session string) string {

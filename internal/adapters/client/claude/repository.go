@@ -77,6 +77,18 @@ func (r *Repository) BuildLaunchCommand(task *core.Task) ([]string, error) {
 	return []string{r.binary, task.Prompt}, nil
 }
 
+func (r *Repository) LaunchRequest(task *core.Task) (core.LaunchRequest, error) {
+	return core.LaunchRequest{
+		Command:      []string{r.binary},
+		Prompt:       "❯",
+		InitialInput: []string{task.Prompt},
+	}, nil
+}
+
+func (r *Repository) DetectRuntimeState(snapshot core.RuntimeSnapshot) core.RuntimeState {
+	return detectRuntimeState(snapshot)
+}
+
 func (r *Repository) PromptMarker() string {
 	return "❯"
 }
