@@ -3,6 +3,7 @@ package git
 import (
 	"context"
 	"errors"
+	"os"
 	"path/filepath"
 	"strings"
 
@@ -74,7 +75,50 @@ func (r *Repository) CreateWorktree(ctx context.Context, in core.CreateWorktreeI
 	return err
 }
 
+func (r *Repository) CreateTaskWorkspace(ctx context.Context, task *core.Task) error {
+	return r.CreateWorktree(ctx, core.CreateWorktreeInput{
+		RepoRoot:     task.RepoRoot,
+		BaseBranch:   task.BaseBranch,
+		BranchName:   task.BranchName,
+		WorktreePath: task.WorktreePath,
+	})
+}
+
+func (r *Repository) InspectTaskWorkspace(ctx context.Context, task *core.Task) (core.RepoResources, error) {
+	worktreeExists, err := worktreePresence(task.WorktreePath)
+	if err != nil {
+		return core.RepoResources{}, err
+	}
+
+	branchExists, err := r.BranchExists(ctx, task.RepoRoot, task.BranchName)
+	if err != nil {
+		return core.RepoResources{}, err
+	}
+
+	return core.RepoResources{
+		WorktreeExists: worktreeExists,
+		BranchExists:   branchExists,
+	}, nil
+}
+
 func (r *Repository) RemoveWorktree(ctx context.Context, repoRoot, path string) error {
 	_, err := r.runner.Run(ctx, repoRoot, "git", "worktree", "remove", "--force", path)
 	return err
+}
+
+func worktreePresence(path string) (bool, error) {
+	if strings.TrimSpace(path) == "" {
+		return false, nil
+	}
+
+	info, err := os.Stat(path)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return false, nil
+		}
+
+		return false, err
+	}
+
+	return info.IsDir(), nil
 }

@@ -11,6 +11,28 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+func TestRepository_StartTaskSession_LaunchesCommandAndTypesInitialInput(t *testing.T) {
+	runner := &fakeRunner{
+		paneContent: "›",
+	}
+	repo := NewRepository(runner)
+
+	err := repo.StartTaskSession(context.Background(), &core.Task{
+		TmuxSession:      "repo_task",
+		WorktreePath:     "/tmp/repo-task",
+		AgentWindowName:  "agent",
+		EditorWindowName: "editor",
+	}, core.LaunchRequest{
+		Command:      []string{"codex"},
+		Prompt:       "›",
+		InitialInput: []string{"fix billing retry flow"},
+	})
+
+	require.NoError(t, err)
+	require.Equal(t, []string{"codex"}, runner.sentCommand)
+	require.Equal(t, []string{"fix billing retry flow"}, runner.typedCommand)
+}
+
 func TestRepositoryCreateSession_UsesDetachedSessionInWorkingDir(t *testing.T) {
 	runner := execx.NewFakeRunner([]execx.Result{{}})
 	repo := NewRepository(runner)
@@ -360,4 +382,53 @@ func TestRepositoryKillSession_UsesExactSessionTarget(t *testing.T) {
 		"-t",
 		"=repo-billing-retry-flow",
 	}, runner.Calls[0].Args)
+}
+
+type fakeRunner struct {
+	sentCommand  []string
+	typedCommand []string
+	paneContent  string
+}
+
+func (f *fakeRunner) Run(_ context.Context, _ string, name string, args ...string) (execx.Result, error) {
+	if name != "tmux" {
+		return execx.Result{}, nil
+	}
+
+	if len(args) == 0 {
+		return execx.Result{}, nil
+	}
+
+	switch args[0] {
+	case "send-keys":
+		if len(args) < 4 {
+			return execx.Result{}, nil
+		}
+
+		command := splitTmuxCommand(args[3])
+		if len(args) > 4 && args[4] == "C-m" {
+			f.sentCommand = append([]string(nil), command...)
+		} else {
+			f.typedCommand = append([]string(nil), command...)
+		}
+	case "capture-pane":
+		return execx.Result{Stdout: f.paneContent}, nil
+	}
+
+	return execx.Result{}, nil
+}
+
+func (f *fakeRunner) RunWithStdin(context.Context, execx.RunWithStdinOptions) (execx.Result, error) {
+	return execx.Result{}, nil
+}
+
+func splitTmuxCommand(raw string) []string {
+	switch raw {
+	case "codex":
+		return []string{"codex"}
+	case "'fix billing retry flow'":
+		return []string{"fix billing retry flow"}
+	default:
+		return []string{raw}
+	}
 }
