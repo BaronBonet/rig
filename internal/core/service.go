@@ -233,7 +233,10 @@ func (s *Service) createTask(
 		Message: fmt.Sprintf("Launching %s...", task.Provider),
 		Task:    cloneTask(task),
 	})
-	if err := s.tmux.SendKeysToWindow(ctx, task.TmuxSession, task.AgentWindowName, command); err != nil {
+
+	// Type the full launch command into the shell without pressing Enter,
+	// so the user can review or edit before executing.
+	if err := s.tmux.TypeInWindow(ctx, task.TmuxSession, task.AgentWindowName, command); err != nil {
 		return s.markBroken(ctx, task, fmt.Errorf("launch agent: %w", err))
 	}
 

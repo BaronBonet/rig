@@ -70,6 +70,7 @@ type TmuxRepository interface {
 	KillSession(ctx context.Context, session string) error
 	AttachOrSwitch(ctx context.Context, session string) error
 	SendKeysToWindow(ctx context.Context, session, window string, command []string) error
+	TypeInWindow(ctx context.Context, session, window string, command []string) error
 }
 
 type ProviderRepository interface {

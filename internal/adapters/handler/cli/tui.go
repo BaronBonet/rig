@@ -3,7 +3,7 @@ package cli
 import (
 	"fmt"
 
-	tea "github.com/charmbracelet/bubbletea"
+	tea "charm.land/bubbletea/v2"
 	"github.com/spf13/cobra"
 )
 
@@ -19,7 +19,6 @@ func newTUICommand(deps Dependencies) *cobra.Command {
 
 			program := tea.NewProgram(
 				newTUIModel(deps.Service, deps.Cwd),
-				tea.WithAltScreen(),
 				tea.WithInput(cmd.InOrStdin()),
 				tea.WithOutput(cmd.OutOrStdout()),
 			)

@@ -225,6 +225,25 @@ func TestRepositorySendKeysToWindow_DefaultsEmptyWindowToAgent(t *testing.T) {
 	}, runner.Calls[0].Args)
 }
 
+func TestRepositoryTypeInWindow_SendsKeysWithoutEnter(t *testing.T) {
+	runner := execx.NewFakeRunner([]execx.Result{{}})
+	repo := NewRepository(runner)
+
+	err := repo.TypeInWindow(
+		context.Background(),
+		"repo-billing-retry-flow",
+		"agent",
+		[]string{"codex", "fix bug"},
+	)
+	require.NoError(t, err)
+	require.Equal(t, []string{
+		"send-keys",
+		"-t",
+		"=repo-billing-retry-flow:agent",
+		"codex 'fix bug'",
+	}, runner.Calls[0].Args)
+}
+
 func TestRepositoryAttachOrSwitch_UsesExactSessionTarget(t *testing.T) {
 	t.Setenv("TMUX", "")
 

@@ -1,6 +1,6 @@
 package cli
 
-import "github.com/charmbracelet/lipgloss"
+import "charm.land/lipgloss/v2"
 
 // Colors
 var (
@@ -91,4 +91,3 @@ func runtimeStateStyle(state string) (string, lipgloss.Style) {
 		return "", dimStyle
 	}
 }
-

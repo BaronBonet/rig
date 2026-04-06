@@ -22,7 +22,12 @@
       "Bash(tmux list-panes:*)",
       "Bash(tmux capture-pane:*)",
       "Bash(claude:*)",
-      "Bash(go list:*)"
+      "Bash(go list:*)",
+      "Bash(curl -sL \"https://raw.githubusercontent.com/charmbracelet/bubbletea/v2/README.md\")",
+      "Bash(curl -sL \"https://github.com/charmbracelet/bubbletea/releases/tag/v2.0.0\")",
+      "Bash(curl -sL \"https://raw.githubusercontent.com/charmbracelet/bubbletea/v2/key.go\")",
+      "Bash(curl -sL \"https://raw.githubusercontent.com/charmbracelet/bubbletea/v2/tea.go\")",
+      "WebFetch(domain:github.com)"
     ]
   }
 }

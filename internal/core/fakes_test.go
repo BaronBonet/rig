@@ -177,6 +177,8 @@ type fakeTmuxRepository struct {
 	killSessionErr    error
 	killSessionHook   func()
 	sendKeysErr       error
+	typeInErr         error
+	typedCommand      []string
 	sessionExists     bool
 	windowExists      map[string]map[string]bool
 	attachedSession   string
@@ -266,6 +268,10 @@ func (f *fakeTmuxRepository) SendKeysToWindow(_ context.Context, session, window
 		command: append([]string(nil), command...),
 	})
 	return f.sendKeysErr
+}
+func (f *fakeTmuxRepository) TypeInWindow(_ context.Context, _, _ string, command []string) error {
+	f.typedCommand = append([]string(nil), command...)
+	return f.typeInErr
 }
 
 type fakeTmuxWindowCommand struct {
