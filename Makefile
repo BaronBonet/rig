@@ -2,6 +2,13 @@
 ## Dependencies
 ################################################################################
 
+.PHONY: dependencies install dependencies-install
+dependencies: install
+
+.PHONY: install
+install:
+	@./scripts/dependencies/install.sh
+
 .PHONY: dependencies-install
 dependencies-install:
 	@./scripts/dependencies/install.sh
@@ -9,6 +16,14 @@ dependencies-install:
 .PHONY: dependencies-check
 dependencies-check:
 	@./scripts/dependencies/check.sh
+
+################################################################################
+## Generation
+################################################################################
+
+.PHONY: generate
+generate:
+	@GOCACHE=$(CURDIR)/local/go-build go tool mockery --config=.mockery.yaml
 
 ################################################################################
 ## Build

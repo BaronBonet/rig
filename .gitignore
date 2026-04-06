@@ -5,3 +5,7 @@ local/
 *.db
 *.db-shm
 *.db-wal
+internal/core/mock_*.go
+internal/adapters/handler/cli/mock_*.go
+internal/pkg/execx/mock_*.go
+internal/adapters/client/tmux/mock_*.go
