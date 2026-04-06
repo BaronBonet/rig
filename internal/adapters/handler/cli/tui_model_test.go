@@ -651,10 +651,6 @@ func (f *fakeTUIService) SuggestTaskName(_ context.Context, prompt string, _ str
 	return f.suggestedName, f.suggestErr
 }
 
-func (*fakeTUIService) NewTask(context.Context, core.NewTaskInput) (*core.Task, error) {
-	return nil, nil
-}
-
 func (f *fakeTUIService) CreateTaskWithProgress(
 	_ context.Context,
 	input core.NewTaskInput,
@@ -671,8 +667,6 @@ func (f *fakeTUIService) ListTasks(context.Context) ([]*core.Task, error) {
 	f.listCalls++
 	return f.tasks, f.listErr
 }
-
-func (*fakeTUIService) GetTask(context.Context, string) (*core.Task, error) { return nil, nil }
 
 func (f *fakeTUIService) OpenTask(_ context.Context, idOrSlug string) error {
 	f.openedIDOrSlug = idOrSlug
