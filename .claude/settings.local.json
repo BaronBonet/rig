@@ -20,7 +20,8 @@
       "Bash(grep:*)",
       "Bash(tmux list-sessions:*)",
       "Bash(tmux list-panes:*)",
-      "Bash(tmux capture-pane:*)"
+      "Bash(tmux capture-pane:*)",
+      "Bash(claude:*)"
     ]
   }
 }

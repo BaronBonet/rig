@@ -17,8 +17,16 @@ type Call struct {
 	Args []string
 }
 
+type RunWithStdinOptions struct {
+	Cwd   string
+	Stdin string
+	Name  string
+	Args  []string
+}
+
 type Runner interface {
 	Run(ctx context.Context, cwd string, name string, args ...string) (Result, error)
+	RunWithStdin(ctx context.Context, opts RunWithStdinOptions) (Result, error)
 }
 
 type CommandError struct {
@@ -56,8 +64,19 @@ func (e CommandError) Unwrap() error {
 type ExecRunner struct{}
 
 func (ExecRunner) Run(ctx context.Context, cwd string, name string, args ...string) (Result, error) {
-	cmd := exec.CommandContext(ctx, name, args...)
-	cmd.Dir = cwd
+	return ExecRunner{}.RunWithStdin(ctx, RunWithStdinOptions{
+		Cwd:  cwd,
+		Name: name,
+		Args: args,
+	})
+}
+
+func (ExecRunner) RunWithStdin(ctx context.Context, opts RunWithStdinOptions) (Result, error) {
+	cmd := exec.CommandContext(ctx, opts.Name, opts.Args...)
+	cmd.Dir = opts.Cwd
+	if opts.Stdin != "" {
+		cmd.Stdin = strings.NewReader(opts.Stdin)
+	}
 
 	var stdoutBuf strings.Builder
 	var stderrBuf strings.Builder
@@ -72,9 +91,9 @@ func (ExecRunner) Run(ctx context.Context, cwd string, name string, args ...stri
 
 	if err != nil {
 		return result, CommandError{
-			Cwd:    cwd,
-			Name:   name,
-			Args:   append([]string(nil), args...),
+			Cwd:    opts.Cwd,
+			Name:   opts.Name,
+			Args:   append([]string(nil), opts.Args...),
 			Stdout: result.Stdout,
 			Stderr: result.Stderr,
 			Err:    err,
@@ -95,10 +114,18 @@ func NewFakeRunner(results []Result) *FakeRunner {
 }
 
 func (f *FakeRunner) Run(_ context.Context, cwd string, name string, args ...string) (Result, error) {
-	f.Calls = append(f.Calls, Call{
+	return f.RunWithStdin(context.Background(), RunWithStdinOptions{
 		Cwd:  cwd,
 		Name: name,
-		Args: append([]string(nil), args...),
+		Args: args,
+	})
+}
+
+func (f *FakeRunner) RunWithStdin(_ context.Context, opts RunWithStdinOptions) (Result, error) {
+	f.Calls = append(f.Calls, Call{
+		Cwd:  opts.Cwd,
+		Name: opts.Name,
+		Args: append([]string(nil), opts.Args...),
 	})
 
 	var result Result

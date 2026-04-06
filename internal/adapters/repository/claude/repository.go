@@ -38,14 +38,16 @@ type claudeResult struct {
 }
 
 func (r *Repository) ProposeTaskName(ctx context.Context, prompt string) (string, error) {
-	result, err := r.runner.Run(
-		ctx,
-		"",
-		r.binary,
-		"-p",
-		"--output-format", "json",
-		"Reply with only a short task title: "+prompt,
-	)
+	result, err := r.runner.RunWithStdin(ctx, execx.RunWithStdinOptions{
+		Name:  r.binary,
+		Stdin: prompt,
+		Args: []string{
+			"-p",
+			"--output-format", "json",
+			"--tools", "",
+			"--system-prompt", "You are a task naming assistant. Reply with ONLY a short title (3-5 words, no quotes). No explanations, no other text.",
+		},
+	})
 	if err != nil {
 		return "", fmt.Errorf("claude exec failed: %w", err)
 	}
@@ -76,6 +78,7 @@ func normalizeTitle(raw string) string {
 	line = strings.ReplaceAll(line, "`", "")
 	line = strings.Trim(line, "[]")
 	line = strings.Trim(line, ":")
+	line = strings.Trim(line, `"'`)
 	line = strings.TrimSpace(line)
 
 	if line == "" {

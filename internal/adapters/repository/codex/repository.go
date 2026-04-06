@@ -49,7 +49,7 @@ func (r *Repository) ProposeTaskName(ctx context.Context, prompt string) (string
 		"--skip-git-repo-check",
 		"--output-last-message",
 		tmpPath,
-		"Reply with only a short task title: "+prompt,
+		"Reply with only a short task title (3-5 words, no quotes): "+prompt,
 	)
 	if fileBytes, readErr := os.ReadFile(tmpPath); readErr == nil {
 		if title := extractCodexTitle(string(fileBytes)); title != "" {
@@ -88,6 +88,7 @@ func normalizeCodexTitle(raw string) string {
 	line = strings.ReplaceAll(line, "`", "")
 	line = strings.Trim(line, "[]")
 	line = strings.Trim(line, ":")
+	line = strings.Trim(line, `"'`)
 	line = strings.TrimSpace(line)
 
 	if line == "" {
