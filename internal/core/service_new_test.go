@@ -29,15 +29,15 @@ func TestNewService_AcceptsBusinessPorts(t *testing.T) {
 	require.NotNil(t, service)
 }
 
-func TestServiceNewTask_CreatesWorktreeSessionAndPersistsTask(t *testing.T) {
+func TestServiceCreateTaskWithProgress_CreatesWorktreeSessionAndPersistsTask(t *testing.T) {
 	svc := newTestService()
 	svc.providerRepo.suggestedName = "billing retry flow"
 
-	task, err := svc.service.NewTask(t.Context(), NewTaskInput{
+	task, err := svc.service.CreateTaskWithProgress(t.Context(), NewTaskInput{
 		Cwd:                  "/tmp/repo",
 		Prompt:               "add billing retry flow",
 		ConfirmedDisplayName: "billing retry flow",
-	})
+	}, CreateTaskOptions{}, nil)
 
 	require.NoError(t, err)
 	require.Equal(t, "feat/billing-retry-flow", task.BranchName)
@@ -62,14 +62,14 @@ func TestServiceNewTask_CreatesWorktreeSessionAndPersistsTask(t *testing.T) {
 	require.Equal(t, "editor", svc.taskRepo.createdTask.EditorWindowName)
 }
 
-func TestServiceNewTask_FallsBackWhenCodexNameProposalFails(t *testing.T) {
+func TestServiceCreateTaskWithProgress_FallsBackWhenCodexNameProposalFails(t *testing.T) {
 	svc := newTestService()
 	svc.providerRepo.suggestErr = errors.New("codex unavailable")
 
-	task, err := svc.service.NewTask(t.Context(), NewTaskInput{
+	task, err := svc.service.CreateTaskWithProgress(t.Context(), NewTaskInput{
 		Cwd:    "/tmp/repo",
 		Prompt: "add billing retry flow",
-	})
+	}, CreateTaskOptions{}, nil)
 
 	require.NoError(t, err)
 	require.Equal(t, "billing retry flow", task.DisplayName)
@@ -83,24 +83,24 @@ func TestCreateTask_UsesSessionClientLaunchRequest(t *testing.T) {
 		InitialInput: []string{"ship it"},
 	}
 
-	_, err := svc.service.NewTask(t.Context(), NewTaskInput{
+	_, err := svc.service.CreateTaskWithProgress(t.Context(), NewTaskInput{
 		Cwd:    "/tmp/repo",
 		Prompt: "ship it",
-	})
+	}, CreateTaskOptions{}, nil)
 	require.NoError(t, err)
 	require.Equal(t, svc.providerRepo.launchRequest, svc.sessionClient.startedLaunch)
 }
 
-func TestServiceNewTask_PersistsBrokenTaskWhenTmuxCreationFails(t *testing.T) {
+func TestServiceCreateTaskWithProgress_PersistsBrokenTaskWhenTmuxCreationFails(t *testing.T) {
 	svc := newTestService()
 	svc.providerRepo.suggestedName = "billing retry flow"
 	svc.sessionClient.startErr = errors.New("tmux failed")
 
-	task, err := svc.service.NewTask(t.Context(), NewTaskInput{
+	task, err := svc.service.CreateTaskWithProgress(t.Context(), NewTaskInput{
 		Cwd:                  "/tmp/repo",
 		Prompt:               "add billing retry flow",
 		ConfirmedDisplayName: "billing retry flow",
-	})
+	}, CreateTaskOptions{}, nil)
 
 	require.Error(t, err)
 	require.Equal(t, TaskStatusBroken, task.Status)
@@ -178,7 +178,7 @@ func TestServiceCreateTaskWithProgress_SeedsWorkspaceBeforeTmux(t *testing.T) {
 	require.Equal(t, TaskStatusRunning, task.Status)
 }
 
-func TestServiceNewTask_FailsBeforeCreatingTaskWhenWorkspaceValidationFails(t *testing.T) {
+func TestServiceCreateTaskWithProgress_FailsBeforeCreatingTaskWhenWorkspaceValidationFails(t *testing.T) {
 	svc := newTestService()
 	svc.configRepo.repoConfig = RepoConfig{
 		Exists: true,
@@ -186,11 +186,11 @@ func TestServiceNewTask_FailsBeforeCreatingTaskWhenWorkspaceValidationFails(t *t
 	}
 	svc.workspaceSeeder.validateErr = errors.New("invalid seed path \".env\": source path not found")
 
-	task, err := svc.service.NewTask(t.Context(), NewTaskInput{
+	task, err := svc.service.CreateTaskWithProgress(t.Context(), NewTaskInput{
 		Cwd:                  "/tmp/repo",
 		Prompt:               "seed workspace",
 		ConfirmedDisplayName: "seed workspace",
-	})
+	}, CreateTaskOptions{}, nil)
 
 	require.Error(t, err)
 	require.Nil(t, task)
