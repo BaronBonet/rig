@@ -67,20 +67,7 @@ func (s *Service) resolveProvider(name string) ProviderClient {
 	return nil
 }
 
-func (s *Service) NewTask(ctx context.Context, input NewTaskInput) (*Task, error) {
-	return s.createTask(ctx, input, CreateTaskOptions{}, nil)
-}
-
 func (s *Service) CreateTaskWithProgress(
-	ctx context.Context,
-	input NewTaskInput,
-	options CreateTaskOptions,
-	progress func(TaskProgress),
-) (*Task, error) {
-	return s.createTask(ctx, input, options, progress)
-}
-
-func (s *Service) createTask(
 	ctx context.Context,
 	input NewTaskInput,
 	options CreateTaskOptions,
