@@ -7,6 +7,7 @@ import (
 
 	"agent/internal/core"
 
+	"github.com/charmbracelet/bubbles/textarea"
 	textinput "github.com/charmbracelet/bubbles/textinput"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
@@ -32,9 +33,10 @@ type model struct {
 	defaultCreationCwd string
 	mode               tuiMode
 	tasks              []*core.Task
-	promptInput        textinput.Model
+	promptInput        textarea.Model
 	nameInput          textinput.Model
 	selected           int
+	width              int
 	loading            bool
 	busy               bool
 }
@@ -65,9 +67,10 @@ type createFinishedMsg struct {
 }
 
 func newTUIModel(service TaskService, defaultCreationCwd string) model {
-	promptInput := textinput.New()
-	promptInput.Prompt = titleStyle.Render("❯") + " "
-	promptInput.Placeholder = "Describe the task to create"
+	promptInput := textarea.New()
+	promptInput.Placeholder = "Describe the task to create..."
+	promptInput.ShowLineNumbers = false
+	promptInput.SetHeight(4)
 	promptInput.Focus()
 
 	nameInput := textinput.New()
@@ -91,6 +94,10 @@ func (m model) Init() tea.Cmd {
 
 func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
+	case tea.WindowSizeMsg:
+		m.width = msg.Width
+		m.promptInput.SetWidth(msg.Width - 4)
+		return m, nil
 	case tea.KeyMsg:
 		return m.updateKey(msg)
 	case tasksLoadedMsg:
@@ -247,7 +254,7 @@ func (m model) updateListKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.err = nil
 		m.mode = tuiModePromptInput
 		m.createInput = core.NewTaskInput{Cwd: m.creationCwd()}
-		m.promptInput.SetValue("")
+		m.promptInput.Reset()
 		m.promptInput.Focus()
 		m.nameInput.Blur()
 		return m, nil
@@ -431,7 +438,7 @@ func (m model) listView() string {
 func (m model) promptInputView() string {
 	var b strings.Builder
 	b.WriteString(titleStyle.Render(iconHeaderCreate+" Create Task") + "\n\n")
-	b.WriteString(dimStyle.Render("Enter the task prompt. Press Enter to suggest a name, or Esc to cancel.") + "\n")
+	b.WriteString(dimStyle.Render("Enter the task prompt. Press Enter to submit, or Esc to cancel.") + "\n")
 	b.WriteString(dimStyle.Render("tab to switch provider: ") + providerToggle(m.provider) + "\n\n")
 	if m.err != nil {
 		b.WriteString(errorStyle.Render("Error: "+m.err.Error()) + "\n\n")
