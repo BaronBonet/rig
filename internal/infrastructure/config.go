@@ -7,8 +7,8 @@ import (
 
 	"github.com/caarlos0/env/v11"
 
-	"agent/internal/adapters/repository/claude"
-	"agent/internal/adapters/repository/codex"
+	claudeclient "agent/internal/adapters/client/claude"
+	codexclient "agent/internal/adapters/client/codex"
 	"agent/internal/adapters/repository/sqlite"
 	"agent/internal/core"
 )
@@ -16,8 +16,8 @@ import (
 type Config struct {
 	Service core.Config
 	SQLite  sqlite.Config
-	Codex   codex.Config
-	Claude  claude.Config
+	Codex   codexclient.Config
+	Claude  claudeclient.Config
 }
 
 type envConfig struct {
@@ -47,10 +47,10 @@ func LoadConfig() (*Config, error) {
 		SQLite: sqlite.Config{
 			Path: raw.SQLitePath,
 		},
-		Codex: codex.Config{
+		Codex: codexclient.Config{
 			Binary: raw.CodexBinary,
 		},
-		Claude: claude.Config{
+		Claude: claudeclient.Config{
 			Binary: raw.ClaudeBinary,
 		},
 	}, nil

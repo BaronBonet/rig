@@ -5,14 +5,14 @@ import (
 	"os"
 	"time"
 
+	claudeclient "agent/internal/adapters/client/claude"
+	codexclient "agent/internal/adapters/client/codex"
+	gitclient "agent/internal/adapters/client/git"
+	tmuxclient "agent/internal/adapters/client/tmux"
+	workspacefs "agent/internal/adapters/filesystem/workspace"
 	"agent/internal/adapters/handler/cli"
 	agentconfigrepo "agent/internal/adapters/repository/agentconfig"
-	clauderepo "agent/internal/adapters/repository/claude"
-	codexrepo "agent/internal/adapters/repository/codex"
-	gitrepo "agent/internal/adapters/repository/git"
 	sqliterepo "agent/internal/adapters/repository/sqlite"
-	tmuxrepo "agent/internal/adapters/repository/tmux"
-	workspacerepo "agent/internal/adapters/repository/workspace"
 	"agent/internal/core"
 	"agent/internal/infrastructure"
 	"agent/internal/pkg/execx"
@@ -39,7 +39,7 @@ func buildDependencies() (cli.Dependencies, error) {
 	}
 
 	runner := execx.ExecRunner{}
-	runtimeMonitor := tmuxrepo.NewRuntimeMonitor()
+	runtimeMonitor := tmuxclient.NewRuntimeMonitor()
 
 	taskRepo, err := sqliterepo.NewRepository(cfg.SQLite)
 	if err != nil {
@@ -48,19 +48,19 @@ func buildDependencies() (cli.Dependencies, error) {
 
 	service := core.NewService(
 		taskRepo,
-		gitrepo.NewRepository(runner),
-		tmuxrepo.NewRepository(runner),
+		gitclient.NewRepository(runner),
+		tmuxclient.NewRepository(runner),
 		map[string]core.ProviderRepository{
-			"codex":  codexrepo.NewRepository(runner, cfg.Codex),
-			"claude": clauderepo.NewRepository(runner, cfg.Claude),
+			"codex":  codexclient.NewRepository(runner, cfg.Codex),
+			"claude": claudeclient.NewRepository(runner, cfg.Claude),
 		},
 		runtimeMonitor,
 		map[string]core.RuntimeStateDetector{
-			"codex":  codexrepo.NewRuntimeDetector(2 * time.Second),
-			"claude": clauderepo.NewRuntimeDetector(2 * time.Second),
+			"codex":  codexclient.NewRuntimeDetector(2 * time.Second),
+			"claude": claudeclient.NewRuntimeDetector(2 * time.Second),
 		},
 		agentconfigrepo.NewRepository(),
-		workspacerepo.NewRepository(),
+		workspacefs.NewRepository(),
 		timeutil.RealClock{},
 		cfg.Service,
 	)
