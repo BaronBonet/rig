@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"time"
@@ -27,7 +28,7 @@ const (
 )
 
 func NewRepository(cfg Config) (*Repository, error) {
-	if err := os.MkdirAll(filepath.Dir(cfg.Path), 0o755); err != nil {
+	if err := ValidateConfig(cfg); err != nil {
 		return nil, err
 	}
 
@@ -43,6 +44,18 @@ func NewRepository(cfg Config) (*Repository, error) {
 	}
 
 	return repo, nil
+}
+
+func ValidateConfig(cfg Config) error {
+	if filepath.Dir(cfg.Path) == "." {
+		return fmt.Errorf("sqlite path %q must include a parent directory", cfg.Path)
+	}
+
+	if err := os.MkdirAll(filepath.Dir(cfg.Path), 0o755); err != nil {
+		return err
+	}
+
+	return nil
 }
 
 func (r *Repository) initSchema() error {

@@ -3,6 +3,7 @@ package sqlite
 import (
 	"context"
 	"database/sql"
+	"os"
 	"path/filepath"
 	"testing"
 	"time"
@@ -163,6 +164,23 @@ func TestNewRepository_CreatesParentDirectory(t *testing.T) {
 	repo, err := NewRepository(Config{Path: path})
 	require.NoError(t, err)
 	require.NotNil(t, repo)
+}
+
+func TestValidateConfig_CreatesParentDirectory(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "nested", "state.db")
+
+	require.NoError(t, ValidateConfig(Config{Path: path}))
+	_, err := os.Stat(filepath.Dir(path))
+	require.NoError(t, err)
+}
+
+func TestValidateConfig_RejectsFileParent(t *testing.T) {
+	parent := filepath.Join(t.TempDir(), "blocker")
+	require.NoError(t, os.WriteFile(parent, []byte("x"), 0o644))
+
+	err := ValidateConfig(Config{Path: filepath.Join(parent, "state.db")})
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "not a directory")
 }
 
 func TestNewRepository_MigratesLegacyTaskRow(t *testing.T) {

@@ -17,6 +17,13 @@ import (
 )
 
 func TestBuildDependencies_WiresSharedCodexRuntimeMonitor(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("AGENT_PROVIDER", "codex")
+	t.Setenv("AGENT_SQLITE_PATH", filepath.Join(home, "state.db"))
+	t.Setenv("AGENT_CODEX_BINARY", "codex")
+	t.Setenv("AGENT_CLAUDE_BINARY", "claude")
+
 	deps, err := buildDependencies()
 	require.NoError(t, err)
 
@@ -56,9 +63,8 @@ func TestRuntimeServiceDoctor_UsesSQLiteConfig(t *testing.T) {
 	}
 
 	result, err := svc.Doctor(context.Background(), "")
-	require.Error(t, err)
-	require.Empty(t, result)
-	require.Contains(t, err.Error(), "not a directory")
+	require.NoError(t, err)
+	require.Contains(t, result.Failures, "database: mkdir "+blocker+": not a directory")
 }
 
 type noopRuntimeMonitor struct{}
