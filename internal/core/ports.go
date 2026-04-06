@@ -17,6 +17,23 @@ type SeedConfig struct {
 	Copy []string
 }
 
+type LaunchRequest struct {
+	Command      []string
+	Prompt       string
+	InitialInput []string
+}
+
+type RepoResources struct {
+	WorktreeExists bool
+	BranchExists   bool
+}
+
+type SessionResources struct {
+	SessionExists      bool
+	AgentWindowExists  bool
+	EditorWindowExists bool
+}
+
 type CreateWorktreeInput struct {
 	RepoRoot     string
 	BaseBranch   string
@@ -55,6 +72,33 @@ type WorkspaceSeeder interface {
 	ValidateSeedPaths(ctx context.Context, repoRoot string, relativePaths []string) error
 }
 
+type RepoClient interface {
+	IsAvailable(ctx context.Context) error
+	DetectRepo(ctx context.Context, cwd string) (RepoContext, error)
+	CreateTaskWorkspace(ctx context.Context, task *Task) error
+	RemoveTaskWorkspace(ctx context.Context, task *Task) error
+	InspectTaskWorkspace(ctx context.Context, task *Task) (RepoResources, error)
+}
+
+type SessionClient interface {
+	IsAvailable(ctx context.Context) error
+	StartTaskSession(ctx context.Context, task *Task, launch LaunchRequest) error
+	OpenTaskSession(ctx context.Context, task *Task) error
+	DeleteTaskSession(ctx context.Context, task *Task) error
+	InspectTaskSession(ctx context.Context, task *Task) (SessionResources, error)
+	SnapshotTaskSession(ctx context.Context, task *Task) (RuntimeSnapshot, error)
+}
+
+type ProviderClient interface {
+	IsAvailable(ctx context.Context) error
+	SuggestTaskName(ctx context.Context, prompt string) (string, error)
+	LaunchRequest(task *Task) (LaunchRequest, error)
+	DetectRuntimeState(snapshot RuntimeSnapshot) RuntimeState
+}
+
+// Legacy compatibility during the boundary refactor. These are kept only so the
+// existing adapters and composition root can be bridged into the higher-level
+// ports above until later tasks move the mechanics out of core.
 type GitRepository interface {
 	IsAvailable(ctx context.Context) error
 	DetectRepo(ctx context.Context, cwd string) (RepoContext, error)

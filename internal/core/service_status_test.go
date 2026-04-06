@@ -18,14 +18,8 @@ func TestServiceGetTask_ReconcilesLiveFields(t *testing.T) {
 		TmuxSession:  "repo-billing-retry-flow",
 		Status:       TaskStatusRunning,
 	}
-	svc.gitRepo.branchExists = true
-	svc.tmuxRepo.sessionExists = true
-	svc.tmuxRepo.windowExists = map[string]map[string]bool{
-		"repo-billing-retry-flow": {
-			"agent":  true,
-			"editor": true,
-		},
-	}
+	svc.repoClient.repoResources = RepoResources{WorktreeExists: true, BranchExists: true}
+	svc.sessionClient.sessionResources = SessionResources{SessionExists: true, AgentWindowExists: true, EditorWindowExists: true}
 
 	task, err := svc.service.GetTask(t.Context(), "billing-retry-flow")
 	require.NoError(t, err)
@@ -51,13 +45,8 @@ func TestServiceGetTask_MarksTaskDegradedWhenEditorWindowMissing(t *testing.T) {
 		EditorWindowName: "editor",
 		Status:           TaskStatusRunning,
 	}
-	svc.gitRepo.branchExists = true
-	svc.tmuxRepo.sessionExists = true
-	svc.tmuxRepo.windowExists = map[string]map[string]bool{
-		"repo-billing-retry-flow": {
-			"agent": true,
-		},
-	}
+	svc.repoClient.repoResources = RepoResources{WorktreeExists: true, BranchExists: true}
+	svc.sessionClient.sessionResources = SessionResources{SessionExists: true, AgentWindowExists: true}
 
 	task, err := svc.service.GetTask(t.Context(), "billing-retry-flow")
 	require.NoError(t, err)
@@ -81,13 +70,8 @@ func TestServiceGetTask_MarksTaskBrokenWhenAgentWindowMissing(t *testing.T) {
 		EditorWindowName: "editor",
 		Status:           TaskStatusRunning,
 	}
-	svc.gitRepo.branchExists = true
-	svc.tmuxRepo.sessionExists = true
-	svc.tmuxRepo.windowExists = map[string]map[string]bool{
-		"repo-billing-retry-flow": {
-			"editor": true,
-		},
-	}
+	svc.repoClient.repoResources = RepoResources{WorktreeExists: true, BranchExists: true}
+	svc.sessionClient.sessionResources = SessionResources{SessionExists: true, EditorWindowExists: true}
 
 	task, err := svc.service.GetTask(t.Context(), "billing-retry-flow")
 	require.NoError(t, err)
@@ -109,8 +93,8 @@ func TestServiceGetTask_MarksTaskBrokenWhenSessionMissing(t *testing.T) {
 		EditorWindowName: "editor",
 		Status:           TaskStatusRunning,
 	}
-	svc.gitRepo.branchExists = true
-	svc.tmuxRepo.sessionExists = false
+	svc.repoClient.repoResources = RepoResources{WorktreeExists: true, BranchExists: true}
+	svc.sessionClient.sessionResources = SessionResources{}
 
 	task, err := svc.service.GetTask(t.Context(), "billing-retry-flow")
 	require.NoError(t, err)
@@ -133,14 +117,8 @@ func TestServiceGetTask_LeavesRuntimeStateEmptyForUnsupportedProvider(t *testing
 		Provider:         "claude",
 		Status:           TaskStatusRunning,
 	}
-	svc.gitRepo.branchExists = true
-	svc.tmuxRepo.sessionExists = true
-	svc.tmuxRepo.windowExists = map[string]map[string]bool{
-		"repo-billing-retry-flow": {
-			"agent":  true,
-			"editor": true,
-		},
-	}
+	svc.repoClient.repoResources = RepoResources{WorktreeExists: true, BranchExists: true}
+	svc.sessionClient.sessionResources = SessionResources{SessionExists: true, AgentWindowExists: true, EditorWindowExists: true}
 
 	task, err := svc.service.GetTask(t.Context(), "billing-retry-flow")
 	require.NoError(t, err)
@@ -162,20 +140,14 @@ func TestServiceGetTask_LeavesRuntimeStateEmptyForBrokenTask(t *testing.T) {
 		Provider:         "codex",
 		Status:           TaskStatusRunning,
 	}
-	svc.gitRepo.branchExists = false
-	svc.tmuxRepo.sessionExists = true
-	svc.tmuxRepo.windowExists = map[string]map[string]bool{
-		"repo-billing-retry-flow": {
-			"agent":  true,
-			"editor": true,
-		},
-	}
-	svc.runtimeMonitor.snapshot = RuntimeSnapshot{
+	svc.repoClient.repoResources = RepoResources{WorktreeExists: true, BranchExists: false}
+	svc.sessionClient.sessionResources = SessionResources{SessionExists: true, AgentWindowExists: true, EditorWindowExists: true}
+	svc.sessionClient.snapshot = RuntimeSnapshot{
 		PaneID:            "%24",
 		ForegroundCommand: "codex",
 		Content:           "› still here",
 	}
-	svc.runtimeDetector.state = RuntimeStateNeedsInput
+	svc.providerRepo.runtimeState = RuntimeStateNeedsInput
 
 	task, err := svc.service.GetTask(t.Context(), "billing-retry-flow")
 	require.NoError(t, err)
@@ -199,19 +171,14 @@ func TestServiceGetTask_EnrichesRuntimeStateForDegradedTask(t *testing.T) {
 		Provider:         "codex",
 		Status:           TaskStatusRunning,
 	}
-	svc.gitRepo.branchExists = true
-	svc.tmuxRepo.sessionExists = true
-	svc.tmuxRepo.windowExists = map[string]map[string]bool{
-		"repo-billing-retry-flow": {
-			"agent": true,
-		},
-	}
-	svc.runtimeMonitor.snapshot = RuntimeSnapshot{
+	svc.repoClient.repoResources = RepoResources{WorktreeExists: true, BranchExists: true}
+	svc.sessionClient.sessionResources = SessionResources{SessionExists: true, AgentWindowExists: true}
+	svc.sessionClient.snapshot = RuntimeSnapshot{
 		PaneID:            "%24",
 		ForegroundCommand: "codex",
 		Content:           "› still here",
 	}
-	svc.runtimeDetector.state = RuntimeStateNeedsInput
+	svc.providerRepo.runtimeState = RuntimeStateNeedsInput
 
 	task, err := svc.service.GetTask(t.Context(), "billing-retry-flow")
 	require.NoError(t, err)

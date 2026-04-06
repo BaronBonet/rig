@@ -27,7 +27,7 @@ func TestServiceDoctor_ReportsStorageFailure(t *testing.T) {
 
 func TestServiceDoctor_ReportsRepoDetectionFailure(t *testing.T) {
 	svc := newTestService()
-	svc.gitRepo.detectRepoErr = errors.New("not a git repo")
+	svc.repoClient.detectRepoErr = errors.New("not a git repo")
 
 	result, err := svc.service.Doctor(t.Context(), "/tmp/repo")
 	require.NoError(t, err)
