@@ -20,13 +20,13 @@ func TestServiceNewTask_CreatesWorktreeSessionAndPersistsTask(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, "feat/billing-retry-flow", task.BranchName)
 	require.Equal(t, "/tmp/repo-billing-retry-flow", task.WorktreePath)
-	require.Equal(t, "repo-billing-retry-flow", task.TmuxSession)
+	require.Equal(t, "repo_billing-retry-flow", task.TmuxSession)
 	require.Equal(t, "repo", task.RepoName)
 	require.Equal(t, "agent", task.AgentWindowName)
 	require.Equal(t, "editor", task.EditorWindowName)
 	require.Equal(t, TaskStatusRunning, task.Status)
 	require.Equal(t, "/tmp/repo-billing-retry-flow", svc.repoClient.createdTask.WorktreePath)
-	require.Equal(t, "repo-billing-retry-flow", svc.sessionClient.startedTask.TmuxSession)
+	require.Equal(t, "repo_billing-retry-flow", svc.sessionClient.startedTask.TmuxSession)
 	require.Equal(t, "agent", svc.sessionClient.startedTask.AgentWindowName)
 	require.Equal(t, "editor", svc.sessionClient.startedTask.EditorWindowName)
 	require.Equal(t, LaunchRequest{
@@ -104,7 +104,7 @@ func TestServiceCreateTaskWithProgress_EmitsEventsAndOpensSession(t *testing.T) 
 	})
 
 	require.NoError(t, err)
-	require.Equal(t, "repo-billing-retry-flow", svc.sessionClient.openedTask.TmuxSession)
+	require.Equal(t, "repo_billing-retry-flow", svc.sessionClient.openedTask.TmuxSession)
 	require.Equal(t, []TaskProgressStep{
 		TaskProgressNameSelected,
 		TaskProgressWorktreeCreating,

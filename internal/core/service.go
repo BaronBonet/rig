@@ -138,7 +138,7 @@ func (s *Service) createTask(
 		// TODO: don't assume its a feat, the llm should figure that out
 		BranchName:       "feat/" + taskSlug,
 		WorktreePath:     filepath.Join(filepath.Dir(repoCtx.Root), repoCtx.Name+"-"+taskSlug),
-		TmuxSession:      repoCtx.Name + "-" + taskSlug,
+		TmuxSession:      repoCtx.Name + "_" + taskSlug,
 		AgentWindowName:  "agent",
 		EditorWindowName: "editor",
 		Provider:         provider,
