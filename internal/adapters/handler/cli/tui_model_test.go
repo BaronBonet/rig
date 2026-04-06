@@ -94,7 +94,7 @@ func TestModelUpdate_CreateFlowWithoutTasksUsesModelCwdFallback(t *testing.T) {
 		suggestedName: "billing retry flow",
 		createdTask:   tuiTask("billing-retry-flow"),
 	}
-	m := newTUIModel(service, "/tmp/fallback-repo")
+	m := newTUIModel(service, "/tmp/fallback-repo", "codex")
 	m.loading = false
 
 	m, _ = updateTUIModel(t, m, keyRunes("n"))
@@ -118,6 +118,33 @@ func TestModelUpdate_CreateFlowWithoutTasksUsesModelCwdFallback(t *testing.T) {
 	require.Equal(t, tuiModeList, m.mode)
 	require.True(t, m.loading)
 	require.NotNil(t, refreshCmd)
+}
+
+func TestModelUpdate_CreateFlowUsesConfiguredDefaultProvider(t *testing.T) {
+	service := &fakeTUIService{
+		suggestedName: "billing retry flow",
+		createdTask:   tuiTask("billing-retry-flow"),
+	}
+	existing := tuiTask("existing-task")
+	existing.RepoRoot = "/tmp/repo"
+	m := newLoadedTUIModelWithProvider(t, service, "claude", existing)
+
+	m, _ = updateTUIModel(t, m, keyRunes("n"))
+	m.promptInput.SetValue("add billing retry flow")
+
+	m, suggestCmd := updateTUIModel(t, m, tea.KeyPressMsg{Code: tea.KeyEnter})
+	require.NotNil(t, suggestCmd)
+
+	suggestMsg := suggestCmd()
+	m, _ = updateTUIModel(t, m, suggestMsg)
+	require.Equal(t, "claude", service.suggestedProvider)
+
+	m, createCmd := updateTUIModel(t, m, tea.KeyPressMsg{Code: tea.KeyEnter})
+	require.NotNil(t, createCmd)
+
+	createMsg := createCmd()
+	m, _ = updateTUIModel(t, m, createMsg)
+	require.Equal(t, "claude", service.createdInput.Provider)
 }
 
 func TestModelUpdate_SuggestNameFailureReturnsToPromptModeAndRendersError(t *testing.T) {
@@ -619,35 +646,37 @@ func TestModelUpdate_CleanupSuccessRefreshFailureRemovesTaskFromVisibleList(t *t
 }
 
 func TestModelView_ShowsLoadingBeforeInitialLoadCompletes(t *testing.T) {
-	m := newTUIModel(&fakeTUIService{}, "/tmp/default")
+	m := newTUIModel(&fakeTUIService{}, "/tmp/default", "codex")
 	require.Contains(t, stripANSI(m.View().Content), "Loading tasks")
 }
 
 type fakeTUIService struct {
-	deleteErr       error
-	listErr         error
-	openErr         error
-	suggestErr      error
-	createErr       error
-	deleteTask      *core.Task
-	createdTask     *core.Task
-	createdInput    core.NewTaskInput
-	suggestedName   string
-	suggestedPrompt string
-	deletedIDOrSlug string
-	openedIDOrSlug  string
-	tasks           []*core.Task
-	createCalls     int
-	listCalls       int
-	createOptions   core.CreateTaskOptions
+	deleteErr         error
+	listErr           error
+	openErr           error
+	suggestErr        error
+	createErr         error
+	deleteTask        *core.Task
+	createdTask       *core.Task
+	createdInput      core.NewTaskInput
+	suggestedName     string
+	suggestedPrompt   string
+	suggestedProvider string
+	deletedIDOrSlug   string
+	openedIDOrSlug    string
+	tasks             []*core.Task
+	createCalls       int
+	listCalls         int
+	createOptions     core.CreateTaskOptions
 }
 
 func (*fakeTUIService) Doctor(context.Context, string) (core.DoctorResult, error) {
 	return core.DoctorResult{}, nil
 }
 
-func (f *fakeTUIService) SuggestTaskName(_ context.Context, prompt string, _ string) (string, error) {
+func (f *fakeTUIService) SuggestTaskName(_ context.Context, prompt string, provider string) (string, error) {
 	f.suggestedPrompt = prompt
+	f.suggestedProvider = provider
 	return f.suggestedName, f.suggestErr
 }
 
@@ -683,9 +712,13 @@ func (f *fakeTUIService) DeleteTaskResources(_ context.Context, idOrSlug string)
 }
 
 func newLoadedTUIModel(t *testing.T, service TaskService, tasks ...*core.Task) model {
+	return newLoadedTUIModelWithProvider(t, service, "codex", tasks...)
+}
+
+func newLoadedTUIModelWithProvider(t *testing.T, service TaskService, provider string, tasks ...*core.Task) model {
 	t.Helper()
 
-	next, cmd := newTUIModel(service, "/tmp/default").Update(tasksLoadedMsg{tasks: tasks})
+	next, cmd := newTUIModel(service, "/tmp/default", provider).Update(tasksLoadedMsg{tasks: tasks})
 	require.Nil(t, cmd)
 
 	m, ok := next.(model)
