@@ -9,6 +9,7 @@ import (
 
 	textinput "github.com/charmbracelet/bubbles/textinput"
 	tea "github.com/charmbracelet/bubbletea"
+	"github.com/charmbracelet/lipgloss"
 )
 
 var availableProviders = []string{"codex", "claude"}
@@ -335,6 +336,31 @@ func (m model) updateNameConfirmKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	return m, cmd
 }
 
+// Grid column widths.
+const (
+	colWidthName     = 34
+	colWidthProvider = 10
+	colWidthStatus   = 14
+)
+
+// truncateStr truncates s to max runes and appends "…" if it was longer.
+func truncateStr(s string, max int) string {
+	runes := []rune(s)
+	if len(runes) <= max {
+		return s
+	}
+	return string(runes[:max-1]) + "…"
+}
+
+// padRight pads s with spaces to exactly width runes. If s is longer it is returned as-is.
+func padRight(s string, width int) string {
+	runes := []rune(s)
+	if len(runes) >= width {
+		return s
+	}
+	return s + strings.Repeat(" ", width-len(runes))
+}
+
 func (m model) listView() string {
 	var b strings.Builder
 
@@ -342,7 +368,8 @@ func (m model) listView() string {
 	header := titleStyle.Render(iconHeaderList + " Control Center")
 	keys := dimStyle.Render("j/k move · enter open · n new · x clean · r refresh · q quit")
 	b.WriteString(header + "  " + keys + "\n")
-	b.WriteString(dimStyle.Render(strings.Repeat("─", 72)) + "\n")
+	totalWidth := 3 + colWidthName + 2 + colWidthProvider + 2 + colWidthStatus
+	b.WriteString(dimStyle.Render(strings.Repeat("─", totalWidth)) + "\n")
 
 	if m.err != nil {
 		b.WriteString(errorStyle.Render("Error: "+m.err.Error()) + "\n\n")
@@ -376,23 +403,37 @@ func (m model) listView() string {
 	)
 	b.WriteString(details + "\n\n")
 
+	// Column header
+	colHeader := fmt.Sprintf("   %s  %s  %s",
+		padRight("TASK", colWidthName),
+		padRight("PROVIDER", colWidthProvider),
+		padRight("STATUS", colWidthStatus),
+	)
+	b.WriteString(dimStyle.Render(colHeader) + "\n")
+
 	// Task rows
 	for i, task := range m.tasks {
-		provider := primaryStyle.Render(providerIcon(task.Provider) + " " + emptyFallback(task.Provider, "-"))
-		icon, style := statusStyle(string(task.Status))
-		state := style.Render(icon + " " + string(task.Status))
+		providerText := providerIcon(task.Provider) + " " + emptyFallback(task.Provider, "-")
+		var stateText, stateIcon string
+		var stateStyle lipgloss.Style
 		if task.RuntimeState != core.RuntimeStateNone {
-			runtimeIcon, runtimeStyle := runtimeStateStyle(string(task.RuntimeState))
-			state = runtimeStyle.Render(runtimeIcon + " " + strings.ReplaceAll(string(task.RuntimeState), "_", " "))
+			stateIcon, stateStyle = runtimeStateStyle(string(task.RuntimeState))
+			stateText = stateIcon + " " + strings.ReplaceAll(string(task.RuntimeState), "_", " ")
+		} else {
+			stateIcon, stateStyle = statusStyle(string(task.Status))
+			stateText = stateIcon + " " + string(task.Status)
 		}
 
+		providerCell := padRight(providerText, colWidthProvider)
+		stateCell := padRight(stateText, colWidthStatus)
+
 		if i == m.selected {
-			name := iconSelected + " " + task.DisplayName
-			row := fmt.Sprintf("%-40s %s  %s", name, provider, state)
+			nameCell := padRight(truncateStr(iconSelected+" "+task.DisplayName, colWidthName), colWidthName)
+			row := nameCell + "  " + primaryStyle.Render(providerCell) + "  " + stateStyle.Render(stateCell)
 			b.WriteString(selectedRowStyle.Render(row) + "\n")
 		} else {
-			name := "  " + task.DisplayName
-			row := fmt.Sprintf("%-40s %s  %s", name, provider, state)
+			nameCell := padRight(truncateStr("  "+task.DisplayName, colWidthName), colWidthName)
+			row := nameCell + "  " + primaryStyle.Render(providerCell) + "  " + stateStyle.Render(stateCell)
 			b.WriteString(normalRowStyle.Render(row) + "\n")
 		}
 	}
