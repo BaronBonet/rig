@@ -7,6 +7,28 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+func TestNewService_AcceptsBusinessPorts(t *testing.T) {
+	taskRepo := &fakeTaskRepository{}
+	repoClient := &fakeRepoClient{}
+	sessionClient := &fakeSessionClient{}
+	providerClient := &fakeProviderClient{}
+	configRepo := &fakeRepoConfigRepository{}
+	workspaceSeeder := &fakeWorkspaceSeeder{}
+
+	service := NewService(
+		taskRepo,
+		repoClient,
+		sessionClient,
+		map[string]ProviderClient{"codex": providerClient},
+		configRepo,
+		workspaceSeeder,
+		fakeClock{},
+		Config{Provider: "codex"},
+	)
+
+	require.NotNil(t, service)
+}
+
 func TestServiceNewTask_CreatesWorktreeSessionAndPersistsTask(t *testing.T) {
 	svc := newTestService()
 	svc.providerRepo.suggestedName = "billing retry flow"

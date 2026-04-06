@@ -108,6 +108,71 @@ func TestRepositoryCreateSession_JoinsWindowCreationAndCleanupErrors(t *testing.
 	require.Len(t, runner.Calls, 3)
 }
 
+func TestRepositoryOpenTaskSession_UsesTaskSession(t *testing.T) {
+	t.Setenv("TMUX", "")
+
+	runner := execx.NewFakeRunner([]execx.Result{{}})
+	repo := NewRepository(runner)
+
+	err := repo.OpenTaskSession(context.Background(), &core.Task{TmuxSession: "repo-billing-retry-flow"})
+	require.NoError(t, err)
+	require.Equal(t, []string{
+		"attach-session",
+		"-t",
+		"=repo-billing-retry-flow",
+	}, runner.Calls[0].Args)
+}
+
+func TestRepositoryDeleteTaskSession_UsesTaskSession(t *testing.T) {
+	runner := execx.NewFakeRunner([]execx.Result{{}})
+	repo := NewRepository(runner)
+
+	err := repo.DeleteTaskSession(context.Background(), &core.Task{TmuxSession: "repo-billing-retry-flow"})
+	require.NoError(t, err)
+	require.Equal(t, []string{
+		"kill-session",
+		"-t",
+		"=repo-billing-retry-flow",
+	}, runner.Calls[0].Args)
+}
+
+func TestRepositoryInspectTaskSession_ReturnsSessionAndWindowResources(t *testing.T) {
+	runner := execx.NewFakeRunner([]execx.Result{
+		{},
+		{Stdout: "agent\neditor\n"},
+		{Stdout: "agent\neditor\n"},
+	})
+	repo := NewRepository(runner)
+
+	resources, err := repo.InspectTaskSession(context.Background(), &core.Task{
+		TmuxSession:      "repo-billing-retry-flow",
+		AgentWindowName:  "agent",
+		EditorWindowName: "editor",
+	})
+	require.NoError(t, err)
+	require.Equal(t, core.SessionResources{
+		SessionExists:      true,
+		AgentWindowExists:  true,
+		EditorWindowExists: true,
+	}, resources)
+}
+
+func TestRepositorySnapshotTaskSession_UsesRuntimeMonitor(t *testing.T) {
+	repo := NewRepository(execx.NewFakeRunner(nil))
+	repo.runtimeMonitor = &fakeRuntimeMonitor{
+		snapshot: core.RuntimeSnapshot{
+			SessionName: "repo-billing-retry-flow",
+			PaneID:      "%24",
+		},
+	}
+
+	snapshot, err := repo.SnapshotTaskSession(context.Background(), &core.Task{TmuxSession: "repo-billing-retry-flow"})
+	require.NoError(t, err)
+	require.Equal(t, "repo-billing-retry-flow", snapshot.SessionName)
+	require.Equal(t, "%24", snapshot.PaneID)
+	require.Equal(t, "repo-billing-retry-flow", repo.runtimeMonitor.(*fakeRuntimeMonitor).task.TmuxSession)
+}
+
 func TestRepositoryNormalizesColonSessionNamesAcrossTmuxCommands(t *testing.T) {
 	t.Setenv("TMUX", "")
 
@@ -389,6 +454,19 @@ type fakeRunner struct {
 	typedCommand []string
 	paneContent  string
 }
+
+type fakeRuntimeMonitor struct {
+	task     *core.Task
+	snapshot core.RuntimeSnapshot
+	err      error
+}
+
+func (f *fakeRuntimeMonitor) Snapshot(_ context.Context, task *core.Task) (core.RuntimeSnapshot, error) {
+	f.task = task
+	return f.snapshot, f.err
+}
+
+func (f *fakeRuntimeMonitor) Close() error { return nil }
 
 func (f *fakeRunner) Run(_ context.Context, _ string, name string, args ...string) (execx.Result, error) {
 	if name != "tmux" {

@@ -73,6 +73,10 @@ func (r *Repository) ProposeTaskName(ctx context.Context, prompt string) (string
 	return title, nil
 }
 
+func (r *Repository) SuggestTaskName(ctx context.Context, prompt string) (string, error) {
+	return r.ProposeTaskName(ctx, prompt)
+}
+
 func (r *Repository) BuildLaunchCommand(task *core.Task) ([]string, error) {
 	return []string{r.binary, task.Prompt}, nil
 }

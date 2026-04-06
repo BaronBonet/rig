@@ -3,7 +3,6 @@ package main
 import (
 	"fmt"
 	"os"
-	"time"
 
 	claudeclient "agent/internal/adapters/client/claude"
 	codexclient "agent/internal/adapters/client/codex"
@@ -39,7 +38,6 @@ func buildDependencies() (cli.Dependencies, error) {
 	}
 
 	runner := execx.ExecRunner{}
-	runtimeMonitor := tmuxclient.NewRuntimeMonitor()
 
 	taskRepo, err := sqliterepo.NewRepository(cfg.SQLite)
 	if err != nil {
@@ -50,14 +48,9 @@ func buildDependencies() (cli.Dependencies, error) {
 		taskRepo,
 		gitclient.NewRepository(runner),
 		tmuxclient.NewRepository(runner),
-		map[string]core.ProviderRepository{
+		map[string]core.ProviderClient{
 			"codex":  codexclient.NewRepository(runner, cfg.Codex),
 			"claude": claudeclient.NewRepository(runner, cfg.Claude),
-		},
-		runtimeMonitor,
-		map[string]core.RuntimeStateDetector{
-			"codex":  codexclient.NewRuntimeDetector(2 * time.Second),
-			"claude": claudeclient.NewRuntimeDetector(2 * time.Second),
 		},
 		agentconfigrepo.NewRepository(),
 		workspacefs.NewRepository(),

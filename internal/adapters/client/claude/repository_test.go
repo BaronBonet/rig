@@ -33,6 +33,19 @@ func TestRepositoryLaunchRequest_UsesBinaryPromptAndTaskPrompt(t *testing.T) {
 	}, launch)
 }
 
+func TestRepositorySuggestTaskName_DelegatesToClaudeProposal(t *testing.T) {
+	runner := execx.NewFakeRunner([]execx.Result{
+		{
+			Stdout: `{"type":"result","subtype":"success","result":"Billing Retry Flow","is_error":false}` + "\n",
+		},
+	})
+	repo := NewRepository(runner, Config{Binary: "claude"})
+
+	name, err := repo.SuggestTaskName(t.Context(), "add billing retry flow")
+	require.NoError(t, err)
+	require.Equal(t, "Billing Retry Flow", name)
+}
+
 func TestRepositoryDetectRuntimeState_ReturnsNeedsInputForPrompt(t *testing.T) {
 	repo := NewRepository(execx.NewFakeRunner(nil), Config{Binary: "claude"})
 
