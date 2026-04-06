@@ -4,8 +4,14 @@ import (
 	"context"
 	"fmt"
 
+	"agent/internal/core"
+
 	"github.com/spf13/cobra"
 )
+
+type taskGetter interface {
+	GetTask(context.Context, string) (*core.Task, error)
+}
 
 func newStatusCommand(deps Dependencies) *cobra.Command {
 	return &cobra.Command{
@@ -17,7 +23,12 @@ func newStatusCommand(deps Dependencies) *cobra.Command {
 				return fmt.Errorf("service not configured")
 			}
 
-			task, err := deps.Service.GetTask(context.Background(), args[0])
+			service, ok := any(deps.Service).(taskGetter)
+			if !ok {
+				return fmt.Errorf("service not configured")
+			}
+
+			task, err := service.GetTask(context.Background(), args[0])
 			if err != nil {
 				return err
 			}
