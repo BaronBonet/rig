@@ -116,14 +116,22 @@ During implementation, ports should be consolidated toward a smaller set of coar
 
 Adapters remain under `internal/adapters/...` and own the details of the external systems they integrate with.
 
+The adapter taxonomy should carry meaning:
+
+- `internal/adapters/repository`: persisted state or document-backed storage
+- `internal/adapters/client`: external tools or service integrations
+- `internal/adapters/filesystem`: local filesystem operations
+
 Expected responsibilities:
 
-- `git`: repository detection, branch/worktree operations
-- `tmux`: session/window lifecycle, launch orchestration, runtime inspection internals
-- `sqlite`: persistence, schema management, row mapping
-- `workspace`: seed validation and copy behavior
-- provider adapters such as `codex` and `claude`: availability checks, task-name proposal, provider launch behavior
-- repo config adapter: parsing `agent.yaml`
+- `repository/sqlite`: persistence, schema management, row mapping
+- `repository/agentconfig`: parsing and loading the repo-local `agent.yaml` document
+- `client/git`: repository detection, branch/worktree operations through the git CLI
+- `client/tmux`: session/window lifecycle, launch orchestration, runtime inspection internals
+- `client/codex` and `client/claude`: availability checks, task-name proposal, provider launch behavior
+- `filesystem/workspace`: seed validation and copy behavior
+
+This naming is intentional: `repository` should not become the catch-all bucket for every adapter. If an integration is primarily a tool client rather than persisted data access, it belongs under `client`.
 
 Adapters may depend on `core` port and domain types, but `core` must not depend on adapters.
 
@@ -139,13 +147,13 @@ internal/core/ports.go
 internal/core/errors.go
 internal/infrastructure/config.go
 internal/adapters/handler/cli/...
-internal/adapters/repository/git/...
-internal/adapters/repository/tmux/...
 internal/adapters/repository/sqlite/...
-internal/adapters/repository/workspace/...
 internal/adapters/repository/agentconfig/...
-internal/adapters/repository/codex/...
-internal/adapters/repository/claude/...
+internal/adapters/client/git/...
+internal/adapters/client/tmux/...
+internal/adapters/client/codex/...
+internal/adapters/client/claude/...
+internal/adapters/filesystem/workspace/...
 ```
 
 This keeps the filesystem aligned with the intended architecture:
