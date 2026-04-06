@@ -15,6 +15,7 @@ import (
 	tmuxrepo "agent/internal/adapters/repository/tmux"
 	workspacerepo "agent/internal/adapters/repository/workspace"
 	"agent/internal/core"
+	"agent/internal/infrastructure"
 	"agent/internal/pkg/execx"
 	"agent/internal/pkg/timeutil"
 )
@@ -33,10 +34,14 @@ func main() {
 }
 
 func buildDependencies() (cli.Dependencies, error) {
-	cfg := core.DefaultConfig()
+	cfg, err := infrastructure.LoadConfig()
+	if err != nil {
+		return cli.Dependencies{}, err
+	}
+
 	runtimeMonitor := tmuxrepo.NewRuntimeMonitor()
 	service := &runtimeService{
-		cfg:            cfg,
+		cfg:            *cfg,
 		runner:         execx.ExecRunner{},
 		runtimeMonitor: runtimeMonitor,
 		runtimeDetectors: map[string]core.RuntimeStateDetector{
@@ -54,7 +59,7 @@ func buildDependencies() (cli.Dependencies, error) {
 
 type runtimeService struct {
 	runner           execx.ExecRunner
-	cfg              core.Config
+	cfg              infrastructure.Config
 	runtimeMonitor   core.RuntimeMonitor
 	runtimeDetectors map[string]core.RuntimeStateDetector
 }
@@ -139,7 +144,7 @@ func (r *runtimeService) DeleteTaskResources(ctx context.Context, idOrSlug strin
 func (r *runtimeService) newService(withSQLite bool) (*core.Service, error) {
 	var taskRepo core.TaskRepository = noopTaskRepository{}
 	if withSQLite {
-		sqliteRepo, err := sqliterepo.NewRepository(r.cfg.DatabasePath)
+		sqliteRepo, err := sqliterepo.NewRepository(r.cfg.SQLite)
 		if err != nil {
 			return nil, err
 		}
@@ -148,8 +153,8 @@ func (r *runtimeService) newService(withSQLite bool) (*core.Service, error) {
 	}
 
 	providers := map[string]core.ProviderRepository{
-		"codex":  codexrepo.NewRepository(r.runner, r.cfg.CodexBinary),
-		"claude": clauderepo.NewRepository(r.runner, r.cfg.ClaudeBinary),
+		"codex":  codexrepo.NewRepository(r.runner, r.cfg.Codex),
+		"claude": clauderepo.NewRepository(r.runner, r.cfg.Claude),
 	}
 
 	return core.NewService(
@@ -162,7 +167,7 @@ func (r *runtimeService) newService(withSQLite bool) (*core.Service, error) {
 		agentconfigrepo.NewRepository(),
 		workspacerepo.NewRepository(),
 		timeutil.RealClock{},
-		r.cfg,
+		r.cfg.Service,
 	), nil
 }
 

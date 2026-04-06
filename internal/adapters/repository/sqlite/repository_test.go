@@ -15,7 +15,7 @@ import (
 func newTestRepository(t *testing.T) *Repository {
 	t.Helper()
 
-	repo, err := NewRepository(filepath.Join(t.TempDir(), "state.db"))
+	repo, err := NewRepository(Config{Path: filepath.Join(t.TempDir(), "state.db")})
 	require.NoError(t, err)
 
 	return repo
@@ -160,7 +160,7 @@ func TestRepositoryListTasks_OrdersByCreatedAtAscending(t *testing.T) {
 func TestNewRepository_CreatesParentDirectory(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "nested", "state.db")
 
-	repo, err := NewRepository(path)
+	repo, err := NewRepository(Config{Path: path})
 	require.NoError(t, err)
 	require.NotNil(t, repo)
 }
@@ -224,7 +224,7 @@ insert into tasks (
 	require.NoError(t, err)
 	require.NoError(t, db.Close())
 
-	repo, err := NewRepository(path)
+	repo, err := NewRepository(Config{Path: path})
 	require.NoError(t, err)
 	require.NotNil(t, repo)
 

@@ -17,17 +17,21 @@ type Repository struct {
 	db *sql.DB
 }
 
+type Config struct {
+	Path string
+}
+
 const (
 	defaultAgentWindowName  = "agent"
 	defaultEditorWindowName = "editor"
 )
 
-func NewRepository(path string) (*Repository, error) {
-	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+func NewRepository(cfg Config) (*Repository, error) {
+	if err := os.MkdirAll(filepath.Dir(cfg.Path), 0o755); err != nil {
 		return nil, err
 	}
 
-	db, err := sql.Open("sqlite", path)
+	db, err := sql.Open("sqlite", cfg.Path)
 	if err != nil {
 		return nil, err
 	}
