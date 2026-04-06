@@ -21,7 +21,8 @@
       "Bash(tmux list-sessions:*)",
       "Bash(tmux list-panes:*)",
       "Bash(tmux capture-pane:*)",
-      "Bash(claude:*)"
+      "Bash(claude:*)",
+      "Bash(go list:*)"
     ]
   }
 }
