@@ -41,5 +41,5 @@ func TestBuildDependencies_PreservesDoctorStorageFailures(t *testing.T) {
 
 	result, err := deps.Service.Doctor(context.Background(), "")
 	require.NoError(t, err)
-	require.Contains(t, result.Failures, "database: mkdir "+blocker+": not a directory")
+	require.Contains(t, result.Failures, "storage: mkdir "+blocker+": not a directory")
 }
