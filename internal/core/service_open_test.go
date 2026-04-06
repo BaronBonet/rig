@@ -19,18 +19,12 @@ func TestServiceOpenTask_AttachesWhenSessionExists(t *testing.T) {
 		TmuxSession:  "repo-billing-retry-flow",
 		Status:       TaskStatusRunning,
 	}
-	svc.gitRepo.branchExists = true
-	svc.tmuxRepo.sessionExists = true
-	svc.tmuxRepo.windowExists = map[string]map[string]bool{
-		"repo-billing-retry-flow": {
-			"agent":  true,
-			"editor": true,
-		},
-	}
+	svc.repoClient.repoResources = RepoResources{WorktreeExists: true, BranchExists: true}
+	svc.sessionClient.sessionResources = SessionResources{SessionExists: true, AgentWindowExists: true, EditorWindowExists: true}
 
 	err := svc.service.OpenTask(t.Context(), "billing-retry-flow")
 	require.NoError(t, err)
-	require.Equal(t, "repo-billing-retry-flow", svc.tmuxRepo.attachedSession)
+	require.Equal(t, "repo-billing-retry-flow", svc.sessionClient.openedTask.TmuxSession)
 }
 
 func TestServiceOpenTask_AllowsDegradedWhenAgentWindowExists(t *testing.T) {
@@ -47,17 +41,12 @@ func TestServiceOpenTask_AllowsDegradedWhenAgentWindowExists(t *testing.T) {
 		EditorWindowName: "editor",
 		Status:           TaskStatus("degraded"),
 	}
-	svc.gitRepo.branchExists = true
-	svc.tmuxRepo.sessionExists = true
-	svc.tmuxRepo.windowExists = map[string]map[string]bool{
-		"repo-billing-retry-flow": {
-			"agent": true,
-		},
-	}
+	svc.repoClient.repoResources = RepoResources{WorktreeExists: true, BranchExists: true}
+	svc.sessionClient.sessionResources = SessionResources{SessionExists: true, AgentWindowExists: true}
 
 	err := svc.service.OpenTask(t.Context(), "billing-retry-flow")
 	require.NoError(t, err)
-	require.Equal(t, "repo-billing-retry-flow", svc.tmuxRepo.attachedSession)
+	require.Equal(t, "repo-billing-retry-flow", svc.sessionClient.openedTask.TmuxSession)
 }
 
 func TestServiceOpenTask_ReturnsCleanedErrorForCleanedTask(t *testing.T) {
@@ -71,11 +60,11 @@ func TestServiceOpenTask_ReturnsCleanedErrorForCleanedTask(t *testing.T) {
 		TmuxSession:  "repo-billing-retry-flow",
 		Status:       TaskStatusCleaned,
 	}
-	svc.gitRepo.branchExists = true
-	svc.tmuxRepo.sessionExists = false
+	svc.repoClient.repoResources = RepoResources{WorktreeExists: false, BranchExists: true}
+	svc.sessionClient.sessionResources = SessionResources{}
 
 	err := svc.service.OpenTask(t.Context(), "billing-retry-flow")
 
 	require.ErrorIs(t, err, ErrCleanedTask)
-	require.Empty(t, svc.tmuxRepo.attachedSession)
+	require.Nil(t, svc.sessionClient.openedTask)
 }

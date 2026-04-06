@@ -20,8 +20,8 @@ func TestServiceListTasks_MarksMissingTmuxSessionAsBroken(t *testing.T) {
 		TmuxSession:  "repo-billing-retry-flow",
 		Status:       TaskStatusRunning,
 	}}
-	svc.gitRepo.branchExists = true
-	svc.tmuxRepo.sessionExists = false
+	svc.repoClient.repoResources = RepoResources{WorktreeExists: true, BranchExists: true}
+	svc.sessionClient.sessionResources = SessionResources{}
 
 	tasks, err := svc.service.ListTasks(t.Context())
 	require.NoError(t, err)
@@ -45,22 +45,20 @@ func TestServiceListTasks_EnrichesRuntimeStateForCodexTask(t *testing.T) {
 		Provider:         "codex",
 		Status:           TaskStatusRunning,
 	}}
-	svc.gitRepo.branchExists = true
-	svc.tmuxRepo.sessionExists = true
-	svc.tmuxRepo.windowExists = map[string]map[string]bool{
-		"repo-billing-retry-flow": {
-			"agent":  true,
-			"editor": true,
-		},
+	svc.repoClient.repoResources = RepoResources{WorktreeExists: true, BranchExists: true}
+	svc.sessionClient.sessionResources = SessionResources{
+		SessionExists:      true,
+		AgentWindowExists:  true,
+		EditorWindowExists: true,
 	}
-	svc.runtimeMonitor.snapshot = RuntimeSnapshot{
+	svc.sessionClient.snapshot = RuntimeSnapshot{
 		PaneID:            "%24",
 		ForegroundCommand: "codex",
 		Content:           "› review my changes\n  gpt-5.4 high · 82% left",
 		ObservedAt:        observedAt,
 		LastOutputAt:      time.Date(2026, 4, 5, 9, 59, 55, 0, time.UTC),
 	}
-	svc.runtimeDetector.state = RuntimeStateNeedsInput
+	svc.providerRepo.runtimeState = RuntimeStateNeedsInput
 
 	tasks, err := svc.service.ListTasks(t.Context())
 	require.NoError(t, err)
@@ -84,15 +82,13 @@ func TestServiceListTasks_IgnoresRuntimeSnapshotErrors(t *testing.T) {
 		Provider:         "codex",
 		Status:           TaskStatusRunning,
 	}}
-	svc.gitRepo.branchExists = true
-	svc.tmuxRepo.sessionExists = true
-	svc.tmuxRepo.windowExists = map[string]map[string]bool{
-		"repo-billing-retry-flow": {
-			"agent":  true,
-			"editor": true,
-		},
+	svc.repoClient.repoResources = RepoResources{WorktreeExists: true, BranchExists: true}
+	svc.sessionClient.sessionResources = SessionResources{
+		SessionExists:      true,
+		AgentWindowExists:  true,
+		EditorWindowExists: true,
 	}
-	svc.runtimeMonitor.err = errors.New("snapshot failed")
+	svc.sessionClient.snapshotErr = errors.New("snapshot failed")
 
 	tasks, err := svc.service.ListTasks(t.Context())
 	require.NoError(t, err)

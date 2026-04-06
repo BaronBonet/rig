@@ -26,21 +26,22 @@ type NewTaskInput struct {
 }
 
 type Service struct {
-	tasks            TaskRepository
-	git              GitRepository
-	tmux             TmuxRepository
-	providers        map[string]ProviderRepository
-	runtimeMonitor   RuntimeMonitor
-	runtimeDetectors map[string]RuntimeStateDetector
-	repoConfig       RepoConfigRepository
-	workspace        WorkspaceSeeder
-	clock            timeutil.Clock
-	cfg              Config
+	tasks      TaskRepository
+	repo       RepoClient
+	session    SessionClient
+	providers  map[string]ProviderClient
+	repoConfig RepoConfigRepository
+	workspace  WorkspaceSeeder
+	clock      timeutil.Clock
+	cfg        Config
 }
 
 func (s *Service) SuggestTaskName(ctx context.Context, prompt string, provider string) (string, error) {
 	repo := s.resolveProvider(provider)
-	name, err := repo.ProposeTaskName(ctx, prompt)
+	if repo == nil {
+		return fallbackDisplayName(prompt), nil
+	}
+	name, err := repo.SuggestTaskName(ctx, prompt)
 	if err == nil && strings.TrimSpace(name) != "" {
 		return strings.TrimSpace(name), nil
 	}
@@ -48,7 +49,7 @@ func (s *Service) SuggestTaskName(ctx context.Context, prompt string, provider s
 	return fallbackDisplayName(prompt), nil
 }
 
-func (s *Service) resolveProvider(name string) ProviderRepository {
+func (s *Service) resolveProvider(name string) ProviderClient {
 	if name != "" {
 		if repo, ok := s.providers[name]; ok {
 			return repo
@@ -82,7 +83,7 @@ func (s *Service) createTask(
 	options CreateTaskOptions,
 	progress func(TaskProgress),
 ) (*Task, error) {
-	repoCtx, err := s.git.DetectRepo(ctx, input.Cwd)
+	repoCtx, err := s.repo.DetectRepo(ctx, input.Cwd)
 	if err != nil {
 		return nil, err
 	}
@@ -137,7 +138,7 @@ func (s *Service) createTask(
 		// TODO: don't assume its a feat, the llm should figure that out
 		BranchName:       "feat/" + taskSlug,
 		WorktreePath:     filepath.Join(filepath.Dir(repoCtx.Root), repoCtx.Name+"-"+taskSlug),
-		TmuxSession:      repoCtx.Name + "_" + taskSlug,
+		TmuxSession:      repoCtx.Name + "-" + taskSlug,
 		AgentWindowName:  "agent",
 		EditorWindowName: "editor",
 		Provider:         provider,
@@ -162,12 +163,7 @@ func (s *Service) createTask(
 		Message: "Creating worktree...",
 		Task:    cloneTask(task),
 	})
-	if err := s.git.CreateWorktree(ctx, CreateWorktreeInput{
-		RepoRoot:     task.RepoRoot,
-		BaseBranch:   task.BaseBranch,
-		BranchName:   task.BranchName,
-		WorktreePath: task.WorktreePath,
-	}); err != nil {
+	if err := s.repo.CreateTaskWorkspace(ctx, task); err != nil {
 		return s.markBroken(ctx, task, fmt.Errorf("create worktree: %w", err))
 	}
 
@@ -206,27 +202,13 @@ func (s *Service) createTask(
 		Message: "Starting tmux session...",
 		Task:    cloneTask(task),
 	})
-	if err := s.tmux.CreateSession(ctx, CreateSessionInput{
-		SessionName:      task.TmuxSession,
-		WorkingDir:       task.WorktreePath,
-		AgentWindowName:  task.AgentWindowName,
-		EditorWindowName: task.EditorWindowName,
-	}); err != nil {
-		return s.markBroken(ctx, task, fmt.Errorf("start tmux session: %w", err))
-	}
-
-	task.SessionExists = true
-	task.AgentWindowExists = true
-	task.EditorWindowExists = true
-	task.UpdatedAt = s.clock.Now().UTC()
-	if err := s.tasks.UpdateTask(ctx, task); err != nil {
-		return task, err
-	}
-
 	providerRepo := s.resolveProvider(task.Provider)
-	command, err := providerRepo.BuildLaunchCommand(task)
+	if providerRepo == nil {
+		return s.markBroken(ctx, task, fmt.Errorf("build launch request: provider %q unavailable", task.Provider))
+	}
+	launch, err := providerRepo.LaunchRequest(task)
 	if err != nil {
-		return s.markBroken(ctx, task, fmt.Errorf("build launch command: %w", err))
+		return s.markBroken(ctx, task, fmt.Errorf("build launch request: %w", err))
 	}
 
 	emitTaskProgress(progress, TaskProgress{
@@ -235,30 +217,20 @@ func (s *Service) createTask(
 		Task:    cloneTask(task),
 	})
 
-	// Launch the agent binary in interactive mode.
-	if err := s.tmux.SendKeysToWindow(ctx, task.TmuxSession, task.AgentWindowName, command[:1]); err != nil {
-		return s.markBroken(ctx, task, fmt.Errorf("launch agent: %w", err))
+	if err := s.session.StartTaskSession(ctx, task, launch); err != nil {
+		return s.markBroken(ctx, task, fmt.Errorf("start task session: %w", err))
 	}
 
-	// Wait for the agent to show its input prompt, then type the task
-	// prompt without pressing Enter so the user can review first.
-	if len(command) > 1 {
-		marker := providerRepo.PromptMarker()
-		if err := s.waitForPrompt(ctx, task.TmuxSession, task.AgentWindowName, marker); err != nil {
-			return s.markBroken(ctx, task, fmt.Errorf("wait for agent prompt: %w", err))
-		}
-		if err := s.tmux.TypeInWindow(ctx, task.TmuxSession, task.AgentWindowName, command[1:]); err != nil {
-			return s.markBroken(ctx, task, fmt.Errorf("type prompt: %w", err))
-		}
-	}
-
+	task.SessionExists = true
+	task.AgentWindowExists = true
+	task.EditorWindowExists = true
 	task.Status = TaskStatusRunning
 	task.UpdatedAt = s.clock.Now().UTC()
 	if err := s.tasks.UpdateTask(ctx, task); err != nil {
 		return task, err
 	}
 
-	_ = s.tasks.AppendEvent(ctx, task.ID, "agent_launch_requested", strings.Join(command, " "))
+	_ = s.tasks.AppendEvent(ctx, task.ID, "agent_launch_requested", strings.Join(launch.Command, " "))
 
 	emitTaskProgress(progress, TaskProgress{
 		Step:    TaskProgressTaskCreated,
@@ -272,8 +244,8 @@ func (s *Service) createTask(
 			Message: "Opening tmux session...",
 			Task:    cloneTask(task),
 		})
-		if err := s.tmux.AttachOrSwitch(ctx, task.TmuxSession); err != nil {
-			return s.markBroken(ctx, task, fmt.Errorf("open tmux session: %w", err))
+		if err := s.session.OpenTaskSession(ctx, task); err != nil {
+			return s.markBroken(ctx, task, fmt.Errorf("open task session: %w", err))
 		}
 	}
 
@@ -337,7 +309,7 @@ func (s *Service) OpenTask(ctx context.Context, idOrSlug string) error {
 		return ErrBrokenTask
 	}
 
-	return s.tmux.AttachOrSwitch(ctx, task.TmuxSession)
+	return s.session.OpenTaskSession(ctx, task)
 }
 
 func (s *Service) DeleteTaskResources(ctx context.Context, idOrSlug string) (*Task, error) {
@@ -354,9 +326,9 @@ func (s *Service) DeleteTaskResources(ctx context.Context, idOrSlug string) (*Ta
 	_ = s.tasks.AppendEvent(ctx, task.ID, "cleanup_requested", string(task.Status))
 
 	if task.SessionExists {
-		if err := s.tmux.KillSession(ctx, task.TmuxSession); err != nil {
-			sessionExists, checkErr := s.tmux.SessionExists(ctx, task.TmuxSession)
-			if checkErr != nil || sessionExists {
+		if err := s.session.DeleteTaskSession(ctx, task); err != nil {
+			sessionResources, checkErr := s.session.InspectTaskSession(ctx, task)
+			if checkErr != nil || sessionResources.SessionExists {
 				return s.markCleanupBroken(ctx, task, fmt.Errorf("kill tmux session: %w", err))
 			}
 		}
@@ -371,9 +343,9 @@ func (s *Service) DeleteTaskResources(ctx context.Context, idOrSlug string) (*Ta
 	}
 
 	if task.WorktreeExists {
-		if err := s.git.RemoveWorktree(ctx, task.RepoRoot, task.WorktreePath); err != nil {
-			worktreeExists, checkErr := worktreePresence(task.WorktreePath)
-			if checkErr != nil || worktreeExists {
+		if err := s.repo.RemoveTaskWorkspace(ctx, task); err != nil {
+			repoResources, checkErr := s.repo.InspectTaskWorkspace(ctx, task)
+			if checkErr != nil || repoResources.WorktreeExists {
 				return s.markCleanupBroken(ctx, task, fmt.Errorf("remove worktree: %w", err))
 			}
 		}
@@ -409,18 +381,235 @@ func NewService(
 	clock timeutil.Clock,
 	cfg Config,
 ) *Service {
-	return &Service{
-		tasks:            tasks,
-		git:              git,
-		tmux:             tmux,
-		providers:        providers,
-		runtimeMonitor:   runtimeMonitor,
-		runtimeDetectors: runtimeDetectors,
-		repoConfig:       repoConfig,
-		workspace:        workspace,
-		clock:            clock,
-		cfg:              cfg,
+	wrappedProviders := make(map[string]ProviderClient, len(providers))
+	for name, provider := range providers {
+		wrappedProviders[name] = legacyProviderClient{
+			repo:     provider,
+			detector: runtimeDetectors[name],
+		}
 	}
+
+	return newServiceWithPorts(
+		tasks,
+		legacyRepoClient{git: git},
+		legacySessionClient{
+			tmux:           tmux,
+			runtimeMonitor: runtimeMonitor,
+			clock:          clock,
+		},
+		wrappedProviders,
+		repoConfig,
+		workspace,
+		clock,
+		cfg,
+	)
+}
+
+func newServiceWithPorts(
+	tasks TaskRepository,
+	repo RepoClient,
+	session SessionClient,
+	providers map[string]ProviderClient,
+	repoConfig RepoConfigRepository,
+	workspace WorkspaceSeeder,
+	clock timeutil.Clock,
+	cfg Config,
+) *Service {
+	return &Service{
+		tasks:      tasks,
+		repo:       repo,
+		session:    session,
+		providers:  providers,
+		repoConfig: repoConfig,
+		workspace:  workspace,
+		clock:      clock,
+		cfg:        cfg,
+	}
+}
+
+type legacyRepoClient struct {
+	git GitRepository
+}
+
+func (c legacyRepoClient) IsAvailable(ctx context.Context) error {
+	return c.git.IsAvailable(ctx)
+}
+
+func (c legacyRepoClient) DetectRepo(ctx context.Context, cwd string) (RepoContext, error) {
+	return c.git.DetectRepo(ctx, cwd)
+}
+
+func (c legacyRepoClient) CreateTaskWorkspace(ctx context.Context, task *Task) error {
+	return c.git.CreateWorktree(ctx, CreateWorktreeInput{
+		RepoRoot:     task.RepoRoot,
+		BaseBranch:   task.BaseBranch,
+		BranchName:   task.BranchName,
+		WorktreePath: task.WorktreePath,
+	})
+}
+
+func (c legacyRepoClient) RemoveTaskWorkspace(ctx context.Context, task *Task) error {
+	return c.git.RemoveWorktree(ctx, task.RepoRoot, task.WorktreePath)
+}
+
+func (c legacyRepoClient) InspectTaskWorkspace(ctx context.Context, task *Task) (RepoResources, error) {
+	worktreeExists, err := worktreePresence(task.WorktreePath)
+	if err != nil {
+		return RepoResources{}, err
+	}
+
+	branchExists, err := c.git.BranchExists(ctx, task.RepoRoot, task.BranchName)
+	if err != nil {
+		return RepoResources{}, err
+	}
+
+	return RepoResources{
+		WorktreeExists: worktreeExists,
+		BranchExists:   branchExists,
+	}, nil
+}
+
+type legacySessionClient struct {
+	tmux           TmuxRepository
+	runtimeMonitor RuntimeMonitor
+	clock          timeutil.Clock
+}
+
+func (c legacySessionClient) IsAvailable(ctx context.Context) error {
+	return c.tmux.IsAvailable(ctx)
+}
+
+func (c legacySessionClient) StartTaskSession(ctx context.Context, task *Task, launch LaunchRequest) error {
+	if err := c.tmux.CreateSession(ctx, CreateSessionInput{
+		SessionName:      task.TmuxSession,
+		WorkingDir:       task.WorktreePath,
+		AgentWindowName:  task.AgentWindowName,
+		EditorWindowName: task.EditorWindowName,
+	}); err != nil {
+		return err
+	}
+
+	if err := c.tmux.SendKeysToWindow(ctx, task.TmuxSession, task.AgentWindowName, launch.Command); err != nil {
+		return err
+	}
+
+	if len(launch.InitialInput) == 0 {
+		return nil
+	}
+
+	if err := c.waitForPrompt(ctx, task.TmuxSession, task.AgentWindowName, launch.Prompt); err != nil {
+		return err
+	}
+
+	return c.tmux.TypeInWindow(ctx, task.TmuxSession, task.AgentWindowName, launch.InitialInput)
+}
+
+func (c legacySessionClient) OpenTaskSession(ctx context.Context, task *Task) error {
+	return c.tmux.AttachOrSwitch(ctx, task.TmuxSession)
+}
+
+func (c legacySessionClient) DeleteTaskSession(ctx context.Context, task *Task) error {
+	return c.tmux.KillSession(ctx, task.TmuxSession)
+}
+
+func (c legacySessionClient) InspectTaskSession(ctx context.Context, task *Task) (SessionResources, error) {
+	sessionExists, err := c.tmux.SessionExists(ctx, task.TmuxSession)
+	if err != nil {
+		return SessionResources{}, err
+	}
+
+	if !sessionExists {
+		return SessionResources{}, nil
+	}
+
+	agentWindowExists, err := c.tmux.WindowExists(ctx, task.TmuxSession, windowOrDefault(task.AgentWindowName, "agent"))
+	if err != nil {
+		return SessionResources{}, err
+	}
+
+	editorWindowExists, err := c.tmux.WindowExists(ctx, task.TmuxSession, windowOrDefault(task.EditorWindowName, "editor"))
+	if err != nil {
+		return SessionResources{}, err
+	}
+
+	return SessionResources{
+		SessionExists:      true,
+		AgentWindowExists:  agentWindowExists,
+		EditorWindowExists: editorWindowExists,
+	}, nil
+}
+
+func (c legacySessionClient) SnapshotTaskSession(ctx context.Context, task *Task) (RuntimeSnapshot, error) {
+	if c.runtimeMonitor == nil {
+		return RuntimeSnapshot{}, nil
+	}
+
+	return c.runtimeMonitor.Snapshot(ctx, task)
+}
+
+func (c legacySessionClient) waitForPrompt(ctx context.Context, session, window, marker string) error {
+	const (
+		pollInterval = 500 * time.Millisecond
+		timeout      = 30 * time.Second
+	)
+
+	deadline := c.clock.Now().Add(timeout)
+	for c.clock.Now().Before(deadline) {
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		default:
+		}
+
+		content, err := c.tmux.CapturePaneContent(ctx, session, window)
+		if err == nil && strings.Contains(content, marker) {
+			return nil
+		}
+
+		time.Sleep(pollInterval)
+	}
+
+	return fmt.Errorf("timed out waiting for %s prompt", marker)
+}
+
+type legacyProviderClient struct {
+	repo     ProviderRepository
+	detector RuntimeStateDetector
+}
+
+func (c legacyProviderClient) IsAvailable(ctx context.Context) error {
+	return c.repo.IsAvailable(ctx)
+}
+
+func (c legacyProviderClient) SuggestTaskName(ctx context.Context, prompt string) (string, error) {
+	return c.repo.ProposeTaskName(ctx, prompt)
+}
+
+func (c legacyProviderClient) LaunchRequest(task *Task) (LaunchRequest, error) {
+	command, err := c.repo.BuildLaunchCommand(task)
+	if err != nil {
+		return LaunchRequest{}, err
+	}
+
+	launch := LaunchRequest{
+		Prompt: c.repo.PromptMarker(),
+	}
+	if len(command) > 0 {
+		launch.Command = append([]string(nil), command[:1]...)
+	}
+	if len(command) > 1 {
+		launch.InitialInput = append([]string(nil), command[1:]...)
+	}
+
+	return launch, nil
+}
+
+func (c legacyProviderClient) DetectRuntimeState(snapshot RuntimeSnapshot) RuntimeState {
+	if c.detector == nil {
+		return RuntimeStateNone
+	}
+
+	return c.detector.Detect(snapshot)
 }
 
 func (s *Service) Doctor(ctx context.Context, cwd string) (DoctorResult, error) {
@@ -430,11 +619,11 @@ func (s *Service) Doctor(ctx context.Context, cwd string) (DoctorResult, error) 
 		result.Failures = append(result.Failures, "database: "+err.Error())
 	}
 
-	if err := s.git.IsAvailable(ctx); err != nil {
+	if err := s.repo.IsAvailable(ctx); err != nil {
 		result.Failures = append(result.Failures, "git: "+err.Error())
 	}
 
-	if err := s.tmux.IsAvailable(ctx); err != nil {
+	if err := s.session.IsAvailable(ctx); err != nil {
 		result.Failures = append(result.Failures, "tmux: "+err.Error())
 	}
 
@@ -445,7 +634,7 @@ func (s *Service) Doctor(ctx context.Context, cwd string) (DoctorResult, error) 
 	}
 
 	if strings.TrimSpace(cwd) != "" {
-		repoCtx, err := s.git.DetectRepo(ctx, cwd)
+		repoCtx, err := s.repo.DetectRepo(ctx, cwd)
 		if err != nil {
 			result.Failures = append(result.Failures, "repo: "+err.Error())
 		} else {
@@ -472,50 +661,23 @@ func (s *Service) Doctor(ctx context.Context, cwd string) (DoctorResult, error) 
 
 func (s *Service) reconcileTask(ctx context.Context, task *Task) (*Task, error) {
 	reconciled := *task
-	worktreeExists, worktreeErr := worktreePresence(reconciled.WorktreePath)
-	reconciled.WorktreeExists = worktreeExists
-
-	branchExists, err := s.git.BranchExists(ctx, reconciled.RepoRoot, reconciled.BranchName)
+	repoResources, err := s.repo.InspectTaskWorkspace(ctx, &reconciled)
 	if err != nil {
 		return nil, err
 	}
-	reconciled.BranchExists = branchExists
+	reconciled.WorktreeExists = repoResources.WorktreeExists
+	reconciled.BranchExists = repoResources.BranchExists
 
-	sessionExists, err := s.tmux.SessionExists(ctx, reconciled.TmuxSession)
+	sessionResources, err := s.session.InspectTaskSession(ctx, &reconciled)
 	if err != nil {
 		return nil, err
 	}
-	reconciled.SessionExists = sessionExists
-	if reconciled.SessionExists {
-		agentWindowExists, err := s.tmux.WindowExists(
-			ctx,
-			reconciled.TmuxSession,
-			windowOrDefault(reconciled.AgentWindowName, "agent"),
-		)
-		if err != nil {
-			return nil, err
-		}
-		reconciled.AgentWindowExists = agentWindowExists
-		editorWindowExists, err := s.tmux.WindowExists(
-			ctx,
-			reconciled.TmuxSession,
-			windowOrDefault(reconciled.EditorWindowName, "editor"),
-		)
-		if err != nil {
-			return nil, err
-		}
-		reconciled.EditorWindowExists = editorWindowExists
-	} else {
-		reconciled.AgentWindowExists = false
-		reconciled.EditorWindowExists = false
-	}
+	reconciled.SessionExists = sessionResources.SessionExists
+	reconciled.AgentWindowExists = sessionResources.AgentWindowExists
+	reconciled.EditorWindowExists = sessionResources.EditorWindowExists
 	reconciled.LastReconciledAt = s.clock.Now().UTC()
 	reconciled.UpdatedAt = s.clock.Now().UTC()
 	problems := make([]string, 0, 1)
-	if worktreeErr != nil {
-		reconciled.WorktreeExists = true
-		problems = append(problems, "worktree check failed")
-	}
 
 	if task.Status == TaskStatusCleaned {
 		if len(problems) == 0 && !reconciled.WorktreeExists && !reconciled.SessionExists {
@@ -588,24 +750,21 @@ func (s *Service) enrichRuntimeState(ctx context.Context, task *Task) error {
 	if task.Status == TaskStatusBroken || task.Status == TaskStatusCleaned {
 		return nil
 	}
-	if s.runtimeMonitor == nil {
-		return nil
-	}
 	if !task.SessionExists || !task.AgentWindowExists {
 		return nil
 	}
 
-	detector, ok := s.runtimeDetectors[task.Provider]
-	if !ok || detector == nil {
+	provider, ok := s.providers[task.Provider]
+	if !ok || provider == nil {
 		return nil
 	}
 
-	snapshot, err := s.runtimeMonitor.Snapshot(ctx, task)
+	snapshot, err := s.session.SnapshotTaskSession(ctx, task)
 	if err != nil {
 		return nil
 	}
 
-	task.RuntimeState = detector.Detect(snapshot)
+	task.RuntimeState = provider.DetectRuntimeState(snapshot)
 	if !snapshot.ObservedAt.IsZero() {
 		task.RuntimeStateUpdatedAt = snapshot.ObservedAt.UTC()
 		return nil
@@ -613,31 +772,6 @@ func (s *Service) enrichRuntimeState(ctx context.Context, task *Task) error {
 
 	task.RuntimeStateUpdatedAt = s.clock.Now().UTC()
 	return nil
-}
-
-func (s *Service) waitForPrompt(ctx context.Context, session, window, marker string) error {
-	const (
-		pollInterval = 500 * time.Millisecond
-		timeout      = 30 * time.Second
-	)
-
-	deadline := s.clock.Now().Add(timeout)
-	for s.clock.Now().Before(deadline) {
-		select {
-		case <-ctx.Done():
-			return ctx.Err()
-		default:
-		}
-
-		content, err := s.tmux.CapturePaneContent(ctx, session, window)
-		if err == nil && strings.Contains(content, marker) {
-			return nil
-		}
-
-		time.Sleep(pollInterval)
-	}
-
-	return fmt.Errorf("timed out waiting for %s prompt", marker)
 }
 
 func (s *Service) markBroken(ctx context.Context, task *Task, failure error) (*Task, error) {

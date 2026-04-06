@@ -2,7 +2,6 @@ package core
 
 import (
 	"context"
-	"os"
 	"time"
 
 	"agent/internal/pkg/timeutil"
@@ -11,50 +10,51 @@ import (
 type testServiceHarness struct {
 	service         *Service
 	taskRepo        *fakeTaskRepository
-	gitRepo         *fakeGitRepository
-	tmuxRepo        *fakeTmuxRepository
-	providerRepo    *fakeProviderRepository
-	runtimeMonitor  *fakeRuntimeMonitor
-	runtimeDetector *fakeRuntimeStateDetector
+	repoClient      *fakeRepoClient
+	sessionClient   *fakeSessionClient
+	providerRepo    *fakeProviderClient
 	configRepo      *fakeRepoConfigRepository
 	workspaceSeeder *fakeWorkspaceSeeder
 }
 
 func newTestService() *testServiceHarness {
 	taskRepo := &fakeTaskRepository{}
-	gitRepo := &fakeGitRepository{
+	repoClient := &fakeRepoClient{
 		repoContext: RepoContext{
 			Root:       "/tmp/repo",
 			Name:       "repo",
 			BaseBranch: "main",
 		},
 	}
-	tmuxRepo := &fakeTmuxRepository{capturedPaneContent: "› "}
-	providerRepo := &fakeProviderRepository{}
-	runtimeMonitor := &fakeRuntimeMonitor{}
-	runtimeDetector := &fakeRuntimeStateDetector{}
+	sessionClient := &fakeSessionClient{}
+	providerRepo := &fakeProviderClient{}
 	configRepo := &fakeRepoConfigRepository{}
 	workspaceSeeder := &fakeWorkspaceSeeder{}
-	tmuxRepo.createSessionHook = func() {
-		workspaceSeeder.seededBeforeTmux = workspaceSeeder.seedCalled
+	sessionClient.startHook = func() {
+		workspaceSeeder.seededBeforeSession = workspaceSeeder.seedCalled
 	}
 
 	return &testServiceHarness{
-		service: NewService(taskRepo, gitRepo, tmuxRepo, map[string]ProviderRepository{
-			"codex": providerRepo,
-		}, runtimeMonitor, map[string]RuntimeStateDetector{
-			"codex": runtimeDetector,
-		}, configRepo, workspaceSeeder, fakeClock{
-			now: time.Date(2026, 4, 2, 12, 0, 0, 0, time.UTC),
-		}, Config{
-			Provider: "codex",
-		}),
+		service: newServiceWithPorts(
+			taskRepo,
+			repoClient,
+			sessionClient,
+			map[string]ProviderClient{
+				"codex": providerRepo,
+			},
+			configRepo,
+			workspaceSeeder,
+			fakeClock{
+				now: time.Date(2026, 4, 2, 12, 0, 0, 0, time.UTC),
+			},
+			Config{
+				Provider: "codex",
+			},
+		),
 		taskRepo:        taskRepo,
-		gitRepo:         gitRepo,
-		tmuxRepo:        tmuxRepo,
+		repoClient:      repoClient,
+		sessionClient:   sessionClient,
 		providerRepo:    providerRepo,
-		runtimeMonitor:  runtimeMonitor,
-		runtimeDetector: runtimeDetector,
 		configRepo:      configRepo,
 		workspaceSeeder: workspaceSeeder,
 	}
@@ -132,201 +132,161 @@ type fakeTaskEvent struct {
 	payload   string
 }
 
-type fakeGitRepository struct {
-	isAvailableErr      error
-	detectRepoErr       error
-	createWorktreeErr   error
-	removeWorktreeErr   error
-	removeWorktreeHook  func(string)
-	branchExists        bool
-	repoContext         RepoContext
-	createWorktreeInput CreateWorktreeInput
-	removedWorktrees    []string
+type fakeRepoClient struct {
+	isAvailableErr error
+	detectRepoErr  error
+	createErr      error
+	inspectErr     error
+	removeErr      error
+	removeHook     func(*Task)
+	repoContext    RepoContext
+	repoResources  RepoResources
+	createdTask    *Task
+	removedTasks   []*Task
 }
 
-func (f *fakeGitRepository) IsAvailable(context.Context) error { return f.isAvailableErr }
-func (f *fakeGitRepository) DetectRepo(context.Context, string) (RepoContext, error) {
+func (f *fakeRepoClient) IsAvailable(context.Context) error { return f.isAvailableErr }
+
+func (f *fakeRepoClient) DetectRepo(context.Context, string) (RepoContext, error) {
 	if f.detectRepoErr != nil {
 		return RepoContext{}, f.detectRepoErr
 	}
 
 	return f.repoContext, nil
 }
-func (f *fakeGitRepository) BranchExists(context.Context, string, string) (bool, error) {
-	return f.branchExists, nil
-}
-func (f *fakeGitRepository) CreateWorktree(_ context.Context, input CreateWorktreeInput) error {
-	f.createWorktreeInput = input
-	return f.createWorktreeErr
-}
 
-func (f *fakeGitRepository) RemoveWorktree(_ context.Context, _ string, path string) error {
-	f.removedWorktrees = append(f.removedWorktrees, path)
-	if f.removeWorktreeHook != nil {
-		f.removeWorktreeHook(path)
-	}
-	if f.removeWorktreeErr != nil {
-		return f.removeWorktreeErr
+func (f *fakeRepoClient) CreateTaskWorkspace(_ context.Context, task *Task) error {
+	clone := *task
+	f.createdTask = &clone
+	if f.createErr != nil {
+		return f.createErr
 	}
 
-	return os.RemoveAll(path)
+	f.repoResources.WorktreeExists = true
+	f.repoResources.BranchExists = true
+	return nil
 }
 
-type fakeTmuxRepository struct {
-	isAvailableErr      error
-	createSessionErr    error
-	createSessionHook   func()
-	killSessionErr      error
-	killSessionHook     func()
-	sendKeysErr         error
-	typeInErr           error
-	typedCommand        []string
-	capturedPaneContent string
-	sessionExists       bool
-	windowExists        map[string]map[string]bool
-	attachedSession     string
-	createdSession      CreateSessionInput
-	sentCommand         []string
-	sentSession         string
-	sentWindow          string
-	sentWindows         []fakeTmuxWindowCommand
-	killedSessions      []string
+func (f *fakeRepoClient) RemoveTaskWorkspace(_ context.Context, task *Task) error {
+	clone := *task
+	f.removedTasks = append(f.removedTasks, &clone)
+	if f.removeHook != nil {
+		f.removeHook(task)
+	}
+	if f.removeErr != nil {
+		return f.removeErr
+	}
+
+	f.repoResources.WorktreeExists = false
+	return nil
 }
 
-func (f *fakeTmuxRepository) IsAvailable(context.Context) error { return f.isAvailableErr }
-func (f *fakeTmuxRepository) SessionExists(context.Context, string) (bool, error) {
-	return f.sessionExists, nil
-}
-func (f *fakeTmuxRepository) WindowExists(_ context.Context, session, window string) (bool, error) {
-	if f.windowExists == nil {
-		return false, nil
-	}
-
-	windows, ok := f.windowExists[session]
-	if !ok {
-		return false, nil
-	}
-
-	return windows[window], nil
-}
-func (f *fakeTmuxRepository) CreateSession(_ context.Context, input CreateSessionInput) error {
-	f.createdSession = input
-	if f.createSessionHook != nil {
-		f.createSessionHook()
-	}
-	if f.createSessionErr == nil {
-		f.sessionExists = true
-		if f.windowExists == nil {
-			f.windowExists = make(map[string]map[string]bool)
-		}
-
-		windows := f.windowExists[input.SessionName]
-		if windows == nil {
-			windows = make(map[string]bool)
-			f.windowExists[input.SessionName] = windows
-		}
-
-		agentWindow := input.AgentWindowName
-		if agentWindow == "" {
-			agentWindow = "agent"
-		}
-		editorWindow := input.EditorWindowName
-		if editorWindow == "" {
-			editorWindow = "editor"
-		}
-
-		windows[agentWindow] = true
-		windows[editorWindow] = true
-	}
-	return f.createSessionErr
+func (f *fakeRepoClient) InspectTaskWorkspace(context.Context, *Task) (RepoResources, error) {
+	return f.repoResources, f.inspectErr
 }
 
-func (f *fakeTmuxRepository) KillSession(_ context.Context, session string) error {
-	f.killedSessions = append(f.killedSessions, session)
-	if f.killSessionHook != nil {
-		f.killSessionHook()
+type fakeSessionClient struct {
+	isAvailableErr   error
+	startErr         error
+	startHook        func()
+	deleteErr        error
+	deleteHook       func(*Task)
+	inspectErr       error
+	openErr          error
+	startedTask      *Task
+	openedTask       *Task
+	deletedTasks     []*Task
+	startedLaunch    LaunchRequest
+	sessionResources SessionResources
+	snapshot         RuntimeSnapshot
+	snapshotErr      error
+}
+
+func (f *fakeSessionClient) IsAvailable(context.Context) error { return f.isAvailableErr }
+
+func (f *fakeSessionClient) StartTaskSession(_ context.Context, task *Task, launch LaunchRequest) error {
+	clone := *task
+	f.startedTask = &clone
+	f.startedLaunch = launch
+	if f.startHook != nil {
+		f.startHook()
 	}
-	if f.killSessionErr != nil {
-		return f.killSessionErr
+	if f.startErr != nil {
+		return f.startErr
 	}
 
-	f.sessionExists = false
-	if f.windowExists != nil {
-		delete(f.windowExists, session)
+	f.sessionResources = SessionResources{
+		SessionExists:      true,
+		AgentWindowExists:  true,
+		EditorWindowExists: true,
 	}
 	return nil
 }
 
-func (f *fakeTmuxRepository) AttachOrSwitch(_ context.Context, session string) error {
-	f.attachedSession = session
+func (f *fakeSessionClient) OpenTaskSession(_ context.Context, task *Task) error {
+	clone := *task
+	f.openedTask = &clone
+	return f.openErr
+}
+
+func (f *fakeSessionClient) DeleteTaskSession(_ context.Context, task *Task) error {
+	clone := *task
+	f.deletedTasks = append(f.deletedTasks, &clone)
+	if f.deleteHook != nil {
+		f.deleteHook(task)
+	}
+	if f.deleteErr != nil {
+		return f.deleteErr
+	}
+
+	f.sessionResources = SessionResources{}
 	return nil
 }
-func (f *fakeTmuxRepository) SendKeysToWindow(_ context.Context, session, window string, command []string) error {
-	f.sentSession = session
-	f.sentWindow = window
-	f.sentCommand = append([]string(nil), command...)
-	f.sentWindows = append(f.sentWindows, fakeTmuxWindowCommand{
-		session: session,
-		window:  window,
-		command: append([]string(nil), command...),
-	})
-	return f.sendKeysErr
-}
-func (f *fakeTmuxRepository) TypeInWindow(_ context.Context, _, _ string, command []string) error {
-	f.typedCommand = append([]string(nil), command...)
-	return f.typeInErr
-}
-func (f *fakeTmuxRepository) CapturePaneContent(context.Context, string, string) (string, error) {
-	return f.capturedPaneContent, nil
+
+func (f *fakeSessionClient) InspectTaskSession(context.Context, *Task) (SessionResources, error) {
+	return f.sessionResources, f.inspectErr
 }
 
-type fakeTmuxWindowCommand struct {
-	session string
-	window  string
-	command []string
+func (f *fakeSessionClient) SnapshotTaskSession(context.Context, *Task) (RuntimeSnapshot, error) {
+	return f.snapshot, f.snapshotErr
 }
 
-type fakeProviderRepository struct {
+type fakeProviderClient struct {
 	isAvailableErr error
-	proposeErr     error
-	proposedName   string
-	launchCommand  []string
+	suggestErr     error
+	suggestedName  string
+	launchErr      error
+	launchRequest  LaunchRequest
+	runtimeState   RuntimeState
 }
 
-func (f *fakeProviderRepository) ProposeTaskName(context.Context, string) (string, error) {
-	if f.proposeErr != nil {
-		return "", f.proposeErr
+func (f *fakeProviderClient) IsAvailable(context.Context) error { return f.isAvailableErr }
+
+func (f *fakeProviderClient) SuggestTaskName(context.Context, string) (string, error) {
+	if f.suggestErr != nil {
+		return "", f.suggestErr
 	}
 
-	return f.proposedName, nil
+	return f.suggestedName, nil
 }
-func (f *fakeProviderRepository) BuildLaunchCommand(task *Task) ([]string, error) {
-	if len(f.launchCommand) > 0 {
-		return append([]string(nil), f.launchCommand...), nil
+
+func (f *fakeProviderClient) LaunchRequest(task *Task) (LaunchRequest, error) {
+	if f.launchErr != nil {
+		return LaunchRequest{}, f.launchErr
+	}
+	if len(f.launchRequest.Command) > 0 || len(f.launchRequest.InitialInput) > 0 || f.launchRequest.Prompt != "" {
+		return f.launchRequest, nil
 	}
 
-	return []string{"codex", task.Prompt}, nil
-}
-func (f *fakeProviderRepository) PromptMarker() string              { return "›" }
-func (f *fakeProviderRepository) IsAvailable(context.Context) error { return f.isAvailableErr }
-
-type fakeRuntimeMonitor struct {
-	snapshot RuntimeSnapshot
-	err      error
+	return LaunchRequest{
+		Command:      []string{"codex"},
+		Prompt:       "›",
+		InitialInput: []string{task.Prompt},
+	}, nil
 }
 
-func (f *fakeRuntimeMonitor) Snapshot(context.Context, *Task) (RuntimeSnapshot, error) {
-	return f.snapshot, f.err
-}
-
-func (*fakeRuntimeMonitor) Close() error { return nil }
-
-type fakeRuntimeStateDetector struct {
-	state RuntimeState
-}
-
-func (f *fakeRuntimeStateDetector) Detect(RuntimeSnapshot) RuntimeState {
-	return f.state
+func (f *fakeProviderClient) DetectRuntimeState(RuntimeSnapshot) RuntimeState {
+	return f.runtimeState
 }
 
 type fakeClock struct {
@@ -353,14 +313,14 @@ func (f *fakeRepoConfigRepository) LoadRepoConfig(_ context.Context, repoRoot st
 }
 
 type fakeWorkspaceSeeder struct {
-	validateErr      error
-	seedErr          error
-	validateRepoRoot string
-	validatePaths    []string
-	seedInput        SeedWorkspaceInput
-	seededPaths      []string
-	seedCalled       bool
-	seededBeforeTmux bool
+	validateErr         error
+	seedErr             error
+	validateRepoRoot    string
+	validatePaths       []string
+	seedInput           SeedWorkspaceInput
+	seededPaths         []string
+	seedCalled          bool
+	seededBeforeSession bool
 }
 
 func (f *fakeWorkspaceSeeder) SeedWorkspace(_ context.Context, in SeedWorkspaceInput, progress func(string)) error {
