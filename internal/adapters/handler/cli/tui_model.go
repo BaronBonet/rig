@@ -7,10 +7,10 @@ import (
 
 	"agent/internal/core"
 
-	"github.com/charmbracelet/bubbles/textarea"
-	textinput "github.com/charmbracelet/bubbles/textinput"
-	tea "github.com/charmbracelet/bubbletea"
-	"github.com/charmbracelet/lipgloss"
+	"charm.land/bubbles/v2/textarea"
+	"charm.land/bubbles/v2/textinput"
+	tea "charm.land/bubbletea/v2"
+	"charm.land/lipgloss/v2"
 )
 
 var availableProviders = []string{"codex", "claude"}
@@ -98,7 +98,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.width = msg.Width
 		m.promptInput.SetWidth(msg.Width - 4)
 		return m, nil
-	case tea.KeyMsg:
+	case tea.KeyPressMsg:
 		return m.updateKey(msg)
 	case tasksLoadedMsg:
 		m.loading = false
@@ -176,21 +176,25 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	}
 }
 
-func (m model) View() string {
+func (m model) View() tea.View {
+	var body string
 	switch m.mode {
 	case tuiModeCleanupConfirm:
-		return m.confirmationView()
+		body = m.confirmationView()
 	case tuiModePromptInput:
-		return m.promptInputView()
+		body = m.promptInputView()
 	case tuiModeNameConfirm:
-		return m.nameConfirmView()
+		body = m.nameConfirmView()
 	default:
-		return m.listView()
+		body = m.listView()
 	}
+	v := tea.NewView(body)
+	v.AltScreen = true
+	return v
 }
 
-func (m model) updateKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
-	if msg.Type == tea.KeyCtrlC {
+func (m model) updateKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
+	if msg.Code == 'c' && msg.Mod == tea.ModCtrl {
 		return m, tea.Quit
 	}
 
@@ -210,7 +214,7 @@ func (m model) updateKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	}
 }
 
-func (m model) updateListKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+func (m model) updateListKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	switch msg.String() {
 	case "q":
 		return m, tea.Quit
@@ -268,7 +272,7 @@ func (m model) updateListKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	}
 }
 
-func (m model) updateCleanupConfirmKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+func (m model) updateCleanupConfirmKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	switch msg.String() {
 	case "q", "n", "esc":
 		m.mode = tuiModeList
@@ -289,9 +293,9 @@ func (m model) updateCleanupConfirmKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	}
 }
 
-func (m model) updatePromptInputKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
-	switch msg.Type {
-	case tea.KeyEsc:
+func (m model) updatePromptInputKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
+	switch msg.Code {
+	case tea.KeyEscape:
 		m.mode = tuiModeList
 		m.promptInput.Blur()
 		return m, nil
@@ -317,9 +321,9 @@ func (m model) updatePromptInputKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	return m, cmd
 }
 
-func (m model) updateNameConfirmKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
-	switch msg.Type {
-	case tea.KeyEsc:
+func (m model) updateNameConfirmKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
+	switch msg.Code {
+	case tea.KeyEscape:
 		m.mode = tuiModeList
 		m.nameInput.Blur()
 		return m, nil

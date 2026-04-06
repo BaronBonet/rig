@@ -9,7 +9,7 @@ import (
 
 	"agent/internal/core"
 
-	tea "github.com/charmbracelet/bubbletea"
+	tea "charm.land/bubbletea/v2"
 	"github.com/stretchr/testify/require"
 )
 
@@ -64,7 +64,7 @@ func TestModelUpdate_CreateFlowSuggestsNameThenCreatesTask(t *testing.T) {
 	m, _ = updateTUIModel(t, m, keyRunes("n"))
 	m.promptInput.SetValue("add billing retry flow")
 
-	m, suggestCmd := updateTUIModel(t, m, tea.KeyMsg{Type: tea.KeyEnter})
+	m, suggestCmd := updateTUIModel(t, m, tea.KeyPressMsg{Code: tea.KeyEnter})
 	require.NotNil(t, suggestCmd)
 
 	m.selected = 1
@@ -74,7 +74,7 @@ func TestModelUpdate_CreateFlowSuggestsNameThenCreatesTask(t *testing.T) {
 	require.Equal(t, tuiModeNameConfirm, m.mode)
 	require.Equal(t, "billing retry flow", m.nameInput.Value())
 
-	m, createCmd := updateTUIModel(t, m, tea.KeyMsg{Type: tea.KeyEnter})
+	m, createCmd := updateTUIModel(t, m, tea.KeyPressMsg{Code: tea.KeyEnter})
 	require.NotNil(t, createCmd)
 	require.True(t, m.busy)
 
@@ -102,14 +102,14 @@ func TestModelUpdate_CreateFlowWithoutTasksUsesModelCwdFallback(t *testing.T) {
 	m, _ = updateTUIModel(t, m, keyRunes("n"))
 	m.promptInput.SetValue("add billing retry flow")
 
-	m, suggestCmd := updateTUIModel(t, m, tea.KeyMsg{Type: tea.KeyEnter})
+	m, suggestCmd := updateTUIModel(t, m, tea.KeyPressMsg{Code: tea.KeyEnter})
 	require.NotNil(t, suggestCmd)
 
 	suggestMsg := suggestCmd()
 	m, _ = updateTUIModel(t, m, suggestMsg)
 	require.Equal(t, tuiModeNameConfirm, m.mode)
 
-	m, createCmd := updateTUIModel(t, m, tea.KeyMsg{Type: tea.KeyEnter})
+	m, createCmd := updateTUIModel(t, m, tea.KeyPressMsg{Code: tea.KeyEnter})
 	require.NotNil(t, createCmd)
 
 	createMsg := createCmd()
@@ -133,7 +133,7 @@ func TestModelUpdate_SuggestNameFailureReturnsToPromptModeAndRendersError(t *tes
 	m, _ = updateTUIModel(t, m, keyRunes("n"))
 	m.promptInput.SetValue("add billing retry flow")
 
-	m, suggestCmd := updateTUIModel(t, m, tea.KeyMsg{Type: tea.KeyEnter})
+	m, suggestCmd := updateTUIModel(t, m, tea.KeyPressMsg{Code: tea.KeyEnter})
 	require.NotNil(t, suggestCmd)
 	require.True(t, m.busy)
 
@@ -143,7 +143,7 @@ func TestModelUpdate_SuggestNameFailureReturnsToPromptModeAndRendersError(t *tes
 	require.Equal(t, tuiModePromptInput, m.mode)
 	require.False(t, m.busy)
 	require.True(t, m.promptInput.Focused())
-	require.Contains(t, stripANSI(m.View()), "suggest failed")
+	require.Contains(t, stripANSI(m.View().Content), "suggest failed")
 }
 
 func TestModelUpdate_CreateFailureReturnsToNameConfirmModeAndRendersError(t *testing.T) {
@@ -158,11 +158,11 @@ func TestModelUpdate_CreateFailureReturnsToNameConfirmModeAndRendersError(t *tes
 	m, _ = updateTUIModel(t, m, keyRunes("n"))
 	m.promptInput.SetValue("add billing retry flow")
 
-	m, suggestCmd := updateTUIModel(t, m, tea.KeyMsg{Type: tea.KeyEnter})
+	m, suggestCmd := updateTUIModel(t, m, tea.KeyPressMsg{Code: tea.KeyEnter})
 	msg := suggestCmd()
 	m, _ = updateTUIModel(t, m, msg)
 
-	m, createCmd := updateTUIModel(t, m, tea.KeyMsg{Type: tea.KeyEnter})
+	m, createCmd := updateTUIModel(t, m, tea.KeyPressMsg{Code: tea.KeyEnter})
 	require.NotNil(t, createCmd)
 	require.True(t, m.busy)
 
@@ -172,7 +172,7 @@ func TestModelUpdate_CreateFailureReturnsToNameConfirmModeAndRendersError(t *tes
 	require.Equal(t, tuiModeNameConfirm, m.mode)
 	require.False(t, m.busy)
 	require.True(t, m.nameInput.Focused())
-	require.Contains(t, stripANSI(m.View()), "create failed")
+	require.Contains(t, stripANSI(m.View().Content), "create failed")
 }
 
 func TestModelUpdate_CreateFailureWithPersistedTaskReturnsToListModeAndPreservesError(t *testing.T) {
@@ -188,11 +188,11 @@ func TestModelUpdate_CreateFailureWithPersistedTaskReturnsToListModeAndPreserves
 	m, _ = updateTUIModel(t, m, keyRunes("n"))
 	m.promptInput.SetValue("add billing retry flow")
 
-	m, suggestCmd := updateTUIModel(t, m, tea.KeyMsg{Type: tea.KeyEnter})
+	m, suggestCmd := updateTUIModel(t, m, tea.KeyPressMsg{Code: tea.KeyEnter})
 	msg := suggestCmd()
 	m, _ = updateTUIModel(t, m, msg)
 
-	m, createCmd := updateTUIModel(t, m, tea.KeyMsg{Type: tea.KeyEnter})
+	m, createCmd := updateTUIModel(t, m, tea.KeyPressMsg{Code: tea.KeyEnter})
 	require.NotNil(t, createCmd)
 	require.True(t, m.busy)
 
@@ -201,12 +201,12 @@ func TestModelUpdate_CreateFailureWithPersistedTaskReturnsToListModeAndPreserves
 	require.Nil(t, followup)
 	require.Equal(t, tuiModeList, m.mode)
 	require.False(t, m.busy)
-	view := stripANSI(m.View())
+	view := stripANSI(m.View().Content)
 	require.NotContains(t, view, "Confirm Task Name")
 	require.Contains(t, view, "create failed after persist")
 	require.Contains(t, view, "billing-retry-flow")
 
-	_, duplicateCmd := updateTUIModel(t, m, tea.KeyMsg{Type: tea.KeyEnter})
+	_, duplicateCmd := updateTUIModel(t, m, tea.KeyPressMsg{Code: tea.KeyEnter})
 	require.NotNil(t, duplicateCmd)
 	require.Equal(t, 1, service.createCalls)
 }
@@ -215,7 +215,7 @@ func TestModelUpdate_PromptModeEscapeReturnsToListMode(t *testing.T) {
 	m := newLoadedTUIModel(t, &fakeTUIService{}, tuiTask("existing-task"))
 
 	m, _ = updateTUIModel(t, m, keyRunes("n"))
-	m, cmd := updateTUIModel(t, m, tea.KeyMsg{Type: tea.KeyEsc})
+	m, cmd := updateTUIModel(t, m, tea.KeyPressMsg{Code: tea.KeyEscape})
 	require.Equal(t, tuiModeList, m.mode)
 	require.Nil(t, cmd)
 }
@@ -230,11 +230,11 @@ func TestModelUpdate_NameConfirmModeEscapeReturnsToListMode(t *testing.T) {
 
 	m, _ = updateTUIModel(t, m, keyRunes("n"))
 	m.promptInput.SetValue("add billing retry flow")
-	m, suggestCmd := updateTUIModel(t, m, tea.KeyMsg{Type: tea.KeyEnter})
+	m, suggestCmd := updateTUIModel(t, m, tea.KeyPressMsg{Code: tea.KeyEnter})
 	msg := suggestCmd()
 	m, _ = updateTUIModel(t, m, msg)
 
-	m, cmd := updateTUIModel(t, m, tea.KeyMsg{Type: tea.KeyEsc})
+	m, cmd := updateTUIModel(t, m, tea.KeyPressMsg{Code: tea.KeyEscape})
 	require.Equal(t, tuiModeList, m.mode)
 	require.Nil(t, cmd)
 }
@@ -245,7 +245,7 @@ func TestModelUpdate_ConfirmationCancelKeysDismissWithoutQuitting(t *testing.T) 
 		key  tea.KeyMsg
 	}{
 		{name: "n", key: keyRunes("n")},
-		{name: "escape", key: tea.KeyMsg{Type: tea.KeyEsc}},
+		{name: "escape", key: tea.KeyPressMsg{Code: tea.KeyEscape}},
 		{name: "q", key: keyRunes("q")},
 	}
 
@@ -313,7 +313,7 @@ func TestModelUpdate_EnterDispatchesOpenAndKeepsTUIOpen(t *testing.T) {
 	m := newLoadedTUIModel(t, service, service.tasks...)
 	m, _ = updateTUIModel(t, m, keyRunes("j"))
 
-	m, cmd := updateTUIModel(t, m, tea.KeyMsg{Type: tea.KeyEnter})
+	m, cmd := updateTUIModel(t, m, tea.KeyPressMsg{Code: tea.KeyEnter})
 	require.NotNil(t, cmd)
 	require.True(t, m.busy)
 
@@ -332,7 +332,7 @@ func TestModelUpdate_EnterFailureRendersInlineErrorAndKeepsTUIOpen(t *testing.T)
 	m := newLoadedTUIModel(t, service, service.tasks...)
 	m, _ = updateTUIModel(t, m, keyRunes("j"))
 
-	m, cmd := updateTUIModel(t, m, tea.KeyMsg{Type: tea.KeyEnter})
+	m, cmd := updateTUIModel(t, m, tea.KeyPressMsg{Code: tea.KeyEnter})
 	require.NotNil(t, cmd)
 	require.True(t, m.busy)
 
@@ -341,7 +341,7 @@ func TestModelUpdate_EnterFailureRendersInlineErrorAndKeepsTUIOpen(t *testing.T)
 	require.Equal(t, "task-two", service.openedIDOrSlug)
 	require.Nil(t, followup)
 	require.False(t, m.busy)
-	require.Contains(t, stripANSI(m.View()), "open failed")
+	require.Contains(t, stripANSI(m.View().Content), "open failed")
 
 	m, _ = updateTUIModel(t, m, keyRunes("k"))
 	require.Equal(t, 0, m.selected)
@@ -411,7 +411,7 @@ func TestModelUpdate_MainListViewRendersControlCenterDetails(t *testing.T) {
 	task.BranchName = "feat/billing-retry-flow"
 
 	m := newLoadedTUIModel(t, service, task)
-	view := stripANSI(m.View())
+	view := stripANSI(m.View().Content)
 
 	require.Contains(t, view, "Control Center")
 	require.Contains(t, view, "TASK")
@@ -441,7 +441,7 @@ func TestModelView_PrefersRuntimeBadgesOnSeparateTaskRows(t *testing.T) {
 	finished.BranchName = "branch-finished"
 
 	m := newLoadedTUIModel(t, &fakeTUIService{}, running, needsInput, finished)
-	view := stripANSI(m.View())
+	view := stripANSI(m.View().Content)
 
 	require.Contains(t, view, "running task")
 	require.Contains(t, view, "needs input task")
@@ -493,7 +493,7 @@ func TestModelView_ShowsProviderBadgeOnEveryTaskRow(t *testing.T) {
 	claudeTask.RuntimeState = core.RuntimeStateNeedsInput
 
 	m := newLoadedTUIModel(t, &fakeTUIService{}, codexTask, claudeTask)
-	view := stripANSI(m.View())
+	view := stripANSI(m.View().Content)
 	rows := strings.Split(view, "\n")
 
 	requireLineOrdered := func(name, first, second string) {
@@ -523,7 +523,7 @@ func TestModelView_ProviderBadgeCoexistsWithRuntimeBadge(t *testing.T) {
 	task.RuntimeState = core.RuntimeStateFinished
 
 	m := newLoadedTUIModel(t, &fakeTUIService{}, task)
-	view := stripANSI(m.View())
+	view := stripANSI(m.View().Content)
 	for _, row := range strings.Split(view, "\n") {
 		if !strings.Contains(row, "running task") {
 			continue
@@ -543,7 +543,7 @@ func TestModelView_OmitsRuntimeBadgeWhenRuntimeStateIsEmpty(t *testing.T) {
 	task.RuntimeState = core.RuntimeStateNone
 
 	m := newLoadedTUIModel(t, &fakeTUIService{}, task)
-	view := stripANSI(m.View())
+	view := stripANSI(m.View().Content)
 
 	require.Contains(t, view, "◐ degraded")
 	require.NotContains(t, view, "● running")
@@ -559,7 +559,7 @@ func TestModelUpdate_LoadedTasksHideTasksWithoutLiveResources(t *testing.T) {
 	hidden.WorktreeExists = false
 
 	m := newLoadedTUIModel(t, &fakeTUIService{}, active, hidden)
-	view := stripANSI(m.View())
+	view := stripANSI(m.View().Content)
 
 	require.Contains(t, view, "active-task")
 	require.NotContains(t, view, "cleaned-task")
@@ -569,7 +569,7 @@ func TestModelUpdate_ConfirmationViewExplainsDeletionScope(t *testing.T) {
 	m := newLoadedTUIModel(t, &fakeTUIService{}, tuiTask("billing-retry-flow"))
 	m, _ = updateTUIModel(t, m, keyRunes("x"))
 
-	view := stripANSI(m.View())
+	view := stripANSI(m.View().Content)
 	require.Contains(t, view, "tmux session and worktree will be deleted")
 	require.Contains(t, view, "branch will be kept")
 }
@@ -587,7 +587,7 @@ func TestModelUpdate_CleanupFailureRendersInlineErrorAndKeepsTUIUsable(t *testin
 
 	msg := cleanupCmd()
 	m, _ = updateTUIModel(t, m, msg)
-	require.Contains(t, stripANSI(m.View()), "cleanup failed")
+	require.Contains(t, stripANSI(m.View().Content), "cleanup failed")
 
 	m, _ = updateTUIModel(t, m, keyRunes("j"))
 	require.Equal(t, 1, m.selected)
@@ -616,7 +616,7 @@ func TestModelUpdate_CleanupSuccessRefreshFailureRemovesTaskFromVisibleList(t *t
 	refreshMsg := refreshCmd()
 	m, _ = updateTUIModel(t, m, refreshMsg)
 
-	view := stripANSI(m.View())
+	view := stripANSI(m.View().Content)
 	require.NotContains(t, view, "task-one")
 	require.Contains(t, view, "refresh failed")
 	require.False(t, m.busy)
@@ -624,7 +624,7 @@ func TestModelUpdate_CleanupSuccessRefreshFailureRemovesTaskFromVisibleList(t *t
 
 func TestModelView_ShowsLoadingBeforeInitialLoadCompletes(t *testing.T) {
 	m := newTUIModel(&fakeTUIService{}, "/tmp/default")
-	require.Contains(t, stripANSI(m.View()), "Loading tasks")
+	require.Contains(t, stripANSI(m.View().Content), "Loading tasks")
 }
 
 type fakeTUIService struct {
@@ -712,11 +712,9 @@ func updateTUIModel(t *testing.T, current model, msg tea.Msg) (model, tea.Cmd) {
 	return m, cmd
 }
 
-func keyRunes(chars string) tea.KeyMsg {
-	return tea.KeyMsg{
-		Type:  tea.KeyRunes,
-		Runes: []rune(chars),
-	}
+func keyRunes(chars string) tea.KeyPressMsg {
+	r := []rune(chars)
+	return tea.KeyPressMsg{Code: r[0], Text: chars}
 }
 
 // stripANSI removes ANSI escape sequences so view assertions can match plain text.
