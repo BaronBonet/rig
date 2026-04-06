@@ -390,19 +390,6 @@ func (m model) listView() string {
 		return b.String()
 	}
 
-	// Detail bar for selected task
-	task := m.selectedTask()
-	details := fmt.Sprintf(
-		"%s %s  %s %s  %s %s  %s %s  %s %s  %s %s",
-		iconRepo, taskRepoName(task),
-		iconAgent, healthStyle(task.AgentWindowExists),
-		iconEditor, healthStyle(task.EditorWindowExists),
-		iconBranch, dimStyle.Render(emptyFallback(task.BranchName, "-")),
-		iconTmux, yesNoStyled(task.SessionExists),
-		iconWorktree, yesNoStyled(task.WorktreeExists),
-	)
-	b.WriteString(details + "\n\n")
-
 	// Column header
 	colHeader := fmt.Sprintf("   %s  %s  %s",
 		padRight("TASK", colWidthName),
@@ -634,14 +621,6 @@ func selectedIDOrSlug(task *core.Task) string {
 	}
 
 	return task.ID
-}
-
-func taskRepoName(task *core.Task) string {
-	if task == nil {
-		return "-"
-	}
-
-	return emptyFallback(task.RepoName, "-")
 }
 
 func (m model) creationCwd() string {
