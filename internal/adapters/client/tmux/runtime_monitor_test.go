@@ -23,7 +23,7 @@ func TestRuntimeMonitorSnapshot_BindsOnlyCodexPaneInSplitAgentWindow(t *testing.
 	pipe := &fakeControlPipe{
 		output: map[string]string{
 			paneListCommand("repo-billing-retry-flow", "agent"): "%24\tcodex\t1\n%31\tzsh\t0",
-			"capture-pane -t %24 -p -e": "› review my changes\nWorking (26s • esc to interrupt)\n",
+			"capture-pane -t %24 -p -e":                         "› review my changes\nWorking (26s • esc to interrupt)\n",
 		},
 		lastOutputAt: time.Date(2026, 4, 5, 9, 59, 55, 0, time.UTC),
 	}
@@ -53,7 +53,7 @@ func TestRuntimeMonitorSnapshot_BindsCodexAliasPaneInSplitAgentWindow(t *testing
 	pipe := &fakeControlPipe{
 		output: map[string]string{
 			paneListCommand("repo-billing-retry-flow", "agent"): "%24\tcodex-aarch64-a\t1\n%31\tzsh\t0",
-			"capture-pane -t %24 -p -e": "› review my changes\n",
+			"capture-pane -t %24 -p -e":                         "› review my changes\n",
 		},
 		lastOutputAt: time.Date(2026, 4, 5, 9, 59, 55, 0, time.UTC),
 	}
@@ -98,7 +98,7 @@ func TestRuntimeMonitorSnapshot_ReusesBoundPaneAfterCodexReturnsToShell(t *testi
 	pipe := &fakeControlPipe{
 		output: map[string]string{
 			paneListCommand("repo-billing-retry-flow", "agent"): "%24\tcodex\t1",
-			"capture-pane -t %24 -p -e": "› review my changes\nWorking (26s • esc to interrupt)\n",
+			"capture-pane -t %24 -p -e":                         "› review my changes\nWorking (26s • esc to interrupt)\n",
 		},
 	}
 	monitor := NewRuntimeMonitorWithFactory(&fakeControlPipeFactory{
@@ -132,7 +132,7 @@ func TestRuntimeMonitorSnapshot_PreservesShellOnlyHistoryAcrossRepeatedObservati
 	pipe := &fakeControlPipe{
 		output: map[string]string{
 			paneListCommand("repo-billing-retry-flow", "agent"): "%24\tzsh\t1",
-			"capture-pane -t %24 -p -e": "done\n",
+			"capture-pane -t %24 -p -e":                         "done\n",
 		},
 	}
 	monitor := NewRuntimeMonitorWithFactory(&fakeControlPipeFactory{
@@ -161,7 +161,7 @@ func TestRuntimeMonitorSnapshot_MarksCodexHistoryAfterPaneTransitionsFromShellTo
 	pipe := &fakeControlPipe{
 		output: map[string]string{
 			paneListCommand("repo-billing-retry-flow", "agent"): "%24\tzsh\t1",
-			"capture-pane -t %24 -p -e": "done\n",
+			"capture-pane -t %24 -p -e":                         "done\n",
 		},
 	}
 	monitor := NewRuntimeMonitorWithFactory(&fakeControlPipeFactory{
@@ -202,7 +202,7 @@ func TestRuntimeMonitorSnapshot_UsesLatestLastOutputAt(t *testing.T) {
 	pipe := &fakeControlPipe{
 		output: map[string]string{
 			paneListCommand("repo-billing-retry-flow", "agent"): "%24\tcodex\t1",
-			"capture-pane -t %24 -p -e": "› review my changes\n",
+			"capture-pane -t %24 -p -e":                         "› review my changes\n",
 		},
 		lastOutputAt: time.Date(2026, 4, 5, 9, 59, 55, 0, time.UTC),
 	}
@@ -232,7 +232,7 @@ func TestRuntimeMonitor_CloseClosesBoundControlPipes(t *testing.T) {
 	pipe := &fakeControlPipe{
 		output: map[string]string{
 			paneListCommand("repo-billing-retry-flow", "agent"): "%24\tcodex\t1",
-			"capture-pane -t %24 -p -e": "› review my changes\n",
+			"capture-pane -t %24 -p -e":                         "› review my changes\n",
 		},
 	}
 	monitor := NewRuntimeMonitorWithFactory(&fakeControlPipeFactory{
@@ -261,7 +261,7 @@ func TestRuntimeMonitorSnapshot_EvictsDeadPipeAndReattaches(t *testing.T) {
 	secondPipe := &fakeControlPipe{
 		output: map[string]string{
 			paneListCommand("repo-billing-retry-flow", "agent"): "%24\tcodex\t1",
-			"capture-pane -t %24 -p -e": "› review my changes\n",
+			"capture-pane -t %24 -p -e":                         "› review my changes\n",
 		},
 	}
 	factory := &fakeControlPipeFactory{
@@ -293,7 +293,7 @@ func TestRuntimeMonitorSnapshot_BindsActiveShellPaneAsFinishedFallback(t *testin
 	pipe := &fakeControlPipe{
 		output: map[string]string{
 			paneListCommand("repo-billing-retry-flow", "agent"): "%24\tzsh\t1\n%31\tzsh\t0",
-			"capture-pane -t %24 -p -e": "done\n",
+			"capture-pane -t %24 -p -e":                         "done\n",
 		},
 	}
 	monitor := NewRuntimeMonitorWithFactory(&fakeControlPipeFactory{
