@@ -20,9 +20,7 @@ type TaskService interface {
 		options core.CreateTaskOptions,
 		progress func(core.TaskProgress),
 	) (*core.Task, error)
-	NewTask(ctx context.Context, input core.NewTaskInput) (*core.Task, error)
 	ListTasks(ctx context.Context) ([]*core.Task, error)
-	GetTask(ctx context.Context, idOrSlug string) (*core.Task, error)
 	OpenTask(ctx context.Context, idOrSlug string) error
 	DeleteTaskResources(ctx context.Context, idOrSlug string) (*core.Task, error)
 }
