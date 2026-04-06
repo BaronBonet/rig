@@ -122,6 +122,36 @@ func TestRuntimeDetector_Detect_ReturnsFinishedWhenShellAfterAgentBinding(t *tes
 	require.Equal(t, core.RuntimeStateFinished, state)
 }
 
+func TestRuntimeDetector_Detect_PrefersBusyMarkerOverShellForegroundCommand(t *testing.T) {
+	detector := NewRuntimeDetector(2 * time.Second)
+
+	state := detector.Detect(core.RuntimeSnapshot{
+		PaneID:            "%24",
+		HadAgentBinding:   true,
+		ForegroundCommand: "bash",
+		Content:           "⏺ Bash(go test ./...)\n  esc to interrupt",
+		ObservedAt:        time.Date(2026, 4, 5, 10, 0, 0, 0, time.UTC),
+		LastOutputAt:      time.Date(2026, 4, 5, 9, 59, 59, 0, time.UTC),
+	})
+
+	require.Equal(t, core.RuntimeStateRunning, state)
+}
+
+func TestRuntimeDetector_Detect_ReturnsRunningForToolForegroundCommandWithBusyMarker(t *testing.T) {
+	detector := NewRuntimeDetector(2 * time.Second)
+
+	state := detector.Detect(core.RuntimeSnapshot{
+		PaneID:            "%24",
+		HadAgentBinding:   true,
+		ForegroundCommand: "go",
+		Content:           "⏺ Bash(go test ./...)\n  esc to interrupt",
+		ObservedAt:        time.Date(2026, 4, 5, 10, 0, 0, 0, time.UTC),
+		LastOutputAt:      time.Date(2026, 4, 5, 9, 59, 59, 0, time.UTC),
+	})
+
+	require.Equal(t, core.RuntimeStateRunning, state)
+}
+
 func TestRuntimeDetector_Detect_ReturnsEmptyForFirstShellObservation(t *testing.T) {
 	detector := NewRuntimeDetector(2 * time.Second)
 
@@ -162,6 +192,25 @@ func TestRuntimeDetector_Detect_PromptTakesPriorityOverBusyMarkerInTail(t *testi
 	})
 
 	require.Equal(t, core.RuntimeStateNeedsInput, state)
+}
+
+func TestRuntimeDetector_Detect_LiveProgressFooterBeatsPrompt(t *testing.T) {
+	detector := NewRuntimeDetector(2 * time.Second)
+
+	state := detector.Detect(core.RuntimeSnapshot{
+		PaneID:            "%48",
+		HadAgentBinding:   true,
+		ForegroundCommand: "claude-2.1.92",
+		Content: "⏺ Update(internal/adapters/handler/cli/tui_model.go)\n" +
+			"⏺ Now I'll add spinner message forwarding and update the busy message at each step.\n" +
+			"· Unravelling… (1m 9s · ↓ 1.1k tokens)\n" +
+			"❯ \n" +
+			"  -- INSERT -- ⏵⏵ accept edits on (shift+tab to cycle)",
+		ObservedAt:   time.Date(2026, 4, 6, 10, 7, 0, 0, time.UTC),
+		LastOutputAt: time.Date(2026, 4, 6, 10, 6, 40, 0, time.UTC),
+	})
+
+	require.Equal(t, core.RuntimeStateRunning, state)
 }
 
 func TestRuntimeDetector_Detect_NeedsInputEvenWithHistoricalToolMarkers(t *testing.T) {

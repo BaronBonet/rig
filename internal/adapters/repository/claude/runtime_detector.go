@@ -13,6 +13,7 @@ type RuntimeDetector struct {
 }
 
 var ansiEscapePattern = regexp.MustCompile(`\x1b\[[0-9;?]*[ -/]*[@-~]`)
+var claudeLiveProgressPattern = regexp.MustCompile(`(?m)^\s*[·•]\s+.+…\s+\([^)]+\)\s*$`)
 
 func NewRuntimeDetector(activityWindow time.Duration) *RuntimeDetector {
 	return &RuntimeDetector{activityWindow: activityWindow}
@@ -22,6 +23,17 @@ func (d *RuntimeDetector) Detect(snapshot core.RuntimeSnapshot) core.RuntimeStat
 	command := normalizeCommand(snapshot.ForegroundCommand)
 	if command == "" {
 		return core.RuntimeStateNone
+	}
+
+	content := stripANSI(snapshot.Content)
+	tail := lastNLines(content, 5)
+	tailLower := strings.ToLower(tail)
+
+	// When Claude is actively running a tool, tmux may report the tool
+	// process (for example bash or go) instead of claude itself. The busy
+	// footer is still authoritative in the captured pane content.
+	if snapshot.HadAgentBinding && (hasClaudeBusyMarker(tailLower) || hasClaudeLiveProgressMarker(tail)) {
+		return core.RuntimeStateRunning
 	}
 
 	if isShellCommand(command) {
@@ -34,10 +46,6 @@ func (d *RuntimeDetector) Detect(snapshot core.RuntimeSnapshot) core.RuntimeStat
 	if command != "claude" {
 		return core.RuntimeStateNone
 	}
-
-	content := stripANSI(snapshot.Content)
-	tail := lastNLines(content, 5)
-	tailLower := strings.ToLower(tail)
 
 	if hasClaudePromptMarker(tail) {
 		return core.RuntimeStateNeedsInput
@@ -94,6 +102,10 @@ func hasRecentOutput(observedAt, lastOutputAt time.Time, activityWindow time.Dur
 func hasClaudeBusyMarker(content string) bool {
 	return strings.Contains(content, "esc to interrupt") ||
 		strings.Contains(content, "ctrl+c to interrupt")
+}
+
+func hasClaudeLiveProgressMarker(content string) bool {
+	return claudeLiveProgressPattern.MatchString(content)
 }
 
 func hasClaudePromptMarker(content string) bool {
