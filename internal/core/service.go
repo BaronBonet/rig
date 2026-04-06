@@ -1,6 +1,8 @@
 package core
 
 import (
+	"agent/internal/pkg/slug"
+	"agent/internal/pkg/timeutil"
 	"context"
 	"errors"
 	"fmt"
@@ -9,9 +11,6 @@ import (
 	"slices"
 	"strings"
 	"time"
-
-	"agent/internal/pkg/slug"
-	"agent/internal/pkg/timeutil"
 )
 
 type DoctorResult struct {
@@ -128,16 +127,17 @@ func (s *Service) createTask(
 	now := s.clock.Now().UTC()
 	taskSlug := slug.EnsureUnique(slug.FromDisplayName(displayName), existingSlugs)
 	task := &Task{
-		ID:               fmt.Sprintf("%d", now.UnixNano()),
-		Prompt:           input.Prompt,
-		DisplayName:      displayName,
-		Slug:             taskSlug,
-		RepoRoot:         repoCtx.Root,
-		RepoName:         repoCtx.Name,
-		BaseBranch:       repoCtx.BaseBranch,
+		ID:          fmt.Sprintf("%d", now.UnixNano()),
+		Prompt:      input.Prompt,
+		DisplayName: displayName,
+		Slug:        taskSlug,
+		RepoRoot:    repoCtx.Root,
+		RepoName:    repoCtx.Name,
+		BaseBranch:  repoCtx.BaseBranch,
+		// TODO: don't assume its a feat, the llm should figure that out
 		BranchName:       "feat/" + taskSlug,
 		WorktreePath:     filepath.Join(filepath.Dir(repoCtx.Root), repoCtx.Name+"-"+taskSlug),
-		TmuxSession:      repoCtx.Name + "-" + taskSlug,
+		TmuxSession:      repoCtx.Name + "_" + taskSlug,
 		AgentWindowName:  "agent",
 		EditorWindowName: "editor",
 		Provider:         provider,
