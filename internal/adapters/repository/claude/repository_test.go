@@ -10,7 +10,7 @@ import (
 )
 
 func TestRepositoryBuildLaunchCommand_IncludesPrompt(t *testing.T) {
-	repo := NewRepository(execx.NewFakeRunner(nil), "claude")
+	repo := NewRepository(execx.NewFakeRunner(nil), Config{Binary: "claude"})
 
 	cmd, err := repo.BuildLaunchCommand(&core.Task{
 		Prompt: "add billing retry flow",
@@ -26,7 +26,7 @@ func TestRepositoryProposeTaskName_ParsesJSONOutput(t *testing.T) {
 			Stdout: `{"type":"result","subtype":"success","cost_usd":0.002,"duration_ms":1500,"duration_api_ms":1200,"is_error":false,"num_turns":1,"result":"Billing Retry Flow","session_id":"abc123","total_cost_usd":0.002}` + "\n",
 		},
 	})
-	repo := NewRepository(runner, "claude")
+	repo := NewRepository(runner, Config{Binary: "claude"})
 
 	name, err := repo.ProposeTaskName(t.Context(), "add billing retry flow")
 	require.NoError(t, err)
@@ -43,7 +43,7 @@ func TestRepositoryProposeTaskName_StripsMarkdownTicks(t *testing.T) {
 			Stdout: `{"type":"result","subtype":"success","result":"Migrate to ` + "`sqlc`" + `","is_error":false}` + "\n",
 		},
 	})
-	repo := NewRepository(runner, "claude")
+	repo := NewRepository(runner, Config{Binary: "claude"})
 
 	name, err := repo.ProposeTaskName(t.Context(), "switch sqlite to sqlc")
 	require.NoError(t, err)
@@ -54,7 +54,7 @@ func TestRepositoryProposeTaskName_ReturnsErrorOnEmptyResult(t *testing.T) {
 	runner := execx.NewFakeRunner([]execx.Result{
 		{Stdout: `{"type":"result","subtype":"success","result":"","is_error":false}` + "\n"},
 	})
-	repo := NewRepository(runner, "claude")
+	repo := NewRepository(runner, Config{Binary: "claude"})
 
 	_, err := repo.ProposeTaskName(t.Context(), "do something")
 	require.Error(t, err)
@@ -64,7 +64,7 @@ func TestRepositoryProposeTaskName_ReturnsErrorOnAPIError(t *testing.T) {
 	runner := execx.NewFakeRunner([]execx.Result{
 		{Stdout: `{"type":"result","subtype":"error","result":"API error","is_error":true}` + "\n"},
 	})
-	repo := NewRepository(runner, "claude")
+	repo := NewRepository(runner, Config{Binary: "claude"})
 
 	_, err := repo.ProposeTaskName(t.Context(), "do something")
 	require.Error(t, err)
@@ -74,7 +74,7 @@ func TestRepositoryIsAvailable_CallsClaudeVersion(t *testing.T) {
 	runner := execx.NewFakeRunner([]execx.Result{
 		{Stdout: "1.0.0\n"},
 	})
-	repo := NewRepository(runner, "claude")
+	repo := NewRepository(runner, Config{Binary: "claude"})
 
 	err := repo.IsAvailable(t.Context())
 	require.NoError(t, err)

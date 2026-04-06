@@ -10,7 +10,7 @@ import (
 )
 
 func TestRepositoryBuildLaunchCommand_IncludesPrompt(t *testing.T) {
-	repo := NewRepository(execx.NewFakeRunner(nil), "codex")
+	repo := NewRepository(execx.NewFakeRunner(nil), Config{Binary: "codex"})
 
 	cmd, err := repo.BuildLaunchCommand(&core.Task{
 		Prompt: "add billing retry flow",
@@ -24,7 +24,7 @@ func TestRepositoryProposeTaskName_TrimsRunnerOutput(t *testing.T) {
 	runner := execx.NewFakeRunner([]execx.Result{
 		{Stdout: "billing retry flow\n"},
 	})
-	repo := NewRepository(runner, "codex")
+	repo := NewRepository(runner, Config{Binary: "codex"})
 
 	name, err := repo.ProposeTaskName(t.Context(), "add billing retry flow")
 	require.NoError(t, err)
@@ -48,7 +48,7 @@ tokens used
 26,736
 `},
 	})
-	repo := NewRepository(runner, "codex")
+	repo := NewRepository(runner, Config{Binary: "codex"})
 
 	name, err := repo.ProposeTaskName(t.Context(), "i want you to switch the sqlite repo to use sqlc")
 	require.NoError(t, err)
@@ -59,7 +59,7 @@ func TestRepositoryProposeTaskName_StripsMarkdownTicksFromTitle(t *testing.T) {
 	runner := execx.NewFakeRunner([]execx.Result{
 		{Stdout: "Migrate SQLite Repo to `sqlc`\n"},
 	})
-	repo := NewRepository(runner, "codex")
+	repo := NewRepository(runner, Config{Binary: "codex"})
 
 	name, err := repo.ProposeTaskName(t.Context(), "switch the sqlite repo to use sqlc")
 	require.NoError(t, err)

@@ -16,14 +16,18 @@ type Repository struct {
 	binary string
 }
 
-func NewRepository(runner execx.Runner, binary string) *Repository {
-	if binary == "" {
-		binary = "codex"
+type Config struct {
+	Binary string
+}
+
+func NewRepository(runner execx.Runner, cfg Config) *Repository {
+	if cfg.Binary == "" {
+		cfg.Binary = "codex"
 	}
 
 	return &Repository{
 		runner: runner,
-		binary: binary,
+		binary: cfg.Binary,
 	}
 }
 
