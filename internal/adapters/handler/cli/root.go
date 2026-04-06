@@ -2,10 +2,12 @@ package cli
 
 import (
 	"context"
+	"fmt"
 	"io"
 
 	"agent/internal/core"
 
+	tea "charm.land/bubbletea/v2"
 	"github.com/spf13/cobra"
 )
 
@@ -36,6 +38,21 @@ func NewRootCommand(deps Dependencies) *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "agent",
 		Short: "Manage task worktrees and tmux sessions for agent-driven work",
+		Args:  cobra.NoArgs,
+		RunE: func(cmd *cobra.Command, _ []string) error {
+			if deps.Service == nil {
+				return fmt.Errorf("service not configured")
+			}
+
+			program := tea.NewProgram(
+				newTUIModel(deps.Service, deps.Cwd),
+				tea.WithInput(cmd.InOrStdin()),
+				tea.WithOutput(cmd.OutOrStdout()),
+			)
+
+			_, err := program.Run()
+			return err
+		},
 	}
 
 	if deps.Stdout != nil {
@@ -46,12 +63,7 @@ func NewRootCommand(deps Dependencies) *cobra.Command {
 		cmd.SetErr(deps.Stderr)
 	}
 
-	cmd.AddCommand(newNewCommand(deps))
-	cmd.AddCommand(newListCommand(deps))
-	cmd.AddCommand(newOpenCommand(deps))
-	cmd.AddCommand(newStatusCommand(deps))
 	cmd.AddCommand(newDoctorCommand(deps))
-	cmd.AddCommand(newTUICommand(deps))
 
 	return cmd
 }
