@@ -187,9 +187,27 @@ func TestRepositoryIsAvailable_ValidatesConfiguredPath(t *testing.T) {
 	parent := filepath.Join(t.TempDir(), "blocker")
 	require.NoError(t, os.WriteFile(parent, []byte("x"), 0o644))
 
-	repo := &Repository{path: filepath.Join(parent, "state.db")}
+	repo, err := NewRepository(Config{Path: filepath.Join(parent, "state.db")})
+	require.NoError(t, err)
 
-	err := repo.IsAvailable(context.Background())
+	err = repo.IsAvailable(context.Background())
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "not a directory")
+}
+
+func TestNewRepository_ReturnsUnavailableRepositoryForInvalidConfig(t *testing.T) {
+	parent := filepath.Join(t.TempDir(), "blocker")
+	require.NoError(t, os.WriteFile(parent, []byte("x"), 0o644))
+
+	repo, err := NewRepository(Config{Path: filepath.Join(parent, "state.db")})
+	require.NoError(t, err)
+	require.NotNil(t, repo)
+
+	err = repo.IsAvailable(context.Background())
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "not a directory")
+
+	_, err = repo.ListTasks(context.Background())
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "not a directory")
 }
