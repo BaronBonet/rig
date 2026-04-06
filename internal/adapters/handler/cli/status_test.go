@@ -30,7 +30,7 @@ func TestStatusCommand_PrintsTaskDetails(t *testing.T) {
 		},
 	}
 
-	cmd := newStatusCommand(Dependencies{Service: service, Stdout: out, Stderr: out})
+	cmd := newStatusCommand(service)
 	cmd.SetOut(out)
 	cmd.SetErr(out)
 	cmd.SetArgs([]string{"billing-retry-flow"})

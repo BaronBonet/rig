@@ -9,22 +9,17 @@ import (
 	"github.com/spf13/cobra"
 )
 
-type taskGetter interface {
+type statusTaskGetter interface {
 	GetTask(context.Context, string) (*core.Task, error)
 }
 
-func newStatusCommand(deps Dependencies) *cobra.Command {
+func newStatusCommand(service statusTaskGetter) *cobra.Command {
 	return &cobra.Command{
 		Use:   "status <task>",
 		Short: "Show task status",
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			if deps.Service == nil {
-				return fmt.Errorf("service not configured")
-			}
-
-			service, ok := any(deps.Service).(taskGetter)
-			if !ok {
+			if service == nil {
 				return fmt.Errorf("service not configured")
 			}
 
