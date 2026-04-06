@@ -35,7 +35,7 @@ func newTestService() *testServiceHarness {
 	}
 
 	return &testServiceHarness{
-		service: newServiceWithPorts(
+		service: NewService(
 			taskRepo,
 			repoClient,
 			sessionClient,

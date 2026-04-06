@@ -12,16 +12,18 @@ import (
 )
 
 type Repository struct {
-	runner execx.Runner
-	now    func() time.Time
-	sleep  func(time.Duration)
+	runner         execx.Runner
+	runtimeMonitor core.RuntimeMonitor
+	now            func() time.Time
+	sleep          func(time.Duration)
 }
 
 func NewRepository(runner execx.Runner) *Repository {
 	return &Repository{
-		runner: runner,
-		now:    time.Now,
-		sleep:  time.Sleep,
+		runner:         runner,
+		runtimeMonitor: NewRuntimeMonitor(),
+		now:            time.Now,
+		sleep:          time.Sleep,
 	}
 }
 
@@ -143,6 +145,49 @@ func (r *Repository) StartTaskSession(ctx context.Context, task *core.Task, laun
 	}
 
 	return r.TypeInWindow(ctx, task.TmuxSession, task.AgentWindowName, launch.InitialInput)
+}
+
+func (r *Repository) OpenTaskSession(ctx context.Context, task *core.Task) error {
+	return r.AttachOrSwitch(ctx, task.TmuxSession)
+}
+
+func (r *Repository) DeleteTaskSession(ctx context.Context, task *core.Task) error {
+	return r.KillSession(ctx, task.TmuxSession)
+}
+
+func (r *Repository) InspectTaskSession(ctx context.Context, task *core.Task) (core.SessionResources, error) {
+	sessionExists, err := r.SessionExists(ctx, task.TmuxSession)
+	if err != nil {
+		return core.SessionResources{}, err
+	}
+
+	if !sessionExists {
+		return core.SessionResources{}, nil
+	}
+
+	agentWindowExists, err := r.WindowExists(ctx, task.TmuxSession, windowOrDefault(task.AgentWindowName, "agent"))
+	if err != nil {
+		return core.SessionResources{}, err
+	}
+
+	editorWindowExists, err := r.WindowExists(ctx, task.TmuxSession, windowOrDefault(task.EditorWindowName, "editor"))
+	if err != nil {
+		return core.SessionResources{}, err
+	}
+
+	return core.SessionResources{
+		SessionExists:      true,
+		AgentWindowExists:  agentWindowExists,
+		EditorWindowExists: editorWindowExists,
+	}, nil
+}
+
+func (r *Repository) SnapshotTaskSession(ctx context.Context, task *core.Task) (core.RuntimeSnapshot, error) {
+	if r.runtimeMonitor == nil {
+		return core.RuntimeSnapshot{}, nil
+	}
+
+	return r.runtimeMonitor.Snapshot(ctx, task)
 }
 
 func (r *Repository) KillSession(ctx context.Context, session string) error {

@@ -95,6 +95,24 @@ func TestRepositoryInspectTaskWorkspace_ReturnsWorktreeAndBranchPresence(t *test
 	}, runner.Calls[0].Args)
 }
 
+func TestRepositoryRemoveTaskWorkspace_UsesTaskFields(t *testing.T) {
+	runner := execx.NewFakeRunner([]execx.Result{{}})
+	repo := NewRepository(runner)
+
+	err := repo.RemoveTaskWorkspace(context.Background(), &core.Task{
+		RepoRoot:     "/tmp/repo",
+		WorktreePath: "/tmp/repo-billing-retry-flow",
+	})
+	require.NoError(t, err)
+	require.Equal(t, "/tmp/repo", runner.Calls[0].Cwd)
+	require.Equal(t, []string{
+		"worktree",
+		"remove",
+		"--force",
+		"/tmp/repo-billing-retry-flow",
+	}, runner.Calls[0].Args)
+}
+
 func TestRepositoryRemoveWorktree_UsesExpectedGitCommand(t *testing.T) {
 	runner := execx.NewFakeRunner([]execx.Result{{}})
 	repo := NewRepository(runner)

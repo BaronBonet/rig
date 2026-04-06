@@ -101,6 +101,10 @@ func (r *Repository) InspectTaskWorkspace(ctx context.Context, task *core.Task) 
 	}, nil
 }
 
+func (r *Repository) RemoveTaskWorkspace(ctx context.Context, task *core.Task) error {
+	return r.RemoveWorktree(ctx, task.RepoRoot, task.WorktreePath)
+}
+
 func (r *Repository) RemoveWorktree(ctx context.Context, repoRoot, path string) error {
 	_, err := r.runner.Run(ctx, repoRoot, "git", "worktree", "remove", "--force", path)
 	return err

@@ -72,6 +72,10 @@ func (r *Repository) ProposeTaskName(ctx context.Context, prompt string) (string
 	return "", fmt.Errorf("codex did not return a usable task title")
 }
 
+func (r *Repository) SuggestTaskName(ctx context.Context, prompt string) (string, error) {
+	return r.ProposeTaskName(ctx, prompt)
+}
+
 func (r *Repository) BuildLaunchCommand(task *core.Task) ([]string, error) {
 	return []string{r.binary, task.Prompt}, nil
 }
