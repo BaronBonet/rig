@@ -15,8 +15,9 @@ import (
 )
 
 type Repository struct {
-	db   *sql.DB
-	path string
+	db      *sql.DB
+	path    string
+	initErr error
 }
 
 type Config struct {
@@ -29,19 +30,25 @@ const (
 )
 
 func NewRepository(cfg Config) (*Repository, error) {
+	repo := &Repository{path: cfg.Path}
+
 	if err := ValidateConfig(cfg); err != nil {
-		return nil, err
+		repo.initErr = err
+		return repo, nil
 	}
 
 	db, err := sql.Open("sqlite", cfg.Path)
 	if err != nil {
-		return nil, err
+		repo.initErr = err
+		return repo, nil
 	}
 
-	repo := &Repository{db: db, path: cfg.Path}
+	repo.db = db
 	if err := repo.initSchema(); err != nil {
+		repo.initErr = err
 		_ = db.Close()
-		return nil, err
+		repo.db = nil
+		return repo, nil
 	}
 
 	return repo, nil
@@ -60,6 +67,10 @@ func ValidateConfig(cfg Config) error {
 }
 
 func (r *Repository) IsAvailable(context.Context) error {
+	if err := r.unavailableErr(); err != nil {
+		return err
+	}
+
 	return ValidateConfig(Config{Path: r.path})
 }
 
@@ -124,6 +135,10 @@ create table if not exists events (
 }
 
 func (r *Repository) CreateTask(ctx context.Context, task *core.Task) error {
+	if err := r.unavailableErr(); err != nil {
+		return err
+	}
+
 	_, err := r.db.ExecContext(
 		ctx,
 		`insert into tasks (
@@ -161,6 +176,10 @@ func (r *Repository) CreateTask(ctx context.Context, task *core.Task) error {
 }
 
 func (r *Repository) UpdateTask(ctx context.Context, task *core.Task) error {
+	if err := r.unavailableErr(); err != nil {
+		return err
+	}
+
 	_, err := r.db.ExecContext(
 		ctx,
 		`update tasks set
@@ -215,6 +234,10 @@ func (r *Repository) UpdateTask(ctx context.Context, task *core.Task) error {
 }
 
 func (r *Repository) GetTask(ctx context.Context, idOrSlug string) (*core.Task, error) {
+	if err := r.unavailableErr(); err != nil {
+		return nil, err
+	}
+
 	row := r.db.QueryRowContext(
 		ctx,
 		`select
@@ -238,6 +261,10 @@ func (r *Repository) GetTask(ctx context.Context, idOrSlug string) (*core.Task, 
 }
 
 func (r *Repository) ListTasks(ctx context.Context) ([]*core.Task, error) {
+	if err := r.unavailableErr(); err != nil {
+		return nil, err
+	}
+
 	rows, err := r.db.QueryContext(
 		ctx,
 		`select
@@ -269,6 +296,10 @@ func (r *Repository) ListTasks(ctx context.Context) ([]*core.Task, error) {
 }
 
 func (r *Repository) AppendEvent(ctx context.Context, taskID, eventType, payload string) error {
+	if err := r.unavailableErr(); err != nil {
+		return err
+	}
+
 	_, err := r.db.ExecContext(
 		ctx,
 		`insert into events (task_id, event_type, payload, created_at) values (?, ?, ?, ?)`,
@@ -278,6 +309,17 @@ func (r *Repository) AppendEvent(ctx context.Context, taskID, eventType, payload
 		time.Now().UTC().Format(time.RFC3339Nano),
 	)
 	return err
+}
+
+func (r *Repository) unavailableErr() error {
+	if r.initErr != nil {
+		return r.initErr
+	}
+	if r.db == nil {
+		return fmt.Errorf("sqlite repository unavailable")
+	}
+
+	return nil
 }
 
 type rowScanner interface {

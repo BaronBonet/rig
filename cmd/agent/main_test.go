@@ -1,6 +1,8 @@
 package main
 
 import (
+	"context"
+	"os"
 	"path/filepath"
 	"testing"
 
@@ -20,4 +22,24 @@ func TestBuildDependencies_ReturnsConcreteService(t *testing.T) {
 	deps, err := buildDependencies()
 	require.NoError(t, err)
 	require.IsType(t, &core.Service{}, deps.Service)
+}
+
+func TestBuildDependencies_PreservesDoctorStorageFailures(t *testing.T) {
+	home := t.TempDir()
+	blocker := filepath.Join(home, "blocker")
+	require.NoError(t, os.WriteFile(blocker, []byte("x"), 0o644))
+
+	t.Setenv("HOME", home)
+	t.Setenv("AGENT_PROVIDER", "codex")
+	t.Setenv("AGENT_SQLITE_PATH", filepath.Join(blocker, "state.db"))
+	t.Setenv("AGENT_CODEX_BINARY", "true")
+	t.Setenv("AGENT_CLAUDE_BINARY", "true")
+
+	deps, err := buildDependencies()
+	require.NoError(t, err)
+	require.IsType(t, &core.Service{}, deps.Service)
+
+	result, err := deps.Service.Doctor(context.Background(), "")
+	require.NoError(t, err)
+	require.Contains(t, result.Failures, "database: mkdir "+blocker+": not a directory")
 }
