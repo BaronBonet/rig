@@ -24,6 +24,10 @@ type NewTaskInput struct {
 	Provider             string
 }
 
+type CreateTaskOptions struct {
+	OpenSession bool
+}
+
 type Service struct {
 	tasks      TaskRepository
 	repo       RepoClient
