@@ -72,6 +72,10 @@ func (r *Repository) BuildLaunchCommand(task *core.Task) ([]string, error) {
 	return []string{r.binary, task.Prompt}, nil
 }
 
+func (r *Repository) PromptMarker() string {
+	return "›"
+}
+
 func extractCodexTitle(raw string) string {
 	lines := strings.Split(raw, "\n")
 	for i := len(lines) - 1; i >= 0; i-- {

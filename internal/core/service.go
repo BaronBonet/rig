@@ -223,7 +223,8 @@ func (s *Service) createTask(
 		return task, err
 	}
 
-	command, err := s.resolveProvider(task.Provider).BuildLaunchCommand(task)
+	providerRepo := s.resolveProvider(task.Provider)
+	command, err := providerRepo.BuildLaunchCommand(task)
 	if err != nil {
 		return s.markBroken(ctx, task, fmt.Errorf("build launch command: %w", err))
 	}
@@ -234,10 +235,21 @@ func (s *Service) createTask(
 		Task:    cloneTask(task),
 	})
 
-	// Type the full launch command into the shell without pressing Enter,
-	// so the user can review or edit before executing.
-	if err := s.tmux.TypeInWindow(ctx, task.TmuxSession, task.AgentWindowName, command); err != nil {
+	// Launch the agent binary in interactive mode.
+	if err := s.tmux.SendKeysToWindow(ctx, task.TmuxSession, task.AgentWindowName, command[:1]); err != nil {
 		return s.markBroken(ctx, task, fmt.Errorf("launch agent: %w", err))
+	}
+
+	// Wait for the agent to show its input prompt, then type the task
+	// prompt without pressing Enter so the user can review first.
+	if len(command) > 1 {
+		marker := providerRepo.PromptMarker()
+		if err := s.waitForPrompt(ctx, task.TmuxSession, task.AgentWindowName, marker); err != nil {
+			return s.markBroken(ctx, task, fmt.Errorf("wait for agent prompt: %w", err))
+		}
+		if err := s.tmux.TypeInWindow(ctx, task.TmuxSession, task.AgentWindowName, command[1:]); err != nil {
+			return s.markBroken(ctx, task, fmt.Errorf("type prompt: %w", err))
+		}
 	}
 
 	task.Status = TaskStatusRunning
@@ -609,6 +621,31 @@ func (s *Service) enrichRuntimeState(ctx context.Context, task *Task) error {
 
 	task.RuntimeStateUpdatedAt = s.clock.Now().UTC()
 	return nil
+}
+
+func (s *Service) waitForPrompt(ctx context.Context, session, window, marker string) error {
+	const (
+		pollInterval = 500 * time.Millisecond
+		timeout      = 30 * time.Second
+	)
+
+	deadline := s.clock.Now().Add(timeout)
+	for s.clock.Now().Before(deadline) {
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		default:
+		}
+
+		content, err := s.tmux.CapturePaneContent(ctx, session, window)
+		if err == nil && strings.Contains(content, marker) {
+			return nil
+		}
+
+		time.Sleep(pollInterval)
+	}
+
+	return fmt.Errorf("timed out waiting for %s prompt", marker)
 }
 
 func (s *Service) markBroken(ctx context.Context, task *Task, failure error) (*Task, error) {

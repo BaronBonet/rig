@@ -29,7 +29,7 @@ func newTestService() *testServiceHarness {
 			BaseBranch: "main",
 		},
 	}
-	tmuxRepo := &fakeTmuxRepository{}
+	tmuxRepo := &fakeTmuxRepository{capturedPaneContent: "› "}
 	providerRepo := &fakeProviderRepository{}
 	runtimeMonitor := &fakeRuntimeMonitor{}
 	runtimeDetector := &fakeRuntimeStateDetector{}
@@ -177,8 +177,9 @@ type fakeTmuxRepository struct {
 	killSessionErr    error
 	killSessionHook   func()
 	sendKeysErr       error
-	typeInErr         error
-	typedCommand      []string
+	typeInErr           error
+	typedCommand        []string
+	capturedPaneContent string
 	sessionExists     bool
 	windowExists      map[string]map[string]bool
 	attachedSession   string
@@ -273,6 +274,9 @@ func (f *fakeTmuxRepository) TypeInWindow(_ context.Context, _, _ string, comman
 	f.typedCommand = append([]string(nil), command...)
 	return f.typeInErr
 }
+func (f *fakeTmuxRepository) CapturePaneContent(context.Context, string, string) (string, error) {
+	return f.capturedPaneContent, nil
+}
 
 type fakeTmuxWindowCommand struct {
 	session string
@@ -301,6 +305,7 @@ func (f *fakeProviderRepository) BuildLaunchCommand(task *Task) ([]string, error
 
 	return []string{"codex", task.Prompt}, nil
 }
+func (f *fakeProviderRepository) PromptMarker() string { return "›" }
 func (f *fakeProviderRepository) IsAvailable(context.Context) error { return f.isAvailableErr }
 
 type fakeRuntimeMonitor struct {
