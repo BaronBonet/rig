@@ -14,13 +14,6 @@ var (
 
 // Icons
 const (
-	iconRepo     = "📁"
-	iconAgent    = "🤖"
-	iconEditor   = "📝"
-	iconBranch   = "🌿"
-	iconTmux     = "💻"
-	iconWorktree = "🌳"
-
 	iconStatusActive   = "●"
 	iconStatusIdle     = "○"
 	iconStatusProgress = "◐"
@@ -99,18 +92,3 @@ func runtimeStateStyle(state string) (string, lipgloss.Style) {
 	}
 }
 
-// healthStyle returns the styled string for a boolean health indicator.
-func healthStyle(ok bool) string {
-	if ok {
-		return healthyStyle.Render("healthy")
-	}
-	return dimStyle.Render("missing")
-}
-
-// yesNoStyled returns a styled yes/no string.
-func yesNoStyled(ok bool) string {
-	if ok {
-		return healthyStyle.Render("yes")
-	}
-	return dimStyle.Render("no")
-}

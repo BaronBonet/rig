@@ -414,14 +414,11 @@ func TestModelUpdate_MainListViewRendersControlCenterDetails(t *testing.T) {
 	view := stripANSI(m.View())
 
 	require.Contains(t, view, "Control Center")
-	require.Contains(t, view, "tmux-llm")
-	require.Contains(t, view, "healthy")
-	require.Contains(t, view, "missing")
+	require.Contains(t, view, "TASK")
+	require.Contains(t, view, "PROVIDER")
+	require.Contains(t, view, "STATUS")
 	require.Contains(t, view, "billing retry flow")
 	require.Contains(t, view, "running")
-	require.Contains(t, view, "yes")
-	require.Contains(t, view, "no")
-	require.Contains(t, view, "feat/billing-retry-flow")
 }
 
 func TestModelView_PrefersRuntimeBadgesOnSeparateTaskRows(t *testing.T) {
