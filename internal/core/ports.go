@@ -38,6 +38,7 @@ type SeedWorkspaceInput struct {
 }
 
 type TaskRepository interface {
+	IsAvailable(ctx context.Context) error
 	CreateTask(ctx context.Context, task *Task) error
 	UpdateTask(ctx context.Context, task *Task) error
 	GetTask(ctx context.Context, idOrSlug string) (*Task, error)

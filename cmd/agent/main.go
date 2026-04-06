@@ -1,7 +1,6 @@
 package main
 
 import (
-	"context"
 	"fmt"
 	"os"
 	"time"
@@ -39,166 +38,36 @@ func buildDependencies() (cli.Dependencies, error) {
 		return cli.Dependencies{}, err
 	}
 
+	runner := execx.ExecRunner{}
 	runtimeMonitor := tmuxrepo.NewRuntimeMonitor()
-	service := &runtimeService{
-		cfg:            *cfg,
-		runner:         execx.ExecRunner{},
-		runtimeMonitor: runtimeMonitor,
-		runtimeDetectors: map[string]core.RuntimeStateDetector{
+
+	taskRepo, err := sqliterepo.NewRepository(cfg.SQLite)
+	if err != nil {
+		return cli.Dependencies{}, err
+	}
+
+	service := core.NewService(
+		taskRepo,
+		gitrepo.NewRepository(runner),
+		tmuxrepo.NewRepository(runner),
+		map[string]core.ProviderRepository{
+			"codex":  codexrepo.NewRepository(runner, cfg.Codex),
+			"claude": clauderepo.NewRepository(runner, cfg.Claude),
+		},
+		runtimeMonitor,
+		map[string]core.RuntimeStateDetector{
 			"codex":  codexrepo.NewRuntimeDetector(2 * time.Second),
 			"claude": clauderepo.NewRuntimeDetector(2 * time.Second),
 		},
-	}
+		agentconfigrepo.NewRepository(),
+		workspacerepo.NewRepository(),
+		timeutil.RealClock{},
+		cfg.Service,
+	)
 
 	return cli.Dependencies{
 		Service: service,
 		Stdout:  os.Stdout,
 		Stderr:  os.Stderr,
 	}, nil
-}
-
-type runtimeService struct {
-	runner           execx.ExecRunner
-	cfg              infrastructure.Config
-	runtimeMonitor   core.RuntimeMonitor
-	runtimeDetectors map[string]core.RuntimeStateDetector
-}
-
-func (r *runtimeService) Doctor(ctx context.Context, cwd string) (core.DoctorResult, error) {
-	result := core.DoctorResult{}
-
-	if err := sqliterepo.ValidateConfig(r.cfg.SQLite); err != nil {
-		result.Failures = append(result.Failures, "database: "+err.Error())
-	}
-
-	service, err := r.newService(false)
-	if err != nil {
-		return core.DoctorResult{}, err
-	}
-
-	doctorResult, err := service.Doctor(ctx, cwd)
-	if err != nil {
-		return core.DoctorResult{}, err
-	}
-
-	result.Notes = append(result.Notes, doctorResult.Notes...)
-	result.Failures = append(result.Failures, doctorResult.Failures...)
-
-	return result, nil
-}
-
-func (r *runtimeService) SuggestTaskName(ctx context.Context, prompt string, provider string) (string, error) {
-	service, err := r.newService(false)
-	if err != nil {
-		return "", err
-	}
-
-	return service.SuggestTaskName(ctx, prompt, provider)
-}
-
-func (r *runtimeService) NewTask(ctx context.Context, input core.NewTaskInput) (*core.Task, error) {
-	service, err := r.newService(true)
-	if err != nil {
-		return nil, err
-	}
-
-	return service.NewTask(ctx, input)
-}
-
-func (r *runtimeService) CreateTaskWithProgress(
-	ctx context.Context,
-	input core.NewTaskInput,
-	options core.CreateTaskOptions,
-	progress func(core.TaskProgress),
-) (*core.Task, error) {
-	service, err := r.newService(true)
-	if err != nil {
-		return nil, err
-	}
-
-	return service.CreateTaskWithProgress(ctx, input, options, progress)
-}
-
-func (r *runtimeService) ListTasks(ctx context.Context) ([]*core.Task, error) {
-	service, err := r.newService(true)
-	if err != nil {
-		return nil, err
-	}
-
-	return service.ListTasks(ctx)
-}
-
-func (r *runtimeService) GetTask(ctx context.Context, idOrSlug string) (*core.Task, error) {
-	service, err := r.newService(true)
-	if err != nil {
-		return nil, err
-	}
-
-	return service.GetTask(ctx, idOrSlug)
-}
-
-func (r *runtimeService) OpenTask(ctx context.Context, idOrSlug string) error {
-	service, err := r.newService(true)
-	if err != nil {
-		return err
-	}
-
-	return service.OpenTask(ctx, idOrSlug)
-}
-
-func (r *runtimeService) DeleteTaskResources(ctx context.Context, idOrSlug string) (*core.Task, error) {
-	service, err := r.newService(true)
-	if err != nil {
-		return nil, err
-	}
-
-	return service.DeleteTaskResources(ctx, idOrSlug)
-}
-
-func (r *runtimeService) newService(withSQLite bool) (*core.Service, error) {
-	var taskRepo core.TaskRepository = noopTaskRepository{}
-	if withSQLite {
-		sqliteRepo, err := sqliterepo.NewRepository(r.cfg.SQLite)
-		if err != nil {
-			return nil, err
-		}
-
-		taskRepo = sqliteRepo
-	}
-
-	providers := map[string]core.ProviderRepository{
-		"codex":  codexrepo.NewRepository(r.runner, r.cfg.Codex),
-		"claude": clauderepo.NewRepository(r.runner, r.cfg.Claude),
-	}
-
-	return core.NewService(
-		taskRepo,
-		gitrepo.NewRepository(r.runner),
-		tmuxrepo.NewRepository(r.runner),
-		providers,
-		r.runtimeMonitor,
-		r.runtimeDetectors,
-		agentconfigrepo.NewRepository(),
-		workspacerepo.NewRepository(),
-		timeutil.RealClock{},
-		r.cfg.Service,
-	), nil
-}
-
-type noopTaskRepository struct{}
-
-func (noopTaskRepository) CreateTask(context.Context, *core.Task) error {
-	return fmt.Errorf("task repository unavailable")
-}
-func (noopTaskRepository) UpdateTask(context.Context, *core.Task) error {
-	return fmt.Errorf("task repository unavailable")
-}
-func (noopTaskRepository) GetTask(context.Context, string) (*core.Task, error) {
-	return nil, fmt.Errorf("task repository unavailable")
-}
-func (noopTaskRepository) ListTasks(context.Context) ([]*core.Task, error) {
-	return nil, fmt.Errorf("task repository unavailable")
-}
-func (noopTaskRepository) AppendEvent(context.Context, string, string, string) error {
-	return fmt.Errorf("task repository unavailable")
 }
