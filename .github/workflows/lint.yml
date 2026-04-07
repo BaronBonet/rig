@@ -21,7 +21,7 @@ jobs:
           cache: true
 
       - name: Install dependencies
-        run: make dependencies-install
+        run: make dependencies install
 
       - name: Run linters
         run: |
@@ -29,4 +29,4 @@ jobs:
           make lint-all
 
       - name: Run tests
-        run: go test ./...
+        run: make test
