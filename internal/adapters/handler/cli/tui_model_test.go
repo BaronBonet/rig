@@ -731,11 +731,11 @@ func TestModelView_ShowsLoadingBeforeInitialLoadCompletes(t *testing.T) {
 	require.Contains(t, stripANSI(m.View().Content), "Loading tasks")
 }
 
-func newLoadedTUIModel(t *testing.T, service TaskService, tasks ...*core.Task) model {
+func newLoadedTUIModel(t *testing.T, service *MockTaskService, tasks ...*core.Task) model {
 	return newLoadedTUIModelWithProvider(t, service, "codex", tasks...)
 }
 
-func newLoadedTUIModelWithProvider(t *testing.T, service TaskService, provider string, tasks ...*core.Task) model {
+func newLoadedTUIModelWithProvider(t *testing.T, service *MockTaskService, provider string, tasks ...*core.Task) model {
 	t.Helper()
 
 	next, cmd := newTUIModel(service, "/tmp/default", provider).Update(tasksLoadedMsg{tasks: tasks})
