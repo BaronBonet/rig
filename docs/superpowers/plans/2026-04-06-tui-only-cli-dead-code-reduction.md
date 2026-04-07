@@ -419,3 +419,8 @@ Verified with:
 - gofmt -w cmd/agent/main.go internal/adapters/handler/cli/*.go internal/core/*.go
 - git status --short
 ```
+
+## Known Follow-Up
+
+- Read-only startup paths still eagerly initialize SQLite during dependency construction. Today that means commands such as `agent --help` and `agent doctor` can create the configured SQLite file before Cobra dispatches into the selected command path.
+- This is intentionally left unresolved in this pass so the TUI-only cleanup does not reintroduce the lazy composition pattern that was removed during the boundary refactor.
