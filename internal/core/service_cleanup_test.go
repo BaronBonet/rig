@@ -4,18 +4,21 @@ import (
 	"errors"
 	"path/filepath"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/require"
 )
 
 func TestServiceDeleteTaskResources_CleansRunningTaskResources(t *testing.T) {
 	worktree := t.TempDir()
-	svc := newTestService()
+	svc := newTestService(t)
 	svc.taskRepo.getTask = cleanupTestTask(worktree)
 	svc.repoClient.repoResources = RepoResources{WorktreeExists: true, BranchExists: true}
 	svc.sessionClient.sessionResources = SessionResources{SessionExists: true, AgentWindowExists: true, EditorWindowExists: true}
+	before := time.Now().UTC()
 
 	task, err := svc.service.DeleteTaskResources(t.Context(), "billing-retry-flow")
+	after := time.Now().UTC()
 
 	require.NoError(t, err)
 	require.Equal(t, TaskStatusCleaned, task.Status)
@@ -29,11 +32,12 @@ func TestServiceDeleteTaskResources_CleansRunningTaskResources(t *testing.T) {
 	require.Equal(t, "repo-billing-retry-flow", svc.sessionClient.deletedTasks[0].TmuxSession)
 	require.Len(t, svc.repoClient.removedTasks, 1)
 	require.Equal(t, worktree, svc.repoClient.removedTasks[0].WorktreePath)
+	requireTimeInWindow(t, task.UpdatedAt, before, after)
 }
 
 func TestServiceDeleteTaskResources_CleansWorktreeWhenSessionAlreadyMissing(t *testing.T) {
 	worktree := t.TempDir()
-	svc := newTestService()
+	svc := newTestService(t)
 	svc.taskRepo.getTask = cleanupTestTask(worktree)
 	svc.repoClient.repoResources = RepoResources{WorktreeExists: true, BranchExists: true}
 	svc.sessionClient.sessionResources = SessionResources{}
@@ -51,7 +55,7 @@ func TestServiceDeleteTaskResources_CleansWorktreeWhenSessionAlreadyMissing(t *t
 
 func TestServiceDeleteTaskResources_CleansSessionWhenWorktreeAlreadyMissing(t *testing.T) {
 	worktree := filepath.Join(t.TempDir(), "gone")
-	svc := newTestService()
+	svc := newTestService(t)
 	svc.taskRepo.getTask = cleanupTestTask(worktree)
 	svc.repoClient.repoResources = RepoResources{WorktreeExists: false, BranchExists: true}
 	svc.sessionClient.sessionResources = SessionResources{SessionExists: true, AgentWindowExists: true, EditorWindowExists: true}
@@ -69,7 +73,7 @@ func TestServiceDeleteTaskResources_CleansSessionWhenWorktreeAlreadyMissing(t *t
 
 func TestServiceDeleteTaskResources_TreatsMissingSessionAfterKillErrorAsSuccess(t *testing.T) {
 	worktree := t.TempDir()
-	svc := newTestService()
+	svc := newTestService(t)
 	svc.taskRepo.getTask = cleanupTestTask(worktree)
 	svc.repoClient.repoResources = RepoResources{WorktreeExists: true, BranchExists: true}
 	svc.sessionClient.sessionResources = SessionResources{SessionExists: true, AgentWindowExists: true, EditorWindowExists: true}
@@ -93,7 +97,7 @@ func TestServiceDeleteTaskResources_TreatsMissingSessionAfterKillErrorAsSuccess(
 
 func TestServiceDeleteTaskResources_TreatsMissingWorktreeAfterRemoveErrorAsSuccess(t *testing.T) {
 	worktree := t.TempDir()
-	svc := newTestService()
+	svc := newTestService(t)
 	svc.taskRepo.getTask = cleanupTestTask(worktree)
 	svc.repoClient.repoResources = RepoResources{WorktreeExists: true, BranchExists: true}
 	svc.repoClient.removeErr = errors.New("already gone")
@@ -116,7 +120,7 @@ func TestServiceDeleteTaskResources_TreatsMissingWorktreeAfterRemoveErrorAsSucce
 
 func TestServiceDeleteTaskResources_KeepsTaskBrokenWhenWorktreeStateCannotBeVerified(t *testing.T) {
 	worktree := "/tmp/bad"
-	svc := newTestService()
+	svc := newTestService(t)
 	svc.taskRepo.getTask = cleanupTestTask(worktree)
 	svc.repoClient.repoResources = RepoResources{WorktreeExists: true, BranchExists: true}
 	svc.repoClient.removeErr = errors.New("permission denied")
@@ -135,7 +139,7 @@ func TestServiceDeleteTaskResources_KeepsTaskBrokenWhenWorktreeStateCannotBeVeri
 
 func TestServiceDeleteTaskResources_MarksTaskBrokenWhenWorktreeRemovalFailsAfterTmuxCleanup(t *testing.T) {
 	worktree := t.TempDir()
-	svc := newTestService()
+	svc := newTestService(t)
 	svc.taskRepo.getTask = cleanupTestTask(worktree)
 	svc.repoClient.repoResources = RepoResources{WorktreeExists: true, BranchExists: true}
 	svc.repoClient.removeErr = errors.New("remove worktree: permission denied")
@@ -152,7 +156,7 @@ func TestServiceDeleteTaskResources_MarksTaskBrokenWhenWorktreeRemovalFailsAfter
 
 func TestServiceDeleteTaskResources_AppendsCleanupLifecycleEvents(t *testing.T) {
 	worktree := t.TempDir()
-	svc := newTestService()
+	svc := newTestService(t)
 	svc.taskRepo.getTask = cleanupTestTask(worktree)
 	svc.repoClient.repoResources = RepoResources{WorktreeExists: true, BranchExists: true}
 	svc.sessionClient.sessionResources = SessionResources{SessionExists: true, AgentWindowExists: true, EditorWindowExists: true}
@@ -168,7 +172,7 @@ func TestServiceDeleteTaskResources_AppendsCleanupLifecycleEvents(t *testing.T) 
 
 func TestServiceDeleteTaskResources_ReturnsIntermediateUpdateFailure(t *testing.T) {
 	worktree := t.TempDir()
-	svc := newTestService()
+	svc := newTestService(t)
 	svc.taskRepo.getTask = cleanupTestTask(worktree)
 	svc.taskRepo.updateErrAt = 2
 	svc.taskRepo.updateErr = errors.New("update failed")
@@ -184,7 +188,7 @@ func TestServiceDeleteTaskResources_ReturnsIntermediateUpdateFailure(t *testing.
 
 func TestServiceDeleteTaskResources_PreservesCleanupFailureReasonDuringLaterReconcile(t *testing.T) {
 	worktree := t.TempDir()
-	svc := newTestService()
+	svc := newTestService(t)
 	svc.taskRepo.getTask = cleanupTestTask(worktree)
 	svc.repoClient.repoResources = RepoResources{WorktreeExists: true, BranchExists: true}
 	svc.repoClient.removeErr = errors.New("remove worktree: permission denied")
@@ -204,7 +208,7 @@ func TestServiceDeleteTaskResources_PreservesCleanupFailureReasonDuringLaterReco
 
 func TestServiceReconcile_PreservesCleanedWhenResourcesRemainAbsent(t *testing.T) {
 	worktree := filepath.Join(t.TempDir(), "gone")
-	svc := newTestService()
+	svc := newTestService(t)
 	svc.taskRepo.getTask = &Task{
 		ID:           "task-1",
 		Slug:         "billing-retry-flow",
@@ -229,7 +233,7 @@ func TestServiceReconcile_PreservesCleanedWhenResourcesRemainAbsent(t *testing.T
 func TestServiceReconcile_TurnsCleanedTaskBrokenWhenResourcesReappear(t *testing.T) {
 	t.Run("session reappears", func(t *testing.T) {
 		worktree := filepath.Join(t.TempDir(), "gone")
-		svc := newTestService()
+		svc := newTestService(t)
 		svc.taskRepo.getTask = &Task{
 			ID:           "task-1",
 			Slug:         "billing-retry-flow",
@@ -251,7 +255,7 @@ func TestServiceReconcile_TurnsCleanedTaskBrokenWhenResourcesReappear(t *testing
 
 	t.Run("worktree reappears", func(t *testing.T) {
 		worktree := t.TempDir()
-		svc := newTestService()
+		svc := newTestService(t)
 		svc.taskRepo.getTask = &Task{
 			ID:           "task-1",
 			Slug:         "billing-retry-flow",

@@ -3,17 +3,18 @@ package core
 import (
 	"errors"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/require"
 )
 
 func TestNewService_AcceptsBusinessPorts(t *testing.T) {
-	taskRepo := &fakeTaskRepository{}
-	repoClient := &fakeRepoClient{}
-	sessionClient := &fakeSessionClient{}
-	providerClient := &fakeProviderClient{}
-	configRepo := &fakeRepoConfigRepository{}
-	workspaceSeeder := &fakeWorkspaceSeeder{}
+	taskRepo := NewMockTaskRepository(t)
+	repoClient := NewMockRepoClient(t)
+	sessionClient := NewMockSessionClient(t)
+	providerClient := NewMockProviderClient(t)
+	configRepo := NewMockRepoConfigRepository(t)
+	workspaceSeeder := NewMockWorkspaceSeeder(t)
 
 	service := NewService(
 		taskRepo,
@@ -22,7 +23,6 @@ func TestNewService_AcceptsBusinessPorts(t *testing.T) {
 		map[string]ProviderClient{"codex": providerClient},
 		configRepo,
 		workspaceSeeder,
-		fakeClock{},
 		Config{Provider: "codex"},
 	)
 
@@ -30,14 +30,16 @@ func TestNewService_AcceptsBusinessPorts(t *testing.T) {
 }
 
 func TestServiceCreateTaskWithProgress_CreatesWorktreeSessionAndPersistsTask(t *testing.T) {
-	svc := newTestService()
+	svc := newTestService(t)
 	svc.providerRepo.suggestedName = "billing retry flow"
+	before := time.Now().UTC()
 
 	task, err := svc.service.CreateTaskWithProgress(t.Context(), NewTaskInput{
 		Cwd:                  "/tmp/repo",
 		Prompt:               "add billing retry flow",
 		ConfirmedDisplayName: "billing retry flow",
 	}, CreateTaskOptions{}, nil)
+	after := time.Now().UTC()
 
 	require.NoError(t, err)
 	require.Equal(t, "feat/billing-retry-flow", task.BranchName)
@@ -60,10 +62,13 @@ func TestServiceCreateTaskWithProgress_CreatesWorktreeSessionAndPersistsTask(t *
 	require.Equal(t, "repo", svc.taskRepo.createdTask.RepoName)
 	require.Equal(t, "agent", svc.taskRepo.createdTask.AgentWindowName)
 	require.Equal(t, "editor", svc.taskRepo.createdTask.EditorWindowName)
+	requireTimeInWindow(t, task.CreatedAt, before, after)
+	requireTimeInWindow(t, task.UpdatedAt, before, after)
+	require.False(t, task.UpdatedAt.Before(task.CreatedAt))
 }
 
 func TestServiceCreateTaskWithProgress_FallsBackWhenCodexNameProposalFails(t *testing.T) {
-	svc := newTestService()
+	svc := newTestService(t)
 	svc.providerRepo.suggestErr = errors.New("codex unavailable")
 
 	task, err := svc.service.CreateTaskWithProgress(t.Context(), NewTaskInput{
@@ -76,7 +81,7 @@ func TestServiceCreateTaskWithProgress_FallsBackWhenCodexNameProposalFails(t *te
 }
 
 func TestCreateTask_UsesSessionClientLaunchRequest(t *testing.T) {
-	svc := newTestService()
+	svc := newTestService(t)
 	svc.providerRepo.launchRequest = LaunchRequest{
 		Command:      []string{"codex"},
 		Prompt:       "›",
@@ -92,24 +97,29 @@ func TestCreateTask_UsesSessionClientLaunchRequest(t *testing.T) {
 }
 
 func TestServiceCreateTaskWithProgress_PersistsBrokenTaskWhenTmuxCreationFails(t *testing.T) {
-	svc := newTestService()
+	svc := newTestService(t)
 	svc.providerRepo.suggestedName = "billing retry flow"
 	svc.sessionClient.startErr = errors.New("tmux failed")
+	before := time.Now().UTC()
 
 	task, err := svc.service.CreateTaskWithProgress(t.Context(), NewTaskInput{
 		Cwd:                  "/tmp/repo",
 		Prompt:               "add billing retry flow",
 		ConfirmedDisplayName: "billing retry flow",
 	}, CreateTaskOptions{}, nil)
+	after := time.Now().UTC()
 
 	require.Error(t, err)
 	require.Equal(t, TaskStatusBroken, task.Status)
 	require.Contains(t, task.LastError, "tmux failed")
 	require.Equal(t, TaskStatusBroken, svc.taskRepo.updatedTask.Status)
+	requireTimeInWindow(t, task.CreatedAt, before, after)
+	requireTimeInWindow(t, task.UpdatedAt, before, after)
+	require.False(t, task.UpdatedAt.Before(task.CreatedAt))
 }
 
 func TestServiceCreateTaskWithProgress_EmitsEventsAndOpensSession(t *testing.T) {
-	svc := newTestService()
+	svc := newTestService(t)
 	svc.providerRepo.launchRequest = LaunchRequest{
 		Command:      []string{"codex"},
 		Prompt:       "›",
@@ -139,7 +149,7 @@ func TestServiceCreateTaskWithProgress_EmitsEventsAndOpensSession(t *testing.T) 
 }
 
 func TestServiceCreateTaskWithProgress_SeedsWorkspaceBeforeTmux(t *testing.T) {
-	svc := newTestService()
+	svc := newTestService(t)
 	svc.configRepo.repoConfig = RepoConfig{
 		Seed: SeedConfig{Copy: []string{".env", "local/"}},
 	}
@@ -179,7 +189,7 @@ func TestServiceCreateTaskWithProgress_SeedsWorkspaceBeforeTmux(t *testing.T) {
 }
 
 func TestServiceCreateTaskWithProgress_FailsBeforeCreatingTaskWhenWorkspaceValidationFails(t *testing.T) {
-	svc := newTestService()
+	svc := newTestService(t)
 	svc.configRepo.repoConfig = RepoConfig{
 		Exists: true,
 		Seed:   SeedConfig{Copy: []string{".env"}},
