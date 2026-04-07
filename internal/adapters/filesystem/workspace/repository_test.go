@@ -24,7 +24,7 @@ func TestRepositorySeedWorkspaceCopiesFilesAndDirectories(t *testing.T) {
 		os.WriteFile(filepath.Join(repoRoot, "local", "scripts", "setup.sh"), []byte("#!/bin/sh\necho setup\n"), 0o755),
 	)
 
-	repo := NewRepository()
+	repo := NewSeeder()
 	var copied []string
 
 	err := repo.SeedWorkspace(context.Background(), core.SeedWorkspaceInput{
@@ -60,7 +60,7 @@ func TestRepositoryValidateSeedPathsDoesNotMutateWorkspace(t *testing.T) {
 	sentinel := filepath.Join(repoRoot, "created-by-validation")
 	require.NoError(t, os.RemoveAll(sentinel))
 
-	repo := NewRepository()
+	repo := NewSeeder()
 
 	err := repo.ValidateSeedPaths(context.Background(), repoRoot, []string{".env"})
 	require.NoError(t, err)
@@ -80,7 +80,7 @@ func TestRepositoryValidateSeedPathsRejectsOverlappingPaths(t *testing.T) {
 	require.NoError(t, os.MkdirAll(filepath.Join(repoRoot, "local"), 0o755))
 	require.NoError(t, os.WriteFile(filepath.Join(repoRoot, "local", "config.json"), []byte(`{"ok":true}`), 0o644))
 
-	repo := NewRepository()
+	repo := NewSeeder()
 
 	err := repo.ValidateSeedPaths(context.Background(), repoRoot, []string{"local/", "local/config.json"})
 	require.Error(t, err)
@@ -88,7 +88,7 @@ func TestRepositoryValidateSeedPathsRejectsOverlappingPaths(t *testing.T) {
 }
 
 func TestRepositorySeedWorkspaceRejectsMissingSource(t *testing.T) {
-	repo := NewRepository()
+	repo := NewSeeder()
 
 	err := repo.SeedWorkspace(context.Background(), core.SeedWorkspaceInput{
 		RepoRoot:      t.TempDir(),
@@ -106,7 +106,7 @@ func TestRepositorySeedWorkspaceRejectsExistingDestination(t *testing.T) {
 	require.NoError(t, os.WriteFile(filepath.Join(repoRoot, ".env"), []byte("API_KEY=1\n"), 0o600))
 	require.NoError(t, os.WriteFile(filepath.Join(worktreePath, ".env"), []byte("already here\n"), 0o644))
 
-	repo := NewRepository()
+	repo := NewSeeder()
 
 	err := repo.SeedWorkspace(context.Background(), core.SeedWorkspaceInput{
 		RepoRoot:      repoRoot,
@@ -129,7 +129,7 @@ func TestRepositorySeedWorkspaceRejectsSymlinks(t *testing.T) {
 	require.NoError(t, os.WriteFile(target, []byte("secret\n"), 0o600))
 	require.NoError(t, os.Symlink("target.txt", filepath.Join(repoRoot, "linked.txt")))
 
-	repo := NewRepository()
+	repo := NewSeeder()
 
 	err := repo.SeedWorkspace(context.Background(), core.SeedWorkspaceInput{
 		RepoRoot:      repoRoot,
@@ -152,7 +152,7 @@ func TestRepositorySeedWorkspaceRejectsSymlinkedSourceParent(t *testing.T) {
 	require.NoError(t, os.WriteFile(filepath.Join(targetDir, "config.json"), []byte(`{"ok":true}`), 0o644))
 	require.NoError(t, os.Symlink("real-dir", filepath.Join(repoRoot, "link-dir")))
 
-	repo := NewRepository()
+	repo := NewSeeder()
 
 	err := repo.SeedWorkspace(context.Background(), core.SeedWorkspaceInput{
 		RepoRoot:      repoRoot,
@@ -177,7 +177,7 @@ func TestRepositorySeedWorkspaceRejectsSymlinkedDestinationParent(t *testing.T) 
 	require.NoError(t, os.Remove(filepath.Join(worktreePath, "subdir")))
 	require.NoError(t, os.Symlink(outside, filepath.Join(worktreePath, "subdir")))
 
-	repo := NewRepository()
+	repo := NewSeeder()
 
 	err := repo.SeedWorkspace(context.Background(), core.SeedWorkspaceInput{
 		RepoRoot:      repoRoot,
@@ -202,7 +202,7 @@ func TestRepositorySeedWorkspaceRejectsNestedDirectorySymlinkWithoutMutatingDest
 	require.NoError(t, os.WriteFile(filepath.Join(repoRoot, "local", "config.json"), []byte(`{"ok":true}`), 0o644))
 	require.NoError(t, os.Symlink("../config.json", filepath.Join(repoRoot, "local", "nested", "link.json")))
 
-	repo := NewRepository()
+	repo := NewSeeder()
 
 	err := repo.SeedWorkspace(context.Background(), core.SeedWorkspaceInput{
 		RepoRoot:      repoRoot,
@@ -217,7 +217,7 @@ func TestRepositorySeedWorkspaceRejectsNestedDirectorySymlinkWithoutMutatingDest
 }
 
 func TestRepositorySeedWorkspaceRejectsEscapingPaths(t *testing.T) {
-	repo := NewRepository()
+	repo := NewSeeder()
 
 	err := repo.ValidateSeedPaths(context.Background(), t.TempDir(), []string{"../outside"})
 	require.Error(t, err)

@@ -1,6 +1,8 @@
 package infrastructure
 
 import (
+	"agent/internal/adapters/repository/sqlite"
+	"agent/internal/core"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -9,10 +11,9 @@ import (
 
 	claudeclient "agent/internal/adapters/client/claude"
 	codexclient "agent/internal/adapters/client/codex"
-	"agent/internal/adapters/repository/sqlite"
-	"agent/internal/core"
 )
 
+// TODO: this is way to complicated, move the adapter specific stuff to their own repos
 type Config struct {
 	Service core.Config
 	SQLite  sqlite.Config

@@ -24,8 +24,8 @@ type testServiceHarness struct {
 	providerRepoMock *MockProviderClient
 	providerRepo     providerClientState
 
-	configRepoMock *MockRepoConfigRepository
-	configRepo     repoConfigRepositoryState
+	configRepoMock *MockRepoConfigLoader
+	configRepo     repoConfigLoaderState
 
 	workspaceSeederMock *MockWorkspaceSeeder
 	workspaceSeeder     workspaceSeederState
@@ -89,7 +89,7 @@ type providerClientState struct {
 	runtimeState   RuntimeState
 }
 
-type repoConfigRepositoryState struct {
+type repoConfigLoaderState struct {
 	repoConfig     RepoConfig
 	loadErr        error
 	loadedRepoRoot string
@@ -114,7 +114,7 @@ func newTestService(t *testing.T) *testServiceHarness {
 		repoClientMock:      NewMockRepoClient(t),
 		sessionClientMock:   NewMockSessionClient(t),
 		providerRepoMock:    NewMockProviderClient(t),
-		configRepoMock:      NewMockRepoConfigRepository(t),
+		configRepoMock:      NewMockRepoConfigLoader(t),
 		workspaceSeederMock: NewMockWorkspaceSeeder(t),
 		repoClient: repoClientState{
 			repoContext: RepoContext{
@@ -133,7 +133,7 @@ func newTestService(t *testing.T) *testServiceHarness {
 	wireRepoClientMock(h)
 	wireSessionClientMock(h)
 	wireProviderClientMock(h)
-	wireRepoConfigRepositoryMock(h)
+	wireRepoConfigLoaderMock(h)
 	wireWorkspaceSeederMock(h)
 
 	h.service = NewService(
@@ -327,7 +327,7 @@ func wireProviderClientMock(h *testServiceHarness) {
 	}).Maybe()
 }
 
-func wireRepoConfigRepositoryMock(h *testServiceHarness) {
+func wireRepoConfigLoaderMock(h *testServiceHarness) {
 	h.configRepoMock.EXPECT().LoadRepoConfig(mock.Anything, mock.Anything).
 		RunAndReturn(func(_ context.Context, repoRoot string) (RepoConfig, error) {
 			h.configRepo.loadedRepoRoot = repoRoot

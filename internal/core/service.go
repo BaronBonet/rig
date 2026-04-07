@@ -33,7 +33,7 @@ type Service struct {
 	repo       RepoClient
 	session    SessionClient
 	providers  map[string]ProviderClient
-	repoConfig RepoConfigRepository
+	repoConfig RepoConfigLoader
 	workspace  WorkspaceSeeder
 	cfg        Config
 }
@@ -363,7 +363,7 @@ func NewService(
 	repo RepoClient,
 	session SessionClient,
 	providers map[string]ProviderClient,
-	repoConfig RepoConfigRepository,
+	repoConfig RepoConfigLoader,
 	workspace WorkspaceSeeder,
 	cfg Config,
 ) *Service {

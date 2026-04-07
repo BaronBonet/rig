@@ -13,13 +13,13 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
-type Repository struct{}
+type Loader struct{}
 
-func NewRepository() *Repository {
-	return &Repository{}
+func NewLoader() *Loader {
+	return &Loader{}
 }
 
-func (r *Repository) LoadRepoConfig(_ context.Context, repoRoot string) (core.RepoConfig, error) {
+func (l *Loader) LoadRepoConfig(_ context.Context, repoRoot string) (core.RepoConfig, error) {
 	raw, err := os.ReadFile(filepath.Join(repoRoot, "agent.yaml"))
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) {

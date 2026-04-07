@@ -63,7 +63,7 @@ type TaskRepository interface {
 	AppendEvent(ctx context.Context, taskID, eventType, payload string) error
 }
 
-type RepoConfigRepository interface {
+type RepoConfigLoader interface {
 	LoadRepoConfig(ctx context.Context, repoRoot string) (RepoConfig, error)
 }
 

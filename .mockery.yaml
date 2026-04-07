@@ -13,7 +13,7 @@ packages:
   agent/internal/core:
     interfaces:
       TaskRepository:
-      RepoConfigRepository:
+      RepoConfigLoader:
       WorkspaceSeeder:
       RepoClient:
       SessionClient:

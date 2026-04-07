@@ -10,7 +10,7 @@ import (
 
 func TestRepositoryLoadRepoConfig(t *testing.T) {
 	t.Run("missing agent.yaml returns empty config", func(t *testing.T) {
-		repo := NewRepository()
+		repo := NewLoader()
 
 		cfg, err := repo.LoadRepoConfig(t.Context(), t.TempDir())
 		require.NoError(t, err)
@@ -28,7 +28,7 @@ seed:
     - nested/path///
 `), 0o644))
 
-		repo := NewRepository()
+		repo := NewLoader()
 
 		cfg, err := repo.LoadRepoConfig(t.Context(), repoRoot)
 		require.NoError(t, err)
@@ -40,7 +40,7 @@ seed:
 		repoRoot := t.TempDir()
 		require.NoError(t, os.WriteFile(filepath.Join(repoRoot, "agent.yaml"), []byte(""), 0o644))
 
-		repo := NewRepository()
+		repo := NewLoader()
 
 		cfg, err := repo.LoadRepoConfig(t.Context(), repoRoot)
 		require.NoError(t, err)
@@ -52,7 +52,7 @@ seed:
 		repoRoot := t.TempDir()
 		require.NoError(t, os.WriteFile(filepath.Join(repoRoot, "agent.yaml"), []byte("seed:\n  copy: [\n"), 0o644))
 
-		repo := NewRepository()
+		repo := NewLoader()
 
 		_, err := repo.LoadRepoConfig(t.Context(), repoRoot)
 		require.Error(t, err)
@@ -81,7 +81,7 @@ seed:
 				repoRoot := t.TempDir()
 				require.NoError(t, os.WriteFile(filepath.Join(repoRoot, "agent.yaml"), []byte(tc.body), 0o644))
 
-				repo := NewRepository()
+				repo := NewLoader()
 
 				_, err := repo.LoadRepoConfig(t.Context(), repoRoot)
 				require.Error(t, err)
@@ -113,7 +113,7 @@ seed:
 				repoRoot := t.TempDir()
 				require.NoError(t, os.WriteFile(filepath.Join(repoRoot, "agent.yaml"), []byte(tc.body), 0o644))
 
-				repo := NewRepository()
+				repo := NewLoader()
 
 				_, err := repo.LoadRepoConfig(t.Context(), repoRoot)
 				require.Error(t, err)
@@ -175,7 +175,7 @@ seed:
 				repoRoot := t.TempDir()
 				require.NoError(t, os.WriteFile(filepath.Join(repoRoot, "agent.yaml"), []byte(tc.body), 0o644))
 
-				repo := NewRepository()
+				repo := NewLoader()
 
 				_, err := repo.LoadRepoConfig(t.Context(), repoRoot)
 				require.Error(t, err)
@@ -222,7 +222,7 @@ seed:
 				repoRoot := t.TempDir()
 				require.NoError(t, os.WriteFile(filepath.Join(repoRoot, "agent.yaml"), []byte(tc.body), 0o644))
 
-				repo := NewRepository()
+				repo := NewLoader()
 
 				_, err := repo.LoadRepoConfig(t.Context(), repoRoot)
 				require.Error(t, err)
