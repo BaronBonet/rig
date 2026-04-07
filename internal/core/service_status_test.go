@@ -20,7 +20,11 @@ func TestServiceGetTask_ReconcilesLiveFields(t *testing.T) {
 		Status:       TaskStatusRunning,
 	}
 	svc.repoClient.repoResources = RepoResources{WorktreeExists: true, BranchExists: true}
-	svc.sessionClient.sessionResources = SessionResources{SessionExists: true, AgentWindowExists: true, EditorWindowExists: true}
+	svc.sessionClient.sessionResources = SessionResources{
+		SessionExists:      true,
+		AgentWindowExists:  true,
+		EditorWindowExists: true,
+	}
 	before := time.Now().UTC()
 
 	task, err := svc.service.GetTask(t.Context(), "billing-retry-flow")
@@ -123,7 +127,11 @@ func TestServiceGetTask_LeavesRuntimeStateEmptyForUnsupportedProvider(t *testing
 		Status:           TaskStatusRunning,
 	}
 	svc.repoClient.repoResources = RepoResources{WorktreeExists: true, BranchExists: true}
-	svc.sessionClient.sessionResources = SessionResources{SessionExists: true, AgentWindowExists: true, EditorWindowExists: true}
+	svc.sessionClient.sessionResources = SessionResources{
+		SessionExists:      true,
+		AgentWindowExists:  true,
+		EditorWindowExists: true,
+	}
 
 	task, err := svc.service.GetTask(t.Context(), "billing-retry-flow")
 	require.NoError(t, err)
@@ -146,7 +154,11 @@ func TestServiceGetTask_LeavesRuntimeStateEmptyForBrokenTask(t *testing.T) {
 		Status:           TaskStatusRunning,
 	}
 	svc.repoClient.repoResources = RepoResources{WorktreeExists: true, BranchExists: false}
-	svc.sessionClient.sessionResources = SessionResources{SessionExists: true, AgentWindowExists: true, EditorWindowExists: true}
+	svc.sessionClient.sessionResources = SessionResources{
+		SessionExists:      true,
+		AgentWindowExists:  true,
+		EditorWindowExists: true,
+	}
 	svc.sessionClient.snapshot = RuntimeSnapshot{
 		PaneID:            "%24",
 		ForegroundCommand: "codex",

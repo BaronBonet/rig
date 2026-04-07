@@ -20,7 +20,11 @@ func TestServiceOpenTask_AttachesWhenSessionExists(t *testing.T) {
 		Status:       TaskStatusRunning,
 	}
 	svc.repoClient.repoResources = RepoResources{WorktreeExists: true, BranchExists: true}
-	svc.sessionClient.sessionResources = SessionResources{SessionExists: true, AgentWindowExists: true, EditorWindowExists: true}
+	svc.sessionClient.sessionResources = SessionResources{
+		SessionExists:      true,
+		AgentWindowExists:  true,
+		EditorWindowExists: true,
+	}
 
 	err := svc.service.OpenTask(t.Context(), "billing-retry-flow")
 	require.NoError(t, err)

@@ -14,7 +14,11 @@ func TestServiceDeleteTaskResources_CleansRunningTaskResources(t *testing.T) {
 	svc := newTestService(t)
 	svc.taskRepo.getTask = cleanupTestTask(worktree)
 	svc.repoClient.repoResources = RepoResources{WorktreeExists: true, BranchExists: true}
-	svc.sessionClient.sessionResources = SessionResources{SessionExists: true, AgentWindowExists: true, EditorWindowExists: true}
+	svc.sessionClient.sessionResources = SessionResources{
+		SessionExists:      true,
+		AgentWindowExists:  true,
+		EditorWindowExists: true,
+	}
 	before := time.Now().UTC()
 
 	task, err := svc.service.DeleteTaskResources(t.Context(), "billing-retry-flow")
@@ -58,7 +62,11 @@ func TestServiceDeleteTaskResources_CleansSessionWhenWorktreeAlreadyMissing(t *t
 	svc := newTestService(t)
 	svc.taskRepo.getTask = cleanupTestTask(worktree)
 	svc.repoClient.repoResources = RepoResources{WorktreeExists: false, BranchExists: true}
-	svc.sessionClient.sessionResources = SessionResources{SessionExists: true, AgentWindowExists: true, EditorWindowExists: true}
+	svc.sessionClient.sessionResources = SessionResources{
+		SessionExists:      true,
+		AgentWindowExists:  true,
+		EditorWindowExists: true,
+	}
 
 	task, err := svc.service.DeleteTaskResources(t.Context(), "billing-retry-flow")
 
@@ -76,7 +84,11 @@ func TestServiceDeleteTaskResources_TreatsMissingSessionAfterKillErrorAsSuccess(
 	svc := newTestService(t)
 	svc.taskRepo.getTask = cleanupTestTask(worktree)
 	svc.repoClient.repoResources = RepoResources{WorktreeExists: true, BranchExists: true}
-	svc.sessionClient.sessionResources = SessionResources{SessionExists: true, AgentWindowExists: true, EditorWindowExists: true}
+	svc.sessionClient.sessionResources = SessionResources{
+		SessionExists:      true,
+		AgentWindowExists:  true,
+		EditorWindowExists: true,
+	}
 	svc.sessionClient.deleteErr = errors.New("can't find session")
 	svc.sessionClient.deleteHook = func(*Task) {
 		svc.sessionClient.sessionResources = SessionResources{}
@@ -143,7 +155,11 @@ func TestServiceDeleteTaskResources_MarksTaskBrokenWhenWorktreeRemovalFailsAfter
 	svc.taskRepo.getTask = cleanupTestTask(worktree)
 	svc.repoClient.repoResources = RepoResources{WorktreeExists: true, BranchExists: true}
 	svc.repoClient.removeErr = errors.New("remove worktree: permission denied")
-	svc.sessionClient.sessionResources = SessionResources{SessionExists: true, AgentWindowExists: true, EditorWindowExists: true}
+	svc.sessionClient.sessionResources = SessionResources{
+		SessionExists:      true,
+		AgentWindowExists:  true,
+		EditorWindowExists: true,
+	}
 
 	task, err := svc.service.DeleteTaskResources(t.Context(), "billing-retry-flow")
 
@@ -159,7 +175,11 @@ func TestServiceDeleteTaskResources_AppendsCleanupLifecycleEvents(t *testing.T) 
 	svc := newTestService(t)
 	svc.taskRepo.getTask = cleanupTestTask(worktree)
 	svc.repoClient.repoResources = RepoResources{WorktreeExists: true, BranchExists: true}
-	svc.sessionClient.sessionResources = SessionResources{SessionExists: true, AgentWindowExists: true, EditorWindowExists: true}
+	svc.sessionClient.sessionResources = SessionResources{
+		SessionExists:      true,
+		AgentWindowExists:  true,
+		EditorWindowExists: true,
+	}
 
 	_, err := svc.service.DeleteTaskResources(t.Context(), "billing-retry-flow")
 
@@ -177,7 +197,11 @@ func TestServiceDeleteTaskResources_ReturnsIntermediateUpdateFailure(t *testing.
 	svc.taskRepo.updateErrAt = 2
 	svc.taskRepo.updateErr = errors.New("update failed")
 	svc.repoClient.repoResources = RepoResources{WorktreeExists: true, BranchExists: true}
-	svc.sessionClient.sessionResources = SessionResources{SessionExists: true, AgentWindowExists: true, EditorWindowExists: true}
+	svc.sessionClient.sessionResources = SessionResources{
+		SessionExists:      true,
+		AgentWindowExists:  true,
+		EditorWindowExists: true,
+	}
 
 	task, err := svc.service.DeleteTaskResources(t.Context(), "billing-retry-flow")
 
@@ -192,7 +216,11 @@ func TestServiceDeleteTaskResources_PreservesCleanupFailureReasonDuringLaterReco
 	svc.taskRepo.getTask = cleanupTestTask(worktree)
 	svc.repoClient.repoResources = RepoResources{WorktreeExists: true, BranchExists: true}
 	svc.repoClient.removeErr = errors.New("remove worktree: permission denied")
-	svc.sessionClient.sessionResources = SessionResources{SessionExists: true, AgentWindowExists: true, EditorWindowExists: true}
+	svc.sessionClient.sessionResources = SessionResources{
+		SessionExists:      true,
+		AgentWindowExists:  true,
+		EditorWindowExists: true,
+	}
 
 	task, err := svc.service.DeleteTaskResources(t.Context(), "billing-retry-flow")
 	require.Error(t, err)
