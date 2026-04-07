@@ -10,52 +10,28 @@ import (
 )
 
 type testServiceHarness struct {
-	service         *Service
-	taskRepo        *taskRepositoryHarness
-	repoClient      *repoClientHarness
-	sessionClient   *sessionClientHarness
-	providerRepo    *providerClientHarness
-	configRepo      *repoConfigRepositoryHarness
-	workspaceSeeder *workspaceSeederHarness
+	service *Service
+
+	taskRepoMock *MockTaskRepository
+	taskRepo     taskRepositoryState
+
+	repoClientMock *MockRepoClient
+	repoClient     repoClientState
+
+	sessionClientMock *MockSessionClient
+	sessionClient     sessionClientState
+
+	providerRepoMock *MockProviderClient
+	providerRepo     providerClientState
+
+	configRepoMock *MockRepoConfigRepository
+	configRepo     repoConfigRepositoryState
+
+	workspaceSeederMock *MockWorkspaceSeeder
+	workspaceSeeder     workspaceSeederState
 }
 
-func newTestService(t *testing.T) *testServiceHarness {
-	t.Helper()
-
-	taskRepo := newTaskRepositoryHarness(t)
-	repoClient := newRepoClientHarness(t)
-	sessionClient := newSessionClientHarness(t)
-	providerRepo := newProviderClientHarness(t)
-	configRepo := newRepoConfigRepositoryHarness(t)
-	workspaceSeeder := newWorkspaceSeederHarness(t)
-
-	sessionClient.startHook = func() {
-		workspaceSeeder.seededBeforeSession = workspaceSeeder.seedCalled
-	}
-
-	return &testServiceHarness{
-		service: NewService(
-			taskRepo.MockTaskRepository,
-			repoClient.MockRepoClient,
-			sessionClient.MockSessionClient,
-			map[string]ProviderClient{
-				"codex": providerRepo.MockProviderClient,
-			},
-			configRepo.MockRepoConfigRepository,
-			workspaceSeeder.MockWorkspaceSeeder,
-			Config{Provider: "codex"},
-		),
-		taskRepo:        taskRepo,
-		repoClient:      repoClient,
-		sessionClient:   sessionClient,
-		providerRepo:    providerRepo,
-		configRepo:      configRepo,
-		workspaceSeeder: workspaceSeeder,
-	}
-}
-
-type taskRepositoryHarness struct {
-	*MockTaskRepository
+type taskRepositoryState struct {
 	isAvailableErr error
 	createErr      error
 	updateErr      error
@@ -68,68 +44,13 @@ type taskRepositoryHarness struct {
 	appendedEvents []testTaskEvent
 }
 
-func newTaskRepositoryHarness(t *testing.T) *taskRepositoryHarness {
-	t.Helper()
-
-	h := &taskRepositoryHarness{MockTaskRepository: NewMockTaskRepository(t)}
-	h.EXPECT().IsAvailable(mock.Anything).RunAndReturn(func(context.Context) error {
-		return h.isAvailableErr
-	}).Maybe()
-	h.EXPECT().CreateTask(mock.Anything, mock.Anything).RunAndReturn(func(_ context.Context, task *Task) error {
-		if h.createErr != nil {
-			return h.createErr
-		}
-
-		h.createdTask = cloneTask(task)
-		h.getTask = cloneTask(task)
-		return nil
-	}).Maybe()
-	h.EXPECT().UpdateTask(mock.Anything, mock.Anything).RunAndReturn(func(_ context.Context, task *Task) error {
-		h.updateCount++
-		if h.updateErr != nil && (h.updateErrAt == 0 || h.updateCount == h.updateErrAt) {
-			return h.updateErr
-		}
-
-		h.updatedTask = cloneTask(task)
-		h.getTask = cloneTask(task)
-		return nil
-	}).Maybe()
-	h.EXPECT().GetTask(mock.Anything, mock.Anything).RunAndReturn(func(context.Context, string) (*Task, error) {
-		if h.getTask == nil {
-			return nil, ErrTaskNotFound
-		}
-
-		return cloneTask(h.getTask), nil
-	}).Maybe()
-	h.EXPECT().ListTasks(mock.Anything).RunAndReturn(func(context.Context) ([]*Task, error) {
-		tasks := make([]*Task, 0, len(h.listTasks))
-		for _, task := range h.listTasks {
-			tasks = append(tasks, cloneTask(task))
-		}
-
-		return tasks, nil
-	}).Maybe()
-	h.EXPECT().AppendEvent(mock.Anything, mock.Anything, mock.Anything, mock.Anything).
-		RunAndReturn(func(_ context.Context, taskID, eventType, payload string) error {
-			h.appendedEvents = append(h.appendedEvents, testTaskEvent{
-				taskID:    taskID,
-				eventType: eventType,
-				payload:   payload,
-			})
-			return nil
-		}).Maybe()
-
-	return h
-}
-
 type testTaskEvent struct {
 	taskID    string
 	eventType string
 	payload   string
 }
 
-type repoClientHarness struct {
-	*MockRepoClient
+type repoClientState struct {
 	isAvailableErr error
 	detectRepoErr  error
 	createErr      error
@@ -142,61 +63,7 @@ type repoClientHarness struct {
 	removedTasks   []*Task
 }
 
-func newRepoClientHarness(t *testing.T) *repoClientHarness {
-	t.Helper()
-
-	h := &repoClientHarness{
-		MockRepoClient: NewMockRepoClient(t),
-		repoContext: RepoContext{
-			Root:       "/tmp/repo",
-			Name:       "repo",
-			BaseBranch: "main",
-		},
-	}
-	h.EXPECT().IsAvailable(mock.Anything).RunAndReturn(func(context.Context) error {
-		return h.isAvailableErr
-	}).Maybe()
-	h.EXPECT().DetectRepo(mock.Anything, mock.Anything).RunAndReturn(func(context.Context, string) (RepoContext, error) {
-		if h.detectRepoErr != nil {
-			return RepoContext{}, h.detectRepoErr
-		}
-
-		return h.repoContext, nil
-	}).Maybe()
-	h.EXPECT().CreateTaskWorkspace(mock.Anything, mock.Anything).
-		RunAndReturn(func(_ context.Context, task *Task) error {
-			h.createdTask = cloneTask(task)
-			if h.createErr != nil {
-				return h.createErr
-			}
-
-			h.repoResources.WorktreeExists = true
-			h.repoResources.BranchExists = true
-			return nil
-		}).Maybe()
-	h.EXPECT().RemoveTaskWorkspace(mock.Anything, mock.Anything).
-		RunAndReturn(func(_ context.Context, task *Task) error {
-			h.removedTasks = append(h.removedTasks, cloneTask(task))
-			if h.removeHook != nil {
-				h.removeHook(task)
-			}
-			if h.removeErr != nil {
-				return h.removeErr
-			}
-
-			h.repoResources.WorktreeExists = false
-			return nil
-		}).Maybe()
-	h.EXPECT().InspectTaskWorkspace(mock.Anything, mock.Anything).
-		RunAndReturn(func(context.Context, *Task) (RepoResources, error) {
-			return h.repoResources, h.inspectErr
-		}).Maybe()
-
-	return h
-}
-
-type sessionClientHarness struct {
-	*MockSessionClient
+type sessionClientState struct {
 	isAvailableErr   error
 	startErr         error
 	startHook        func()
@@ -213,62 +80,7 @@ type sessionClientHarness struct {
 	snapshotErr      error
 }
 
-func newSessionClientHarness(t *testing.T) *sessionClientHarness {
-	t.Helper()
-
-	h := &sessionClientHarness{MockSessionClient: NewMockSessionClient(t)}
-	h.EXPECT().IsAvailable(mock.Anything).RunAndReturn(func(context.Context) error {
-		return h.isAvailableErr
-	}).Maybe()
-	h.EXPECT().StartTaskSession(mock.Anything, mock.Anything, mock.Anything).
-		RunAndReturn(func(_ context.Context, task *Task, launch LaunchRequest) error {
-			h.startedTask = cloneTask(task)
-			h.startedLaunch = launch
-			if h.startHook != nil {
-				h.startHook()
-			}
-			if h.startErr != nil {
-				return h.startErr
-			}
-
-			h.sessionResources = SessionResources{
-				SessionExists:      true,
-				AgentWindowExists:  true,
-				EditorWindowExists: true,
-			}
-			return nil
-		}).Maybe()
-	h.EXPECT().OpenTaskSession(mock.Anything, mock.Anything).RunAndReturn(func(_ context.Context, task *Task) error {
-		h.openedTask = cloneTask(task)
-		return h.openErr
-	}).Maybe()
-	h.EXPECT().DeleteTaskSession(mock.Anything, mock.Anything).
-		RunAndReturn(func(_ context.Context, task *Task) error {
-			h.deletedTasks = append(h.deletedTasks, cloneTask(task))
-			if h.deleteHook != nil {
-				h.deleteHook(task)
-			}
-			if h.deleteErr != nil {
-				return h.deleteErr
-			}
-
-			h.sessionResources = SessionResources{}
-			return nil
-		}).Maybe()
-	h.EXPECT().InspectTaskSession(mock.Anything, mock.Anything).
-		RunAndReturn(func(context.Context, *Task) (SessionResources, error) {
-			return h.sessionResources, h.inspectErr
-		}).Maybe()
-	h.EXPECT().SnapshotTaskSession(mock.Anything, mock.Anything).
-		RunAndReturn(func(context.Context, *Task) (RuntimeSnapshot, error) {
-			return h.snapshot, h.snapshotErr
-		}).Maybe()
-
-	return h
-}
-
-type providerClientHarness struct {
-	*MockProviderClient
+type providerClientState struct {
 	isAvailableErr error
 	suggestErr     error
 	suggestedName  string
@@ -277,68 +89,13 @@ type providerClientHarness struct {
 	runtimeState   RuntimeState
 }
 
-func newProviderClientHarness(t *testing.T) *providerClientHarness {
-	t.Helper()
-
-	h := &providerClientHarness{MockProviderClient: NewMockProviderClient(t)}
-	h.EXPECT().IsAvailable(mock.Anything).RunAndReturn(func(context.Context) error {
-		return h.isAvailableErr
-	}).Maybe()
-	h.EXPECT().SuggestTaskName(mock.Anything, mock.Anything).
-		RunAndReturn(func(context.Context, string) (string, error) {
-			if h.suggestErr != nil {
-				return "", h.suggestErr
-			}
-
-			return h.suggestedName, nil
-		}).Maybe()
-	h.EXPECT().LaunchRequest(mock.Anything).RunAndReturn(func(task *Task) (LaunchRequest, error) {
-		if h.launchErr != nil {
-			return LaunchRequest{}, h.launchErr
-		}
-		if hasCustomLaunchRequest(h.launchRequest) {
-			return h.launchRequest, nil
-		}
-
-		return LaunchRequest{
-			Command:      []string{"codex"},
-			Prompt:       "›",
-			InitialInput: []string{task.Prompt},
-		}, nil
-	}).Maybe()
-	h.EXPECT().DetectRuntimeState(mock.Anything).RunAndReturn(func(RuntimeSnapshot) RuntimeState {
-		return h.runtimeState
-	}).Maybe()
-
-	return h
-}
-
-type repoConfigRepositoryHarness struct {
-	*MockRepoConfigRepository
+type repoConfigRepositoryState struct {
 	repoConfig     RepoConfig
 	loadErr        error
 	loadedRepoRoot string
 }
 
-func newRepoConfigRepositoryHarness(t *testing.T) *repoConfigRepositoryHarness {
-	t.Helper()
-
-	h := &repoConfigRepositoryHarness{MockRepoConfigRepository: NewMockRepoConfigRepository(t)}
-	h.EXPECT().LoadRepoConfig(mock.Anything, mock.Anything).
-		RunAndReturn(func(_ context.Context, repoRoot string) (RepoConfig, error) {
-			h.loadedRepoRoot = repoRoot
-			if h.loadErr != nil {
-				return RepoConfig{}, h.loadErr
-			}
-
-			return h.repoConfig, nil
-		}).Maybe()
-
-	return h
-}
-
-type workspaceSeederHarness struct {
-	*MockWorkspaceSeeder
+type workspaceSeederState struct {
 	validateErr         error
 	seedErr             error
 	validateRepoRoot    string
@@ -349,20 +106,249 @@ type workspaceSeederHarness struct {
 	seededBeforeSession bool
 }
 
-func newWorkspaceSeederHarness(t *testing.T) *workspaceSeederHarness {
+func newTestService(t *testing.T) *testServiceHarness {
 	t.Helper()
 
-	h := &workspaceSeederHarness{MockWorkspaceSeeder: NewMockWorkspaceSeeder(t)}
-	h.EXPECT().SeedWorkspace(mock.Anything, mock.Anything, mock.Anything).
+	h := &testServiceHarness{
+		taskRepoMock:        NewMockTaskRepository(t),
+		repoClientMock:      NewMockRepoClient(t),
+		sessionClientMock:   NewMockSessionClient(t),
+		providerRepoMock:    NewMockProviderClient(t),
+		configRepoMock:      NewMockRepoConfigRepository(t),
+		workspaceSeederMock: NewMockWorkspaceSeeder(t),
+		repoClient: repoClientState{
+			repoContext: RepoContext{
+				Root:       "/tmp/repo",
+				Name:       "repo",
+				BaseBranch: "main",
+			},
+		},
+	}
+
+	h.sessionClient.startHook = func() {
+		h.workspaceSeeder.seededBeforeSession = h.workspaceSeeder.seedCalled
+	}
+
+	wireTaskRepositoryMock(h)
+	wireRepoClientMock(h)
+	wireSessionClientMock(h)
+	wireProviderClientMock(h)
+	wireRepoConfigRepositoryMock(h)
+	wireWorkspaceSeederMock(h)
+
+	h.service = NewService(
+		h.taskRepoMock,
+		h.repoClientMock,
+		h.sessionClientMock,
+		map[string]ProviderClient{
+			"codex": h.providerRepoMock,
+		},
+		h.configRepoMock,
+		h.workspaceSeederMock,
+		Config{Provider: "codex"},
+	)
+
+	return h
+}
+
+func wireTaskRepositoryMock(h *testServiceHarness) {
+	h.taskRepoMock.EXPECT().IsAvailable(mock.Anything).RunAndReturn(func(context.Context) error {
+		return h.taskRepo.isAvailableErr
+	}).Maybe()
+	h.taskRepoMock.EXPECT().CreateTask(mock.Anything, mock.Anything).
+		RunAndReturn(func(_ context.Context, task *Task) error {
+			if h.taskRepo.createErr != nil {
+				return h.taskRepo.createErr
+			}
+
+			h.taskRepo.createdTask = cloneTask(task)
+			h.taskRepo.getTask = cloneTask(task)
+			return nil
+		}).Maybe()
+	h.taskRepoMock.EXPECT().UpdateTask(mock.Anything, mock.Anything).
+		RunAndReturn(func(_ context.Context, task *Task) error {
+			h.taskRepo.updateCount++
+			if h.taskRepo.updateErr != nil && (h.taskRepo.updateErrAt == 0 || h.taskRepo.updateCount == h.taskRepo.updateErrAt) {
+				return h.taskRepo.updateErr
+			}
+
+			h.taskRepo.updatedTask = cloneTask(task)
+			h.taskRepo.getTask = cloneTask(task)
+			return nil
+		}).Maybe()
+	h.taskRepoMock.EXPECT().GetTask(mock.Anything, mock.Anything).
+		RunAndReturn(func(context.Context, string) (*Task, error) {
+			if h.taskRepo.getTask == nil {
+				return nil, ErrTaskNotFound
+			}
+
+			return cloneTask(h.taskRepo.getTask), nil
+		}).Maybe()
+	h.taskRepoMock.EXPECT().ListTasks(mock.Anything).RunAndReturn(func(context.Context) ([]*Task, error) {
+		tasks := make([]*Task, 0, len(h.taskRepo.listTasks))
+		for _, task := range h.taskRepo.listTasks {
+			tasks = append(tasks, cloneTask(task))
+		}
+
+		return tasks, nil
+	}).Maybe()
+	h.taskRepoMock.EXPECT().AppendEvent(mock.Anything, mock.Anything, mock.Anything, mock.Anything).
+		RunAndReturn(func(_ context.Context, taskID, eventType, payload string) error {
+			h.taskRepo.appendedEvents = append(h.taskRepo.appendedEvents, testTaskEvent{
+				taskID:    taskID,
+				eventType: eventType,
+				payload:   payload,
+			})
+			return nil
+		}).Maybe()
+}
+
+func wireRepoClientMock(h *testServiceHarness) {
+	h.repoClientMock.EXPECT().IsAvailable(mock.Anything).RunAndReturn(func(context.Context) error {
+		return h.repoClient.isAvailableErr
+	}).Maybe()
+	h.repoClientMock.EXPECT().DetectRepo(mock.Anything, mock.Anything).
+		RunAndReturn(func(context.Context, string) (RepoContext, error) {
+			if h.repoClient.detectRepoErr != nil {
+				return RepoContext{}, h.repoClient.detectRepoErr
+			}
+
+			return h.repoClient.repoContext, nil
+		}).Maybe()
+	h.repoClientMock.EXPECT().CreateTaskWorkspace(mock.Anything, mock.Anything).
+		RunAndReturn(func(_ context.Context, task *Task) error {
+			h.repoClient.createdTask = cloneTask(task)
+			if h.repoClient.createErr != nil {
+				return h.repoClient.createErr
+			}
+
+			h.repoClient.repoResources.WorktreeExists = true
+			h.repoClient.repoResources.BranchExists = true
+			return nil
+		}).Maybe()
+	h.repoClientMock.EXPECT().RemoveTaskWorkspace(mock.Anything, mock.Anything).
+		RunAndReturn(func(_ context.Context, task *Task) error {
+			h.repoClient.removedTasks = append(h.repoClient.removedTasks, cloneTask(task))
+			if h.repoClient.removeHook != nil {
+				h.repoClient.removeHook(task)
+			}
+			if h.repoClient.removeErr != nil {
+				return h.repoClient.removeErr
+			}
+
+			h.repoClient.repoResources.WorktreeExists = false
+			return nil
+		}).Maybe()
+	h.repoClientMock.EXPECT().InspectTaskWorkspace(mock.Anything, mock.Anything).
+		RunAndReturn(func(context.Context, *Task) (RepoResources, error) {
+			return h.repoClient.repoResources, h.repoClient.inspectErr
+		}).Maybe()
+}
+
+func wireSessionClientMock(h *testServiceHarness) {
+	h.sessionClientMock.EXPECT().IsAvailable(mock.Anything).RunAndReturn(func(context.Context) error {
+		return h.sessionClient.isAvailableErr
+	}).Maybe()
+	h.sessionClientMock.EXPECT().StartTaskSession(mock.Anything, mock.Anything, mock.Anything).
+		RunAndReturn(func(_ context.Context, task *Task, launch LaunchRequest) error {
+			h.sessionClient.startedTask = cloneTask(task)
+			h.sessionClient.startedLaunch = launch
+			if h.sessionClient.startHook != nil {
+				h.sessionClient.startHook()
+			}
+			if h.sessionClient.startErr != nil {
+				return h.sessionClient.startErr
+			}
+
+			h.sessionClient.sessionResources = SessionResources{
+				SessionExists:      true,
+				AgentWindowExists:  true,
+				EditorWindowExists: true,
+			}
+			return nil
+		}).Maybe()
+	h.sessionClientMock.EXPECT().OpenTaskSession(mock.Anything, mock.Anything).
+		RunAndReturn(func(_ context.Context, task *Task) error {
+			h.sessionClient.openedTask = cloneTask(task)
+			return h.sessionClient.openErr
+		}).Maybe()
+	h.sessionClientMock.EXPECT().DeleteTaskSession(mock.Anything, mock.Anything).
+		RunAndReturn(func(_ context.Context, task *Task) error {
+			h.sessionClient.deletedTasks = append(h.sessionClient.deletedTasks, cloneTask(task))
+			if h.sessionClient.deleteHook != nil {
+				h.sessionClient.deleteHook(task)
+			}
+			if h.sessionClient.deleteErr != nil {
+				return h.sessionClient.deleteErr
+			}
+
+			h.sessionClient.sessionResources = SessionResources{}
+			return nil
+		}).Maybe()
+	h.sessionClientMock.EXPECT().InspectTaskSession(mock.Anything, mock.Anything).
+		RunAndReturn(func(context.Context, *Task) (SessionResources, error) {
+			return h.sessionClient.sessionResources, h.sessionClient.inspectErr
+		}).Maybe()
+	h.sessionClientMock.EXPECT().SnapshotTaskSession(mock.Anything, mock.Anything).
+		RunAndReturn(func(context.Context, *Task) (RuntimeSnapshot, error) {
+			return h.sessionClient.snapshot, h.sessionClient.snapshotErr
+		}).Maybe()
+}
+
+func wireProviderClientMock(h *testServiceHarness) {
+	h.providerRepoMock.EXPECT().IsAvailable(mock.Anything).RunAndReturn(func(context.Context) error {
+		return h.providerRepo.isAvailableErr
+	}).Maybe()
+	h.providerRepoMock.EXPECT().SuggestTaskName(mock.Anything, mock.Anything).
+		RunAndReturn(func(context.Context, string) (string, error) {
+			if h.providerRepo.suggestErr != nil {
+				return "", h.providerRepo.suggestErr
+			}
+
+			return h.providerRepo.suggestedName, nil
+		}).Maybe()
+	h.providerRepoMock.EXPECT().LaunchRequest(mock.Anything).RunAndReturn(func(task *Task) (LaunchRequest, error) {
+		if h.providerRepo.launchErr != nil {
+			return LaunchRequest{}, h.providerRepo.launchErr
+		}
+		if hasCustomLaunchRequest(h.providerRepo.launchRequest) {
+			return h.providerRepo.launchRequest, nil
+		}
+
+		return LaunchRequest{
+			Command:      []string{"codex"},
+			Prompt:       "›",
+			InitialInput: []string{task.Prompt},
+		}, nil
+	}).Maybe()
+	h.providerRepoMock.EXPECT().DetectRuntimeState(mock.Anything).RunAndReturn(func(RuntimeSnapshot) RuntimeState {
+		return h.providerRepo.runtimeState
+	}).Maybe()
+}
+
+func wireRepoConfigRepositoryMock(h *testServiceHarness) {
+	h.configRepoMock.EXPECT().LoadRepoConfig(mock.Anything, mock.Anything).
+		RunAndReturn(func(_ context.Context, repoRoot string) (RepoConfig, error) {
+			h.configRepo.loadedRepoRoot = repoRoot
+			if h.configRepo.loadErr != nil {
+				return RepoConfig{}, h.configRepo.loadErr
+			}
+
+			return h.configRepo.repoConfig, nil
+		}).Maybe()
+}
+
+func wireWorkspaceSeederMock(h *testServiceHarness) {
+	h.workspaceSeederMock.EXPECT().SeedWorkspace(mock.Anything, mock.Anything, mock.Anything).
 		RunAndReturn(func(_ context.Context, in SeedWorkspaceInput, progress func(string)) error {
-			h.seedCalled = true
-			h.seedInput = in
-			if h.seedErr != nil {
-				return h.seedErr
+			h.workspaceSeeder.seedCalled = true
+			h.workspaceSeeder.seedInput = in
+			if h.workspaceSeeder.seedErr != nil {
+				return h.workspaceSeeder.seedErr
 			}
 
 			for _, path := range in.RelativePaths {
-				h.seededPaths = append(h.seededPaths, path)
+				h.workspaceSeeder.seededPaths = append(h.workspaceSeeder.seededPaths, path)
 				if progress != nil {
 					progress(path)
 				}
@@ -370,14 +356,12 @@ func newWorkspaceSeederHarness(t *testing.T) *workspaceSeederHarness {
 
 			return nil
 		}).Maybe()
-	h.EXPECT().ValidateSeedPaths(mock.Anything, mock.Anything, mock.Anything).
+	h.workspaceSeederMock.EXPECT().ValidateSeedPaths(mock.Anything, mock.Anything, mock.Anything).
 		RunAndReturn(func(_ context.Context, repoRoot string, relativePaths []string) error {
-			h.validateRepoRoot = repoRoot
-			h.validatePaths = append([]string(nil), relativePaths...)
-			return h.validateErr
+			h.workspaceSeeder.validateRepoRoot = repoRoot
+			h.workspaceSeeder.validatePaths = append([]string(nil), relativePaths...)
+			return h.workspaceSeeder.validateErr
 		}).Maybe()
-
-	return h
 }
 
 func hasCustomLaunchRequest(req LaunchRequest) bool {
