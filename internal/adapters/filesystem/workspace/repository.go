@@ -13,13 +13,13 @@ import (
 	"agent/internal/core"
 )
 
-type Repository struct{}
+type Seeder struct{}
 
-func NewRepository() *Repository {
-	return &Repository{}
+func NewSeeder() *Seeder {
+	return &Seeder{}
 }
 
-func (r *Repository) SeedWorkspace(ctx context.Context, in core.SeedWorkspaceInput, progress func(string)) error {
+func (s *Seeder) SeedWorkspace(ctx context.Context, in core.SeedWorkspaceInput, progress func(string)) error {
 	paths, err := prepareSeedPaths(in.RepoRoot, in.RelativePaths)
 	if err != nil {
 		return err
@@ -40,7 +40,7 @@ func (r *Repository) SeedWorkspace(ctx context.Context, in core.SeedWorkspaceInp
 	return nil
 }
 
-func (r *Repository) ValidateSeedPaths(ctx context.Context, repoRoot string, relativePaths []string) error {
+func (s *Seeder) ValidateSeedPaths(ctx context.Context, repoRoot string, relativePaths []string) error {
 	paths, err := prepareSeedPaths(repoRoot, relativePaths)
 	if err != nil {
 		return err

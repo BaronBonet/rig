@@ -8,9 +8,9 @@ import (
 	codexclient "agent/internal/adapters/client/codex"
 	gitclient "agent/internal/adapters/client/git"
 	tmuxclient "agent/internal/adapters/client/tmux"
+	agentconfigfs "agent/internal/adapters/filesystem/agentconfig"
 	workspacefs "agent/internal/adapters/filesystem/workspace"
 	"agent/internal/adapters/handler/cli"
-	agentconfigrepo "agent/internal/adapters/repository/agentconfig"
 	sqliterepo "agent/internal/adapters/repository/sqlite"
 	"agent/internal/core"
 	"agent/internal/infrastructure"
@@ -51,8 +51,8 @@ func buildDependencies() (cli.Dependencies, error) {
 			"codex":  codexclient.NewRepository(runner, cfg.Codex),
 			"claude": claudeclient.NewRepository(runner, cfg.Claude),
 		},
-		agentconfigrepo.NewRepository(),
-		workspacefs.NewRepository(),
+		agentconfigfs.NewLoader(),
+		workspacefs.NewSeeder(),
 		cfg.Service,
 	)
 

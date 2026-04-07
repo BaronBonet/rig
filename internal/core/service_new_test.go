@@ -13,7 +13,7 @@ func TestNewService_AcceptsBusinessPorts(t *testing.T) {
 	repoClient := NewMockRepoClient(t)
 	sessionClient := NewMockSessionClient(t)
 	providerClient := NewMockProviderClient(t)
-	configRepo := NewMockRepoConfigRepository(t)
+	configRepo := NewMockRepoConfigLoader(t)
 	workspaceSeeder := NewMockWorkspaceSeeder(t)
 
 	service := NewService(
