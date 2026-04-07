@@ -21,8 +21,11 @@ jobs:
           go-version-file: go.mod
           cache: true
 
+      - name: Install dependencies
+        run: make dependencies install
+
       - name: Run tests
-        run: go test ./...
+        run: make test
 
       - name: Build release archives
         env:

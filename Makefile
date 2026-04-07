@@ -38,7 +38,7 @@ build:
 ################################################################################
 
 .PHONY: test
-test:
+test: generate
 	@go test ./...
 
 ################################################################################
@@ -50,7 +50,7 @@ format:
 	@./scripts/ci/format.sh
 
 .PHONY: lint-go
-lint-go:
+lint-go: generate
 	@./scripts/ci/lint-go.sh
 
 .PHONY: lint-all
