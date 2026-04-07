@@ -8,6 +8,7 @@ import (
 
 	"agent/internal/core"
 
+	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
 )
 
@@ -20,16 +21,14 @@ func TestPaneListCommand_QuotesFormatForTmuxControlMode(t *testing.T) {
 }
 
 func TestRuntimeMonitorSnapshot_BindsOnlyCodexPaneInSplitAgentWindow(t *testing.T) {
-	pipe := &fakeControlPipe{
-		output: map[string]string{
-			paneListCommand("repo-billing-retry-flow", "agent"): "%24\tcodex\t1\n%31\tzsh\t0",
-			"capture-pane -t %24 -p -e":                         "› review my changes\nWorking (26s • esc to interrupt)\n",
-		},
-		lastOutputAt: time.Date(2026, 4, 5, 9, 59, 55, 0, time.UTC),
-	}
-	monitor := NewRuntimeMonitorWithFactory(&fakeControlPipeFactory{
-		pipes: map[string]controlPipe{"repo-billing-retry-flow": pipe},
-	}, func() time.Time {
+	lastOutputAt := time.Date(2026, 4, 5, 9, 59, 55, 0, time.UTC)
+	pipe := newMockControlPipe(t, map[string]string{
+		paneListCommand("repo-billing-retry-flow", "agent"): "%24\tcodex\t1\n%31\tzsh\t0",
+		"capture-pane -t %24 -p -e":                         "› review my changes\nWorking (26s • esc to interrupt)\n",
+	}, nil, &lastOutputAt, nil)
+	monitor := NewRuntimeMonitorWithFactory(newMockControlPipeFactory(t, map[string]controlPipe{
+		"repo-billing-retry-flow": pipe,
+	}, nil, nil), func() time.Time {
 		return time.Date(2026, 4, 5, 10, 0, 0, 0, time.UTC)
 	})
 
@@ -50,16 +49,14 @@ func TestRuntimeMonitorSnapshot_BindsOnlyCodexPaneInSplitAgentWindow(t *testing.
 }
 
 func TestRuntimeMonitorSnapshot_BindsCodexAliasPaneInSplitAgentWindow(t *testing.T) {
-	pipe := &fakeControlPipe{
-		output: map[string]string{
-			paneListCommand("repo-billing-retry-flow", "agent"): "%24\tcodex-aarch64-a\t1\n%31\tzsh\t0",
-			"capture-pane -t %24 -p -e":                         "› review my changes\n",
-		},
-		lastOutputAt: time.Date(2026, 4, 5, 9, 59, 55, 0, time.UTC),
-	}
-	monitor := NewRuntimeMonitorWithFactory(&fakeControlPipeFactory{
-		pipes: map[string]controlPipe{"repo-billing-retry-flow": pipe},
-	}, func() time.Time {
+	lastOutputAt := time.Date(2026, 4, 5, 9, 59, 55, 0, time.UTC)
+	pipe := newMockControlPipe(t, map[string]string{
+		paneListCommand("repo-billing-retry-flow", "agent"): "%24\tcodex-aarch64-a\t1\n%31\tzsh\t0",
+		"capture-pane -t %24 -p -e":                         "› review my changes\n",
+	}, nil, &lastOutputAt, nil)
+	monitor := NewRuntimeMonitorWithFactory(newMockControlPipeFactory(t, map[string]controlPipe{
+		"repo-billing-retry-flow": pipe,
+	}, nil, nil), func() time.Time {
 		return time.Date(2026, 4, 5, 10, 0, 0, 0, time.UTC)
 	})
 
@@ -75,14 +72,12 @@ func TestRuntimeMonitorSnapshot_BindsCodexAliasPaneInSplitAgentWindow(t *testing
 }
 
 func TestRuntimeMonitorSnapshot_ReturnsEmptyWhenMultipleCodexPanesExist(t *testing.T) {
-	pipe := &fakeControlPipe{
-		output: map[string]string{
-			paneListCommand("repo-billing-retry-flow", "agent"): "%24\tcodex\t1\n%31\tcodex\t0",
-		},
-	}
-	monitor := NewRuntimeMonitorWithFactory(&fakeControlPipeFactory{
-		pipes: map[string]controlPipe{"repo-billing-retry-flow": pipe},
-	}, time.Now)
+	pipe := newMockControlPipe(t, map[string]string{
+		paneListCommand("repo-billing-retry-flow", "agent"): "%24\tcodex\t1\n%31\tcodex\t0",
+	}, nil, nil, nil)
+	monitor := NewRuntimeMonitorWithFactory(newMockControlPipeFactory(t, map[string]controlPipe{
+		"repo-billing-retry-flow": pipe,
+	}, nil, nil), time.Now)
 
 	snapshot, err := monitor.Snapshot(context.Background(), &core.Task{
 		TmuxSession:     "repo-billing-retry-flow",
@@ -95,15 +90,14 @@ func TestRuntimeMonitorSnapshot_ReturnsEmptyWhenMultipleCodexPanesExist(t *testi
 }
 
 func TestRuntimeMonitorSnapshot_ReusesBoundPaneAfterCodexReturnsToShell(t *testing.T) {
-	pipe := &fakeControlPipe{
-		output: map[string]string{
-			paneListCommand("repo-billing-retry-flow", "agent"): "%24\tcodex\t1",
-			"capture-pane -t %24 -p -e":                         "› review my changes\nWorking (26s • esc to interrupt)\n",
-		},
+	output := map[string]string{
+		paneListCommand("repo-billing-retry-flow", "agent"): "%24\tcodex\t1",
+		"capture-pane -t %24 -p -e":                         "› review my changes\nWorking (26s • esc to interrupt)\n",
 	}
-	monitor := NewRuntimeMonitorWithFactory(&fakeControlPipeFactory{
-		pipes: map[string]controlPipe{"repo-billing-retry-flow": pipe},
-	}, time.Now)
+	pipe := newMockControlPipe(t, output, nil, nil, nil)
+	monitor := NewRuntimeMonitorWithFactory(newMockControlPipeFactory(t, map[string]controlPipe{
+		"repo-billing-retry-flow": pipe,
+	}, nil, nil), time.Now)
 
 	first, err := monitor.Snapshot(context.Background(), &core.Task{
 		TmuxSession:     "repo-billing-retry-flow",
@@ -114,8 +108,8 @@ func TestRuntimeMonitorSnapshot_ReusesBoundPaneAfterCodexReturnsToShell(t *testi
 	require.True(t, first.HadAgentBinding)
 	require.Equal(t, "codex", first.ForegroundCommand)
 
-	pipe.output[paneListCommand("repo-billing-retry-flow", "agent")] = "%24\tzsh\t1"
-	pipe.output["capture-pane -t %24 -p -e"] = "done\n"
+	output[paneListCommand("repo-billing-retry-flow", "agent")] = "%24\tzsh\t1"
+	output["capture-pane -t %24 -p -e"] = "done\n"
 
 	second, err := monitor.Snapshot(context.Background(), &core.Task{
 		TmuxSession:     "repo-billing-retry-flow",
@@ -129,15 +123,13 @@ func TestRuntimeMonitorSnapshot_ReusesBoundPaneAfterCodexReturnsToShell(t *testi
 }
 
 func TestRuntimeMonitorSnapshot_PreservesShellOnlyHistoryAcrossRepeatedObservations(t *testing.T) {
-	pipe := &fakeControlPipe{
-		output: map[string]string{
-			paneListCommand("repo-billing-retry-flow", "agent"): "%24\tzsh\t1",
-			"capture-pane -t %24 -p -e":                         "done\n",
-		},
-	}
-	monitor := NewRuntimeMonitorWithFactory(&fakeControlPipeFactory{
-		pipes: map[string]controlPipe{"repo-billing-retry-flow": pipe},
-	}, time.Now)
+	pipe := newMockControlPipe(t, map[string]string{
+		paneListCommand("repo-billing-retry-flow", "agent"): "%24\tzsh\t1",
+		"capture-pane -t %24 -p -e":                         "done\n",
+	}, nil, nil, nil)
+	monitor := NewRuntimeMonitorWithFactory(newMockControlPipeFactory(t, map[string]controlPipe{
+		"repo-billing-retry-flow": pipe,
+	}, nil, nil), time.Now)
 
 	snapshot, err := monitor.Snapshot(context.Background(), &core.Task{
 		TmuxSession:     "repo-billing-retry-flow",
@@ -158,15 +150,14 @@ func TestRuntimeMonitorSnapshot_PreservesShellOnlyHistoryAcrossRepeatedObservati
 }
 
 func TestRuntimeMonitorSnapshot_MarksCodexHistoryAfterPaneTransitionsFromShellToCodex(t *testing.T) {
-	pipe := &fakeControlPipe{
-		output: map[string]string{
-			paneListCommand("repo-billing-retry-flow", "agent"): "%24\tzsh\t1",
-			"capture-pane -t %24 -p -e":                         "done\n",
-		},
+	output := map[string]string{
+		paneListCommand("repo-billing-retry-flow", "agent"): "%24\tzsh\t1",
+		"capture-pane -t %24 -p -e":                         "done\n",
 	}
-	monitor := NewRuntimeMonitorWithFactory(&fakeControlPipeFactory{
-		pipes: map[string]controlPipe{"repo-billing-retry-flow": pipe},
-	}, time.Now)
+	pipe := newMockControlPipe(t, output, nil, nil, nil)
+	monitor := NewRuntimeMonitorWithFactory(newMockControlPipeFactory(t, map[string]controlPipe{
+		"repo-billing-retry-flow": pipe,
+	}, nil, nil), time.Now)
 
 	first, err := monitor.Snapshot(context.Background(), &core.Task{
 		TmuxSession:     "repo-billing-retry-flow",
@@ -175,8 +166,8 @@ func TestRuntimeMonitorSnapshot_MarksCodexHistoryAfterPaneTransitionsFromShellTo
 	require.NoError(t, err)
 	require.False(t, first.HadAgentBinding)
 
-	pipe.output[paneListCommand("repo-billing-retry-flow", "agent")] = "%24\tcodex\t1"
-	pipe.output["capture-pane -t %24 -p -e"] = "› review my changes\nWorking (26s • esc to interrupt)\n"
+	output[paneListCommand("repo-billing-retry-flow", "agent")] = "%24\tcodex\t1"
+	output["capture-pane -t %24 -p -e"] = "› review my changes\nWorking (26s • esc to interrupt)\n"
 
 	second, err := monitor.Snapshot(context.Background(), &core.Task{
 		TmuxSession:     "repo-billing-retry-flow",
@@ -186,8 +177,8 @@ func TestRuntimeMonitorSnapshot_MarksCodexHistoryAfterPaneTransitionsFromShellTo
 	require.True(t, second.HadAgentBinding)
 	require.Equal(t, "codex", second.ForegroundCommand)
 
-	pipe.output[paneListCommand("repo-billing-retry-flow", "agent")] = "%24\tzsh\t1"
-	pipe.output["capture-pane -t %24 -p -e"] = "done again\n"
+	output[paneListCommand("repo-billing-retry-flow", "agent")] = "%24\tzsh\t1"
+	output["capture-pane -t %24 -p -e"] = "done again\n"
 
 	third, err := monitor.Snapshot(context.Background(), &core.Task{
 		TmuxSession:     "repo-billing-retry-flow",
@@ -199,16 +190,14 @@ func TestRuntimeMonitorSnapshot_MarksCodexHistoryAfterPaneTransitionsFromShellTo
 }
 
 func TestRuntimeMonitorSnapshot_UsesLatestLastOutputAt(t *testing.T) {
-	pipe := &fakeControlPipe{
-		output: map[string]string{
-			paneListCommand("repo-billing-retry-flow", "agent"): "%24\tcodex\t1",
-			"capture-pane -t %24 -p -e":                         "› review my changes\n",
-		},
-		lastOutputAt: time.Date(2026, 4, 5, 9, 59, 55, 0, time.UTC),
-	}
-	monitor := NewRuntimeMonitorWithFactory(&fakeControlPipeFactory{
-		pipes: map[string]controlPipe{"repo-billing-retry-flow": pipe},
-	}, func() time.Time {
+	lastOutputAt := time.Date(2026, 4, 5, 9, 59, 55, 0, time.UTC)
+	pipe := newMockControlPipe(t, map[string]string{
+		paneListCommand("repo-billing-retry-flow", "agent"): "%24\tcodex\t1",
+		"capture-pane -t %24 -p -e":                         "› review my changes\n",
+	}, nil, &lastOutputAt, nil)
+	monitor := NewRuntimeMonitorWithFactory(newMockControlPipeFactory(t, map[string]controlPipe{
+		"repo-billing-retry-flow": pipe,
+	}, nil, nil), func() time.Time {
 		return time.Date(2026, 4, 5, 10, 0, 0, 0, time.UTC)
 	})
 
@@ -219,7 +208,7 @@ func TestRuntimeMonitorSnapshot_UsesLatestLastOutputAt(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, time.Date(2026, 4, 5, 9, 59, 55, 0, time.UTC), snapshot.LastOutputAt)
 
-	pipe.lastOutputAt = time.Date(2026, 4, 5, 10, 0, 2, 0, time.UTC)
+	lastOutputAt = time.Date(2026, 4, 5, 10, 0, 2, 0, time.UTC)
 	snapshot, err = monitor.Snapshot(context.Background(), &core.Task{
 		TmuxSession:     "repo-billing-retry-flow",
 		AgentWindowName: "agent",
@@ -229,15 +218,14 @@ func TestRuntimeMonitorSnapshot_UsesLatestLastOutputAt(t *testing.T) {
 }
 
 func TestRuntimeMonitor_CloseClosesBoundControlPipes(t *testing.T) {
-	pipe := &fakeControlPipe{
-		output: map[string]string{
-			paneListCommand("repo-billing-retry-flow", "agent"): "%24\tcodex\t1",
-			"capture-pane -t %24 -p -e":                         "› review my changes\n",
-		},
-	}
-	monitor := NewRuntimeMonitorWithFactory(&fakeControlPipeFactory{
-		pipes: map[string]controlPipe{"repo-billing-retry-flow": pipe},
-	}, time.Now)
+	closed := false
+	pipe := newMockControlPipe(t, map[string]string{
+		paneListCommand("repo-billing-retry-flow", "agent"): "%24\tcodex\t1",
+		"capture-pane -t %24 -p -e":                         "› review my changes\n",
+	}, nil, nil, &closed)
+	monitor := NewRuntimeMonitorWithFactory(newMockControlPipeFactory(t, map[string]controlPipe{
+		"repo-billing-retry-flow": pipe,
+	}, nil, nil), time.Now)
 
 	_, err := monitor.Snapshot(context.Background(), &core.Task{
 		TmuxSession:     "repo-billing-retry-flow",
@@ -246,27 +234,23 @@ func TestRuntimeMonitor_CloseClosesBoundControlPipes(t *testing.T) {
 	require.NoError(t, err)
 
 	require.NoError(t, monitor.Close())
-	require.True(t, pipe.closed)
+	require.True(t, closed)
 }
 
 func TestRuntimeMonitorSnapshot_EvictsDeadPipeAndReattaches(t *testing.T) {
-	firstPipe := &fakeControlPipe{
-		output: map[string]string{
-			paneListCommand("repo-billing-retry-flow", "agent"): "%24\tcodex\t1",
-		},
-		errors: map[string]error{
-			"capture-pane -t %24 -p -e": io.ErrClosedPipe,
-		},
-	}
-	secondPipe := &fakeControlPipe{
-		output: map[string]string{
-			paneListCommand("repo-billing-retry-flow", "agent"): "%24\tcodex\t1",
-			"capture-pane -t %24 -p -e":                         "› review my changes\n",
-		},
-	}
-	factory := &fakeControlPipeFactory{
-		queue: []controlPipe{firstPipe, secondPipe},
-	}
+	firstClosed := false
+	firstPipe := newMockControlPipe(t, map[string]string{
+		paneListCommand("repo-billing-retry-flow", "agent"): "%24\tcodex\t1",
+	}, map[string]error{
+		"capture-pane -t %24 -p -e": io.ErrClosedPipe,
+	}, nil, &firstClosed)
+	secondClosed := false
+	secondPipe := newMockControlPipe(t, map[string]string{
+		paneListCommand("repo-billing-retry-flow", "agent"): "%24\tcodex\t1",
+		"capture-pane -t %24 -p -e":                         "› review my changes\n",
+	}, nil, nil, &secondClosed)
+	var calls []string
+	factory := newMockControlPipeFactory(t, nil, []controlPipe{firstPipe, secondPipe}, &calls)
 	monitor := NewRuntimeMonitorWithFactory(factory, time.Now)
 
 	snapshot, err := monitor.Snapshot(context.Background(), &core.Task{
@@ -275,8 +259,8 @@ func TestRuntimeMonitorSnapshot_EvictsDeadPipeAndReattaches(t *testing.T) {
 	})
 	require.Error(t, err)
 	require.Empty(t, snapshot.PaneID)
-	require.True(t, firstPipe.closed)
-	require.Len(t, factory.calls, 1)
+	require.True(t, firstClosed)
+	require.Len(t, calls, 1)
 
 	snapshot, err = monitor.Snapshot(context.Background(), &core.Task{
 		TmuxSession:     "repo-billing-retry-flow",
@@ -285,20 +269,18 @@ func TestRuntimeMonitorSnapshot_EvictsDeadPipeAndReattaches(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, "%24", snapshot.PaneID)
 	require.Equal(t, "› review my changes\n", snapshot.Content)
-	require.Len(t, factory.calls, 2)
-	require.False(t, secondPipe.closed)
+	require.Len(t, calls, 2)
+	require.False(t, secondClosed)
 }
 
 func TestRuntimeMonitorSnapshot_BindsActiveShellPaneAsFinishedFallback(t *testing.T) {
-	pipe := &fakeControlPipe{
-		output: map[string]string{
-			paneListCommand("repo-billing-retry-flow", "agent"): "%24\tzsh\t1\n%31\tzsh\t0",
-			"capture-pane -t %24 -p -e":                         "done\n",
-		},
-	}
-	monitor := NewRuntimeMonitorWithFactory(&fakeControlPipeFactory{
-		pipes: map[string]controlPipe{"repo-billing-retry-flow": pipe},
-	}, time.Now)
+	pipe := newMockControlPipe(t, map[string]string{
+		paneListCommand("repo-billing-retry-flow", "agent"): "%24\tzsh\t1\n%31\tzsh\t0",
+		"capture-pane -t %24 -p -e":                         "done\n",
+	}, nil, nil, nil)
+	monitor := NewRuntimeMonitorWithFactory(newMockControlPipeFactory(t, map[string]controlPipe{
+		"repo-billing-retry-flow": pipe,
+	}, nil, nil), time.Now)
 
 	snapshot, err := monitor.Snapshot(context.Background(), &core.Task{
 		TmuxSession:     "repo-billing-retry-flow",
@@ -310,44 +292,76 @@ func TestRuntimeMonitorSnapshot_BindsActiveShellPaneAsFinishedFallback(t *testin
 	require.Equal(t, "zsh", snapshot.ForegroundCommand)
 }
 
-type fakeControlPipe struct {
-	output       map[string]string
-	errors       map[string]error
-	lastOutputAt time.Time
-	closed       bool
+func newMockControlPipe(
+	t *testing.T,
+	output map[string]string,
+	errors map[string]error,
+	lastOutputAt *time.Time,
+	closed *bool,
+) *MockcontrolPipe {
+	t.Helper()
+
+	pipe := NewMockcontrolPipe(t)
+	pipe.On("SendCommand", mock.Anything).Return(
+		func(command string) string {
+			return output[command]
+		},
+		func(command string) error {
+			if errors == nil {
+				return nil
+			}
+
+			return errors[command]
+		},
+	).Maybe()
+	pipe.On("LastOutputAt").Return(func() time.Time {
+		if lastOutputAt == nil {
+			return time.Time{}
+		}
+
+		return *lastOutputAt
+	}).Maybe()
+	pipe.On("Close").Return(func() error {
+		if closed != nil {
+			*closed = true
+		}
+
+		return nil
+	}).Maybe()
+
+	return pipe
 }
 
-func (f *fakeControlPipe) SendCommand(command string) (string, error) {
-	if err, ok := f.errors[command]; ok {
-		return "", err
-	}
-	return f.output[command], nil
-}
+func newMockControlPipeFactory(
+	t *testing.T,
+	pipes map[string]controlPipe,
+	queue []controlPipe,
+	calls *[]string,
+) *MockcontrolPipeFactory {
+	t.Helper()
 
-func (f *fakeControlPipe) LastOutputAt() time.Time {
-	return f.lastOutputAt
-}
+	emptyPipe := newMockControlPipe(t, map[string]string{}, nil, nil, nil)
+	remaining := append([]controlPipe(nil), queue...)
+	factory := NewMockcontrolPipeFactory(t)
+	factory.On("Attach", mock.Anything).Return(
+		func(session string) controlPipe {
+			if calls != nil {
+				*calls = append(*calls, session)
+			}
+			if len(remaining) > 0 {
+				pipe := remaining[0]
+				remaining = remaining[1:]
 
-func (f *fakeControlPipe) Close() error {
-	f.closed = true
-	return nil
-}
+				return pipe
+			}
+			if pipe, ok := pipes[session]; ok {
+				return pipe
+			}
 
-type fakeControlPipeFactory struct {
-	pipes map[string]controlPipe
-	queue []controlPipe
-	calls []string
-}
+			return emptyPipe
+		},
+		func(string) error { return nil },
+	).Maybe()
 
-func (f *fakeControlPipeFactory) Attach(session string) (controlPipe, error) {
-	f.calls = append(f.calls, session)
-	if len(f.queue) > 0 {
-		pipe := f.queue[0]
-		f.queue = f.queue[1:]
-		return pipe, nil
-	}
-	if pipe, ok := f.pipes[session]; ok {
-		return pipe, nil
-	}
-	return &fakeControlPipe{output: map[string]string{}}, nil
+	return factory
 }

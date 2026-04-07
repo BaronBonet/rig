@@ -4,18 +4,38 @@ import (
 	"context"
 	"errors"
 	"testing"
+	"time"
 
 	"agent/internal/core"
 	"agent/internal/pkg/execx"
 
+	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
 )
 
 func TestRepository_StartTaskSession_LaunchesCommandAndTypesInitialInput(t *testing.T) {
-	runner := &fakeRunner{
-		paneContent: "›",
-	}
+	runner := execx.NewMockRunner(t)
 	repo := NewRepository(runner)
+	repo.now = func() time.Time { return time.Unix(0, 0) }
+	repo.sleep = func(time.Duration) {}
+
+	mock.InOrder(
+		expectTmuxRun(runner, execx.Result{}, nil,
+			"new-session", "-d", "-s", "repo_task", "-n", "agent", "-c", "/tmp/repo-task",
+		),
+		expectTmuxRun(runner, execx.Result{}, nil,
+			"new-window", "-d", "-t", "=repo_task", "-n", "editor", "-c", "/tmp/repo-task",
+		),
+		expectTmuxRun(runner, execx.Result{}, nil,
+			"send-keys", "-t", "=repo_task:agent", "codex", "C-m",
+		),
+		expectTmuxRun(runner, execx.Result{Stdout: "›"}, nil,
+			"capture-pane", "-t", "=repo_task:agent", "-p",
+		),
+		expectTmuxRun(runner, execx.Result{}, nil,
+			"send-keys", "-t", "=repo_task:agent", "'fix billing retry flow'",
+		),
+	)
 
 	err := repo.StartTaskSession(context.Background(), &core.Task{
 		TmuxSession:      "repo_task",
@@ -29,13 +49,20 @@ func TestRepository_StartTaskSession_LaunchesCommandAndTypesInitialInput(t *test
 	})
 
 	require.NoError(t, err)
-	require.Equal(t, []string{"codex"}, runner.sentCommand)
-	require.Equal(t, []string{"fix billing retry flow"}, runner.typedCommand)
 }
 
 func TestRepositoryCreateSession_UsesDetachedSessionInWorkingDir(t *testing.T) {
-	runner := execx.NewFakeRunner([]execx.Result{{}})
+	runner := execx.NewMockRunner(t)
 	repo := NewRepository(runner)
+
+	mock.InOrder(
+		expectTmuxRun(runner, execx.Result{}, nil,
+			"new-session", "-d", "-s", "repo-billing-retry-flow", "-n", "agent", "-c", "/tmp/repo-billing-retry-flow",
+		),
+		expectTmuxRun(runner, execx.Result{}, nil,
+			"new-window", "-d", "-t", "=repo-billing-retry-flow", "-n", "editor", "-c", "/tmp/repo-billing-retry-flow",
+		),
+	)
 
 	err := repo.CreateSession(context.Background(), core.CreateSessionInput{
 		SessionName:      "repo-billing-retry-flow",
@@ -44,35 +71,23 @@ func TestRepositoryCreateSession_UsesDetachedSessionInWorkingDir(t *testing.T) {
 		EditorWindowName: "editor",
 	})
 	require.NoError(t, err)
-	require.Len(t, runner.Calls, 2)
-	require.Equal(t, "tmux", runner.Calls[0].Name)
-	require.Equal(t, []string{
-		"new-session",
-		"-d",
-		"-s",
-		"repo-billing-retry-flow",
-		"-n",
-		"agent",
-		"-c",
-		"/tmp/repo-billing-retry-flow",
-	}, runner.Calls[0].Args)
-	require.Equal(t, "tmux", runner.Calls[1].Name)
-	require.Equal(t, []string{
-		"new-window",
-		"-d",
-		"-t",
-		"=repo-billing-retry-flow",
-		"-n",
-		"editor",
-		"-c",
-		"/tmp/repo-billing-retry-flow",
-	}, runner.Calls[1].Args)
 }
 
 func TestRepositoryCreateSession_KillsSessionIfEditorWindowCreationFails(t *testing.T) {
-	runner := execx.NewFakeRunner([]execx.Result{{}, {}, {}})
-	runner.Errors = []error{nil, errors.New("new-window failed"), nil}
+	runner := execx.NewMockRunner(t)
 	repo := NewRepository(runner)
+
+	mock.InOrder(
+		expectTmuxRun(runner, execx.Result{}, nil,
+			"new-session", "-d", "-s", "repo-billing-retry-flow", "-n", "agent", "-c", "/tmp/repo-billing-retry-flow",
+		),
+		expectTmuxRun(runner, execx.Result{}, errors.New("new-window failed"),
+			"new-window", "-d", "-t", "=repo-billing-retry-flow", "-n", "editor", "-c", "/tmp/repo-billing-retry-flow",
+		),
+		expectTmuxRun(runner, execx.Result{}, nil,
+			"kill-session", "-t", "=repo-billing-retry-flow",
+		),
+	)
 
 	err := repo.CreateSession(context.Background(), core.CreateSessionInput{
 		SessionName:      "repo-billing-retry-flow",
@@ -82,18 +97,23 @@ func TestRepositoryCreateSession_KillsSessionIfEditorWindowCreationFails(t *test
 	})
 
 	require.EqualError(t, err, "new-window failed")
-	require.Len(t, runner.Calls, 3)
-	require.Equal(t, []string{
-		"kill-session",
-		"-t",
-		"=repo-billing-retry-flow",
-	}, runner.Calls[2].Args)
 }
 
 func TestRepositoryCreateSession_JoinsWindowCreationAndCleanupErrors(t *testing.T) {
-	runner := execx.NewFakeRunner([]execx.Result{{}, {}, {}})
-	runner.Errors = []error{nil, errors.New("new-window failed"), errors.New("kill-session failed")}
+	runner := execx.NewMockRunner(t)
 	repo := NewRepository(runner)
+
+	mock.InOrder(
+		expectTmuxRun(runner, execx.Result{}, nil,
+			"new-session", "-d", "-s", "repo-billing-retry-flow", "-n", "agent", "-c", "/tmp/repo-billing-retry-flow",
+		),
+		expectTmuxRun(runner, execx.Result{}, errors.New("new-window failed"),
+			"new-window", "-d", "-t", "=repo-billing-retry-flow", "-n", "editor", "-c", "/tmp/repo-billing-retry-flow",
+		),
+		expectTmuxRun(runner, execx.Result{}, errors.New("kill-session failed"),
+			"kill-session", "-t", "=repo-billing-retry-flow",
+		),
+	)
 
 	err := repo.CreateSession(context.Background(), core.CreateSessionInput{
 		SessionName:      "repo-billing-retry-flow",
@@ -105,44 +125,41 @@ func TestRepositoryCreateSession_JoinsWindowCreationAndCleanupErrors(t *testing.
 	require.Error(t, err)
 	require.ErrorContains(t, err, "new-window failed")
 	require.ErrorContains(t, err, "kill-session failed")
-	require.Len(t, runner.Calls, 3)
 }
 
 func TestRepositoryOpenTaskSession_UsesTaskSession(t *testing.T) {
 	t.Setenv("TMUX", "")
 
-	runner := execx.NewFakeRunner([]execx.Result{{}})
+	runner := execx.NewMockRunner(t)
 	repo := NewRepository(runner)
+	expectTmuxRun(runner, execx.Result{}, nil, "attach-session", "-t", "=repo-billing-retry-flow")
 
 	err := repo.OpenTaskSession(context.Background(), &core.Task{TmuxSession: "repo-billing-retry-flow"})
 	require.NoError(t, err)
-	require.Equal(t, []string{
-		"attach-session",
-		"-t",
-		"=repo-billing-retry-flow",
-	}, runner.Calls[0].Args)
 }
 
 func TestRepositoryDeleteTaskSession_UsesTaskSession(t *testing.T) {
-	runner := execx.NewFakeRunner([]execx.Result{{}})
+	runner := execx.NewMockRunner(t)
 	repo := NewRepository(runner)
+	expectTmuxRun(runner, execx.Result{}, nil, "kill-session", "-t", "=repo-billing-retry-flow")
 
 	err := repo.DeleteTaskSession(context.Background(), &core.Task{TmuxSession: "repo-billing-retry-flow"})
 	require.NoError(t, err)
-	require.Equal(t, []string{
-		"kill-session",
-		"-t",
-		"=repo-billing-retry-flow",
-	}, runner.Calls[0].Args)
 }
 
 func TestRepositoryInspectTaskSession_ReturnsSessionAndWindowResources(t *testing.T) {
-	runner := execx.NewFakeRunner([]execx.Result{
-		{},
-		{Stdout: "agent\neditor\n"},
-		{Stdout: "agent\neditor\n"},
-	})
+	runner := execx.NewMockRunner(t)
 	repo := NewRepository(runner)
+
+	mock.InOrder(
+		expectTmuxRun(runner, execx.Result{}, nil, "has-session", "-t", "=repo-billing-retry-flow"),
+		expectTmuxRun(runner, execx.Result{Stdout: "agent\neditor\n"}, nil,
+			"list-windows", "-t", "=repo-billing-retry-flow", "-F", "#{window_name}",
+		),
+		expectTmuxRun(runner, execx.Result{Stdout: "agent\neditor\n"}, nil,
+			"list-windows", "-t", "=repo-billing-retry-flow", "-F", "#{window_name}",
+		),
+	)
 
 	resources, err := repo.InspectTaskSession(context.Background(), &core.Task{
 		TmuxSession:      "repo-billing-retry-flow",
@@ -158,34 +175,45 @@ func TestRepositoryInspectTaskSession_ReturnsSessionAndWindowResources(t *testin
 }
 
 func TestRepositorySnapshotTaskSession_UsesRuntimeMonitor(t *testing.T) {
-	repo := NewRepository(execx.NewFakeRunner(nil))
-	repo.runtimeMonitor = &fakeRuntimeMonitor{
-		snapshot: core.RuntimeSnapshot{
-			SessionName: "repo-billing-retry-flow",
-			PaneID:      "%24",
-		},
-	}
+	repo := NewRepository(execx.NewMockRunner(t))
+	runtimeMonitor := core.NewMockRuntimeMonitor(t)
+	repo.runtimeMonitor = runtimeMonitor
 
-	snapshot, err := repo.SnapshotTaskSession(context.Background(), &core.Task{TmuxSession: "repo-billing-retry-flow"})
+	task := &core.Task{TmuxSession: "repo-billing-retry-flow"}
+	runtimeMonitor.EXPECT().Snapshot(mock.Anything, task).Return(core.RuntimeSnapshot{
+		SessionName: "repo-billing-retry-flow",
+		PaneID:      "%24",
+	}, nil).Once()
+
+	snapshot, err := repo.SnapshotTaskSession(context.Background(), task)
 	require.NoError(t, err)
 	require.Equal(t, "repo-billing-retry-flow", snapshot.SessionName)
 	require.Equal(t, "%24", snapshot.PaneID)
-	require.Equal(t, "repo-billing-retry-flow", repo.runtimeMonitor.(*fakeRuntimeMonitor).task.TmuxSession)
 }
 
 func TestRepositoryNormalizesColonSessionNamesAcrossTmuxCommands(t *testing.T) {
 	t.Setenv("TMUX", "")
 
-	runner := execx.NewFakeRunner([]execx.Result{
-		{},
-		{},
-		{},
-		{Stdout: "agent\neditor\n"},
-		{},
-		{},
-		{},
-	})
+	runner := execx.NewMockRunner(t)
 	repo := NewRepository(runner)
+
+	mock.InOrder(
+		expectTmuxRun(runner, execx.Result{}, nil,
+			"new-session", "-d", "-s", "repo-billing-retry-flow", "-n", "agent", "-c", "/tmp/repo-billing-retry-flow",
+		),
+		expectTmuxRun(runner, execx.Result{}, nil,
+			"new-window", "-d", "-t", "=repo-billing-retry-flow", "-n", "editor", "-c", "/tmp/repo-billing-retry-flow",
+		),
+		expectTmuxRun(runner, execx.Result{}, nil, "has-session", "-t", "=repo-billing-retry-flow"),
+		expectTmuxRun(runner, execx.Result{Stdout: "agent\neditor\n"}, nil,
+			"list-windows", "-t", "=repo-billing-retry-flow", "-F", "#{window_name}",
+		),
+		expectTmuxRun(runner, execx.Result{}, nil, "attach-session", "-t", "=repo-billing-retry-flow"),
+		expectTmuxRun(runner, execx.Result{}, nil,
+			"send-keys", "-t", "=repo-billing-retry-flow:editor", "codex 'fix bug'", "C-m",
+		),
+		expectTmuxRun(runner, execx.Result{}, nil, "kill-session", "-t", "=repo-billing-retry-flow"),
+	)
 
 	input := core.CreateSessionInput{
 		SessionName:      "repo:billing-retry-flow",
@@ -210,76 +238,24 @@ func TestRepositoryNormalizesColonSessionNamesAcrossTmuxCommands(t *testing.T) {
 		repo.SendKeysToWindow(context.Background(), input.SessionName, "editor", []string{"codex", "fix bug"}),
 	)
 	require.NoError(t, repo.KillSession(context.Background(), input.SessionName))
-
-	require.Len(t, runner.Calls, 7)
-	require.Equal(t, []string{
-		"new-session",
-		"-d",
-		"-s",
-		"repo-billing-retry-flow",
-		"-n",
-		"agent",
-		"-c",
-		"/tmp/repo-billing-retry-flow",
-	}, runner.Calls[0].Args)
-	require.Equal(t, []string{
-		"new-window",
-		"-d",
-		"-t",
-		"=repo-billing-retry-flow",
-		"-n",
-		"editor",
-		"-c",
-		"/tmp/repo-billing-retry-flow",
-	}, runner.Calls[1].Args)
-	require.Equal(t, []string{
-		"has-session",
-		"-t",
-		"=repo-billing-retry-flow",
-	}, runner.Calls[2].Args)
-	require.Equal(t, []string{
-		"list-windows",
-		"-t",
-		"=repo-billing-retry-flow",
-		"-F",
-		"#{window_name}",
-	}, runner.Calls[3].Args)
-	require.Equal(t, []string{
-		"attach-session",
-		"-t",
-		"=repo-billing-retry-flow",
-	}, runner.Calls[4].Args)
-	require.Equal(t, []string{
-		"send-keys",
-		"-t",
-		"=repo-billing-retry-flow:editor",
-		"codex 'fix bug'",
-		"C-m",
-	}, runner.Calls[5].Args)
-	require.Equal(t, []string{
-		"kill-session",
-		"-t",
-		"=repo-billing-retry-flow",
-	}, runner.Calls[6].Args)
 }
 
 func TestRepositoryNormalizesColonSessionNamesForSwitchClientInsideTmux(t *testing.T) {
 	t.Setenv("TMUX", "/tmp/tmux-123/default,123,0")
 
-	runner := execx.NewFakeRunner([]execx.Result{{}})
+	runner := execx.NewMockRunner(t)
 	repo := NewRepository(runner)
+	expectTmuxRun(runner, execx.Result{}, nil, "switch-client", "-t", "=repo-billing-retry-flow")
 
 	require.NoError(t, repo.AttachOrSwitch(context.Background(), "repo:billing-retry-flow"))
-	require.Equal(t, []string{
-		"switch-client",
-		"-t",
-		"=repo-billing-retry-flow",
-	}, runner.Calls[0].Args)
 }
 
 func TestRepositorySendKeysToWindow_UsesNamedWindowTarget(t *testing.T) {
-	runner := execx.NewFakeRunner([]execx.Result{{}})
+	runner := execx.NewMockRunner(t)
 	repo := NewRepository(runner)
+	expectTmuxRun(runner, execx.Result{}, nil,
+		"send-keys", "-t", "=repo-billing-retry-flow:editor", "codex 'fix bug'", "C-m",
+	)
 
 	err := repo.SendKeysToWindow(
 		context.Background(),
@@ -288,33 +264,25 @@ func TestRepositorySendKeysToWindow_UsesNamedWindowTarget(t *testing.T) {
 		[]string{"codex", "fix bug"},
 	)
 	require.NoError(t, err)
-	require.Equal(t, []string{
-		"send-keys",
-		"-t",
-		"=repo-billing-retry-flow:editor",
-		"codex 'fix bug'",
-		"C-m",
-	}, runner.Calls[0].Args)
 }
 
 func TestRepositorySendKeysToWindow_DefaultsEmptyWindowToAgent(t *testing.T) {
-	runner := execx.NewFakeRunner([]execx.Result{{}})
+	runner := execx.NewMockRunner(t)
 	repo := NewRepository(runner)
+	expectTmuxRun(runner, execx.Result{}, nil,
+		"send-keys", "-t", "=repo-billing-retry-flow:agent", "codex 'fix bug'", "C-m",
+	)
 
 	err := repo.SendKeysToWindow(context.Background(), "repo-billing-retry-flow", "", []string{"codex", "fix bug"})
 	require.NoError(t, err)
-	require.Equal(t, []string{
-		"send-keys",
-		"-t",
-		"=repo-billing-retry-flow:agent",
-		"codex 'fix bug'",
-		"C-m",
-	}, runner.Calls[0].Args)
 }
 
 func TestRepositoryTypeInWindow_SendsKeysWithoutEnter(t *testing.T) {
-	runner := execx.NewFakeRunner([]execx.Result{{}})
+	runner := execx.NewMockRunner(t)
 	repo := NewRepository(runner)
+	expectTmuxRun(runner, execx.Result{}, nil,
+		"send-keys", "-t", "=repo-billing-retry-flow:agent", "codex 'fix bug'",
+	)
 
 	err := repo.TypeInWindow(
 		context.Background(),
@@ -323,66 +291,48 @@ func TestRepositoryTypeInWindow_SendsKeysWithoutEnter(t *testing.T) {
 		[]string{"codex", "fix bug"},
 	)
 	require.NoError(t, err)
-	require.Equal(t, []string{
-		"send-keys",
-		"-t",
-		"=repo-billing-retry-flow:agent",
-		"codex 'fix bug'",
-	}, runner.Calls[0].Args)
 }
 
 func TestRepositoryAttachOrSwitch_UsesExactSessionTarget(t *testing.T) {
 	t.Setenv("TMUX", "")
 
-	runner := execx.NewFakeRunner([]execx.Result{{}})
+	runner := execx.NewMockRunner(t)
 	repo := NewRepository(runner)
+	expectTmuxRun(runner, execx.Result{}, nil, "attach-session", "-t", "=repo-billing-retry-flow")
 
 	err := repo.AttachOrSwitch(context.Background(), "repo-billing-retry-flow")
 	require.NoError(t, err)
-	require.Equal(t, []string{
-		"attach-session",
-		"-t",
-		"=repo-billing-retry-flow",
-	}, runner.Calls[0].Args)
 }
 
 func TestRepositoryAttachOrSwitch_UsesSwitchClientInsideTmux(t *testing.T) {
 	t.Setenv("TMUX", "/tmp/tmux-123/default,123,0")
 
-	runner := execx.NewFakeRunner([]execx.Result{{}})
+	runner := execx.NewMockRunner(t)
 	repo := NewRepository(runner)
+	expectTmuxRun(runner, execx.Result{}, nil, "switch-client", "-t", "=repo-billing-retry-flow")
 
 	err := repo.AttachOrSwitch(context.Background(), "repo-billing-retry-flow")
 	require.NoError(t, err)
-	require.Equal(t, []string{
-		"switch-client",
-		"-t",
-		"=repo-billing-retry-flow",
-	}, runner.Calls[0].Args)
 }
 
 func TestRepositorySessionExists_UsesExactSessionTarget(t *testing.T) {
-	runner := execx.NewFakeRunner([]execx.Result{{}})
+	runner := execx.NewMockRunner(t)
 	repo := NewRepository(runner)
+	expectTmuxRun(runner, execx.Result{}, nil, "has-session", "-t", "=repo-billing-retry-flow")
 
 	exists, err := repo.SessionExists(context.Background(), "repo-billing-retry-flow")
 	require.NoError(t, err)
 	require.True(t, exists)
-	require.Equal(t, []string{
-		"has-session",
-		"-t",
-		"=repo-billing-retry-flow",
-	}, runner.Calls[0].Args)
 }
 
 func TestRepositorySessionExists_ReturnsFalseForMissingSessionOnly(t *testing.T) {
-	runner := execx.NewFakeRunner([]execx.Result{{Stderr: "can't find session: repo-billing-retry-flow\n"}})
-	runner.Errors = []error{execx.CommandError{
+	runner := execx.NewMockRunner(t)
+	expectTmuxRun(runner, execx.Result{Stderr: "can't find session: repo-billing-retry-flow\n"}, execx.CommandError{
 		Name:   "tmux",
 		Args:   []string{"has-session", "-t", "=repo-billing-retry-flow"},
 		Stderr: "can't find session: repo-billing-retry-flow\n",
 		Err:    errors.New("exit status 1"),
-	}}
+	}, "has-session", "-t", "=repo-billing-retry-flow")
 	repo := NewRepository(runner)
 
 	exists, err := repo.SessionExists(context.Background(), "repo-billing-retry-flow")
@@ -391,13 +341,13 @@ func TestRepositorySessionExists_ReturnsFalseForMissingSessionOnly(t *testing.T)
 }
 
 func TestRepositorySessionExists_ReturnsErrorForTmuxFailure(t *testing.T) {
-	runner := execx.NewFakeRunner([]execx.Result{{Stderr: "failed to connect to server\n"}})
-	runner.Errors = []error{execx.CommandError{
+	runner := execx.NewMockRunner(t)
+	expectTmuxRun(runner, execx.Result{Stderr: "failed to connect to server\n"}, execx.CommandError{
 		Name:   "tmux",
 		Args:   []string{"has-session", "-t", "=repo-billing-retry-flow"},
 		Stderr: "failed to connect to server\n",
 		Err:    errors.New("exit status 1"),
-	}}
+	}, "has-session", "-t", "=repo-billing-retry-flow")
 	repo := NewRepository(runner)
 
 	exists, err := repo.SessionExists(context.Background(), "repo-billing-retry-flow")
@@ -406,29 +356,25 @@ func TestRepositorySessionExists_ReturnsErrorForTmuxFailure(t *testing.T) {
 }
 
 func TestRepositoryWindowExists_UsesExactSessionTarget(t *testing.T) {
-	runner := execx.NewFakeRunner([]execx.Result{{Stdout: "agent\neditor\n"}})
+	runner := execx.NewMockRunner(t)
 	repo := NewRepository(runner)
+	expectTmuxRun(runner, execx.Result{Stdout: "agent\neditor\n"}, nil,
+		"list-windows", "-t", "=repo-billing-retry-flow", "-F", "#{window_name}",
+	)
 
 	exists, err := repo.WindowExists(context.Background(), "repo-billing-retry-flow", "agent")
 	require.NoError(t, err)
 	require.True(t, exists)
-	require.Equal(t, []string{
-		"list-windows",
-		"-t",
-		"=repo-billing-retry-flow",
-		"-F",
-		"#{window_name}",
-	}, runner.Calls[0].Args)
 }
 
 func TestRepositoryWindowExists_ReturnsFalseForMissingSessionOnly(t *testing.T) {
-	runner := execx.NewFakeRunner([]execx.Result{{Stderr: "can't find session: repo-billing-retry-flow\n"}})
-	runner.Errors = []error{execx.CommandError{
+	runner := execx.NewMockRunner(t)
+	expectTmuxRun(runner, execx.Result{Stderr: "can't find session: repo-billing-retry-flow\n"}, execx.CommandError{
 		Name:   "tmux",
 		Args:   []string{"list-windows", "-t", "=repo-billing-retry-flow", "-F", "#{window_name}"},
 		Stderr: "can't find session: repo-billing-retry-flow\n",
 		Err:    errors.New("exit status 1"),
-	}}
+	}, "list-windows", "-t", "=repo-billing-retry-flow", "-F", "#{window_name}")
 	repo := NewRepository(runner)
 
 	exists, err := repo.WindowExists(context.Background(), "repo-billing-retry-flow", "agent")
@@ -437,76 +383,19 @@ func TestRepositoryWindowExists_ReturnsFalseForMissingSessionOnly(t *testing.T) 
 }
 
 func TestRepositoryKillSession_UsesExactSessionTarget(t *testing.T) {
-	runner := execx.NewFakeRunner([]execx.Result{{}})
+	runner := execx.NewMockRunner(t)
 	repo := NewRepository(runner)
+	expectTmuxRun(runner, execx.Result{}, nil, "kill-session", "-t", "=repo-billing-retry-flow")
 
 	err := repo.KillSession(context.Background(), "repo-billing-retry-flow")
 	require.NoError(t, err)
-	require.Equal(t, []string{
-		"kill-session",
-		"-t",
-		"=repo-billing-retry-flow",
-	}, runner.Calls[0].Args)
 }
 
-type fakeRunner struct {
-	sentCommand  []string
-	typedCommand []string
-	paneContent  string
-}
-
-type fakeRuntimeMonitor struct {
-	task     *core.Task
-	snapshot core.RuntimeSnapshot
-	err      error
-}
-
-func (f *fakeRuntimeMonitor) Snapshot(_ context.Context, task *core.Task) (core.RuntimeSnapshot, error) {
-	f.task = task
-	return f.snapshot, f.err
-}
-
-func (f *fakeRuntimeMonitor) Close() error { return nil }
-
-func (f *fakeRunner) Run(_ context.Context, _ string, name string, args ...string) (execx.Result, error) {
-	if name != "tmux" {
-		return execx.Result{}, nil
+func expectTmuxRun(runner *execx.MockRunner, result execx.Result, err error, args ...string) *mock.Call {
+	callArgs := make([]interface{}, 0, len(args)+3)
+	callArgs = append(callArgs, mock.Anything, "", "tmux")
+	for _, arg := range args {
+		callArgs = append(callArgs, arg)
 	}
-
-	if len(args) == 0 {
-		return execx.Result{}, nil
-	}
-
-	switch args[0] {
-	case "send-keys":
-		if len(args) < 4 {
-			return execx.Result{}, nil
-		}
-
-		command := splitTmuxCommand(args[3])
-		if len(args) > 4 && args[4] == "C-m" {
-			f.sentCommand = append([]string(nil), command...)
-		} else {
-			f.typedCommand = append([]string(nil), command...)
-		}
-	case "capture-pane":
-		return execx.Result{Stdout: f.paneContent}, nil
-	}
-
-	return execx.Result{}, nil
-}
-
-func (f *fakeRunner) RunWithStdin(context.Context, execx.RunWithStdinOptions) (execx.Result, error) {
-	return execx.Result{}, nil
-}
-
-func splitTmuxCommand(raw string) []string {
-	switch raw {
-	case "codex":
-		return []string{"codex"}
-	case "'fix billing retry flow'":
-		return []string{"fix billing retry flow"}
-	default:
-		return []string{raw}
-	}
+	return runner.On("Run", callArgs...).Return(result, err).Once()
 }
