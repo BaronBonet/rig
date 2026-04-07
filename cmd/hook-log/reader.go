@@ -7,9 +7,13 @@ import (
 	"os"
 	"sort"
 	"strings"
+	"time"
+	"unicode"
 
 	"agent/internal/experimental/hooklog"
 )
+
+const maxLogLineSize = 1024 * 1024
 
 func renderSummary(path string) (string, error) {
 	file, err := os.Open(path)
@@ -18,10 +22,13 @@ func renderSummary(path string) (string, error) {
 	}
 	defer file.Close()
 
-	sessionEvents := make(map[string]map[string]int)
-	lastAssistant := make(map[string]string)
-
 	scanner := bufio.NewScanner(file)
+	scanner.Buffer(make([]byte, 0, 64*1024), maxLogLineSize)
+
+	sessionEvents := make(map[string]map[string]int)
+	lastAssistant := make(map[string]assistantMessage)
+	recordIndex := 0
+
 	for scanner.Scan() {
 		var record hooklog.Record
 		if err := json.Unmarshal(scanner.Bytes(), &record); err != nil {
@@ -38,9 +45,18 @@ func renderSummary(path string) (string, error) {
 		}
 		sessionEvents[sessionID][record.EventName]++
 
-		if msg := strings.TrimSpace(record.LastAssistantMessage()); msg != "" {
-			lastAssistant[sessionID] = msg
+		if msg := sanitizeSummaryText(record.LastAssistantMessage()); msg != "" {
+			candidate := assistantMessage{
+				text:       msg,
+				receivedAt: record.ReceivedAt,
+				order:      recordIndex,
+			}
+			if shouldReplaceAssistant(lastAssistant[sessionID], candidate) {
+				lastAssistant[sessionID] = candidate
+			}
 		}
+
+		recordIndex++
 	}
 	if err := scanner.Err(); err != nil {
 		return "", err
@@ -66,10 +82,56 @@ func renderSummary(path string) (string, error) {
 			fmt.Fprintf(&b, "  %s: %d\n", eventName, sessionEvents[sessionID][eventName])
 		}
 
-		if msg := lastAssistant[sessionID]; msg != "" {
+		if msg := lastAssistant[sessionID].text; msg != "" {
 			fmt.Fprintf(&b, "  last assistant message: %s\n", msg)
 		}
 	}
 
 	return strings.TrimRight(b.String(), "\n"), nil
+}
+
+type assistantMessage struct {
+	text       string
+	receivedAt time.Time
+	order      int
+}
+
+func shouldReplaceAssistant(existing, candidate assistantMessage) bool {
+	if candidate.text == "" {
+		return false
+	}
+	if existing.text == "" {
+		return true
+	}
+	if candidate.receivedAt.IsZero() {
+		if existing.receivedAt.IsZero() {
+			return candidate.order > existing.order
+		}
+		return false
+	}
+	if existing.receivedAt.IsZero() {
+		return true
+	}
+	if candidate.receivedAt.After(existing.receivedAt) {
+		return true
+	}
+	if candidate.receivedAt.Before(existing.receivedAt) {
+		return false
+	}
+	return candidate.order > existing.order
+}
+
+func sanitizeSummaryText(s string) string {
+	if s == "" {
+		return ""
+	}
+
+	normalized := strings.Map(func(r rune) rune {
+		if unicode.IsControl(r) {
+			return ' '
+		}
+		return r
+	}, s)
+
+	return strings.Join(strings.Fields(normalized), " ")
 }
