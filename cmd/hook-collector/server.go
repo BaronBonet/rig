@@ -28,13 +28,23 @@ func newServer(logPath string, now func() time.Time) *server {
 }
 
 func (s *server) handleHook(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		w.Header().Set("Allow", http.MethodPost)
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
 	body, err := io.ReadAll(r.Body)
 	if err != nil {
 		http.Error(w, "read body: "+err.Error(), http.StatusBadRequest)
 		return
 	}
 
-	record := hooklog.NewRecord(s.now(), r.Header.Get("X-Codex-Hook-Event"), r.RemoteAddr, r.URL.Path, body)
+	eventName := r.Header.Get("X-Codex-Hook-Event")
+	record := hooklog.NewRecord(s.now(), eventName, r.RemoteAddr, r.URL.Path, body)
+	if record.EventName == "" {
+		record.EventName = eventNameFromBody(record.RawPayload)
+	}
 	if record.EventName == "" {
 		record.EventName = "unknown"
 	}
@@ -59,4 +69,19 @@ func appendRecord(path string, record hooklog.Record) error {
 	defer file.Close()
 
 	return json.NewEncoder(file).Encode(record)
+}
+
+func eventNameFromBody(rawPayload []byte) string {
+	if len(rawPayload) == 0 {
+		return ""
+	}
+
+	var payload struct {
+		HookEventName string `json:"hook_event_name"`
+	}
+	if err := json.Unmarshal(rawPayload, &payload); err != nil {
+		return ""
+	}
+
+	return payload.HookEventName
 }
