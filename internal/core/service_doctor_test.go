@@ -8,7 +8,7 @@ import (
 )
 
 func TestServiceDoctor_ReturnsMissingBinaryFailures(t *testing.T) {
-	svc := newTestService()
+	svc := newTestService(t)
 	svc.providerRepo.isAvailableErr = errors.New("missing codex")
 
 	result, err := svc.service.Doctor(t.Context(), "/tmp/repo")
@@ -17,7 +17,7 @@ func TestServiceDoctor_ReturnsMissingBinaryFailures(t *testing.T) {
 }
 
 func TestDoctor_ReportsTaskRepositoryAvailabilityFailure(t *testing.T) {
-	svc := newTestService()
+	svc := newTestService(t)
 	svc.taskRepo.isAvailableErr = errors.New("sqlite unavailable")
 
 	result, err := svc.service.Doctor(t.Context(), "/tmp/repo")
@@ -26,7 +26,7 @@ func TestDoctor_ReportsTaskRepositoryAvailabilityFailure(t *testing.T) {
 }
 
 func TestServiceDoctor_ReportsRepoDetectionFailure(t *testing.T) {
-	svc := newTestService()
+	svc := newTestService(t)
 	svc.repoClient.detectRepoErr = errors.New("not a git repo")
 
 	result, err := svc.service.Doctor(t.Context(), "/tmp/repo")
@@ -35,7 +35,7 @@ func TestServiceDoctor_ReportsRepoDetectionFailure(t *testing.T) {
 }
 
 func TestServiceDoctor_NotesMissingRepoConfigWhenRepoDetected(t *testing.T) {
-	svc := newTestService()
+	svc := newTestService(t)
 
 	result, err := svc.service.Doctor(t.Context(), "/tmp/repo")
 	require.NoError(t, err)
@@ -44,7 +44,7 @@ func TestServiceDoctor_NotesMissingRepoConfigWhenRepoDetected(t *testing.T) {
 }
 
 func TestServiceDoctor_NotesLoadedEmptyRepoConfig(t *testing.T) {
-	svc := newTestService()
+	svc := newTestService(t)
 	svc.configRepo.repoConfig = RepoConfig{Exists: true}
 
 	result, err := svc.service.Doctor(t.Context(), "/tmp/repo")
@@ -55,7 +55,7 @@ func TestServiceDoctor_NotesLoadedEmptyRepoConfig(t *testing.T) {
 }
 
 func TestServiceDoctor_ReportsValidSeedPathsAsNotes(t *testing.T) {
-	svc := newTestService()
+	svc := newTestService(t)
 	svc.configRepo.repoConfig = RepoConfig{
 		Exists: true,
 		Seed:   SeedConfig{Copy: []string{".env", "local/"}},
@@ -72,7 +72,7 @@ func TestServiceDoctor_ReportsValidSeedPathsAsNotes(t *testing.T) {
 }
 
 func TestServiceDoctor_ReportsInvalidRepoConfigAsFailure(t *testing.T) {
-	svc := newTestService()
+	svc := newTestService(t)
 	svc.configRepo.loadErr = errors.New("parse agent.yaml: invalid yaml")
 
 	result, err := svc.service.Doctor(t.Context(), "/tmp/repo")
@@ -81,7 +81,7 @@ func TestServiceDoctor_ReportsInvalidRepoConfigAsFailure(t *testing.T) {
 }
 
 func TestServiceDoctor_ReportsInvalidSeedPathsAsFailure(t *testing.T) {
-	svc := newTestService()
+	svc := newTestService(t)
 	svc.configRepo.repoConfig = RepoConfig{
 		Exists: true,
 		Seed:   SeedConfig{Copy: []string{".env"}},

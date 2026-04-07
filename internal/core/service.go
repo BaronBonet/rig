@@ -2,7 +2,6 @@ package core
 
 import (
 	"agent/internal/pkg/slug"
-	"agent/internal/pkg/timeutil"
 	"context"
 	"errors"
 	"fmt"
@@ -35,7 +34,6 @@ type Service struct {
 	providers  map[string]ProviderClient
 	repoConfig RepoConfigRepository
 	workspace  WorkspaceSeeder
-	clock      timeutil.Clock
 	cfg        Config
 }
 
@@ -115,7 +113,7 @@ func (s *Service) CreateTaskWithProgress(
 		provider = s.cfg.Provider
 	}
 
-	now := s.clock.Now().UTC()
+	now := time.Now().UTC()
 	taskSlug := slug.EnsureUnique(slug.FromDisplayName(displayName), existingSlugs)
 	task := &Task{
 		ID:          fmt.Sprintf("%d", now.UnixNano()),
@@ -159,7 +157,7 @@ func (s *Service) CreateTaskWithProgress(
 
 	task.WorktreeExists = true
 	task.BranchExists = true
-	task.UpdatedAt = s.clock.Now().UTC()
+	task.UpdatedAt = time.Now().UTC()
 	if err := s.tasks.UpdateTask(ctx, task); err != nil {
 		return task, err
 	}
@@ -215,7 +213,7 @@ func (s *Service) CreateTaskWithProgress(
 	task.AgentWindowExists = true
 	task.EditorWindowExists = true
 	task.Status = TaskStatusRunning
-	task.UpdatedAt = s.clock.Now().UTC()
+	task.UpdatedAt = time.Now().UTC()
 	if err := s.tasks.UpdateTask(ctx, task); err != nil {
 		return task, err
 	}
@@ -326,7 +324,7 @@ func (s *Service) DeleteTaskResources(ctx context.Context, idOrSlug string) (*Ta
 		task.SessionExists = false
 		task.AgentWindowExists = false
 		task.EditorWindowExists = false
-		task.UpdatedAt = s.clock.Now().UTC()
+		task.UpdatedAt = time.Now().UTC()
 		if err := s.tasks.UpdateTask(ctx, task); err != nil {
 			return task, err
 		}
@@ -341,7 +339,7 @@ func (s *Service) DeleteTaskResources(ctx context.Context, idOrSlug string) (*Ta
 		}
 
 		task.WorktreeExists = false
-		task.UpdatedAt = s.clock.Now().UTC()
+		task.UpdatedAt = time.Now().UTC()
 		if err := s.tasks.UpdateTask(ctx, task); err != nil {
 			return task, err
 		}
@@ -349,7 +347,7 @@ func (s *Service) DeleteTaskResources(ctx context.Context, idOrSlug string) (*Ta
 
 	task.Status = TaskStatusCleaned
 	task.LastError = ""
-	task.UpdatedAt = s.clock.Now().UTC()
+	task.UpdatedAt = time.Now().UTC()
 	if err := s.tasks.UpdateTask(ctx, task); err != nil {
 		return task, err
 	}
@@ -366,7 +364,6 @@ func NewService(
 	providers map[string]ProviderClient,
 	repoConfig RepoConfigRepository,
 	workspace WorkspaceSeeder,
-	clock timeutil.Clock,
 	cfg Config,
 ) *Service {
 	return &Service{
@@ -376,7 +373,6 @@ func NewService(
 		providers:  providers,
 		repoConfig: repoConfig,
 		workspace:  workspace,
-		clock:      clock,
 		cfg:        cfg,
 	}
 }
@@ -444,8 +440,9 @@ func (s *Service) reconcileTask(ctx context.Context, task *Task) (*Task, error) 
 	reconciled.SessionExists = sessionResources.SessionExists
 	reconciled.AgentWindowExists = sessionResources.AgentWindowExists
 	reconciled.EditorWindowExists = sessionResources.EditorWindowExists
-	reconciled.LastReconciledAt = s.clock.Now().UTC()
-	reconciled.UpdatedAt = s.clock.Now().UTC()
+	now := time.Now().UTC()
+	reconciled.LastReconciledAt = now
+	reconciled.UpdatedAt = now
 	problems := make([]string, 0, 1)
 
 	if task.Status == TaskStatusCleaned {
@@ -539,14 +536,14 @@ func (s *Service) enrichRuntimeState(ctx context.Context, task *Task) error {
 		return nil
 	}
 
-	task.RuntimeStateUpdatedAt = s.clock.Now().UTC()
+	task.RuntimeStateUpdatedAt = time.Now().UTC()
 	return nil
 }
 
 func (s *Service) markBroken(ctx context.Context, task *Task, failure error) (*Task, error) {
 	task.Status = TaskStatusBroken
 	task.LastError = failure.Error()
-	task.UpdatedAt = s.clock.Now().UTC()
+	task.UpdatedAt = time.Now().UTC()
 
 	if err := s.tasks.UpdateTask(ctx, task); err != nil {
 		return task, err
@@ -560,7 +557,7 @@ func (s *Service) markBroken(ctx context.Context, task *Task, failure error) (*T
 func (s *Service) markCleanupBroken(ctx context.Context, task *Task, failure error) (*Task, error) {
 	task.Status = TaskStatusBroken
 	task.LastError = "cleanup failed: " + failure.Error()
-	task.UpdatedAt = s.clock.Now().UTC()
+	task.UpdatedAt = time.Now().UTC()
 
 	if err := s.tasks.UpdateTask(ctx, task); err != nil {
 		return task, err

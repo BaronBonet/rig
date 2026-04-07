@@ -10,7 +10,7 @@ import (
 
 func TestServiceListTasks_MarksMissingTmuxSessionAsBroken(t *testing.T) {
 	worktree := t.TempDir()
-	svc := newTestService()
+	svc := newTestService(t)
 	svc.taskRepo.listTasks = []*Task{{
 		ID:           "task-1",
 		Slug:         "billing-retry-flow",
@@ -31,7 +31,7 @@ func TestServiceListTasks_MarksMissingTmuxSessionAsBroken(t *testing.T) {
 
 func TestServiceListTasks_EnrichesRuntimeStateForCodexTask(t *testing.T) {
 	worktree := t.TempDir()
-	svc := newTestService()
+	svc := newTestService(t)
 	observedAt := time.Date(2026, 4, 5, 10, 0, 0, 0, time.UTC)
 	svc.taskRepo.listTasks = []*Task{{
 		ID:               "task-1",
@@ -69,7 +69,7 @@ func TestServiceListTasks_EnrichesRuntimeStateForCodexTask(t *testing.T) {
 
 func TestServiceListTasks_IgnoresRuntimeSnapshotErrors(t *testing.T) {
 	worktree := t.TempDir()
-	svc := newTestService()
+	svc := newTestService(t)
 	svc.taskRepo.listTasks = []*Task{{
 		ID:               "task-1",
 		Slug:             "billing-retry-flow",

@@ -2,13 +2,14 @@ package core
 
 import (
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/require"
 )
 
 func TestServiceGetTask_ReconcilesLiveFields(t *testing.T) {
 	worktree := t.TempDir()
-	svc := newTestService()
+	svc := newTestService(t)
 	svc.taskRepo.getTask = &Task{
 		ID:           "task-1",
 		Slug:         "billing-retry-flow",
@@ -20,8 +21,10 @@ func TestServiceGetTask_ReconcilesLiveFields(t *testing.T) {
 	}
 	svc.repoClient.repoResources = RepoResources{WorktreeExists: true, BranchExists: true}
 	svc.sessionClient.sessionResources = SessionResources{SessionExists: true, AgentWindowExists: true, EditorWindowExists: true}
+	before := time.Now().UTC()
 
 	task, err := svc.service.GetTask(t.Context(), "billing-retry-flow")
+	after := time.Now().UTC()
 	require.NoError(t, err)
 	require.True(t, task.WorktreeExists)
 	require.True(t, task.BranchExists)
@@ -29,11 +32,13 @@ func TestServiceGetTask_ReconcilesLiveFields(t *testing.T) {
 	require.True(t, task.AgentWindowExists)
 	require.True(t, task.EditorWindowExists)
 	require.Equal(t, TaskStatusRunning, task.Status)
+	requireTimeInWindow(t, task.LastReconciledAt, before, after)
+	requireTimeInWindow(t, task.UpdatedAt, before, after)
 }
 
 func TestServiceGetTask_MarksTaskDegradedWhenEditorWindowMissing(t *testing.T) {
 	worktree := t.TempDir()
-	svc := newTestService()
+	svc := newTestService(t)
 	svc.taskRepo.getTask = &Task{
 		ID:               "task-1",
 		Slug:             "billing-retry-flow",
@@ -58,7 +63,7 @@ func TestServiceGetTask_MarksTaskDegradedWhenEditorWindowMissing(t *testing.T) {
 
 func TestServiceGetTask_MarksTaskBrokenWhenAgentWindowMissing(t *testing.T) {
 	worktree := t.TempDir()
-	svc := newTestService()
+	svc := newTestService(t)
 	svc.taskRepo.getTask = &Task{
 		ID:               "task-1",
 		Slug:             "billing-retry-flow",
@@ -81,7 +86,7 @@ func TestServiceGetTask_MarksTaskBrokenWhenAgentWindowMissing(t *testing.T) {
 
 func TestServiceGetTask_MarksTaskBrokenWhenSessionMissing(t *testing.T) {
 	worktree := t.TempDir()
-	svc := newTestService()
+	svc := newTestService(t)
 	svc.taskRepo.getTask = &Task{
 		ID:               "task-1",
 		Slug:             "billing-retry-flow",
@@ -104,7 +109,7 @@ func TestServiceGetTask_MarksTaskBrokenWhenSessionMissing(t *testing.T) {
 
 func TestServiceGetTask_LeavesRuntimeStateEmptyForUnsupportedProvider(t *testing.T) {
 	worktree := t.TempDir()
-	svc := newTestService()
+	svc := newTestService(t)
 	svc.taskRepo.getTask = &Task{
 		ID:               "task-1",
 		Slug:             "billing-retry-flow",
@@ -127,7 +132,7 @@ func TestServiceGetTask_LeavesRuntimeStateEmptyForUnsupportedProvider(t *testing
 
 func TestServiceGetTask_LeavesRuntimeStateEmptyForBrokenTask(t *testing.T) {
 	worktree := t.TempDir()
-	svc := newTestService()
+	svc := newTestService(t)
 	svc.taskRepo.getTask = &Task{
 		ID:               "task-1",
 		Slug:             "billing-retry-flow",
@@ -158,7 +163,7 @@ func TestServiceGetTask_LeavesRuntimeStateEmptyForBrokenTask(t *testing.T) {
 
 func TestServiceGetTask_EnrichesRuntimeStateForDegradedTask(t *testing.T) {
 	worktree := t.TempDir()
-	svc := newTestService()
+	svc := newTestService(t)
 	svc.taskRepo.getTask = &Task{
 		ID:               "task-1",
 		Slug:             "billing-retry-flow",
@@ -179,10 +184,12 @@ func TestServiceGetTask_EnrichesRuntimeStateForDegradedTask(t *testing.T) {
 		Content:           "› still here",
 	}
 	svc.providerRepo.runtimeState = RuntimeStateNeedsInput
+	before := time.Now().UTC()
 
 	task, err := svc.service.GetTask(t.Context(), "billing-retry-flow")
+	after := time.Now().UTC()
 	require.NoError(t, err)
 	require.Equal(t, TaskStatusDegraded, task.Status)
 	require.Equal(t, RuntimeStateNeedsInput, task.RuntimeState)
-	require.False(t, task.RuntimeStateUpdatedAt.IsZero())
+	requireTimeInWindow(t, task.RuntimeStateUpdatedAt, before, after)
 }

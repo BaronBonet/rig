@@ -9,7 +9,7 @@ import (
 
 func TestServiceOpenTask_AttachesWhenSessionExists(t *testing.T) {
 	worktree := t.TempDir()
-	svc := newTestService()
+	svc := newTestService(t)
 	svc.taskRepo.getTask = &Task{
 		ID:           "task-1",
 		Slug:         "billing-retry-flow",
@@ -29,7 +29,7 @@ func TestServiceOpenTask_AttachesWhenSessionExists(t *testing.T) {
 
 func TestServiceOpenTask_AllowsDegradedWhenAgentWindowExists(t *testing.T) {
 	worktree := t.TempDir()
-	svc := newTestService()
+	svc := newTestService(t)
 	svc.taskRepo.getTask = &Task{
 		ID:               "task-1",
 		Slug:             "billing-retry-flow",
@@ -50,7 +50,7 @@ func TestServiceOpenTask_AllowsDegradedWhenAgentWindowExists(t *testing.T) {
 }
 
 func TestServiceOpenTask_ReturnsCleanedErrorForCleanedTask(t *testing.T) {
-	svc := newTestService()
+	svc := newTestService(t)
 	svc.taskRepo.getTask = &Task{
 		ID:           "task-1",
 		Slug:         "billing-retry-flow",

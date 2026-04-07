@@ -15,7 +15,6 @@ import (
 	"agent/internal/core"
 	"agent/internal/infrastructure"
 	"agent/internal/pkg/execx"
-	"agent/internal/pkg/timeutil"
 )
 
 func main() {
@@ -54,7 +53,6 @@ func buildDependencies() (cli.Dependencies, error) {
 		},
 		agentconfigrepo.NewRepository(),
 		workspacefs.NewRepository(),
-		timeutil.RealClock{},
 		cfg.Service,
 	)
 
