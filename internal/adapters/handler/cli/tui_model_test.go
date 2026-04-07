@@ -1,7 +1,6 @@
 package cli
 
 import (
-	"context"
 	"errors"
 	"regexp"
 	"strings"
@@ -10,11 +9,12 @@ import (
 	"agent/internal/core"
 
 	tea "charm.land/bubbletea/v2"
+	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
 )
 
 func TestModelUpdate_JAndKChangeSelectedRow(t *testing.T) {
-	m := newLoadedTUIModel(t, &fakeTUIService{}, tuiTask("task-one"), tuiTask("task-two"), tuiTask("task-three"))
+	m := newLoadedTUIModel(t, NewMockTaskService(t), tuiTask("task-one"), tuiTask("task-two"), tuiTask("task-three"))
 
 	m, _ = updateTUIModel(t, m, keyRunes("j"))
 	require.Equal(t, 1, m.selected)
@@ -24,7 +24,7 @@ func TestModelUpdate_JAndKChangeSelectedRow(t *testing.T) {
 }
 
 func TestModelUpdate_GAndGJumpToBounds(t *testing.T) {
-	m := newLoadedTUIModel(t, &fakeTUIService{}, tuiTask("task-one"), tuiTask("task-two"), tuiTask("task-three"))
+	m := newLoadedTUIModel(t, NewMockTaskService(t), tuiTask("task-one"), tuiTask("task-two"), tuiTask("task-three"))
 
 	m, _ = updateTUIModel(t, m, keyRunes("G"))
 	require.Equal(t, 2, m.selected)
@@ -34,7 +34,7 @@ func TestModelUpdate_GAndGJumpToBounds(t *testing.T) {
 }
 
 func TestModelUpdate_XEntersConfirmationMode(t *testing.T) {
-	m := newLoadedTUIModel(t, &fakeTUIService{}, tuiTask("task-one"))
+	m := newLoadedTUIModel(t, NewMockTaskService(t), tuiTask("task-one"))
 
 	m, cmd := updateTUIModel(t, m, keyRunes("x"))
 	require.Equal(t, tuiModeCleanupConfirm, m.mode)
@@ -42,7 +42,7 @@ func TestModelUpdate_XEntersConfirmationMode(t *testing.T) {
 }
 
 func TestModelUpdate_NEntersPromptEntryMode(t *testing.T) {
-	m := newLoadedTUIModel(t, &fakeTUIService{}, tuiTask("task-one"))
+	m := newLoadedTUIModel(t, NewMockTaskService(t), tuiTask("task-one"))
 
 	m, cmd := updateTUIModel(t, m, keyRunes("n"))
 	require.Equal(t, tuiModePromptInput, m.mode)
@@ -51,10 +51,7 @@ func TestModelUpdate_NEntersPromptEntryMode(t *testing.T) {
 }
 
 func TestModelUpdate_CreateFlowSuggestsNameThenCreatesTask(t *testing.T) {
-	service := &fakeTUIService{
-		suggestedName: "billing retry flow",
-		createdTask:   tuiTask("billing-retry-flow"),
-	}
+	service := NewMockTaskService(t)
 	existing := tuiTask("existing-task")
 	existing.RepoRoot = "/tmp/repo"
 	other := tuiTask("other-task")
@@ -64,42 +61,56 @@ func TestModelUpdate_CreateFlowSuggestsNameThenCreatesTask(t *testing.T) {
 	m, _ = updateTUIModel(t, m, keyRunes("n"))
 	m.promptInput.SetValue("add billing retry flow")
 
+	service.EXPECT().
+		SuggestTaskName(mock.Anything, "add billing retry flow", "codex").
+		Return("billing retry flow", nil).
+		Once()
 	m, suggestCmd := updateTUIModel(t, m, tea.KeyPressMsg{Code: tea.KeyEnter})
 	require.NotNil(t, suggestCmd)
 
 	m.selected = 1
 	suggestMsg := suggestCmd()
-	require.Equal(t, "add billing retry flow", service.suggestedPrompt)
 	m, _ = updateTUIModel(t, m, suggestMsg)
 	require.Equal(t, tuiModeNameConfirm, m.mode)
 	require.Equal(t, "billing retry flow", m.nameInput.Value())
 
+	service.EXPECT().
+		CreateTaskWithProgress(
+			mock.Anything,
+			core.NewTaskInput{
+				Cwd:                  "/tmp/repo",
+				Prompt:               "add billing retry flow",
+				ConfirmedDisplayName: "billing retry flow",
+				Provider:             "codex",
+			},
+			core.CreateTaskOptions{OpenSession: true},
+			mock.Anything,
+		).
+		Return(tuiTask("billing-retry-flow"), nil).
+		Once()
 	m, createCmd := updateTUIModel(t, m, tea.KeyPressMsg{Code: tea.KeyEnter})
 	require.NotNil(t, createCmd)
 	require.True(t, m.busy)
 
 	createMsg := createCmd()
 	m, refreshCmd := updateTUIModel(t, m, createMsg)
-	require.Equal(t, "/tmp/repo", service.createdInput.Cwd)
-	require.Equal(t, "add billing retry flow", service.createdInput.Prompt)
-	require.Equal(t, "billing retry flow", service.createdInput.ConfirmedDisplayName)
-	require.True(t, service.createOptions.OpenSession)
 	require.Equal(t, tuiModeList, m.mode)
 	require.True(t, m.loading)
 	require.NotNil(t, refreshCmd)
 }
 
 func TestModelUpdate_CreateFlowWithoutTasksUsesModelCwdFallback(t *testing.T) {
-	service := &fakeTUIService{
-		suggestedName: "billing retry flow",
-		createdTask:   tuiTask("billing-retry-flow"),
-	}
+	service := NewMockTaskService(t)
 	m := newTUIModel(service, "/tmp/fallback-repo", "codex")
 	m.loading = false
 
 	m, _ = updateTUIModel(t, m, keyRunes("n"))
 	m.promptInput.SetValue("add billing retry flow")
 
+	service.EXPECT().
+		SuggestTaskName(mock.Anything, "add billing retry flow", "codex").
+		Return("billing retry flow", nil).
+		Once()
 	m, suggestCmd := updateTUIModel(t, m, tea.KeyPressMsg{Code: tea.KeyEnter})
 	require.NotNil(t, suggestCmd)
 
@@ -107,24 +118,32 @@ func TestModelUpdate_CreateFlowWithoutTasksUsesModelCwdFallback(t *testing.T) {
 	m, _ = updateTUIModel(t, m, suggestMsg)
 	require.Equal(t, tuiModeNameConfirm, m.mode)
 
+	service.EXPECT().
+		CreateTaskWithProgress(
+			mock.Anything,
+			core.NewTaskInput{
+				Cwd:                  "/tmp/fallback-repo",
+				Prompt:               "add billing retry flow",
+				ConfirmedDisplayName: "billing retry flow",
+				Provider:             "codex",
+			},
+			core.CreateTaskOptions{OpenSession: true},
+			mock.Anything,
+		).
+		Return(tuiTask("billing-retry-flow"), nil).
+		Once()
 	m, createCmd := updateTUIModel(t, m, tea.KeyPressMsg{Code: tea.KeyEnter})
 	require.NotNil(t, createCmd)
 
 	createMsg := createCmd()
 	m, refreshCmd := updateTUIModel(t, m, createMsg)
-	require.Equal(t, "/tmp/fallback-repo", service.createdInput.Cwd)
-	require.Equal(t, "add billing retry flow", service.createdInput.Prompt)
-	require.Equal(t, "billing retry flow", service.createdInput.ConfirmedDisplayName)
 	require.Equal(t, tuiModeList, m.mode)
 	require.True(t, m.loading)
 	require.NotNil(t, refreshCmd)
 }
 
 func TestModelUpdate_CreateFlowUsesConfiguredDefaultProvider(t *testing.T) {
-	service := &fakeTUIService{
-		suggestedName: "billing retry flow",
-		createdTask:   tuiTask("billing-retry-flow"),
-	}
+	service := NewMockTaskService(t)
 	existing := tuiTask("existing-task")
 	existing.RepoRoot = "/tmp/repo"
 	m := newLoadedTUIModelWithProvider(t, service, "claude", existing)
@@ -132,30 +151,49 @@ func TestModelUpdate_CreateFlowUsesConfiguredDefaultProvider(t *testing.T) {
 	m, _ = updateTUIModel(t, m, keyRunes("n"))
 	m.promptInput.SetValue("add billing retry flow")
 
+	service.EXPECT().
+		SuggestTaskName(mock.Anything, "add billing retry flow", "claude").
+		Return("billing retry flow", nil).
+		Once()
 	m, suggestCmd := updateTUIModel(t, m, tea.KeyPressMsg{Code: tea.KeyEnter})
 	require.NotNil(t, suggestCmd)
 
 	suggestMsg := suggestCmd()
 	m, _ = updateTUIModel(t, m, suggestMsg)
-	require.Equal(t, "claude", service.suggestedProvider)
+	require.Equal(t, "claude", m.provider)
 
+	service.EXPECT().
+		CreateTaskWithProgress(
+			mock.Anything,
+			core.NewTaskInput{
+				Cwd:                  "/tmp/repo",
+				Prompt:               "add billing retry flow",
+				ConfirmedDisplayName: "billing retry flow",
+				Provider:             "claude",
+			},
+			core.CreateTaskOptions{OpenSession: true},
+			mock.Anything,
+		).
+		Return(tuiTask("billing-retry-flow"), nil).
+		Once()
 	m, createCmd := updateTUIModel(t, m, tea.KeyPressMsg{Code: tea.KeyEnter})
 	require.NotNil(t, createCmd)
 
 	createMsg := createCmd()
 	m, _ = updateTUIModel(t, m, createMsg)
-	require.Equal(t, "claude", service.createdInput.Provider)
+	require.Equal(t, "claude", m.createInput.Provider)
 }
 
 func TestModelUpdate_SuggestNameFailureReturnsToPromptModeAndRendersError(t *testing.T) {
-	service := &fakeTUIService{
-		suggestErr: errors.New("suggest failed"),
-	}
+	service := NewMockTaskService(t)
+	service.EXPECT().
+		SuggestTaskName(mock.Anything, "add billing retry flow", "codex").
+		Return("", errors.New("suggest failed")).
+		Once()
 	m := newLoadedTUIModel(t, service, tuiTask("existing-task"))
 
 	m, _ = updateTUIModel(t, m, keyRunes("n"))
 	m.promptInput.SetValue("add billing retry flow")
-
 	m, suggestCmd := updateTUIModel(t, m, tea.KeyPressMsg{Code: tea.KeyEnter})
 	require.NotNil(t, suggestCmd)
 	require.True(t, m.busy)
@@ -170,10 +208,7 @@ func TestModelUpdate_SuggestNameFailureReturnsToPromptModeAndRendersError(t *tes
 }
 
 func TestModelUpdate_CreateFailureReturnsToNameConfirmModeAndRendersError(t *testing.T) {
-	service := &fakeTUIService{
-		suggestedName: "billing retry flow",
-		createErr:     errors.New("create failed"),
-	}
+	service := NewMockTaskService(t)
 	existing := tuiTask("existing-task")
 	existing.RepoRoot = "/tmp/repo"
 	m := newLoadedTUIModel(t, service, existing)
@@ -181,10 +216,28 @@ func TestModelUpdate_CreateFailureReturnsToNameConfirmModeAndRendersError(t *tes
 	m, _ = updateTUIModel(t, m, keyRunes("n"))
 	m.promptInput.SetValue("add billing retry flow")
 
+	service.EXPECT().
+		SuggestTaskName(mock.Anything, "add billing retry flow", "codex").
+		Return("billing retry flow", nil).
+		Once()
 	m, suggestCmd := updateTUIModel(t, m, tea.KeyPressMsg{Code: tea.KeyEnter})
 	msg := suggestCmd()
 	m, _ = updateTUIModel(t, m, msg)
 
+	service.EXPECT().
+		CreateTaskWithProgress(
+			mock.Anything,
+			core.NewTaskInput{
+				Cwd:                  "/tmp/repo",
+				Prompt:               "add billing retry flow",
+				ConfirmedDisplayName: "billing retry flow",
+				Provider:             "codex",
+			},
+			core.CreateTaskOptions{OpenSession: true},
+			mock.Anything,
+		).
+		Return(nil, errors.New("create failed")).
+		Once()
 	m, createCmd := updateTUIModel(t, m, tea.KeyPressMsg{Code: tea.KeyEnter})
 	require.NotNil(t, createCmd)
 	require.True(t, m.busy)
@@ -199,11 +252,7 @@ func TestModelUpdate_CreateFailureReturnsToNameConfirmModeAndRendersError(t *tes
 }
 
 func TestModelUpdate_CreateFailureWithPersistedTaskReturnsToListModeAndPreservesError(t *testing.T) {
-	service := &fakeTUIService{
-		suggestedName: "billing retry flow",
-		createdTask:   tuiTask("billing-retry-flow"),
-		createErr:     errors.New("create failed after persist"),
-	}
+	service := NewMockTaskService(t)
 	existing := tuiTask("existing-task")
 	existing.RepoRoot = "/tmp/repo"
 	m := newLoadedTUIModel(t, service, existing)
@@ -211,10 +260,28 @@ func TestModelUpdate_CreateFailureWithPersistedTaskReturnsToListModeAndPreserves
 	m, _ = updateTUIModel(t, m, keyRunes("n"))
 	m.promptInput.SetValue("add billing retry flow")
 
+	service.EXPECT().
+		SuggestTaskName(mock.Anything, "add billing retry flow", "codex").
+		Return("billing retry flow", nil).
+		Once()
 	m, suggestCmd := updateTUIModel(t, m, tea.KeyPressMsg{Code: tea.KeyEnter})
 	msg := suggestCmd()
 	m, _ = updateTUIModel(t, m, msg)
 
+	service.EXPECT().
+		CreateTaskWithProgress(
+			mock.Anything,
+			core.NewTaskInput{
+				Cwd:                  "/tmp/repo",
+				Prompt:               "add billing retry flow",
+				ConfirmedDisplayName: "billing retry flow",
+				Provider:             "codex",
+			},
+			core.CreateTaskOptions{OpenSession: true},
+			mock.Anything,
+		).
+		Return(tuiTask("billing-retry-flow"), errors.New("create failed after persist")).
+		Once()
 	m, createCmd := updateTUIModel(t, m, tea.KeyPressMsg{Code: tea.KeyEnter})
 	require.NotNil(t, createCmd)
 	require.True(t, m.busy)
@@ -231,11 +298,10 @@ func TestModelUpdate_CreateFailureWithPersistedTaskReturnsToListModeAndPreserves
 
 	_, duplicateCmd := updateTUIModel(t, m, tea.KeyPressMsg{Code: tea.KeyEnter})
 	require.NotNil(t, duplicateCmd)
-	require.Equal(t, 1, service.createCalls)
 }
 
 func TestModelUpdate_PromptModeEscapeReturnsToListMode(t *testing.T) {
-	m := newLoadedTUIModel(t, &fakeTUIService{}, tuiTask("existing-task"))
+	m := newLoadedTUIModel(t, NewMockTaskService(t), tuiTask("existing-task"))
 
 	m, _ = updateTUIModel(t, m, keyRunes("n"))
 	m, cmd := updateTUIModel(t, m, tea.KeyPressMsg{Code: tea.KeyEscape})
@@ -244,15 +310,17 @@ func TestModelUpdate_PromptModeEscapeReturnsToListMode(t *testing.T) {
 }
 
 func TestModelUpdate_NameConfirmModeEscapeReturnsToListMode(t *testing.T) {
-	service := &fakeTUIService{
-		suggestedName: "billing retry flow",
-	}
+	service := NewMockTaskService(t)
 	existing := tuiTask("existing-task")
 	existing.RepoRoot = "/tmp/repo"
 	m := newLoadedTUIModel(t, service, existing)
 
 	m, _ = updateTUIModel(t, m, keyRunes("n"))
 	m.promptInput.SetValue("add billing retry flow")
+	service.EXPECT().
+		SuggestTaskName(mock.Anything, "add billing retry flow", "codex").
+		Return("billing retry flow", nil).
+		Once()
 	m, suggestCmd := updateTUIModel(t, m, tea.KeyPressMsg{Code: tea.KeyEnter})
 	msg := suggestCmd()
 	m, _ = updateTUIModel(t, m, msg)
@@ -274,7 +342,7 @@ func TestModelUpdate_ConfirmationCancelKeysDismissWithoutQuitting(t *testing.T) 
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			m := newLoadedTUIModel(t, &fakeTUIService{}, tuiTask("task-one"))
+			m := newLoadedTUIModel(t, NewMockTaskService(t), tuiTask("task-one"))
 			m, _ = updateTUIModel(t, m, keyRunes("x"))
 
 			m, cmd := updateTUIModel(t, m, tt.key)
@@ -285,13 +353,16 @@ func TestModelUpdate_ConfirmationCancelKeysDismissWithoutQuitting(t *testing.T) 
 }
 
 func TestModelUpdate_YDispatchesCleanupAndRefreshesList(t *testing.T) {
-	service := &fakeTUIService{
-		tasks: []*core.Task{tuiTask("task-one"), tuiTask("task-two")},
-	}
-	m := newLoadedTUIModel(t, service, service.tasks...)
+	service := NewMockTaskService(t)
+	tasks := []*core.Task{tuiTask("task-one"), tuiTask("task-two")}
+	m := newLoadedTUIModel(t, service, tasks...)
 	m, _ = updateTUIModel(t, m, keyRunes("j"))
 	m, _ = updateTUIModel(t, m, keyRunes("x"))
 
+	service.EXPECT().
+		DeleteTaskResources(mock.Anything, "task-two").
+		Return(tuiTask("task-two"), nil).
+		Once()
 	m, cleanupCmd := updateTUIModel(t, m, keyRunes("y"))
 	require.Equal(t, tuiModeList, m.mode)
 	require.True(t, m.busy)
@@ -300,8 +371,11 @@ func TestModelUpdate_YDispatchesCleanupAndRefreshesList(t *testing.T) {
 	msg := cleanupCmd()
 	_, ok := msg.(cleanupFinishedMsg)
 	require.True(t, ok)
-	require.Equal(t, "task-two", service.deletedIDOrSlug)
 
+	service.EXPECT().
+		ListTasks(mock.Anything).
+		Return(tasks, nil).
+		Once()
 	m, refreshCmd := updateTUIModel(t, m, msg)
 	require.True(t, m.busy)
 	require.NotNil(t, refreshCmd)
@@ -309,15 +383,17 @@ func TestModelUpdate_YDispatchesCleanupAndRefreshesList(t *testing.T) {
 	refreshMsg := refreshCmd()
 	_, ok = refreshMsg.(tasksLoadedMsg)
 	require.True(t, ok)
-	require.Equal(t, 1, service.listCalls)
 }
 
 func TestModelUpdate_RTriggersRefreshCommand(t *testing.T) {
-	service := &fakeTUIService{
-		tasks: []*core.Task{tuiTask("task-one")},
-	}
-	m := newLoadedTUIModel(t, service, service.tasks...)
+	service := NewMockTaskService(t)
+	tasks := []*core.Task{tuiTask("task-one")}
+	m := newLoadedTUIModel(t, service, tasks...)
 
+	service.EXPECT().
+		ListTasks(mock.Anything).
+		Return(tasks, nil).
+		Once()
 	m, cmd := updateTUIModel(t, m, keyRunes("r"))
 	require.NotNil(t, cmd)
 	require.True(t, m.busy)
@@ -326,42 +402,44 @@ func TestModelUpdate_RTriggersRefreshCommand(t *testing.T) {
 	msg := cmd()
 	_, ok := msg.(tasksLoadedMsg)
 	require.True(t, ok)
-	require.Equal(t, 1, service.listCalls)
 }
 
 func TestModelUpdate_EnterDispatchesOpenAndKeepsTUIOpen(t *testing.T) {
-	service := &fakeTUIService{
-		tasks: []*core.Task{tuiTask("task-one"), tuiTask("task-two")},
-	}
-	m := newLoadedTUIModel(t, service, service.tasks...)
+	service := NewMockTaskService(t)
+	tasks := []*core.Task{tuiTask("task-one"), tuiTask("task-two")}
+	m := newLoadedTUIModel(t, service, tasks...)
 	m, _ = updateTUIModel(t, m, keyRunes("j"))
 
+	service.EXPECT().
+		OpenTask(mock.Anything, "task-two").
+		Return(nil).
+		Once()
 	m, cmd := updateTUIModel(t, m, tea.KeyPressMsg{Code: tea.KeyEnter})
 	require.NotNil(t, cmd)
 	require.True(t, m.busy)
 
 	msg := cmd()
 	m, cmd = updateTUIModel(t, m, msg)
-	require.Equal(t, "task-two", service.openedIDOrSlug)
 	require.Nil(t, cmd)
 	require.False(t, m.busy)
 }
 
 func TestModelUpdate_EnterFailureRendersInlineErrorAndKeepsTUIOpen(t *testing.T) {
-	service := &fakeTUIService{
-		tasks:   []*core.Task{tuiTask("task-one"), tuiTask("task-two")},
-		openErr: errors.New("open failed"),
-	}
-	m := newLoadedTUIModel(t, service, service.tasks...)
+	service := NewMockTaskService(t)
+	tasks := []*core.Task{tuiTask("task-one"), tuiTask("task-two")}
+	m := newLoadedTUIModel(t, service, tasks...)
 	m, _ = updateTUIModel(t, m, keyRunes("j"))
 
+	service.EXPECT().
+		OpenTask(mock.Anything, "task-two").
+		Return(errors.New("open failed")).
+		Once()
 	m, cmd := updateTUIModel(t, m, tea.KeyPressMsg{Code: tea.KeyEnter})
 	require.NotNil(t, cmd)
 	require.True(t, m.busy)
 
 	msg := cmd()
 	m, followup := updateTUIModel(t, m, msg)
-	require.Equal(t, "task-two", service.openedIDOrSlug)
 	require.Nil(t, followup)
 	require.False(t, m.busy)
 	require.Contains(t, stripANSI(m.View().Content), "open failed")
@@ -371,7 +449,7 @@ func TestModelUpdate_EnterFailureRendersInlineErrorAndKeepsTUIOpen(t *testing.T)
 }
 
 func TestModelUpdate_QQuitsFromNormalMode(t *testing.T) {
-	m := newLoadedTUIModel(t, &fakeTUIService{}, tuiTask("task-one"))
+	m := newLoadedTUIModel(t, NewMockTaskService(t), tuiTask("task-one"))
 
 	_, cmd := updateTUIModel(t, m, keyRunes("q"))
 	require.NotNil(t, cmd)
@@ -382,10 +460,9 @@ func TestModelUpdate_QQuitsFromNormalMode(t *testing.T) {
 }
 
 func TestModelUpdate_BusyStateBlocksOverlappingActions(t *testing.T) {
-	service := &fakeTUIService{
-		tasks: []*core.Task{tuiTask("task-one"), tuiTask("task-two")},
-	}
-	m := newLoadedTUIModel(t, service, service.tasks...)
+	service := NewMockTaskService(t)
+	tasks := []*core.Task{tuiTask("task-one"), tuiTask("task-two")}
+	m := newLoadedTUIModel(t, service, tasks...)
 	m, _ = updateTUIModel(t, m, keyRunes("x"))
 	m, cleanupCmd := updateTUIModel(t, m, keyRunes("y"))
 	require.NotNil(t, cleanupCmd)
@@ -398,15 +475,12 @@ func TestModelUpdate_BusyStateBlocksOverlappingActions(t *testing.T) {
 
 	m, cmd = updateTUIModel(t, m, keyRunes("r"))
 	require.Nil(t, cmd)
-	require.Equal(t, 0, service.listCalls)
 }
 
 func TestModelUpdate_RefreshInFlightBlocksOverlappingActions(t *testing.T) {
-	service := &fakeTUIService{
-		tasks: []*core.Task{tuiTask("task-one"), tuiTask("task-two")},
-	}
-	m := newLoadedTUIModel(t, service, service.tasks...)
-
+	service := NewMockTaskService(t)
+	tasks := []*core.Task{tuiTask("task-one"), tuiTask("task-two")}
+	m := newLoadedTUIModel(t, service, tasks...)
 	m, refreshCmd := updateTUIModel(t, m, keyRunes("r"))
 	require.NotNil(t, refreshCmd)
 	require.True(t, m.busy)
@@ -422,7 +496,7 @@ func TestModelUpdate_RefreshInFlightBlocksOverlappingActions(t *testing.T) {
 }
 
 func TestModelUpdate_MainListViewRendersControlCenterDetails(t *testing.T) {
-	service := &fakeTUIService{}
+	service := NewMockTaskService(t)
 	task := tuiTask("billing-retry-flow")
 	task.DisplayName = "billing retry flow"
 	task.Status = core.TaskStatusRunning
@@ -463,7 +537,7 @@ func TestModelView_PrefersRuntimeBadgesOnSeparateTaskRows(t *testing.T) {
 	finished.RuntimeState = core.RuntimeStateFinished
 	finished.BranchName = "branch-finished"
 
-	m := newLoadedTUIModel(t, &fakeTUIService{}, running, needsInput, finished)
+	m := newLoadedTUIModel(t, NewMockTaskService(t), running, needsInput, finished)
 	view := stripANSI(m.View().Content)
 
 	require.Contains(t, view, "running task")
@@ -515,7 +589,7 @@ func TestModelView_ShowsProviderBadgeOnEveryTaskRow(t *testing.T) {
 	claudeTask.Status = core.TaskStatusDegraded
 	claudeTask.RuntimeState = core.RuntimeStateNeedsInput
 
-	m := newLoadedTUIModel(t, &fakeTUIService{}, codexTask, claudeTask)
+	m := newLoadedTUIModel(t, NewMockTaskService(t), codexTask, claudeTask)
 	view := stripANSI(m.View().Content)
 	rows := strings.Split(view, "\n")
 
@@ -545,7 +619,7 @@ func TestModelView_ProviderBadgeCoexistsWithRuntimeBadge(t *testing.T) {
 	task.Status = core.TaskStatusDegraded
 	task.RuntimeState = core.RuntimeStateFinished
 
-	m := newLoadedTUIModel(t, &fakeTUIService{}, task)
+	m := newLoadedTUIModel(t, NewMockTaskService(t), task)
 	view := stripANSI(m.View().Content)
 	for _, row := range strings.Split(view, "\n") {
 		if !strings.Contains(row, "running task") {
@@ -565,7 +639,7 @@ func TestModelView_OmitsRuntimeBadgeWhenRuntimeStateIsEmpty(t *testing.T) {
 	task.Status = core.TaskStatusDegraded
 	task.RuntimeState = core.RuntimeStateNone
 
-	m := newLoadedTUIModel(t, &fakeTUIService{}, task)
+	m := newLoadedTUIModel(t, NewMockTaskService(t), task)
 	view := stripANSI(m.View().Content)
 
 	require.Contains(t, view, "◐ degraded")
@@ -581,7 +655,7 @@ func TestModelUpdate_LoadedTasksHideTasksWithoutLiveResources(t *testing.T) {
 	hidden.SessionExists = false
 	hidden.WorktreeExists = false
 
-	m := newLoadedTUIModel(t, &fakeTUIService{}, active, hidden)
+	m := newLoadedTUIModel(t, NewMockTaskService(t), active, hidden)
 	view := stripANSI(m.View().Content)
 
 	require.Contains(t, view, "active-task")
@@ -589,7 +663,7 @@ func TestModelUpdate_LoadedTasksHideTasksWithoutLiveResources(t *testing.T) {
 }
 
 func TestModelUpdate_ConfirmationViewExplainsDeletionScope(t *testing.T) {
-	m := newLoadedTUIModel(t, &fakeTUIService{}, tuiTask("billing-retry-flow"))
+	m := newLoadedTUIModel(t, NewMockTaskService(t), tuiTask("billing-retry-flow"))
 	m, _ = updateTUIModel(t, m, keyRunes("x"))
 
 	view := stripANSI(m.View().Content)
@@ -598,13 +672,15 @@ func TestModelUpdate_ConfirmationViewExplainsDeletionScope(t *testing.T) {
 }
 
 func TestModelUpdate_CleanupFailureRendersInlineErrorAndKeepsTUIUsable(t *testing.T) {
-	service := &fakeTUIService{
-		deleteErr: errors.New("cleanup failed"),
-		tasks:     []*core.Task{tuiTask("task-one"), tuiTask("task-two")},
-	}
-	m := newLoadedTUIModel(t, service, service.tasks...)
+	service := NewMockTaskService(t)
+	tasks := []*core.Task{tuiTask("task-one"), tuiTask("task-two")}
+	m := newLoadedTUIModel(t, service, tasks...)
 	m, _ = updateTUIModel(t, m, keyRunes("x"))
 
+	service.EXPECT().
+		DeleteTaskResources(mock.Anything, "task-one").
+		Return(nil, errors.New("cleanup failed")).
+		Once()
 	_, cleanupCmd := updateTUIModel(t, m, keyRunes("y"))
 	require.NotNil(t, cleanupCmd)
 
@@ -618,21 +694,26 @@ func TestModelUpdate_CleanupFailureRendersInlineErrorAndKeepsTUIUsable(t *testin
 }
 
 func TestModelUpdate_CleanupSuccessRefreshFailureRemovesTaskFromVisibleList(t *testing.T) {
+	service := NewMockTaskService(t)
 	cleaned := tuiTask("task-one")
 	cleaned.Status = core.TaskStatusCleaned
 	cleaned.SessionExists = false
 	cleaned.WorktreeExists = false
-
-	service := &fakeTUIService{
-		tasks:      []*core.Task{tuiTask("task-one")},
-		deleteTask: cleaned,
-		listErr:    errors.New("refresh failed"),
-	}
-	m := newLoadedTUIModel(t, service, service.tasks...)
+	tasks := []*core.Task{tuiTask("task-one")}
+	m := newLoadedTUIModel(t, service, tasks...)
 	m, _ = updateTUIModel(t, m, keyRunes("x"))
 
+	service.EXPECT().
+		DeleteTaskResources(mock.Anything, "task-one").
+		Return(cleaned, nil).
+		Once()
 	m, cleanupCmd := updateTUIModel(t, m, keyRunes("y"))
 	msg := cleanupCmd()
+
+	service.EXPECT().
+		ListTasks(mock.Anything).
+		Return(nil, errors.New("refresh failed")).
+		Once()
 	m, refreshCmd := updateTUIModel(t, m, msg)
 	require.NotNil(t, refreshCmd)
 
@@ -646,69 +727,8 @@ func TestModelUpdate_CleanupSuccessRefreshFailureRemovesTaskFromVisibleList(t *t
 }
 
 func TestModelView_ShowsLoadingBeforeInitialLoadCompletes(t *testing.T) {
-	m := newTUIModel(&fakeTUIService{}, "/tmp/default", "codex")
+	m := newTUIModel(NewMockTaskService(t), "/tmp/default", "codex")
 	require.Contains(t, stripANSI(m.View().Content), "Loading tasks")
-}
-
-type fakeTUIService struct {
-	deleteErr         error
-	listErr           error
-	openErr           error
-	suggestErr        error
-	createErr         error
-	deleteTask        *core.Task
-	createdTask       *core.Task
-	createdInput      core.NewTaskInput
-	suggestedName     string
-	suggestedPrompt   string
-	suggestedProvider string
-	deletedIDOrSlug   string
-	openedIDOrSlug    string
-	tasks             []*core.Task
-	createCalls       int
-	listCalls         int
-	createOptions     core.CreateTaskOptions
-}
-
-func (*fakeTUIService) Doctor(context.Context, string) (core.DoctorResult, error) {
-	return core.DoctorResult{}, nil
-}
-
-func (f *fakeTUIService) SuggestTaskName(_ context.Context, prompt string, provider string) (string, error) {
-	f.suggestedPrompt = prompt
-	f.suggestedProvider = provider
-	return f.suggestedName, f.suggestErr
-}
-
-func (f *fakeTUIService) CreateTaskWithProgress(
-	_ context.Context,
-	input core.NewTaskInput,
-	options core.CreateTaskOptions,
-	_ func(core.TaskProgress),
-) (*core.Task, error) {
-	f.createdInput = input
-	f.createOptions = options
-	f.createCalls++
-	return f.createdTask, f.createErr
-}
-
-func (f *fakeTUIService) ListTasks(context.Context) ([]*core.Task, error) {
-	f.listCalls++
-	return f.tasks, f.listErr
-}
-
-func (f *fakeTUIService) OpenTask(_ context.Context, idOrSlug string) error {
-	f.openedIDOrSlug = idOrSlug
-	return f.openErr
-}
-
-func (f *fakeTUIService) DeleteTaskResources(_ context.Context, idOrSlug string) (*core.Task, error) {
-	f.deletedIDOrSlug = idOrSlug
-	if f.deleteTask != nil || f.deleteErr == nil {
-		return f.deleteTask, f.deleteErr
-	}
-
-	return nil, f.deleteErr
 }
 
 func newLoadedTUIModel(t *testing.T, service TaskService, tasks ...*core.Task) model {

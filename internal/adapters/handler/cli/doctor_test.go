@@ -2,27 +2,31 @@ package cli
 
 import (
 	"bytes"
-	"context"
 	"strings"
 	"testing"
 
 	"agent/internal/core"
 
+	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
 )
 
 func TestDoctorCommand_PrintsFailures(t *testing.T) {
 	out := &bytes.Buffer{}
+	service := NewMockTaskService(t)
+	service.EXPECT().
+		Doctor(mock.Anything, "/tmp/repo").
+		Return(core.DoctorResult{
+			Notes:    []string{"config: loaded agent.yaml"},
+			Failures: []string{"codex: missing codex"},
+		}, nil).
+		Once()
+
 	cmd := newDoctorCommand(Dependencies{
-		Service: fakeCLIService{
-			doctorResult: core.DoctorResult{
-				Notes:    []string{"config: loaded agent.yaml"},
-				Failures: []string{"codex: missing codex"},
-			},
-		},
-		Stdout: out,
-		Stderr: out,
-		Cwd:    "/tmp/repo",
+		Service: service,
+		Stdout:  out,
+		Stderr:  out,
+		Cwd:     "/tmp/repo",
 	})
 	cmd.SetOut(out)
 	cmd.SetErr(out)
@@ -35,18 +39,22 @@ func TestDoctorCommand_PrintsFailures(t *testing.T) {
 
 func TestDoctorCommand_PrintsNotesBeforeOk(t *testing.T) {
 	out := &bytes.Buffer{}
-	cmd := newDoctorCommand(Dependencies{
-		Service: fakeCLIService{
-			doctorResult: core.DoctorResult{
-				Notes: []string{
-					"config: loaded agent.yaml",
-					"config: seed path ok: .env",
-				},
+	service := NewMockTaskService(t)
+	service.EXPECT().
+		Doctor(mock.Anything, "/tmp/repo").
+		Return(core.DoctorResult{
+			Notes: []string{
+				"config: loaded agent.yaml",
+				"config: seed path ok: .env",
 			},
-		},
-		Stdout: out,
-		Stderr: out,
-		Cwd:    "/tmp/repo",
+		}, nil).
+		Once()
+
+	cmd := newDoctorCommand(Dependencies{
+		Service: service,
+		Stdout:  out,
+		Stderr:  out,
+		Cwd:     "/tmp/repo",
 	})
 	cmd.SetOut(out)
 	cmd.SetErr(out)
@@ -60,34 +68,4 @@ func TestDoctorCommand_PrintsNotesBeforeOk(t *testing.T) {
 		strings.Index(out.String(), "doctor: ok"),
 	)
 	require.Contains(t, out.String(), "doctor: ok")
-}
-
-type fakeCLIService struct {
-	doctorErr    error
-	doctorResult core.DoctorResult
-}
-
-func (f fakeCLIService) Doctor(context.Context, string) (core.DoctorResult, error) {
-	return f.doctorResult, f.doctorErr
-}
-
-func (fakeCLIService) SuggestTaskName(context.Context, string, string) (string, error) {
-	return "", nil
-}
-
-func (fakeCLIService) CreateTaskWithProgress(
-	context.Context,
-	core.NewTaskInput,
-	core.CreateTaskOptions,
-	func(core.TaskProgress),
-) (*core.Task, error) {
-	return nil, nil
-}
-
-func (fakeCLIService) ListTasks(context.Context) ([]*core.Task, error) { return nil, nil }
-
-func (fakeCLIService) OpenTask(context.Context, string) error { return nil }
-
-func (fakeCLIService) DeleteTaskResources(context.Context, string) (*core.Task, error) {
-	return nil, nil
 }
