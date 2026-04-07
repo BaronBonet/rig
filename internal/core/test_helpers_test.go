@@ -168,7 +168,8 @@ func wireTaskRepositoryMock(h *testServiceHarness) {
 	h.taskRepoMock.EXPECT().UpdateTask(mock.Anything, mock.Anything).
 		RunAndReturn(func(_ context.Context, task *Task) error {
 			h.taskRepo.updateCount++
-			if h.taskRepo.updateErr != nil && (h.taskRepo.updateErrAt == 0 || h.taskRepo.updateCount == h.taskRepo.updateErrAt) {
+			if h.taskRepo.updateErr != nil &&
+				(h.taskRepo.updateErrAt == 0 || h.taskRepo.updateCount == h.taskRepo.updateErrAt) {
 				return h.taskRepo.updateErr
 			}
 

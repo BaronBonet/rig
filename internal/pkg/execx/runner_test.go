@@ -17,7 +17,11 @@ func TestCommandError_ErrorIncludesCommandAndStderr(t *testing.T) {
 		Err:    errors.New("exit status 1"),
 	}
 
-	require.Equal(t, "/tmp/repo: command git worktree add failed: exit status 1\nstdout:\n\nstderr:\nfatal: branch already exists", err.Error())
+	require.Equal(
+		t,
+		"/tmp/repo: command git worktree add failed: exit status 1\nstdout:\n\nstderr:\nfatal: branch already exists",
+		err.Error(),
+	)
 	require.Contains(t, err.Error(), "git worktree add")
 	require.Contains(t, err.Error(), "fatal: branch already exists")
 }

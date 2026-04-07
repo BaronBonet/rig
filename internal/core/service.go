@@ -1,7 +1,6 @@
 package core
 
 import (
-	"agent/internal/pkg/slug"
 	"context"
 	"errors"
 	"fmt"
@@ -9,6 +8,8 @@ import (
 	"slices"
 	"strings"
 	"time"
+
+	"agent/internal/pkg/slug"
 )
 
 type DoctorResult struct {

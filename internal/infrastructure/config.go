@@ -21,9 +21,9 @@ type Config struct {
 }
 
 type envConfig struct {
-	Provider     string `env:"AGENT_PROVIDER" envDefault:"codex"`
+	Provider     string `env:"AGENT_PROVIDER"      envDefault:"codex"`
 	SQLitePath   string `env:"AGENT_SQLITE_PATH"`
-	CodexBinary  string `env:"AGENT_CODEX_BINARY" envDefault:"codex"`
+	CodexBinary  string `env:"AGENT_CODEX_BINARY"  envDefault:"codex"`
 	ClaudeBinary string `env:"AGENT_CLAUDE_BINARY" envDefault:"claude"`
 }
 
