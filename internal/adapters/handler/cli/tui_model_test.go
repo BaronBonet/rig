@@ -5,6 +5,7 @@ import (
 	"regexp"
 	"strings"
 	"testing"
+	"time"
 
 	"agent/internal/core"
 
@@ -373,8 +374,8 @@ func TestModelUpdate_YDispatchesCleanupAndRefreshesList(t *testing.T) {
 	require.True(t, ok)
 
 	service.EXPECT().
-		ListTasks(mock.Anything).
-		Return(tasks, nil).
+		ListTaskViews(mock.Anything).
+		Return(taskViews(tasks...), nil).
 		Once()
 	m, refreshCmd := updateTUIModel(t, m, msg)
 	require.True(t, m.busy)
@@ -391,8 +392,8 @@ func TestModelUpdate_RTriggersRefreshCommand(t *testing.T) {
 	m := newLoadedTUIModel(t, service, tasks...)
 
 	service.EXPECT().
-		ListTasks(mock.Anything).
-		Return(tasks, nil).
+		ListTaskViews(mock.Anything).
+		Return(taskViews(tasks...), nil).
 		Once()
 	m, cmd := updateTUIModel(t, m, keyRunes("r"))
 	require.NotNil(t, cmd)
@@ -634,6 +635,119 @@ func TestModelView_ProviderBadgeCoexistsWithRuntimeBadge(t *testing.T) {
 	t.Fatalf("did not find row for %q in view:\n%s", "running task", view)
 }
 
+func TestModelView_TaskRowsUseHookPhaseBadgeAndPreview(t *testing.T) {
+	service := NewMockTaskService(t)
+	task := tuiTask("billing-retry-flow")
+	task.DisplayName = "billing retry flow"
+
+	service.EXPECT().
+		GetTaskHookEvents(mock.Anything, task.ID, 5).
+		Return(nil, nil).
+		Once()
+	m := newLoadedTUIModelWithViews(t, service, taskView(task, &core.HookSessionSummary{
+		TaskID:          task.ID,
+		RuntimePhase:    core.HookRuntimePhaseRunningCommand,
+		LastCommandText: "go test ./internal/adapters/handler/cli -count=1",
+	}))
+	view := stripANSI(m.View().Content)
+	rows := strings.Split(view, "\n")
+
+	for _, row := range rows {
+		if !strings.Contains(row, "billing retry flow") {
+			continue
+		}
+
+		require.Contains(t, row, "running command")
+		require.Contains(t, row, "go test ./internal/adapters/handler/cli -count=1")
+		require.NotContains(t, row, "◐ degraded")
+		return
+	}
+
+	t.Fatalf("did not find row for %q in view:\n%s", "billing retry flow", view)
+}
+
+func TestModelView_SelectedTaskDetailShowsHookMetadataAndRecentEvents(t *testing.T) {
+	service := NewMockTaskService(t)
+	task := tuiTask("billing-retry-flow")
+	task.DisplayName = "billing retry flow"
+	task.Provider = "codex"
+	task.RepoName = "tmux-llm-v1-refactor-brainstorm"
+	task.RepoRoot = "/tmp/repo"
+	task.WorktreePath = "/tmp/repo/.branches/billing-retry-flow"
+	task.TmuxSession = "repo-billing-retry-flow"
+	task.BranchName = "feat/billing-retry-flow"
+	summary := &core.HookSessionSummary{
+		TaskID:               task.ID,
+		SessionID:            "sess-123",
+		Model:                "gpt-5",
+		Cwd:                  "/tmp/repo",
+		TranscriptPath:       "/tmp/repo/transcripts/sess-123.jsonl",
+		StartSource:          "UserPromptSubmit",
+		LastEventName:        "PostToolUse",
+		RuntimePhase:         core.HookRuntimePhaseRunningCommand,
+		LastCommandText:      "go test ./internal/adapters/handler/cli -count=1",
+		LastActivityAt:       time.Date(2026, 4, 8, 10, 3, 0, 0, time.UTC),
+		LastAssistantMessage: "working on cli hook detail view",
+	}
+
+	service.EXPECT().
+		GetTaskHookEvents(mock.Anything, task.ID, 5).
+		Return([]core.HookEvent{
+			{
+				TaskID:      task.ID,
+				EventName:   "PostToolUse",
+				CommandText: "go test ./internal/adapters/handler/cli -count=1",
+				OccurredAt:  time.Date(2026, 4, 8, 10, 2, 0, 0, time.UTC),
+			},
+			{
+				TaskID:               task.ID,
+				EventName:            "Stop",
+				CommandResultText:    "PASS",
+				LastAssistantMessage: "tests complete",
+				OccurredAt:           time.Date(2026, 4, 8, 10, 3, 0, 0, time.UTC),
+			},
+		}, nil).
+		Once()
+	m := newLoadedTUIModelWithViews(t, service, taskView(task, summary))
+
+	view := stripANSI(m.View().Content)
+	require.Contains(t, view, "Selected Task")
+	require.Contains(t, view, "Hook Activity")
+	require.Contains(t, view, "Session ID: sess-123")
+	require.Contains(t, view, "Model: gpt-5")
+	require.Contains(t, view, "Phase: running command")
+	require.Contains(t, view, "Last Event: PostToolUse")
+	require.Contains(t, view, "Recent Hook Events")
+	require.Contains(t, view, "PostToolUse")
+	require.Contains(t, view, "go test ./internal/adapters/handler/cli -count=1")
+	require.Contains(t, view, "Stop")
+	require.Contains(t, view, "PASS")
+}
+
+func TestModelView_SelectedTaskDetailShowsFallbackWhenHookDataMissing(t *testing.T) {
+	service := NewMockTaskService(t)
+	task := tuiTask("billing-retry-flow")
+	task.DisplayName = "billing retry flow"
+	task.Provider = "claude"
+	task.RepoName = "tmux-llm-v1-refactor-brainstorm"
+	task.RepoRoot = "/tmp/repo"
+	task.WorktreePath = "/tmp/repo/.branches/billing-retry-flow"
+	task.TmuxSession = "repo-billing-retry-flow"
+	task.BranchName = "feat/billing-retry-flow"
+	task.Status = core.TaskStatusDegraded
+
+	m := newLoadedTUIModel(t, service, task)
+	view := stripANSI(m.View().Content)
+
+	require.Contains(t, view, "Selected Task")
+	require.Contains(t, view, "Hook Activity")
+	require.Contains(t, view, "No hook activity has been recorded for this task yet.")
+	require.Contains(t, view, "Provider: claude")
+	require.Contains(t, view, "Branch: feat/billing-retry-flow")
+	require.Contains(t, view, "Repo: tmux-llm-v1-refactor-brainstorm")
+	require.Contains(t, view, "Status: degraded")
+}
+
 func TestModelView_OmitsRuntimeBadgeWhenRuntimeStateIsEmpty(t *testing.T) {
 	task := tuiTask("billing-retry-flow")
 	task.Status = core.TaskStatusDegraded
@@ -711,7 +825,7 @@ func TestModelUpdate_CleanupSuccessRefreshFailureRemovesTaskFromVisibleList(t *t
 	msg := cleanupCmd()
 
 	service.EXPECT().
-		ListTasks(mock.Anything).
+		ListTaskViews(mock.Anything).
 		Return(nil, errors.New("refresh failed")).
 		Once()
 	m, refreshCmd := updateTUIModel(t, m, msg)
@@ -738,10 +852,33 @@ func newLoadedTUIModel(t *testing.T, service *MockTaskService, tasks ...*core.Ta
 func newLoadedTUIModelWithProvider(t *testing.T, service *MockTaskService, provider string, tasks ...*core.Task) model {
 	t.Helper()
 
-	next, cmd := newTUIModel(service, "/tmp/default", provider).Update(tasksLoadedMsg{tasks: tasks})
-	require.Nil(t, cmd)
+	return newLoadedTUIModelWithProviderAndViews(t, service, provider, taskViews(tasks...)...)
+}
 
+func newLoadedTUIModelWithViews(t *testing.T, service *MockTaskService, views ...*core.TaskView) model {
+	t.Helper()
+
+	return newLoadedTUIModelWithProviderAndViews(t, service, "codex", views...)
+}
+
+func newLoadedTUIModelWithProviderAndViews(
+	t *testing.T,
+	service *MockTaskService,
+	provider string,
+	views ...*core.TaskView,
+) model {
+	t.Helper()
+
+	next, cmd := newTUIModel(service, "/tmp/default", provider).Update(tasksLoadedMsg{views: views})
 	m, ok := next.(model)
+	require.True(t, ok)
+	if cmd == nil {
+		return m
+	}
+
+	next, followup := m.Update(cmd())
+	require.Nil(t, followup)
+	m, ok = next.(model)
 	require.True(t, ok)
 	return m
 }
@@ -777,5 +914,21 @@ func tuiTask(slug string) *core.Task {
 		TmuxSession:    "repo-" + slug,
 		SessionExists:  true,
 		WorktreeExists: true,
+	}
+}
+
+func taskViews(tasks ...*core.Task) []*core.TaskView {
+	views := make([]*core.TaskView, 0, len(tasks))
+	for _, task := range tasks {
+		views = append(views, taskView(task, nil))
+	}
+
+	return views
+}
+
+func taskView(task *core.Task, hook *core.HookSessionSummary) *core.TaskView {
+	return &core.TaskView{
+		Task:        task,
+		HookSession: hook,
 	}
 }

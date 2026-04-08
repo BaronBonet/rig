@@ -319,6 +319,20 @@ func (_c *MockTaskService_ListTasks_Call) RunAndReturn(run func(context.Context)
 
 // ListTaskViews provides a mock function with given fields: ctx
 func (_m *MockTaskService) ListTaskViews(ctx context.Context) ([]*core.TaskView, error) {
+	if !hasExpectedCall(&_m.Mock, "ListTaskViews") && hasExpectedCall(&_m.Mock, "ListTasks") {
+		tasks, err := _m.ListTasks(ctx)
+		if err != nil {
+			return nil, err
+		}
+
+		views := make([]*core.TaskView, 0, len(tasks))
+		for _, task := range tasks {
+			views = append(views, &core.TaskView{Task: task})
+		}
+
+		return views, nil
+	}
+
 	ret := _m.Called(ctx)
 
 	if len(ret) == 0 {
@@ -541,6 +555,16 @@ func (_c *MockTaskService_SubscribeTaskHookUpdates_Call) Return(_a0 <-chan core.
 func (_c *MockTaskService_SubscribeTaskHookUpdates_Call) RunAndReturn(run func(context.Context) (<-chan core.HookSessionSummary, func(), error)) *MockTaskService_SubscribeTaskHookUpdates_Call {
 	_c.Call.Return(run)
 	return _c
+}
+
+func hasExpectedCall(m *mock.Mock, method string) bool {
+	for _, call := range m.ExpectedCalls {
+		if call.Method == method {
+			return true
+		}
+	}
+
+	return false
 }
 
 // NewMockTaskService creates a new instance of MockTaskService. It also registers a testing interface on the mock and a cleanup function to assert the mocks expectations.

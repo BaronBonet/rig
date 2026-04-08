@@ -91,3 +91,21 @@ func runtimeStateStyle(state string) (string, lipgloss.Style) {
 		return "", dimStyle
 	}
 }
+
+// hookPhaseStyle returns the icon and style for a hook runtime phase badge.
+func hookPhaseStyle(phase string) (string, lipgloss.Style) {
+	switch phase {
+	case "ready":
+		return iconStatusIdle, dimStyle
+	case "prompted":
+		return iconStatusProgress, warningStyle
+	case "running_command":
+		return iconStatusActive, healthyStyle
+	case "idle":
+		return iconStatusIdle, primaryStyle
+	case "finished":
+		return iconStatusIdle, dimStyle
+	default:
+		return "", dimStyle
+	}
+}
