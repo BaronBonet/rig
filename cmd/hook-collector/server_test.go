@@ -107,6 +107,36 @@ func TestAppendRecord_CreatesPrivateDirectoryAndFile(t *testing.T) {
 	require.Equal(t, os.FileMode(0o600), fileInfo.Mode().Perm())
 }
 
+func TestAppendRecord_FlatPathDoesNotChmodCurrentWorkingDirectory(t *testing.T) {
+	cwd := t.TempDir()
+	require.NoError(t, os.Chmod(cwd, 0o755))
+
+	originalWD, err := os.Getwd()
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		require.NoError(t, os.Chdir(originalWD))
+	})
+	require.NoError(t, os.Chdir(cwd))
+
+	beforeInfo, err := os.Stat(".")
+	require.NoError(t, err)
+
+	logPath := "codex-hooks.jsonl"
+	err = appendRecord(logPath, hooklog.NewRecord(time.Date(2026, 4, 7, 11, 4, 30, 0, time.UTC), "Stop", "127.0.0.1:1234", "/hook", []byte(`{"session_id":"sess-flat"}`)))
+	require.NoError(t, err)
+
+	afterInfo, err := os.Stat(".")
+	require.NoError(t, err)
+	require.Equal(t, beforeInfo.Mode().Perm(), afterInfo.Mode().Perm())
+
+	fileInfo, err := os.Stat(logPath)
+	require.NoError(t, err)
+	require.Equal(t, os.FileMode(0o600), fileInfo.Mode().Perm())
+
+	record := readJSONLRecord(t, logPath)
+	require.Equal(t, "sess-flat", record.SessionID())
+}
+
 func TestServerHandleHook_ConcurrentRequestsAppendValidJSONL(t *testing.T) {
 	logPath := filepath.Join(t.TempDir(), "codex-hooks.jsonl")
 	srv := newServer(logPath, func() time.Time {
