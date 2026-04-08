@@ -30,6 +30,7 @@ type CreateTaskOptions struct {
 
 type Service struct {
 	tasks      TaskRepository
+	hooks      HookObservabilityRepository
 	repo       RepoClient
 	session    SessionClient
 	providers  map[string]ProviderClient
@@ -261,6 +262,62 @@ func (s *Service) ListTasks(ctx context.Context) ([]*Task, error) {
 	}
 
 	return reconciled, nil
+}
+
+func (s *Service) ListTaskViews(ctx context.Context) ([]*TaskView, error) {
+	tasks, err := s.ListTasks(ctx)
+	if err != nil {
+		return nil, err
+	}
+
+	views := make([]*TaskView, 0, len(tasks))
+	if len(tasks) == 0 {
+		return views, nil
+	}
+
+	var summaries map[string]*HookSessionSummary
+	if s.hooks != nil {
+		taskIDs := make([]string, 0, len(tasks))
+		for _, task := range tasks {
+			if task == nil {
+				continue
+			}
+			taskIDs = append(taskIDs, task.ID)
+		}
+
+		summaries, err = s.hooks.ListHookSessionSummaries(ctx, taskIDs)
+		if err != nil {
+			return nil, err
+		}
+	}
+
+	for _, task := range tasks {
+		view := &TaskView{Task: task}
+		if summaries != nil && task != nil {
+			view.HookSession = summaries[task.ID]
+		}
+		views = append(views, view)
+	}
+
+	return views, nil
+}
+
+func (s *Service) GetTaskHookEvents(ctx context.Context, taskID string, limit int) ([]HookEvent, error) {
+	if s.hooks == nil {
+		return nil, nil
+	}
+
+	return s.hooks.ListHookEvents(ctx, taskID, limit)
+}
+
+func (s *Service) SubscribeTaskHookUpdates(ctx context.Context) (<-chan HookSessionSummary, func(), error) {
+	if s.hooks == nil {
+		ch := make(chan HookSessionSummary)
+		close(ch)
+		return ch, func() {}, nil
+	}
+
+	return s.hooks.SubscribeHookSessionUpdates(ctx)
 }
 
 func (s *Service) GetTask(ctx context.Context, idOrSlug string) (*Task, error) {

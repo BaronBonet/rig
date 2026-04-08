@@ -63,6 +63,16 @@ type TaskRepository interface {
 	AppendEvent(ctx context.Context, taskID, eventType, payload string) error
 }
 
+type HookEventIngestor interface {
+	IngestHookEvent(ctx context.Context, raw HookEventInput) (*HookSessionSummary, error)
+}
+
+type HookObservabilityRepository interface {
+	ListHookSessionSummaries(ctx context.Context, taskIDs []string) (map[string]*HookSessionSummary, error)
+	ListHookEvents(ctx context.Context, taskID string, limit int) ([]HookEvent, error)
+	SubscribeHookSessionUpdates(ctx context.Context) (<-chan HookSessionSummary, func(), error)
+}
+
 type RepoConfigLoader interface {
 	LoadRepoConfig(ctx context.Context, repoRoot string) (RepoConfig, error)
 }

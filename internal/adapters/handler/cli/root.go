@@ -21,6 +21,9 @@ type TaskService interface {
 		progress func(core.TaskProgress),
 	) (*core.Task, error)
 	ListTasks(ctx context.Context) ([]*core.Task, error)
+	ListTaskViews(ctx context.Context) ([]*core.TaskView, error)
+	GetTaskHookEvents(ctx context.Context, taskID string, limit int) ([]core.HookEvent, error)
+	SubscribeTaskHookUpdates(ctx context.Context) (<-chan core.HookSessionSummary, func(), error)
 	OpenTask(ctx context.Context, idOrSlug string) error
 	DeleteTaskResources(ctx context.Context, idOrSlug string) (*core.Task, error)
 }
