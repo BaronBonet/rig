@@ -45,6 +45,7 @@ func buildDependencies() (cli.Dependencies, error) {
 
 	service := core.NewService(
 		taskRepo,
+		nil,
 		gitclient.NewRepository(runner),
 		tmuxclient.NewRepository(runner),
 		map[string]core.ProviderClient{

@@ -10,6 +10,7 @@ import (
 
 func TestNewService_AcceptsBusinessPorts(t *testing.T) {
 	taskRepo := NewMockTaskRepository(t)
+	hookRepo := &stubHookObservabilityRepository{}
 	repoClient := NewMockRepoClient(t)
 	sessionClient := NewMockSessionClient(t)
 	providerClient := NewMockProviderClient(t)
@@ -18,6 +19,7 @@ func TestNewService_AcceptsBusinessPorts(t *testing.T) {
 
 	service := NewService(
 		taskRepo,
+		hookRepo,
 		repoClient,
 		sessionClient,
 		map[string]ProviderClient{"codex": providerClient},
@@ -27,6 +29,7 @@ func TestNewService_AcceptsBusinessPorts(t *testing.T) {
 	)
 
 	require.NotNil(t, service)
+	require.Same(t, hookRepo, service.hooks)
 }
 
 func TestServiceCreateTaskWithProgress_CreatesWorktreeSessionAndPersistsTask(t *testing.T) {
