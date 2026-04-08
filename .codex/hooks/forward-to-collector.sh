@@ -1,11 +1,24 @@
 #!/bin/sh
 
+umask 077
+
 collector_url=${CODEX_HOOK_COLLECTOR_URL:-http://127.0.0.1:4123/hook}
-error_log=${CODEX_HOOK_ERROR_LOG:-.agent/observability/hook-forwarder-errors.log}
 event_name=$1
 
-payload_file=${TMPDIR:-/tmp}/codex-hook-payload-$$
-error_file=${TMPDIR:-/tmp}/codex-hook-curl-error-$$
+script_dir=$(CDPATH= cd -- "$(dirname "$0")" 2>/dev/null && pwd -P)
+repo_root=
+if [ -n "$script_dir" ]; then
+	repo_root=$(CDPATH= cd -- "$script_dir/../.." 2>/dev/null && pwd -P)
+fi
+
+default_error_log=.agent/observability/hook-forwarder-errors.log
+if [ -n "$repo_root" ]; then
+	default_error_log=$repo_root/.agent/observability/hook-forwarder-errors.log
+fi
+error_log=${CODEX_HOOK_ERROR_LOG:-$default_error_log}
+
+payload_file=
+error_file=
 
 log_failure() {
 	error_dir=$(dirname "$error_log")
@@ -29,10 +42,25 @@ log_failure() {
 }
 
 cleanup() {
-	rm -f "$payload_file" "$error_file"
+	if [ -n "$payload_file" ]; then
+		rm -f "$payload_file"
+	fi
+	if [ -n "$error_file" ]; then
+		rm -f "$error_file"
+	fi
 }
 
 trap cleanup EXIT HUP INT TERM
+
+payload_file=$(mktemp "${TMPDIR:-/tmp}/codex-hook-payload.XXXXXX") || {
+	log_failure "" "" "failed_to_create_payload_tempfile"
+	exit 0
+}
+
+error_file=$(mktemp "${TMPDIR:-/tmp}/codex-hook-curl-error.XXXXXX") || {
+	log_failure "" "" "failed_to_create_error_tempfile"
+	exit 0
+}
 
 if ! cat >"$payload_file"; then
 	log_failure "" "" "failed_to_read_stdin"
@@ -44,6 +72,8 @@ status=$(curl \
 	--show-error \
 	--output /dev/null \
 	--write-out '%{http_code}' \
+	--connect-timeout 1 \
+	--max-time 2 \
 	--header 'Content-Type: application/json' \
 	--header "X-Codex-Hook-Event: $event_name" \
 	--data-binary @"$payload_file" \
