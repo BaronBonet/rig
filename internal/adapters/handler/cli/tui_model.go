@@ -32,7 +32,10 @@ type model struct {
 	provider           string
 	defaultCreationCwd string
 	mode               tuiMode
+	taskViews          []*core.TaskView
 	tasks              []*core.Task
+	hookEvents         []core.HookEvent
+	hookEventsTaskID   string
 	promptInput        textarea.Model
 	nameInput          textinput.Model
 	selected           int
@@ -43,7 +46,13 @@ type model struct {
 
 type tasksLoadedMsg struct {
 	err   error
-	tasks []*core.Task
+	views []*core.TaskView
+}
+
+type hookEventsLoadedMsg struct {
+	err    error
+	taskID string
+	events []core.HookEvent
 }
 
 type cleanupFinishedMsg struct {
@@ -108,9 +117,11 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 
-		m.tasks = filterVisibleTasks(msg.tasks)
+		m.taskViews = filterVisibleTaskViews(msg.views)
+		m.tasks = taskViewsToTasks(m.taskViews)
 		if len(m.tasks) == 0 {
 			m.selected = 0
+			m.clearHookEvents()
 			if m.mode == tuiModeCleanupConfirm {
 				m.mode = tuiModeList
 			}
@@ -121,6 +132,20 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.selected = len(m.tasks) - 1
 		}
 
+		return m, m.loadSelectedHookEventsCmd()
+	case hookEventsLoadedMsg:
+		if msg.err != nil {
+			m.err = msg.err
+			return m, nil
+		}
+
+		task := m.selectedTask()
+		if task == nil || task.ID != msg.taskID {
+			return m, nil
+		}
+
+		m.hookEventsTaskID = msg.taskID
+		m.hookEvents = msg.events
 		return m, nil
 	case cleanupFinishedMsg:
 		m.mode = tuiModeList
@@ -232,21 +257,25 @@ func (m model) updateListKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	case "j", "down":
 		if m.selected < len(m.tasks)-1 {
 			m.selected++
+			return m, m.loadSelectedHookEventsCmd()
 		}
 		return m, nil
 	case "k", "up":
 		if m.selected > 0 {
 			m.selected--
+			return m, m.loadSelectedHookEventsCmd()
 		}
 		return m, nil
 	case "g", "home":
 		if len(m.tasks) > 0 {
 			m.selected = 0
+			return m, m.loadSelectedHookEventsCmd()
 		}
 		return m, nil
 	case "G", "end":
 		if len(m.tasks) > 0 {
 			m.selected = len(m.tasks) - 1
+			return m, m.loadSelectedHookEventsCmd()
 		}
 		return m, nil
 	case "x":
@@ -351,9 +380,9 @@ func (m model) updateNameConfirmKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 
 // Grid column widths.
 const (
-	colWidthName     = 34
+	colWidthName     = 96
 	colWidthProvider = 10
-	colWidthStatus   = 14
+	colWidthStatus   = 18
 )
 
 // truncateStr truncates s to max runes and appends "…" if it was longer.
@@ -413,32 +442,179 @@ func (m model) listView() string {
 
 	// Task rows
 	for i, task := range m.tasks {
+		view := m.taskViewAt(i)
 		providerText := providerIcon(task.Provider) + " " + emptyFallback(task.Provider, "-")
-		var stateText, stateIcon string
-		var stateStyle lipgloss.Style
-		if task.RuntimeState != core.RuntimeStateNone {
-			stateIcon, stateStyle = runtimeStateStyle(string(task.RuntimeState))
-			stateText = stateIcon + " " + strings.ReplaceAll(string(task.RuntimeState), "_", " ")
-		} else {
-			stateIcon, stateStyle = statusStyle(string(task.Status))
-			stateText = stateIcon + " " + string(task.Status)
+		stateText, stateStyle := taskStateText(view)
+		preview := taskPreview(view)
+		nameText := task.DisplayName
+		if preview != "" {
+			nameText += " · " + preview
 		}
 
 		providerCell := padRight(providerText, colWidthProvider)
 		stateCell := padRight(stateText, colWidthStatus)
 
 		if i == m.selected {
-			nameCell := padRight(truncateStr(iconSelected+" "+task.DisplayName, colWidthName), colWidthName)
+			nameCell := padRight(truncateStr(iconSelected+" "+nameText, colWidthName), colWidthName)
 			row := nameCell + "  " + primaryStyle.Render(providerCell) + "  " + stateStyle.Render(stateCell)
 			b.WriteString(selectedRowStyle.Render(row) + "\n")
 		} else {
-			nameCell := padRight(truncateStr("  "+task.DisplayName, colWidthName), colWidthName)
+			nameCell := padRight(truncateStr("  "+nameText, colWidthName), colWidthName)
 			row := nameCell + "  " + primaryStyle.Render(providerCell) + "  " + stateStyle.Render(stateCell)
 			b.WriteString(normalRowStyle.Render(row) + "\n")
 		}
 	}
 
+	detail := m.selectedTaskDetailView()
+	if detail != "" {
+		b.WriteString("\n")
+		b.WriteString(dimStyle.Render(strings.Repeat("─", totalWidth)) + "\n")
+		b.WriteString(detail)
+	}
+
 	return strings.TrimRight(b.String(), "\n")
+}
+
+func (m model) selectedTaskDetailView() string {
+	task := m.selectedTask()
+	if task == nil {
+		return ""
+	}
+
+	view := m.selectedTaskView()
+	var b strings.Builder
+	b.WriteString(titleStyle.Render("Selected Task") + "\n")
+	b.WriteString(primaryStyle.Render("Name: ") + task.DisplayName + "\n")
+	b.WriteString(primaryStyle.Render("Provider: ") + emptyFallback(task.Provider, "-") + "\n")
+	b.WriteString(primaryStyle.Render("Status: ") + string(task.Status) + "\n")
+	if strings.TrimSpace(task.RepoName) != "" {
+		b.WriteString(primaryStyle.Render("Repo: ") + task.RepoName + "\n")
+	}
+	if strings.TrimSpace(task.BranchName) != "" {
+		b.WriteString(primaryStyle.Render("Branch: ") + task.BranchName + "\n")
+	}
+	if strings.TrimSpace(task.RepoRoot) != "" {
+		b.WriteString(primaryStyle.Render("Repo Root: ") + task.RepoRoot + "\n")
+	}
+	if strings.TrimSpace(task.WorktreePath) != "" {
+		b.WriteString(primaryStyle.Render("Worktree: ") + task.WorktreePath + "\n")
+	}
+	if strings.TrimSpace(task.TmuxSession) != "" {
+		b.WriteString(primaryStyle.Render("Tmux Session: ") + task.TmuxSession + "\n")
+	}
+
+	b.WriteString("\n")
+	b.WriteString(titleStyle.Render("Hook Activity") + "\n")
+	if view == nil || view.HookSession == nil {
+		b.WriteString(dimStyle.Render("No hook activity has been recorded for this task yet.") + "\n")
+		return strings.TrimRight(b.String(), "\n")
+	}
+
+	hook := view.HookSession
+	if strings.TrimSpace(hook.SessionID) != "" {
+		b.WriteString(primaryStyle.Render("Session ID: ") + hook.SessionID + "\n")
+	}
+	if strings.TrimSpace(hook.Model) != "" {
+		b.WriteString(primaryStyle.Render("Model: ") + hook.Model + "\n")
+	}
+	if hook.RuntimePhase != "" {
+		b.WriteString(primaryStyle.Render("Phase: ") + strings.ReplaceAll(string(hook.RuntimePhase), "_", " ") + "\n")
+	}
+	if strings.TrimSpace(hook.LastEventName) != "" {
+		b.WriteString(primaryStyle.Render("Last Event: ") + hook.LastEventName + "\n")
+	}
+	if strings.TrimSpace(hook.Cwd) != "" {
+		b.WriteString(primaryStyle.Render("Hook Cwd: ") + hook.Cwd + "\n")
+	}
+	if strings.TrimSpace(hook.TranscriptPath) != "" {
+		b.WriteString(primaryStyle.Render("Transcript: ") + hook.TranscriptPath + "\n")
+	}
+	if strings.TrimSpace(hook.StartSource) != "" {
+		b.WriteString(primaryStyle.Render("Start Source: ") + hook.StartSource + "\n")
+	}
+	if preview := hookPreview(hook); preview != "" {
+		b.WriteString(primaryStyle.Render("Preview: ") + preview + "\n")
+	}
+
+	b.WriteString("\n")
+	b.WriteString(titleStyle.Render("Recent Hook Events") + "\n")
+	if len(m.hookEvents) == 0 || m.hookEventsTaskID != task.ID {
+		b.WriteString(dimStyle.Render("No recent hook events recorded.") + "\n")
+		return strings.TrimRight(b.String(), "\n")
+	}
+
+	for _, event := range m.hookEvents {
+		line := event.EventName
+		if preview := hookEventPreview(event); preview != "" {
+			line += " · " + preview
+		}
+		b.WriteString(dimStyle.Render("• ") + line + "\n")
+	}
+
+	return strings.TrimRight(b.String(), "\n")
+}
+
+func taskStateText(view *core.TaskView) (string, lipgloss.Style) {
+	if view == nil || view.Task == nil {
+		return "", dimStyle
+	}
+
+	if view != nil && view.HookSession != nil && view.HookSession.RuntimePhase != "" {
+		icon, style := hookPhaseStyle(string(view.HookSession.RuntimePhase))
+		return strings.TrimSpace(icon + " " + strings.ReplaceAll(string(view.HookSession.RuntimePhase), "_", " ")), style
+	}
+
+	task := view.Task
+	if task.RuntimeState != core.RuntimeStateNone {
+		icon, style := runtimeStateStyle(string(task.RuntimeState))
+		return strings.TrimSpace(icon + " " + strings.ReplaceAll(string(task.RuntimeState), "_", " ")), style
+	}
+
+	icon, style := statusStyle(string(task.Status))
+	return strings.TrimSpace(icon + " " + string(task.Status)), style
+}
+
+func taskPreview(view *core.TaskView) string {
+	if view == nil || view.HookSession == nil {
+		return ""
+	}
+
+	return hookPreview(view.HookSession)
+}
+
+func hookPreview(hook *core.HookSessionSummary) string {
+	if hook == nil {
+		return ""
+	}
+
+	return firstNonEmpty(
+		hook.LastCommandText,
+		hook.LastPromptText,
+		hook.LastAssistantMessage,
+		hook.LastCommandResultText,
+	)
+}
+
+func hookEventPreview(event core.HookEvent) string {
+	if result := strings.TrimSpace(event.CommandResultText); result != "" {
+		return result
+	}
+
+	return firstNonEmpty(
+		event.CommandText,
+		event.PromptText,
+		event.LastAssistantMessage,
+	)
+}
+
+func firstNonEmpty(values ...string) string {
+	for _, value := range values {
+		if trimmed := strings.TrimSpace(value); trimmed != "" {
+			return trimmed
+		}
+	}
+
+	return ""
 }
 
 func (m model) promptInputView() string {
@@ -502,18 +678,51 @@ func (m model) selectedTask() *core.Task {
 	return m.tasks[m.selected]
 }
 
+func (m model) selectedTaskView() *core.TaskView {
+	if len(m.taskViews) == 0 {
+		return nil
+	}
+
+	if m.selected < 0 {
+		return m.taskViews[0]
+	}
+
+	if m.selected >= len(m.taskViews) {
+		return m.taskViews[len(m.taskViews)-1]
+	}
+
+	return m.taskViews[m.selected]
+}
+
+func (m model) taskViewAt(index int) *core.TaskView {
+	if index < 0 || index >= len(m.taskViews) {
+		return nil
+	}
+
+	return m.taskViews[index]
+}
+
 func (m *model) replaceTask(updated *core.Task) {
 	for i, task := range m.tasks {
 		if selectedIDOrSlug(task) == selectedIDOrSlug(updated) {
 			if !isVisibleTask(updated) {
 				m.tasks = append(m.tasks[:i], m.tasks[i+1:]...)
+				if i < len(m.taskViews) {
+					m.taskViews = append(m.taskViews[:i], m.taskViews[i+1:]...)
+				}
 				if m.selected >= len(m.tasks) && len(m.tasks) > 0 {
 					m.selected = len(m.tasks) - 1
+				}
+				if len(m.tasks) == 0 {
+					m.clearHookEvents()
 				}
 				return
 			}
 
 			m.tasks[i] = updated
+			if i < len(m.taskViews) {
+				m.taskViews[i] = &core.TaskView{Task: updated}
+			}
 			return
 		}
 	}
@@ -524,21 +733,46 @@ func (m *model) upsertTask(updated *core.Task) {
 		if selectedIDOrSlug(task) == selectedIDOrSlug(updated) {
 			if !isVisibleTask(updated) {
 				m.tasks = append(m.tasks[:i], m.tasks[i+1:]...)
+				if i < len(m.taskViews) {
+					m.taskViews = append(m.taskViews[:i], m.taskViews[i+1:]...)
+				}
 				if m.selected >= len(m.tasks) && len(m.tasks) > 0 {
 					m.selected = len(m.tasks) - 1
+				}
+				if len(m.tasks) == 0 {
+					m.clearHookEvents()
 				}
 				return
 			}
 
 			m.tasks[i] = updated
+			if i < len(m.taskViews) {
+				m.taskViews[i] = &core.TaskView{Task: updated}
+			}
 			return
 		}
 	}
 
 	if isVisibleTask(updated) {
 		m.tasks = append(m.tasks, updated)
+		m.taskViews = append(m.taskViews, &core.TaskView{Task: updated})
 		m.selected = len(m.tasks) - 1
 	}
+}
+
+func (m *model) clearHookEvents() {
+	m.hookEvents = nil
+	m.hookEventsTaskID = ""
+}
+
+func (m *model) loadSelectedHookEventsCmd() tea.Cmd {
+	view := m.selectedTaskView()
+	if view == nil || view.Task == nil || view.HookSession == nil {
+		m.clearHookEvents()
+		return nil
+	}
+
+	return loadTaskHookEventsCmd(m.service, view.Task.ID, 5)
 }
 
 func nextProvider(current string) string {
@@ -591,9 +825,31 @@ func isVisibleTask(task *core.Task) bool {
 
 func refreshTasksCmd(service TaskService) tea.Cmd {
 	return func() tea.Msg {
-		tasks, err := service.ListTasks(context.Background())
-		return tasksLoadedMsg{tasks: tasks, err: err}
+		views, err := service.ListTaskViews(context.Background())
+		return tasksLoadedMsg{views: views, err: err}
 	}
+}
+
+func filterVisibleTaskViews(views []*core.TaskView) []*core.TaskView {
+	filtered := make([]*core.TaskView, 0, len(views))
+	for _, view := range views {
+		if view != nil && isVisibleTask(view.Task) {
+			filtered = append(filtered, view)
+		}
+	}
+
+	return filtered
+}
+
+func taskViewsToTasks(views []*core.TaskView) []*core.Task {
+	tasks := make([]*core.Task, 0, len(views))
+	for _, view := range views {
+		if view != nil && view.Task != nil {
+			tasks = append(tasks, view.Task)
+		}
+	}
+
+	return tasks
 }
 
 func cleanupTaskCmd(service TaskService, idOrSlug string) tea.Cmd {
@@ -606,6 +862,13 @@ func cleanupTaskCmd(service TaskService, idOrSlug string) tea.Cmd {
 func openTaskCmd(service TaskService, idOrSlug string) tea.Cmd {
 	return func() tea.Msg {
 		return openFinishedMsg{err: service.OpenTask(context.Background(), idOrSlug)}
+	}
+}
+
+func loadTaskHookEventsCmd(service TaskService, taskID string, limit int) tea.Cmd {
+	return func() tea.Msg {
+		events, err := service.GetTaskHookEvents(context.Background(), taskID, limit)
+		return hookEventsLoadedMsg{taskID: taskID, events: events, err: err}
 	}
 }
 
