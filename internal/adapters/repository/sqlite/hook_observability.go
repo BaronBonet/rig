@@ -289,7 +289,7 @@ func (r *Repository) resolveHookTaskID(ctx context.Context, raw core.HookEventIn
 		}
 	}
 
-	return "", fmt.Errorf("map hook event to managed task")
+	return "", fmt.Errorf("%w: map hook event to managed task", core.ErrUnmanagedHookEvent)
 }
 
 func queryHookTaskID(ctx context.Context, db queryRower, query string, args ...any) (string, error) {

@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
@@ -75,6 +76,29 @@ func TestServerHandleHook_IgnoresUnmanagedTaskCWD(t *testing.T) {
 	require.Empty(t, summaries)
 }
 
+func TestServerHandleHook_IgnoresTypedUnmanagedHookEvent(t *testing.T) {
+	srv := newServer(fakeHookEventIngestor{err: fmt.Errorf("wrap: %w", core.ErrUnmanagedHookEvent)}, fixedClock(time.Date(2026, 4, 8, 10, 1, 30, 0, time.UTC)))
+
+	req := httptest.NewRequest(http.MethodPost, "/hook", strings.NewReader(`{"hook_event_name":"SessionStart"}`))
+	rec := httptest.NewRecorder()
+
+	srv.handleHook(rec, req)
+
+	require.Equal(t, http.StatusAccepted, rec.Code)
+}
+
+func TestSQLiteRepositoryIngestHookEvent_ReturnsTypedUnmanagedError(t *testing.T) {
+	repo := newTestRepository(t)
+
+	_, err := repo.IngestHookEvent(context.Background(), core.HookEventInput{
+		EventName: "SessionStart",
+		Cwd:       "/tmp/unmanaged",
+	})
+
+	require.Error(t, err)
+	require.ErrorIs(t, err, core.ErrUnmanagedHookEvent)
+}
+
 func TestServerHandleHook_PublishesRepositoryUpdateForManagedTask(t *testing.T) {
 	repo := newTestRepository(t)
 	task := seedTask(t, repo, core.Task{
@@ -132,6 +156,21 @@ func TestServerHandleHook_RejectsNonPOSTWithoutIngesting(t *testing.T) {
 	summaries, err := repo.ListHookSessionSummaries(context.Background(), nil)
 	require.NoError(t, err)
 	require.Empty(t, summaries)
+}
+
+func TestResolveSQLitePath_IgnoresInvalidProviderAndUsesEnvOverride(t *testing.T) {
+	t.Setenv("AGENT_PROVIDER", "definitely-invalid")
+	t.Setenv("AGENT_SQLITE_PATH", "/tmp/custom-state.db")
+
+	require.Equal(t, "/tmp/custom-state.db", resolveSQLitePath())
+}
+
+func TestResolveSQLitePath_UsesDefaultPathWhenEnvUnset(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("AGENT_SQLITE_PATH", "")
+
+	require.Equal(t, filepath.Join(home, ".local", "share", "agent", "state.db"), resolveSQLitePath())
 }
 
 func newTestRepository(t *testing.T) *sqliterepo.Repository {
@@ -212,4 +251,15 @@ func fixedClock(ts time.Time) func() time.Time {
 	return func() time.Time {
 		return ts
 	}
+}
+
+type fakeHookEventIngestor struct {
+	err error
+}
+
+func (f fakeHookEventIngestor) IngestHookEvent(_ context.Context, _ core.HookEventInput) (*core.HookSessionSummary, error) {
+	if f.err != nil {
+		return nil, f.err
+	}
+	return &core.HookSessionSummary{}, nil
 }
