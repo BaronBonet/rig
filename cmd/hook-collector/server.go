@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"sync"
 	"time"
 
 	"agent/internal/experimental/hooklog"
@@ -14,6 +15,7 @@ import (
 type server struct {
 	logPath string
 	now     func() time.Time
+	mu      sync.Mutex
 }
 
 func newServer(logPath string, now func() time.Time) *server {
@@ -49,7 +51,10 @@ func (s *server) handleHook(w http.ResponseWriter, r *http.Request) {
 		record.EventName = "unknown"
 	}
 
-	if err := appendRecord(s.logPath, record); err != nil {
+	s.mu.Lock()
+	err = appendRecord(s.logPath, record)
+	s.mu.Unlock()
+	if err != nil {
 		http.Error(w, "append log: "+err.Error(), http.StatusInternalServerError)
 		return
 	}
@@ -58,15 +63,22 @@ func (s *server) handleHook(w http.ResponseWriter, r *http.Request) {
 }
 
 func appendRecord(path string, record hooklog.Record) error {
-	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+	dir := filepath.Dir(path)
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		return err
+	}
+	if err := os.Chmod(dir, 0o700); err != nil {
 		return err
 	}
 
-	file, err := os.OpenFile(path, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o644)
+	file, err := os.OpenFile(path, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o600)
 	if err != nil {
 		return err
 	}
 	defer file.Close()
+	if err := file.Chmod(0o600); err != nil {
+		return err
+	}
 
 	return json.NewEncoder(file).Encode(record)
 }
