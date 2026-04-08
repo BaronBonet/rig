@@ -22,6 +22,60 @@ func newTestRepository(t *testing.T) *Repository {
 	return repo
 }
 
+func seedTask(t *testing.T, repo *Repository, task core.Task) *core.Task {
+	t.Helper()
+
+	now := time.Date(2026, 4, 8, 9, 0, 0, 0, time.UTC)
+	if task.Prompt == "" {
+		task.Prompt = "fix the failing test"
+	}
+	if task.DisplayName == "" {
+		task.DisplayName = task.ID
+	}
+	if task.Slug == "" {
+		task.Slug = task.ID
+	}
+	if task.RepoRoot == "" {
+		task.RepoRoot = "/tmp/repo"
+	}
+	if task.RepoName == "" {
+		task.RepoName = "repo"
+	}
+	if task.BaseBranch == "" {
+		task.BaseBranch = "main"
+	}
+	if task.BranchName == "" {
+		task.BranchName = "feat/" + task.Slug
+	}
+	if task.WorktreePath == "" {
+		task.WorktreePath = filepath.Join("/tmp", task.Slug)
+	}
+	if task.TmuxSession == "" {
+		task.TmuxSession = task.Slug
+	}
+	if task.AgentWindowName == "" {
+		task.AgentWindowName = defaultAgentWindowName
+	}
+	if task.EditorWindowName == "" {
+		task.EditorWindowName = defaultEditorWindowName
+	}
+	if task.Provider == "" {
+		task.Provider = "codex"
+	}
+	if task.Status == "" {
+		task.Status = core.TaskStatusRunning
+	}
+	if task.CreatedAt.IsZero() {
+		task.CreatedAt = now
+	}
+	if task.UpdatedAt.IsZero() {
+		task.UpdatedAt = task.CreatedAt
+	}
+
+	require.NoError(t, repo.CreateTask(context.Background(), &task))
+	return &task
+}
+
 func TestRepositoryCreateAndGetTask(t *testing.T) {
 	repo := newTestRepository(t)
 
@@ -311,10 +365,210 @@ insert into tasks (
 	}
 }
 
+func TestNewRepository_CreatesHookObservabilityTables(t *testing.T) {
+	repo := newTestRepository(t)
+
+	eventColumns := tableColumns(t, repo.db, "task_hook_events")
+	for _, column := range []string{
+		"id",
+		"task_id",
+		"session_id",
+		"turn_id",
+		"event_name",
+		"occurred_at",
+		"raw_payload_json",
+		"last_assistant_message",
+		"prompt_preview",
+		"command_preview",
+		"command_result_preview",
+		"tool_use_id",
+	} {
+		require.Contains(t, eventColumns, column)
+	}
+
+	sessionColumns := tableColumns(t, repo.db, "task_hook_sessions")
+	for _, column := range []string{
+		"task_id",
+		"session_id",
+		"model",
+		"cwd",
+		"transcript_path",
+		"start_source",
+		"current_turn_id",
+		"last_event_name",
+		"runtime_phase",
+		"started_at",
+		"last_activity_at",
+		"last_stop_at",
+		"last_prompt_preview",
+		"last_command_preview",
+		"last_command_result_preview",
+		"last_assistant_message",
+		"command_count",
+		"updated_at",
+	} {
+		require.Contains(t, sessionColumns, column)
+	}
+}
+
+func TestRepositoryIngestHookEvent_UpdatesSummaryForRunningCommand(t *testing.T) {
+	repo := newTestRepository(t)
+	task := seedTask(t, repo, core.Task{
+		ID:           "task-1",
+		Slug:         "task-1",
+		DisplayName:  "task 1",
+		WorktreePath: "/tmp/repo-task-1",
+		Provider:     "codex",
+		Status:       core.TaskStatusRunning,
+	})
+
+	summary, err := repo.IngestHookEvent(context.Background(), core.HookEventInput{
+		Cwd:            task.WorktreePath,
+		EventName:      "PreToolUse",
+		SessionID:      "sess-1",
+		TurnID:         "turn-1",
+		ToolUseID:      "tool-1",
+		CommandText:    "go test ./...",
+		OccurredAt:     time.Date(2026, 4, 8, 10, 0, 0, 0, time.UTC),
+		RawPayloadJSON: `{"hook_event_name":"PreToolUse"}`,
+	})
+	require.NoError(t, err)
+	require.NotNil(t, summary)
+	require.Equal(t, task.ID, summary.TaskID)
+	require.Equal(t, core.HookRuntimePhaseRunningCommand, summary.RuntimePhase)
+	require.Equal(t, "go test ./...", summary.LastCommandText)
+	require.Equal(t, 1, summary.CommandCount)
+
+	summaries, err := repo.ListHookSessionSummaries(context.Background(), []string{task.ID})
+	require.NoError(t, err)
+	require.Contains(t, summaries, task.ID)
+	require.Equal(t, core.HookRuntimePhaseRunningCommand, summaries[task.ID].RuntimePhase)
+	require.Equal(t, "go test ./...", summaries[task.ID].LastCommandText)
+	require.Equal(t, 1, summaries[task.ID].CommandCount)
+
+	events, err := repo.ListHookEvents(context.Background(), task.ID, 10)
+	require.NoError(t, err)
+	require.Len(t, events, 1)
+	require.Equal(t, "PreToolUse", events[0].EventName)
+	require.Equal(t, task.ID, events[0].TaskID)
+	require.Equal(t, "go test ./...", events[0].CommandText)
+	require.Equal(t, `{"hook_event_name":"PreToolUse"}`, events[0].RawPayloadJSON)
+}
+
+func TestRepositoryIngestHookEvent_MapsTaskBySessionID(t *testing.T) {
+	repo := newTestRepository(t)
+	task := seedTask(t, repo, core.Task{
+		ID:           "task-1",
+		Slug:         "task-1",
+		DisplayName:  "task 1",
+		WorktreePath: "/tmp/repo-task-1",
+	})
+
+	_, err := repo.IngestHookEvent(context.Background(), core.HookEventInput{
+		Cwd:            task.WorktreePath,
+		EventName:      "SessionStart",
+		SessionID:      "sess-1",
+		Model:          "gpt-5",
+		TranscriptPath: "/tmp/transcript.jsonl",
+		StartSource:    "startup",
+		OccurredAt:     time.Date(2026, 4, 8, 10, 0, 0, 0, time.UTC),
+	})
+	require.NoError(t, err)
+
+	summary, err := repo.IngestHookEvent(context.Background(), core.HookEventInput{
+		EventName:            "Stop",
+		SessionID:            "sess-1",
+		TurnID:               "turn-1",
+		LastAssistantMessage: "I finished the change",
+		OccurredAt:           time.Date(2026, 4, 8, 10, 1, 0, 0, time.UTC),
+	})
+	require.NoError(t, err)
+	require.NotNil(t, summary)
+	require.Equal(t, task.ID, summary.TaskID)
+	require.Equal(t, core.HookRuntimePhaseIdle, summary.RuntimePhase)
+	require.Equal(t, "I finished the change", summary.LastAssistantMessage)
+}
+
+func TestRepositoryListHookEvents_OrdersLatestFirst(t *testing.T) {
+	repo := newTestRepository(t)
+	task := seedTask(t, repo, core.Task{
+		ID:           "task-1",
+		Slug:         "task-1",
+		DisplayName:  "task 1",
+		WorktreePath: "/tmp/repo-task-1",
+	})
+
+	for _, input := range []core.HookEventInput{
+		{
+			Cwd:        task.WorktreePath,
+			EventName:  "UserPromptSubmit",
+			SessionID:  "sess-1",
+			TurnID:     "turn-1",
+			PromptText: "fix test A",
+			OccurredAt: time.Date(2026, 4, 8, 10, 0, 0, 0, time.UTC),
+		},
+		{
+			Cwd:                  task.WorktreePath,
+			EventName:            "Stop",
+			SessionID:            "sess-1",
+			TurnID:               "turn-1",
+			LastAssistantMessage: "done",
+			OccurredAt:           time.Date(2026, 4, 8, 10, 1, 0, 0, time.UTC),
+		},
+	} {
+		_, err := repo.IngestHookEvent(context.Background(), input)
+		require.NoError(t, err)
+	}
+
+	events, err := repo.ListHookEvents(context.Background(), task.ID, 10)
+	require.NoError(t, err)
+	require.Len(t, events, 2)
+	require.Equal(t, "Stop", events[0].EventName)
+	require.Equal(t, "UserPromptSubmit", events[1].EventName)
+}
+
+func TestRepositorySubscribeHookSessionUpdates_NotifiesOnIngest(t *testing.T) {
+	repo := newTestRepository(t)
+	task := seedTask(t, repo, core.Task{
+		ID:           "task-1",
+		Slug:         "task-1",
+		DisplayName:  "task 1",
+		WorktreePath: "/tmp/repo-task-1",
+	})
+
+	updates, cleanup, err := repo.SubscribeHookSessionUpdates(context.Background())
+	require.NoError(t, err)
+	defer cleanup()
+
+	_, err = repo.IngestHookEvent(context.Background(), core.HookEventInput{
+		Cwd:        task.WorktreePath,
+		EventName:  "UserPromptSubmit",
+		SessionID:  "sess-1",
+		TurnID:     "turn-1",
+		PromptText: "fix the failing test",
+		OccurredAt: time.Date(2026, 4, 8, 10, 0, 0, 0, time.UTC),
+	})
+	require.NoError(t, err)
+
+	select {
+	case update := <-updates:
+		require.Equal(t, task.ID, update.TaskID)
+		require.Equal(t, core.HookRuntimePhasePrompted, update.RuntimePhase)
+		require.Equal(t, "fix the failing test", update.LastPromptText)
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for hook session update")
+	}
+}
+
 func taskTableColumns(t *testing.T, db *sql.DB) map[string]struct{} {
 	t.Helper()
+	return tableColumns(t, db, "tasks")
+}
 
-	rows, err := db.QueryContext(context.Background(), `pragma table_info(tasks)`)
+func tableColumns(t *testing.T, db *sql.DB, table string) map[string]struct{} {
+	t.Helper()
+
+	rows, err := db.QueryContext(context.Background(), `pragma table_info(`+table+`)`)
 	require.NoError(t, err)
 	defer rows.Close()
 
