@@ -34,9 +34,15 @@ func TestNewRootCommand_HelpOnlyIncludesDoctorSubcommand(t *testing.T) {
 func TestNewRootCommand_RunsTUIWhenNoArgsProvided(t *testing.T) {
 	out := &bytes.Buffer{}
 	service := NewMockTaskService(t)
+	updates := make(chan core.HookSessionSummary)
+	close(updates)
 	service.EXPECT().
-		ListTasks(mock.Anything).
-		Return([]*core.Task{}, nil).
+		ListTaskViews(mock.Anything).
+		Return([]*core.TaskView{}, nil).
+		Once()
+	service.EXPECT().
+		SubscribeTaskHookUpdates(mock.Anything).
+		Return((<-chan core.HookSessionSummary)(updates), func() {}, nil).
 		Once()
 
 	cmd := NewRootCommand(Dependencies{Service: service, Stdout: out, Stderr: out})

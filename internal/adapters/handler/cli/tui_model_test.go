@@ -748,6 +748,46 @@ func TestModelView_SelectedTaskDetailShowsFallbackWhenHookDataMissing(t *testing
 	require.Contains(t, view, "Status: degraded")
 }
 
+func TestModelUpdate_HookSessionUpdateRefreshesSelectedTaskDetails(t *testing.T) {
+	service := NewMockTaskService(t)
+	task := tuiTask("billing-retry-flow")
+	task.DisplayName = "billing retry flow"
+
+	service.EXPECT().
+		GetTaskHookEvents(mock.Anything, task.ID, 5).
+		Return([]core.HookEvent{
+			{
+				TaskID:            task.ID,
+				EventName:         "PostToolUse",
+				CommandText:       "go test ./internal/adapters/handler/cli -count=1",
+				CommandResultText: "PASS",
+			},
+		}, nil).
+		Once()
+
+	m := newLoadedTUIModel(t, service, task)
+	m, cmd := updateTUIModel(t, m, hookSessionUpdatedMsg{
+		summary: core.HookSessionSummary{
+			TaskID:                task.ID,
+			SessionID:             "sess-123",
+			RuntimePhase:          core.HookRuntimePhaseRunningCommand,
+			LastCommandText:       "go test ./internal/adapters/handler/cli -count=1",
+			LastCommandResultText: "PASS",
+		},
+	})
+	require.NotNil(t, cmd)
+
+	msg := cmd()
+	m, followup := updateTUIModel(t, m, msg)
+	require.Nil(t, followup)
+
+	view := stripANSI(m.View().Content)
+	require.Contains(t, view, "running command")
+	require.Contains(t, view, "Session ID: sess-123")
+	require.Contains(t, view, "Recent Hook Events")
+	require.Contains(t, view, "PASS")
+}
+
 func TestModelView_OmitsRuntimeBadgeWhenRuntimeStateIsEmpty(t *testing.T) {
 	task := tuiTask("billing-retry-flow")
 	task.Status = core.TaskStatusDegraded

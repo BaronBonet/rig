@@ -36,6 +36,8 @@ type model struct {
 	tasks              []*core.Task
 	hookEvents         []core.HookEvent
 	hookEventsTaskID   string
+	hookUpdates        <-chan core.HookSessionSummary
+	unsubscribeHooks   func()
 	promptInput        textarea.Model
 	nameInput          textinput.Model
 	selected           int
@@ -54,6 +56,18 @@ type hookEventsLoadedMsg struct {
 	taskID string
 	events []core.HookEvent
 }
+
+type hookSubscriptionReadyMsg struct {
+	err     error
+	updates <-chan core.HookSessionSummary
+	cleanup func()
+}
+
+type hookSessionUpdatedMsg struct {
+	summary core.HookSessionSummary
+}
+
+type hookSubscriptionClosedMsg struct{}
 
 type cleanupFinishedMsg struct {
 	task *core.Task
@@ -98,7 +112,10 @@ func newTUIModel(service TaskService, defaultCreationCwd string, defaultProvider
 }
 
 func (m model) Init() tea.Cmd {
-	return refreshTasksCmd(m.service)
+	return tea.Batch(
+		refreshTasksCmd(m.service),
+		subscribeTaskHookUpdatesCmd(m.service),
+	)
 }
 
 func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
@@ -146,6 +163,33 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 		m.hookEventsTaskID = msg.taskID
 		m.hookEvents = msg.events
+		return m, nil
+	case hookSubscriptionReadyMsg:
+		if msg.err != nil {
+			m.err = msg.err
+			return m, nil
+		}
+		if m.unsubscribeHooks != nil {
+			m.unsubscribeHooks()
+		}
+		m.unsubscribeHooks = msg.cleanup
+		m.hookUpdates = msg.updates
+		return m, waitForHookUpdateCmd(msg.updates)
+	case hookSessionUpdatedMsg:
+		m.applyHookSessionUpdate(msg.summary)
+
+		nextCmds := []tea.Cmd{waitForHookUpdateCmd(m.hookUpdates)}
+		task := m.selectedTask()
+		if task != nil && task.ID == msg.summary.TaskID {
+			nextCmds = append(nextCmds, m.loadSelectedHookEventsCmd())
+		}
+		return m, tea.Batch(nextCmds...)
+	case hookSubscriptionClosedMsg:
+		if m.unsubscribeHooks != nil {
+			m.unsubscribeHooks()
+			m.unsubscribeHooks = nil
+		}
+		m.hookUpdates = nil
 		return m, nil
 	case cleanupFinishedMsg:
 		m.mode = tuiModeList
@@ -222,6 +266,7 @@ func (m model) View() tea.View {
 
 func (m model) updateKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	if msg.Code == 'c' && msg.Mod == tea.ModCtrl {
+		m.cleanupHookSubscription()
 		return m, tea.Quit
 	}
 
@@ -244,6 +289,7 @@ func (m model) updateKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 func (m model) updateListKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	switch msg.String() {
 	case "q":
+		m.cleanupHookSubscription()
 		return m, tea.Quit
 	case "enter":
 		task := m.selectedTask()
@@ -765,6 +811,34 @@ func (m *model) clearHookEvents() {
 	m.hookEventsTaskID = ""
 }
 
+func (m *model) cleanupHookSubscription() {
+	if m.unsubscribeHooks != nil {
+		m.unsubscribeHooks()
+		m.unsubscribeHooks = nil
+	}
+	m.hookUpdates = nil
+}
+
+func (m *model) applyHookSessionUpdate(summary core.HookSessionSummary) {
+	if strings.TrimSpace(summary.TaskID) == "" {
+		return
+	}
+
+	for i, view := range m.taskViews {
+		if view == nil || view.Task == nil || view.Task.ID != summary.TaskID {
+			continue
+		}
+
+		copySummary := summary
+		if view.HookSession == nil {
+			view = &core.TaskView{Task: view.Task}
+			m.taskViews[i] = view
+		}
+		view.HookSession = &copySummary
+		return
+	}
+}
+
 func (m *model) loadSelectedHookEventsCmd() tea.Cmd {
 	view := m.selectedTaskView()
 	if view == nil || view.Task == nil || view.HookSession == nil {
@@ -869,6 +943,27 @@ func loadTaskHookEventsCmd(service TaskService, taskID string, limit int) tea.Cm
 	return func() tea.Msg {
 		events, err := service.GetTaskHookEvents(context.Background(), taskID, limit)
 		return hookEventsLoadedMsg{taskID: taskID, events: events, err: err}
+	}
+}
+
+func subscribeTaskHookUpdatesCmd(service TaskService) tea.Cmd {
+	return func() tea.Msg {
+		updates, cleanup, err := service.SubscribeTaskHookUpdates(context.Background())
+		return hookSubscriptionReadyMsg{updates: updates, cleanup: cleanup, err: err}
+	}
+}
+
+func waitForHookUpdateCmd(updates <-chan core.HookSessionSummary) tea.Cmd {
+	if updates == nil {
+		return nil
+	}
+
+	return func() tea.Msg {
+		summary, ok := <-updates
+		if !ok {
+			return hookSubscriptionClosedMsg{}
+		}
+		return hookSessionUpdatedMsg{summary: summary}
 	}
 }
 
