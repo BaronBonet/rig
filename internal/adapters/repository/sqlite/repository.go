@@ -21,7 +21,7 @@ type Repository struct {
 	initErr              error
 	mu                   sync.Mutex
 	nextHookSubscriberID int
-	hookSubscribers      map[int]chan core.HookSessionSummary
+	hookSubscribers      map[int]*hookSubscriber
 }
 
 type Config struct {

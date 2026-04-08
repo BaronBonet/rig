@@ -32,6 +32,50 @@ type hookRecord struct {
 	StartSource          string
 }
 
+type hookSubscriber struct {
+	ch     chan core.HookSessionSummary
+	mu     sync.RWMutex
+	closed bool
+}
+
+func newHookSubscriber(buffer int) *hookSubscriber {
+	if buffer < 0 {
+		buffer = 0
+	}
+
+	return &hookSubscriber{
+		ch: make(chan core.HookSessionSummary, buffer),
+	}
+}
+
+func (s *hookSubscriber) publish(summary core.HookSessionSummary) bool {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	if s.closed {
+		return false
+	}
+
+	select {
+	case s.ch <- summary:
+		return true
+	default:
+		return false
+	}
+}
+
+func (s *hookSubscriber) close() {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	if s.closed {
+		return
+	}
+
+	s.closed = true
+	close(s.ch)
+}
+
 func (r *Repository) IngestHookEvent(ctx context.Context, raw core.HookEventInput) (*core.HookSessionSummary, error) {
 	if err := r.unavailableErr(); err != nil {
 		return nil, err
@@ -173,27 +217,29 @@ func (r *Repository) SubscribeHookSessionUpdates(ctx context.Context) (<-chan co
 		return nil, nil, err
 	}
 
-	ch := make(chan core.HookSessionSummary, 16)
+	subscriber := newHookSubscriber(16)
 
 	r.mu.Lock()
 	if r.hookSubscribers == nil {
-		r.hookSubscribers = make(map[int]chan core.HookSessionSummary)
+		r.hookSubscribers = make(map[int]*hookSubscriber)
 	}
 	id := r.nextHookSubscriberID
 	r.nextHookSubscriberID++
-	r.hookSubscribers[id] = ch
+	r.hookSubscribers[id] = subscriber
 	r.mu.Unlock()
 
 	var once sync.Once
 	cleanup := func() {
 		once.Do(func() {
 			r.mu.Lock()
-			subscriber, ok := r.hookSubscribers[id]
+			current, ok := r.hookSubscribers[id]
 			if ok {
 				delete(r.hookSubscribers, id)
-				close(subscriber)
 			}
 			r.mu.Unlock()
+			if ok {
+				current.close()
+			}
 		})
 	}
 
@@ -204,7 +250,7 @@ func (r *Repository) SubscribeHookSessionUpdates(ctx context.Context) (<-chan co
 		}()
 	}
 
-	return ch, cleanup, nil
+	return subscriber.ch, cleanup, nil
 }
 
 func (r *Repository) resolveHookTaskID(ctx context.Context, raw core.HookEventInput) (string, error) {
@@ -538,16 +584,13 @@ func placeholders(n int) string {
 
 func (r *Repository) publishHookSessionUpdate(summary core.HookSessionSummary) {
 	r.mu.Lock()
-	subscribers := make([]chan core.HookSessionSummary, 0, len(r.hookSubscribers))
+	subscribers := make([]*hookSubscriber, 0, len(r.hookSubscribers))
 	for _, subscriber := range r.hookSubscribers {
 		subscribers = append(subscribers, subscriber)
 	}
 	r.mu.Unlock()
 
 	for _, subscriber := range subscribers {
-		select {
-		case subscriber <- summary:
-		default:
-		}
+		subscriber.publish(summary)
 	}
 }

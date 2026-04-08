@@ -59,6 +59,41 @@ func TestTrimPreview_NormalizesWhitespaceAndTruncates(t *testing.T) {
 	require.True(t, len(preview) > 0)
 }
 
+func TestHookSubscriber_CloseWaitsForActivePublisher(t *testing.T) {
+	subscriber := newHookSubscriber(1)
+	subscriber.mu.RLock()
+
+	closed := make(chan struct{})
+	go func() {
+		subscriber.close()
+		close(closed)
+	}()
+
+	select {
+	case <-closed:
+		t.Fatal("subscriber closed while publish lock was still held")
+	case <-time.After(20 * time.Millisecond):
+	}
+
+	subscriber.mu.RUnlock()
+
+	select {
+	case <-closed:
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for subscriber close")
+	}
+
+	_, ok := <-subscriber.ch
+	require.False(t, ok)
+}
+
+func TestHookSubscriber_PublishAfterCloseIsSafe(t *testing.T) {
+	subscriber := newHookSubscriber(1)
+	subscriber.close()
+
+	require.False(t, subscriber.publish(core.HookSessionSummary{TaskID: "task-1"}))
+}
+
 func repeatString(s string, count int) string {
 	result := ""
 	for i := 0; i < count; i++ {
