@@ -138,6 +138,7 @@ func newTestService(t *testing.T) *testServiceHarness {
 
 	h.service = NewService(
 		h.taskRepoMock,
+		nil,
 		h.repoClientMock,
 		h.sessionClientMock,
 		map[string]ProviderClient{

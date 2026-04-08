@@ -417,6 +417,7 @@ func (s *Service) DeleteTaskResources(ctx context.Context, idOrSlug string) (*Ta
 
 func NewService(
 	tasks TaskRepository,
+	hooks HookObservabilityRepository,
 	repo RepoClient,
 	session SessionClient,
 	providers map[string]ProviderClient,
@@ -426,6 +427,7 @@ func NewService(
 ) *Service {
 	return &Service{
 		tasks:      tasks,
+		hooks:      hooks,
 		repo:       repo,
 		session:    session,
 		providers:  providers,
