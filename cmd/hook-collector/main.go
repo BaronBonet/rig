@@ -5,19 +5,15 @@ import (
 	"flag"
 	"log"
 	"net/http"
+	"os"
+	"path/filepath"
 
 	sqliterepo "agent/internal/adapters/repository/sqlite"
-	"agent/internal/infrastructure"
 )
 
 func main() {
-	cfg, err := infrastructure.LoadConfig()
-	if err != nil {
-		log.Fatal(err)
-	}
-
 	listenAddr := flag.String("listen", "127.0.0.1:4123", "loopback listen address")
-	dbPath := flag.String("db-path", cfg.SQLite.Path, "SQLite state path")
+	dbPath := flag.String("db-path", resolveSQLitePath(), "SQLite state path")
 	flag.Parse()
 
 	repo, err := sqliterepo.NewRepository(sqliterepo.Config{Path: *dbPath})
@@ -34,4 +30,20 @@ func main() {
 
 	log.Printf("hook-collector listening on http://%s/hook", *listenAddr)
 	log.Fatal(http.ListenAndServe(*listenAddr, mux))
+}
+
+func resolveSQLitePath() string {
+	if path := os.Getenv("AGENT_SQLITE_PATH"); path != "" {
+		return path
+	}
+	return defaultSQLitePath()
+}
+
+func defaultSQLitePath() string {
+	home, err := os.UserHomeDir()
+	if err != nil || home == "" {
+		return ".agent/state.db"
+	}
+
+	return filepath.Join(home, ".local", "share", "agent", "state.db")
 }

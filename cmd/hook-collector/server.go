@@ -3,6 +3,7 @@ package main
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
 	"io"
 	"net/http"
 	"strings"
@@ -10,8 +11,6 @@ import (
 
 	"agent/internal/core"
 )
-
-const unmanagedHookEventMessage = "map hook event to managed task"
 
 type server struct {
 	repo core.HookEventIngestor
@@ -43,7 +42,7 @@ func (s *server) handleHook(w http.ResponseWriter, r *http.Request) {
 	}
 
 	input := decodeHookEventInput(s.now, r.Header.Get("X-Codex-Hook-Event"), body)
-	if _, err := s.repo.IngestHookEvent(r.Context(), input); err != nil && !isUnmanagedHookEvent(err) {
+	if _, err := s.repo.IngestHookEvent(r.Context(), input); err != nil && !errors.Is(err, core.ErrUnmanagedHookEvent) {
 		http.Error(w, "ingest hook event: "+err.Error(), http.StatusInternalServerError)
 		return
 	}
@@ -120,8 +119,4 @@ func flattenPayloadText(raw json.RawMessage) string {
 	}
 
 	return string(trimmed)
-}
-
-func isUnmanagedHookEvent(err error) bool {
-	return err != nil && strings.Contains(err.Error(), unmanagedHookEventMessage)
 }
