@@ -1,31 +1,31 @@
 package main
 
 import (
+	"bytes"
 	"encoding/json"
 	"io"
 	"net/http"
-	"os"
-	"path/filepath"
-	"sync"
+	"strings"
 	"time"
 
-	"agent/internal/experimental/hooklog"
+	"agent/internal/core"
 )
 
+const unmanagedHookEventMessage = "map hook event to managed task"
+
 type server struct {
-	logPath string
-	now     func() time.Time
-	mu      sync.Mutex
+	repo core.HookEventIngestor
+	now  func() time.Time
 }
 
-func newServer(logPath string, now func() time.Time) *server {
+func newServer(repo core.HookEventIngestor, now func() time.Time) *server {
 	if now == nil {
 		now = time.Now
 	}
 
 	return &server{
-		logPath: logPath,
-		now:     now,
+		repo: repo,
+		now:  now,
 	}
 }
 
@@ -42,60 +42,86 @@ func (s *server) handleHook(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	eventName := r.Header.Get("X-Codex-Hook-Event")
-	record := hooklog.NewRecord(s.now(), eventName, r.RemoteAddr, r.URL.Path, body)
-	if record.EventName == "" {
-		record.EventName = eventNameFromBody(record.RawPayload)
-	}
-	if record.EventName == "" {
-		record.EventName = "unknown"
-	}
-
-	s.mu.Lock()
-	err = appendRecord(s.logPath, record)
-	s.mu.Unlock()
-	if err != nil {
-		http.Error(w, "append log: "+err.Error(), http.StatusInternalServerError)
+	input := decodeHookEventInput(s.now, r.Header.Get("X-Codex-Hook-Event"), body)
+	if _, err := s.repo.IngestHookEvent(r.Context(), input); err != nil && !isUnmanagedHookEvent(err) {
+		http.Error(w, "ingest hook event: "+err.Error(), http.StatusInternalServerError)
 		return
 	}
 
 	w.WriteHeader(http.StatusAccepted)
 }
 
-func appendRecord(path string, record hooklog.Record) error {
-	dir := filepath.Dir(path)
-	if err := os.MkdirAll(dir, 0o700); err != nil {
-		return err
+func decodeHookEventInput(now func() time.Time, headerEventName string, body []byte) core.HookEventInput {
+	input := core.HookEventInput{
+		OccurredAt:     now().UTC(),
+		EventName:      strings.TrimSpace(headerEventName),
+		RawPayloadJSON: string(bytes.TrimSpace(body)),
 	}
-	if dir != "." {
-		if err := os.Chmod(dir, 0o700); err != nil {
-			return err
+
+	var payload hookPayload
+	if err := json.Unmarshal(body, &payload); err != nil {
+		if input.EventName == "" {
+			input.EventName = "unknown"
 		}
+		return input
 	}
 
-	file, err := os.OpenFile(path, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o600)
-	if err != nil {
-		return err
+	if input.EventName == "" {
+		input.EventName = strings.TrimSpace(payload.HookEventName)
 	}
-	defer file.Close()
-	if err := file.Chmod(0o600); err != nil {
-		return err
+	if input.EventName == "" {
+		input.EventName = "unknown"
 	}
 
-	return json.NewEncoder(file).Encode(record)
+	input.TaskID = strings.TrimSpace(payload.TaskID)
+	input.SessionID = strings.TrimSpace(payload.SessionID)
+	input.TurnID = strings.TrimSpace(payload.TurnID)
+	input.ToolUseID = strings.TrimSpace(payload.ToolUseID)
+	input.Model = strings.TrimSpace(payload.Model)
+	input.Cwd = strings.TrimSpace(payload.Cwd)
+	input.TranscriptPath = strings.TrimSpace(payload.TranscriptPath)
+	input.StartSource = strings.TrimSpace(payload.Source)
+	input.LastAssistantMessage = strings.TrimSpace(payload.LastAssistantMessage)
+	input.PromptText = strings.TrimSpace(payload.Prompt)
+	input.CommandText = strings.TrimSpace(payload.ToolInput.Command)
+	input.CommandResultText = flattenPayloadText(payload.ToolResponse)
+	return input
 }
 
-func eventNameFromBody(rawPayload []byte) string {
-	if len(rawPayload) == 0 {
+type hookPayload struct {
+	TaskID               string          `json:"task_id"`
+	SessionID            string          `json:"session_id"`
+	TurnID               string          `json:"turn_id"`
+	HookEventName        string          `json:"hook_event_name"`
+	Prompt               string          `json:"prompt"`
+	ToolUseID            string          `json:"tool_use_id"`
+	Model                string          `json:"model"`
+	Cwd                  string          `json:"cwd"`
+	TranscriptPath       string          `json:"transcript_path"`
+	Source               string          `json:"source"`
+	LastAssistantMessage string          `json:"last_assistant_message"`
+	ToolInput            hookToolInput   `json:"tool_input"`
+	ToolResponse         json.RawMessage `json:"tool_response"`
+}
+
+type hookToolInput struct {
+	Command string `json:"command"`
+}
+
+func flattenPayloadText(raw json.RawMessage) string {
+	trimmed := bytes.TrimSpace(raw)
+	if len(trimmed) == 0 {
 		return ""
 	}
 
-	var payload struct {
-		HookEventName string `json:"hook_event_name"`
-	}
-	if err := json.Unmarshal(rawPayload, &payload); err != nil {
-		return ""
+	var text string
+	if err := json.Unmarshal(trimmed, &text); err == nil {
+		return strings.TrimSpace(text)
 	}
 
-	return payload.HookEventName
+	return string(trimmed)
+}
+
+func isUnmanagedHookEvent(err error) bool {
+	return err != nil && strings.Contains(err.Error(), unmanagedHookEventMessage)
 }

@@ -1,67 +1,125 @@
 package main
 
 import (
-	"bytes"
-	"encoding/json"
-	"fmt"
+	"context"
 	"net/http"
 	"net/http/httptest"
-	"os"
 	"path/filepath"
-	"strconv"
 	"strings"
-	"sync"
 	"testing"
 	"time"
 
-	"agent/internal/experimental/hooklog"
+	sqliterepo "agent/internal/adapters/repository/sqlite"
+	"agent/internal/core"
 	"github.com/stretchr/testify/require"
 )
 
-func TestServerHandleHook_AppendsJSONLRecord(t *testing.T) {
-	logPath := filepath.Join(t.TempDir(), "codex-hooks.jsonl")
-	srv := newServer(logPath, func() time.Time {
-		return time.Date(2026, 4, 7, 11, 0, 0, 0, time.UTC)
+func TestServerHandleHook_IngestsManagedTaskEvent(t *testing.T) {
+	repo := newTestRepository(t)
+	task := seedTask(t, repo, core.Task{
+		ID:           "task-1",
+		Slug:         "task-1",
+		DisplayName:  "task 1",
+		WorktreePath: "/tmp/repo-task-1",
+		Provider:     "codex",
+		Status:       core.TaskStatusRunning,
 	})
 
-	req := httptest.NewRequest(http.MethodPost, "/hook", strings.NewReader(`{"session_id":"sess-1","hook_event_name":"SessionStart","source":"startup"}`))
-	req.Header.Set("X-Codex-Hook-Event", "SessionStart")
-	rec := httptest.NewRecorder()
+	srv := newServer(repo, fixedClock(time.Date(2026, 4, 8, 10, 0, 0, 0, time.UTC)))
+	req := httptest.NewRequest(http.MethodPost, "/hook", strings.NewReader(`{
+	  "session_id":"sess-1",
+	  "cwd":"/tmp/repo-task-1",
+	  "hook_event_name":"UserPromptSubmit",
+	  "turn_id":"turn-1",
+	  "prompt":"check the failing test"
+	}`))
+	req.Header.Set("X-Codex-Hook-Event", "UserPromptSubmit")
 
+	rec := httptest.NewRecorder()
 	srv.handleHook(rec, req)
 
 	require.Equal(t, http.StatusAccepted, rec.Code)
-	record := readJSONLRecord(t, logPath)
-	require.Equal(t, "SessionStart", record.EventName)
-	require.Equal(t, "sess-1", record.SessionID())
-	require.Equal(t, time.Date(2026, 4, 7, 11, 0, 0, 0, time.UTC), record.ReceivedAt)
+
+	summaries, err := repo.ListHookSessionSummaries(context.Background(), []string{task.ID})
+	require.NoError(t, err)
+	require.Contains(t, summaries, task.ID)
+	require.Equal(t, core.HookRuntimePhasePrompted, summaries[task.ID].RuntimePhase)
+	require.Equal(t, "sess-1", summaries[task.ID].SessionID)
+	require.Equal(t, "turn-1", summaries[task.ID].CurrentTurnID)
+	require.Equal(t, "check the failing test", summaries[task.ID].LastPromptText)
+
+	events, err := repo.ListHookEvents(context.Background(), task.ID, 10)
+	require.NoError(t, err)
+	require.Len(t, events, 1)
+	require.Equal(t, "UserPromptSubmit", events[0].EventName)
+	require.Equal(t, "check the failing test", events[0].PromptText)
 }
 
-func TestServerHandleHook_PreservesInvalidJSONAsRawText(t *testing.T) {
-	logPath := filepath.Join(t.TempDir(), "codex-hooks.jsonl")
-	srv := newServer(logPath, func() time.Time {
-		return time.Date(2026, 4, 7, 11, 1, 0, 0, time.UTC)
-	})
+func TestServerHandleHook_IgnoresUnmanagedTaskCWD(t *testing.T) {
+	repo := newTestRepository(t)
+	srv := newServer(repo, fixedClock(time.Date(2026, 4, 8, 10, 1, 0, 0, time.UTC)))
 
-	req := httptest.NewRequest(http.MethodPost, "/hook", strings.NewReader("{not-json"))
-	req.Header.Set("X-Codex-Hook-Event", "Stop")
+	req := httptest.NewRequest(http.MethodPost, "/hook", strings.NewReader(`{
+	  "session_id":"sess-x",
+	  "cwd":"/tmp/unmanaged",
+	  "hook_event_name":"SessionStart"
+	}`))
+
 	rec := httptest.NewRecorder()
-
 	srv.handleHook(rec, req)
 
 	require.Equal(t, http.StatusAccepted, rec.Code)
-	record := readJSONLRecord(t, logPath)
-	require.Equal(t, "Stop", record.EventName)
-	require.Equal(t, "{not-json", record.RawText)
-	require.Equal(t, "invalid JSON payload", record.ParseError)
-	require.Empty(t, record.RawPayload)
+
+	summaries, err := repo.ListHookSessionSummaries(context.Background(), nil)
+	require.NoError(t, err)
+	require.Empty(t, summaries)
 }
 
-func TestServerHandleHook_RejectsNonPOSTWithoutAppendingRecord(t *testing.T) {
-	logPath := filepath.Join(t.TempDir(), "codex-hooks.jsonl")
-	srv := newServer(logPath, func() time.Time {
-		return time.Date(2026, 4, 7, 11, 2, 0, 0, time.UTC)
+func TestServerHandleHook_PublishesRepositoryUpdateForManagedTask(t *testing.T) {
+	repo := newTestRepository(t)
+	task := seedTask(t, repo, core.Task{
+		ID:           "task-1",
+		Slug:         "task-1",
+		DisplayName:  "task 1",
+		WorktreePath: "/tmp/repo-task-1",
+		Provider:     "codex",
+		Status:       core.TaskStatusRunning,
 	})
+
+	updates, cleanup, err := repo.SubscribeHookSessionUpdates(context.Background())
+	require.NoError(t, err)
+	defer cleanup()
+
+	srv := newServer(repo, fixedClock(time.Date(2026, 4, 8, 10, 2, 0, 0, time.UTC)))
+	req := httptest.NewRequest(http.MethodPost, "/hook", strings.NewReader(`{
+	  "session_id":"sess-1",
+	  "cwd":"/tmp/repo-task-1",
+	  "hook_event_name":"PreToolUse",
+	  "turn_id":"turn-1",
+	  "tool_use_id":"tool-1",
+	  "tool_input":{"command":"go test ./..."}
+	}`))
+	req.Header.Set("X-Codex-Hook-Event", "PreToolUse")
+
+	rec := httptest.NewRecorder()
+	srv.handleHook(rec, req)
+
+	require.Equal(t, http.StatusAccepted, rec.Code)
+
+	select {
+	case update := <-updates:
+		require.Equal(t, task.ID, update.TaskID)
+		require.Equal(t, core.HookRuntimePhaseRunningCommand, update.RuntimePhase)
+		require.Equal(t, "go test ./...", update.LastCommandText)
+		require.Equal(t, 1, update.CommandCount)
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for hook session update")
+	}
+}
+
+func TestServerHandleHook_RejectsNonPOSTWithoutIngesting(t *testing.T) {
+	repo := newTestRepository(t)
+	srv := newServer(repo, fixedClock(time.Date(2026, 4, 8, 10, 3, 0, 0, time.UTC)))
 
 	req := httptest.NewRequest(http.MethodGet, "/hook", strings.NewReader(`{"session_id":"sess-1"}`))
 	rec := httptest.NewRecorder()
@@ -70,123 +128,88 @@ func TestServerHandleHook_RejectsNonPOSTWithoutAppendingRecord(t *testing.T) {
 
 	require.Equal(t, http.StatusMethodNotAllowed, rec.Code)
 	require.Equal(t, http.MethodPost, rec.Header().Get("Allow"))
-	_, err := os.Stat(logPath)
-	require.ErrorIs(t, err, os.ErrNotExist)
+
+	summaries, err := repo.ListHookSessionSummaries(context.Background(), nil)
+	require.NoError(t, err)
+	require.Empty(t, summaries)
 }
 
-func TestServerHandleHook_UsesHookEventNameWhenHeaderMissing(t *testing.T) {
-	logPath := filepath.Join(t.TempDir(), "codex-hooks.jsonl")
-	srv := newServer(logPath, func() time.Time {
-		return time.Date(2026, 4, 7, 11, 3, 0, 0, time.UTC)
-	})
-
-	req := httptest.NewRequest(http.MethodPost, "/hook", strings.NewReader(`{"session_id":"sess-2","hook_event_name":"Stop"}`))
-	rec := httptest.NewRecorder()
-
-	srv.handleHook(rec, req)
-
-	require.Equal(t, http.StatusAccepted, rec.Code)
-	record := readJSONLRecord(t, logPath)
-	require.Equal(t, "Stop", record.EventName)
-	require.Equal(t, "sess-2", record.SessionID())
-}
-
-func TestAppendRecord_CreatesPrivateDirectoryAndFile(t *testing.T) {
-	logDir := filepath.Join(t.TempDir(), "nested", "logs")
-	logPath := filepath.Join(logDir, "codex-hooks.jsonl")
-
-	err := appendRecord(logPath, hooklog.NewRecord(time.Date(2026, 4, 7, 11, 4, 0, 0, time.UTC), "Stop", "127.0.0.1:1234", "/hook", []byte(`{"session_id":"sess-perms"}`)))
-	require.NoError(t, err)
-
-	dirInfo, err := os.Stat(logDir)
-	require.NoError(t, err)
-	require.Equal(t, os.FileMode(0o700), dirInfo.Mode().Perm())
-
-	fileInfo, err := os.Stat(logPath)
-	require.NoError(t, err)
-	require.Equal(t, os.FileMode(0o600), fileInfo.Mode().Perm())
-}
-
-func TestAppendRecord_FlatPathDoesNotChmodCurrentWorkingDirectory(t *testing.T) {
-	cwd := t.TempDir()
-	require.NoError(t, os.Chmod(cwd, 0o755))
-
-	originalWD, err := os.Getwd()
-	require.NoError(t, err)
-	t.Cleanup(func() {
-		require.NoError(t, os.Chdir(originalWD))
-	})
-	require.NoError(t, os.Chdir(cwd))
-
-	beforeInfo, err := os.Stat(".")
-	require.NoError(t, err)
-
-	logPath := "codex-hooks.jsonl"
-	err = appendRecord(logPath, hooklog.NewRecord(time.Date(2026, 4, 7, 11, 4, 30, 0, time.UTC), "Stop", "127.0.0.1:1234", "/hook", []byte(`{"session_id":"sess-flat"}`)))
-	require.NoError(t, err)
-
-	afterInfo, err := os.Stat(".")
-	require.NoError(t, err)
-	require.Equal(t, beforeInfo.Mode().Perm(), afterInfo.Mode().Perm())
-
-	fileInfo, err := os.Stat(logPath)
-	require.NoError(t, err)
-	require.Equal(t, os.FileMode(0o600), fileInfo.Mode().Perm())
-
-	record := readJSONLRecord(t, logPath)
-	require.Equal(t, "sess-flat", record.SessionID())
-}
-
-func TestServerHandleHook_ConcurrentRequestsAppendValidJSONL(t *testing.T) {
-	logPath := filepath.Join(t.TempDir(), "codex-hooks.jsonl")
-	srv := newServer(logPath, func() time.Time {
-		return time.Date(2026, 4, 7, 11, 5, 0, 0, time.UTC)
-	})
-
-	const requestCount = 32
-	var wg sync.WaitGroup
-	errs := make(chan error, requestCount)
-
-	for i := 0; i < requestCount; i++ {
-		wg.Add(1)
-		go func(i int) {
-			defer wg.Done()
-
-			req := httptest.NewRequest(http.MethodPost, "/hook", strings.NewReader(`{"session_id":"sess-`+strconv.Itoa(i)+`","hook_event_name":"Stop"}`))
-			req.Header.Set("X-Codex-Hook-Event", "Stop")
-			rec := httptest.NewRecorder()
-
-			srv.handleHook(rec, req)
-			if rec.Code != http.StatusAccepted {
-				errs <- fmt.Errorf("status = %d", rec.Code)
-			}
-		}(i)
-	}
-
-	wg.Wait()
-	close(errs)
-	for err := range errs {
-		require.NoError(t, err)
-	}
-
-	body, err := os.ReadFile(logPath)
-	require.NoError(t, err)
-
-	lines := strings.Split(strings.TrimSpace(string(body)), "\n")
-	require.Len(t, lines, requestCount)
-	for _, line := range lines {
-		var record hooklog.Record
-		require.NoError(t, json.Unmarshal([]byte(line), &record))
-	}
-}
-
-func readJSONLRecord(t *testing.T, path string) hooklog.Record {
+func newTestRepository(t *testing.T) *sqliterepo.Repository {
 	t.Helper()
 
-	body, err := os.ReadFile(path)
+	repo, err := sqliterepo.NewRepository(sqliterepo.Config{
+		Path: filepath.Join(t.TempDir(), "state.db"),
+	})
 	require.NoError(t, err)
+	require.NoError(t, repo.IsAvailable(context.Background()))
+	return repo
+}
 
-	var record hooklog.Record
-	require.NoError(t, json.Unmarshal(bytes.TrimSpace(body), &record))
-	return record
+func seedTask(t *testing.T, repo *sqliterepo.Repository, task core.Task) *core.Task {
+	t.Helper()
+
+	now := time.Date(2026, 4, 8, 9, 30, 0, 0, time.UTC)
+	if task.ID == "" {
+		task.ID = "task-1"
+	}
+	if task.Slug == "" {
+		task.Slug = task.ID
+	}
+	if task.DisplayName == "" {
+		task.DisplayName = task.ID
+	}
+	if task.Prompt == "" {
+		task.Prompt = "test prompt"
+	}
+	if task.RepoRoot == "" {
+		task.RepoRoot = "/tmp/repo"
+	}
+	if task.RepoName == "" {
+		task.RepoName = "repo"
+	}
+	if task.BaseBranch == "" {
+		task.BaseBranch = "main"
+	}
+	if task.BranchName == "" {
+		task.BranchName = task.Slug
+	}
+	if task.WorktreePath == "" {
+		task.WorktreePath = filepath.Join("/tmp", task.ID)
+	}
+	if task.TmuxSession == "" {
+		task.TmuxSession = task.ID
+	}
+	if task.AgentWindowName == "" {
+		task.AgentWindowName = "agent"
+	}
+	if task.EditorWindowName == "" {
+		task.EditorWindowName = "editor"
+	}
+	if task.Provider == "" {
+		task.Provider = "codex"
+	}
+	if task.Status == "" {
+		task.Status = core.TaskStatusReady
+	}
+	if task.CreatedAt.IsZero() {
+		task.CreatedAt = now
+	}
+	if task.UpdatedAt.IsZero() {
+		task.UpdatedAt = now
+	}
+
+	task.WorktreeExists = true
+	task.BranchExists = true
+	task.SessionExists = true
+	task.AgentWindowExists = true
+	task.EditorWindowExists = true
+
+	require.NoError(t, repo.CreateTask(context.Background(), &task))
+	return &task
+}
+
+func fixedClock(ts time.Time) func() time.Time {
+	return func() time.Time {
+		return ts
+	}
 }
