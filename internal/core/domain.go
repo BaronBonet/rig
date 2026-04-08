@@ -30,6 +30,16 @@ const (
 	RuntimeStateFinished   RuntimeState = "finished"
 )
 
+type HookRuntimePhase string
+
+const (
+	HookRuntimePhaseReady          HookRuntimePhase = "ready"
+	HookRuntimePhasePrompted       HookRuntimePhase = "prompted"
+	HookRuntimePhaseRunningCommand HookRuntimePhase = "running_command"
+	HookRuntimePhaseIdle           HookRuntimePhase = "idle"
+	HookRuntimePhaseFinished       HookRuntimePhase = "finished"
+)
+
 type Task struct {
 	CreatedAt             time.Time    `json:"created_at"`
 	UpdatedAt             time.Time    `json:"updated_at"`
@@ -56,6 +66,64 @@ type Task struct {
 	SessionExists         bool         `json:"session_exists"`
 	AgentWindowExists     bool         `json:"agent_window_exists"`
 	EditorWindowExists    bool         `json:"editor_window_exists"`
+}
+
+type HookSessionSummary struct {
+	StartedAt             time.Time
+	LastActivityAt        time.Time
+	LastStopAt            time.Time
+	TaskID                string
+	SessionID             string
+	Model                 string
+	Cwd                   string
+	TranscriptPath        string
+	StartSource           string
+	CurrentTurnID         string
+	LastEventName         string
+	RuntimePhase          HookRuntimePhase
+	LastPromptText        string
+	LastCommandText       string
+	LastCommandResultText string
+	LastAssistantMessage  string
+	CommandCount          int
+}
+
+type HookEvent struct {
+	OccurredAt           time.Time
+	ID                   int64
+	TaskID               string
+	SessionID            string
+	TurnID               string
+	EventName            string
+	RawPayloadJSON       string
+	LastAssistantMessage string
+	PromptText           string
+	CommandText          string
+	CommandResultText    string
+	ToolUseID            string
+}
+
+type HookEventInput struct {
+	OccurredAt           time.Time
+	TaskID               string
+	SessionID            string
+	TurnID               string
+	EventName            string
+	RawPayloadJSON       string
+	LastAssistantMessage string
+	PromptText           string
+	CommandText          string
+	CommandResultText    string
+	ToolUseID            string
+	Model                string
+	Cwd                  string
+	TranscriptPath       string
+	StartSource          string
+}
+
+type TaskView struct {
+	Task        *Task
+	HookSession *HookSessionSummary
 }
 
 type TaskProgressStep string
