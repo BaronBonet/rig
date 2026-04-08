@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"encoding/json"
 	"fmt"
+	"io"
 	"os"
 	"sort"
 	"strings"
@@ -13,8 +14,6 @@ import (
 	"agent/internal/experimental/hooklog"
 )
 
-const maxLogLineSize = 1024 * 1024
-
 func renderSummary(path string) (string, error) {
 	file, err := os.Open(path)
 	if err != nil {
@@ -22,17 +21,28 @@ func renderSummary(path string) (string, error) {
 	}
 	defer file.Close()
 
-	scanner := bufio.NewScanner(file)
-	scanner.Buffer(make([]byte, 0, 64*1024), maxLogLineSize)
+	reader := bufio.NewReader(file)
 
 	sessionEvents := make(map[string]map[string]int)
 	lastAssistant := make(map[string]assistantMessage)
 	recordIndex := 0
 
-	for scanner.Scan() {
+	for {
+		lineBytes, err := reader.ReadBytes('\n')
+		if err != nil && err != io.EOF {
+			return "", err
+		}
+		line := strings.TrimSpace(string(lineBytes))
+		if line == "" {
+			if err == io.EOF {
+				break
+			}
+			continue
+		}
+
 		var record hooklog.Record
-		if err := json.Unmarshal(scanner.Bytes(), &record); err != nil {
-			return "", fmt.Errorf("decode %s: %w", path, err)
+		if decodeErr := json.Unmarshal([]byte(line), &record); decodeErr != nil {
+			return "", fmt.Errorf("decode %s: %w", path, decodeErr)
 		}
 
 		sessionID := record.SessionID()
@@ -57,9 +67,9 @@ func renderSummary(path string) (string, error) {
 		}
 
 		recordIndex++
-	}
-	if err := scanner.Err(); err != nil {
-		return "", err
+		if err == io.EOF {
+			break
+		}
 	}
 
 	sessions := make([]string, 0, len(sessionEvents))

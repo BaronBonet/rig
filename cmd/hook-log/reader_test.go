@@ -71,6 +71,26 @@ func TestRenderSummary_SanitizesAssistantMessageAndReadsLargeLines(t *testing.T)
 	require.NotContains(t, summary, "first line\nsecond line")
 }
 
+func TestRenderSummary_HandlesOversizedLogRecord(t *testing.T) {
+	logPath := filepath.Join(t.TempDir(), "codex-hooks.jsonl")
+	require.NoError(t, os.WriteFile(logPath, buildJSONL(t, map[string]any{
+		"received_at": "2026-04-07T12:00:00Z",
+		"event_name":  "Stop",
+		"raw_payload": map[string]any{
+			"session_id":             "sess-big",
+			"hook_event_name":        "Stop",
+			"last_assistant_message": "oversized message",
+			"filler":                 strings.Repeat("x", 1024*1024+1),
+		},
+	}), 0o644))
+
+	summary, err := renderSummary(logPath)
+	require.NoError(t, err)
+	require.Contains(t, summary, "session sess-big")
+	require.Contains(t, summary, "Stop: 1")
+	require.Contains(t, summary, "last assistant message: oversized message")
+}
+
 func buildJSONL(t *testing.T, records ...map[string]any) []byte {
 	t.Helper()
 
