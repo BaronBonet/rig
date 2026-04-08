@@ -389,7 +389,7 @@ func (h *testServiceHarness) existingTask(id string) *Task {
 	}
 
 	h.taskRepo.listTasks = []*Task{task}
-	h.taskRepo.getTask = cloneTask(task)
+	h.taskRepo.getTask = task
 
 	return task
 }

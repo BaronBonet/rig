@@ -33,7 +33,8 @@ func (s stubHookObservabilityRepository) ListHookEvents(ctx context.Context, tas
 func (s stubHookObservabilityRepository) SubscribeHookSessionUpdates(ctx context.Context) (<-chan HookSessionSummary, func(), error) {
 	if s.subscribeHookUpdates == nil {
 		ch := make(chan HookSessionSummary)
-		return ch, func() { close(ch) }, nil
+		close(ch)
+		return ch, func() {}, nil
 	}
 
 	return s.subscribeHookUpdates(ctx)
@@ -120,6 +121,15 @@ func TestServiceGetTaskHookEvents_ReturnsRepositoryEvents(t *testing.T) {
 	require.Equal(t, "PostToolUse", events[1].EventName)
 }
 
+func TestServiceGetTaskHookEvents_ReturnsNilWhenHooksUnavailable(t *testing.T) {
+	h := newTestService(t)
+	h.service.hooks = nil
+
+	events, err := h.service.GetTaskHookEvents(t.Context(), "task-1", 5)
+	require.NoError(t, err)
+	require.Nil(t, events)
+}
+
 func TestServiceSubscribeTaskHookUpdates_PassesThroughRepositoryStream(t *testing.T) {
 	h := newTestService(t)
 	updates := make(chan HookSessionSummary, 1)
@@ -142,4 +152,21 @@ func TestServiceSubscribeTaskHookUpdates_PassesThroughRepositoryStream(t *testin
 
 	release()
 	require.True(t, released)
+}
+
+func TestServiceSubscribeTaskHookUpdates_ReturnsClosedStreamWhenHooksUnavailable(t *testing.T) {
+	h := newTestService(t)
+	h.service.hooks = nil
+
+	stream, release, err := h.service.SubscribeTaskHookUpdates(t.Context())
+	require.NoError(t, err)
+
+	select {
+	case _, ok := <-stream:
+		require.False(t, ok)
+	default:
+		t.Fatal("expected closed stream")
+	}
+
+	release()
 }
