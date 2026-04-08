@@ -370,6 +370,30 @@ func hasCustomLaunchRequest(req LaunchRequest) bool {
 	return len(req.Command) > 0 || len(req.InitialInput) > 0 || req.Prompt != ""
 }
 
+func (h *testServiceHarness) existingTask(id string) *Task {
+	task := &Task{
+		ID:               id,
+		Prompt:           "fix the failing test",
+		DisplayName:      "failing test",
+		Slug:             "failing-test",
+		RepoRoot:         "/tmp/repo",
+		RepoName:         "repo",
+		BaseBranch:       "main",
+		BranchName:       "feat/failing-test",
+		WorktreePath:     "/tmp/repo-failing-test",
+		TmuxSession:      "repo_failing-test",
+		AgentWindowName:  "agent",
+		EditorWindowName: "editor",
+		Provider:         "codex",
+		Status:           TaskStatusRunning,
+	}
+
+	h.taskRepo.listTasks = []*Task{task}
+	h.taskRepo.getTask = cloneTask(task)
+
+	return task
+}
+
 func requireTimeInWindow(t *testing.T, got, before, after time.Time) {
 	t.Helper()
 	require.False(t, got.IsZero())

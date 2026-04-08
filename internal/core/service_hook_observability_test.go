@@ -3,6 +3,7 @@ package core
 import (
 	"context"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/require"
 )
@@ -40,18 +41,11 @@ func (s stubHookObservabilityRepository) SubscribeHookSessionUpdates(ctx context
 
 func TestServiceListTaskViews_UsesHookSummaryWhenAvailable(t *testing.T) {
 	h := newTestService(t)
-	task := &Task{
-		ID:               "task-1",
-		Slug:             "billing-retry-flow",
-		RepoRoot:         "/tmp/repo",
-		BranchName:       "feat/billing-retry-flow",
-		WorktreePath:     t.TempDir(),
-		TmuxSession:      "repo-billing-retry-flow",
-		AgentWindowName:  "agent",
-		EditorWindowName: "editor",
-		Provider:         "codex",
-		Status:           TaskStatusRunning,
-	}
+	task := h.existingTask("task-1")
+	task.Slug = "billing-retry-flow"
+	task.BranchName = "feat/billing-retry-flow"
+	task.WorktreePath = t.TempDir()
+	task.TmuxSession = "repo-billing-retry-flow"
 	summary := &HookSessionSummary{
 		TaskID:          task.ID,
 		SessionID:       "sess-1",
@@ -79,4 +73,73 @@ func TestServiceListTaskViews_UsesHookSummaryWhenAvailable(t *testing.T) {
 	require.NotNil(t, views[0].HookSession)
 	require.Equal(t, HookRuntimePhaseRunningCommand, views[0].HookSession.RuntimePhase)
 	require.Equal(t, "go test ./...", views[0].HookSession.LastCommandText)
+}
+
+func TestServiceListTaskViews_FallsBackToRuntimeStateWithoutHookSummary(t *testing.T) {
+	h := newTestService(t)
+	task := h.existingTask("task-1")
+	now := time.Date(2026, 4, 8, 10, 0, 0, 0, time.UTC)
+
+	h.repoClient.repoResources = RepoResources{WorktreeExists: true, BranchExists: true}
+	h.sessionClient.sessionResources = SessionResources{
+		SessionExists:      true,
+		AgentWindowExists:  true,
+		EditorWindowExists: true,
+	}
+	h.sessionClient.snapshot = RuntimeSnapshot{ObservedAt: now}
+	h.providerRepo.runtimeState = RuntimeStateNeedsInput
+	h.service.hooks = stubHookObservabilityRepository{
+		listHookSessionSummaries: func(_ context.Context, taskIDs []string) (map[string]*HookSessionSummary, error) {
+			require.Equal(t, []string{task.ID}, taskIDs)
+			return map[string]*HookSessionSummary{}, nil
+		},
+	}
+
+	views, err := h.service.ListTaskViews(t.Context())
+	require.NoError(t, err)
+	require.Len(t, views, 1)
+	require.Equal(t, RuntimeStateNeedsInput, views[0].Task.RuntimeState)
+	require.Equal(t, now, views[0].Task.RuntimeStateUpdatedAt)
+	require.Nil(t, views[0].HookSession)
+}
+
+func TestServiceGetTaskHookEvents_ReturnsRepositoryEvents(t *testing.T) {
+	h := newTestService(t)
+	h.service.hooks = stubHookObservabilityRepository{
+		listHookEvents: func(_ context.Context, taskID string, limit int) ([]HookEvent, error) {
+			require.Equal(t, "task-1", taskID)
+			require.Equal(t, 5, limit)
+			return []HookEvent{{EventName: "Stop"}, {EventName: "PostToolUse"}}, nil
+		},
+	}
+
+	events, err := h.service.GetTaskHookEvents(t.Context(), "task-1", 5)
+	require.NoError(t, err)
+	require.Len(t, events, 2)
+	require.Equal(t, "Stop", events[0].EventName)
+	require.Equal(t, "PostToolUse", events[1].EventName)
+}
+
+func TestServiceSubscribeTaskHookUpdates_PassesThroughRepositoryStream(t *testing.T) {
+	h := newTestService(t)
+	updates := make(chan HookSessionSummary, 1)
+	released := false
+	h.service.hooks = stubHookObservabilityRepository{
+		subscribeHookUpdates: func(_ context.Context) (<-chan HookSessionSummary, func(), error) {
+			return updates, func() {
+				released = true
+				close(updates)
+			}, nil
+		},
+	}
+
+	stream, release, err := h.service.SubscribeTaskHookUpdates(t.Context())
+	require.NoError(t, err)
+
+	expected := HookSessionSummary{TaskID: "task-1", RuntimePhase: HookRuntimePhaseIdle}
+	updates <- expected
+	require.Equal(t, expected, <-stream)
+
+	release()
+	require.True(t, released)
 }
