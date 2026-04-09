@@ -2,6 +2,7 @@ package observer
 
 import (
 	"bufio"
+	"bytes"
 	"context"
 	"fmt"
 	"io"
@@ -9,9 +10,11 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
+	sqliterepo "agent/internal/adapters/repository/sqlite"
 	"agent/internal/core"
 
 	"github.com/stretchr/testify/require"
@@ -31,6 +34,7 @@ func TestServe_HealthCheckOverUnixSocket(t *testing.T) {
 			HookListenAddr: hookListener.Addr().String(),
 			HookListener:   hookListener,
 			HookIngestor:   &stubObserverHookIngestor{},
+			Hub:            NewHub(),
 		})
 	}()
 
@@ -63,10 +67,28 @@ func TestServe_HealthCheckOverUnixSocket(t *testing.T) {
 	require.Error(t, err)
 }
 
-func TestServe_HandlesHookIngestRequests(t *testing.T) {
+func TestObserverHookEndpoint_PersistsEventAndPublishesTaskUpdate(t *testing.T) {
 	socketPath := filepath.Join("/tmp", fmt.Sprintf("observer-%d.sock", time.Now().UnixNano()))
 	hookListener := mustListenTCP(t)
-	ingestor := &stubObserverHookIngestor{}
+	repo := mustCreateTaskRepository(t)
+	task := mustSeedTask(t, repo, core.Task{
+		ID:               "task-1",
+		Prompt:           "add observer hook ingest",
+		DisplayName:      "observer hook ingest",
+		Slug:             "observer-hook-ingest",
+		RepoRoot:         "/tmp/repo",
+		RepoName:         "repo",
+		BaseBranch:       "main",
+		BranchName:       "feat/observer-hook-ingest",
+		WorktreePath:     "/tmp/repo-observer-hook-ingest",
+		TmuxSession:      "repo-observer-hook-ingest",
+		Provider:         "codex",
+		Status:           core.TaskStatusRunning,
+		AgentWindowName:  "agent",
+		EditorWindowName: "editor",
+	})
+	hub := NewHub()
+	updates, release := mustSubscribeHub(t, hub)
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -77,7 +99,8 @@ func TestServe_HandlesHookIngestRequests(t *testing.T) {
 			SocketPath:     socketPath,
 			HookListenAddr: hookListener.Addr().String(),
 			HookListener:   hookListener,
-			HookIngestor:   ingestor,
+			HookIngestor:   repo,
+			Hub:            hub,
 		})
 	}()
 
@@ -92,9 +115,41 @@ func TestServe_HandlesHookIngestRequests(t *testing.T) {
 		if err != nil {
 			return false
 		}
-		return status == http.StatusAccepted && ingestor.called
+		return status == http.StatusAccepted
 	}, 2*time.Second, 20*time.Millisecond)
 
+	req, err := http.NewRequest(http.MethodPost, "http://"+hookListener.Addr().String()+"/hook", bytes.NewReader([]byte(`{"cwd":"`+task.WorktreePath+`","session_id":"sess-1","hook_event_name":"SessionStart","model":"gpt-5"}`)))
+	require.NoError(t, err)
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("X-Codex-Hook-Event", "SessionStart")
+
+	resp, err := http.DefaultClient.Do(req)
+	require.NoError(t, err)
+	defer resp.Body.Close()
+	_, _ = io.Copy(io.Discard, resp.Body)
+	require.Equal(t, http.StatusAccepted, resp.StatusCode)
+
+	var update core.HookSessionSummary
+	select {
+	case update = <-updates:
+	case <-time.After(2 * time.Second):
+		t.Fatal("timed out waiting for hub update")
+	}
+	require.Equal(t, task.ID, update.TaskID)
+	require.Equal(t, "sess-1", update.SessionID)
+	require.Equal(t, "SessionStart", update.LastEventName)
+
+	events, err := repo.ListHookEvents(t.Context(), task.ID, 10)
+	require.NoError(t, err)
+	require.Len(t, events, 1)
+	require.Equal(t, "SessionStart", events[0].EventName)
+
+	summaries, err := repo.ListHookSessionSummaries(t.Context(), []string{task.ID})
+	require.NoError(t, err)
+	require.Contains(t, summaries, task.ID)
+	require.Equal(t, "sess-1", summaries[task.ID].SessionID)
+
+	release()
 	cancel()
 	require.Eventually(t, func() bool {
 		select {
@@ -105,10 +160,70 @@ func TestServe_HandlesHookIngestRequests(t *testing.T) {
 			return false
 		}
 	}, 2*time.Second, 20*time.Millisecond)
+}
 
-	require.Equal(t, "SessionStart", ingestor.input.EventName)
-	require.Equal(t, "/tmp/worktree", ingestor.input.Cwd)
-	require.Equal(t, "sess-1", ingestor.input.SessionID)
+func TestObserverDropsUnmanagedHookEventsWithoutBroadcast(t *testing.T) {
+	socketPath := filepath.Join("/tmp", fmt.Sprintf("observer-%d.sock", time.Now().UnixNano()))
+	hookListener := mustListenTCP(t)
+	hub := NewHub()
+	updates, release := mustSubscribeHub(t, hub)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	done := make(chan error, 1)
+	go func() {
+		done <- Serve(ctx, ServerConfig{
+			SocketPath:     socketPath,
+			HookListenAddr: hookListener.Addr().String(),
+			HookListener:   hookListener,
+			HookIngestor:   &stubObserverHookIngestor{err: core.ErrUnmanagedHookEvent},
+			Hub:            hub,
+		})
+	}()
+
+	require.Eventually(t, func() bool {
+		select {
+		case err := <-done:
+			require.NoError(t, err)
+			return false
+		default:
+		}
+		status, err := unixHTTPStatus(socketPath, http.MethodGet, "/healthz", "")
+		if err != nil {
+			return false
+		}
+		return status == http.StatusOK
+	}, 2*time.Second, 20*time.Millisecond)
+
+	req, err := http.NewRequest(http.MethodPost, "http://"+hookListener.Addr().String()+"/hook", strings.NewReader(`{"hook_event_name":"Stop"}`))
+	require.NoError(t, err)
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("X-Codex-Hook-Event", "Stop")
+
+	resp, err := http.DefaultClient.Do(req)
+	require.NoError(t, err)
+	defer resp.Body.Close()
+	_, _ = io.Copy(io.Discard, resp.Body)
+	require.Equal(t, http.StatusAccepted, resp.StatusCode)
+
+	select {
+	case update := <-updates:
+		t.Fatalf("unexpected hub update: %+v", update)
+	case <-time.After(200 * time.Millisecond):
+	}
+
+	release()
+	cancel()
+	require.Eventually(t, func() bool {
+		select {
+		case err := <-done:
+			require.NoError(t, err)
+			return true
+		default:
+			return false
+		}
+	}, 2*time.Second, 20*time.Millisecond)
 }
 
 func mustListenTCP(t *testing.T) net.Listener {
@@ -156,10 +271,73 @@ func unixHTTPStatus(address, method, target, body string) (int, error) {
 type stubObserverHookIngestor struct {
 	called bool
 	input  core.HookEventInput
+	err    error
 }
 
 func (s *stubObserverHookIngestor) IngestHookEvent(_ context.Context, input core.HookEventInput) (*core.HookSessionSummary, error) {
 	s.called = true
 	s.input = input
-	return nil, nil
+	return nil, s.err
+}
+
+func mustCreateTaskRepository(t *testing.T) *sqliterepo.Repository {
+	t.Helper()
+
+	repo, err := sqliterepo.NewRepository(sqliterepo.Config{Path: filepath.Join(t.TempDir(), "state.db")})
+	require.NoError(t, err)
+	return repo
+}
+
+func mustSeedTask(t *testing.T, repo *sqliterepo.Repository, task core.Task) *core.Task {
+	t.Helper()
+
+	now := time.Now().UTC()
+	if task.CreatedAt.IsZero() {
+		task.CreatedAt = now
+	}
+	if task.UpdatedAt.IsZero() {
+		task.UpdatedAt = task.CreatedAt
+	}
+	if task.AgentWindowName == "" {
+		task.AgentWindowName = "agent"
+	}
+	if task.EditorWindowName == "" {
+		task.EditorWindowName = "editor"
+	}
+	if task.DisplayName == "" {
+		task.DisplayName = task.ID
+	}
+	if task.Slug == "" {
+		task.Slug = task.ID
+	}
+	if task.RepoRoot == "" {
+		task.RepoRoot = "/tmp/repo"
+	}
+	if task.RepoName == "" {
+		task.RepoName = "repo"
+	}
+	if task.BaseBranch == "" {
+		task.BaseBranch = "main"
+	}
+	if task.BranchName == "" {
+		task.BranchName = "feat/" + task.Slug
+	}
+	if task.WorktreePath == "" {
+		task.WorktreePath = filepath.Join("/tmp", task.Slug)
+	}
+	if task.TmuxSession == "" {
+		task.TmuxSession = task.Slug
+	}
+
+	require.NoError(t, repo.CreateTask(context.Background(), &task))
+	return &task
+}
+
+func mustSubscribeHub(t *testing.T, hub *Hub) (<-chan core.HookSessionSummary, func()) {
+	t.Helper()
+
+	updates, release := hub.Subscribe(t.Context())
+	require.NotNil(t, updates)
+	require.NotNil(t, release)
+	return updates, release
 }

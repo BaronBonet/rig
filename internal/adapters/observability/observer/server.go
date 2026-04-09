@@ -19,6 +19,7 @@ type ServerConfig struct {
 	SocketPath     string
 	HookListenAddr string
 	HookIngestor   core.HookEventIngestor
+	Hub            *Hub
 	Now            func() time.Time
 	HookListener   net.Listener
 }
@@ -35,6 +36,9 @@ func Serve(ctx context.Context, cfg ServerConfig) error {
 	}
 	if cfg.HookIngestor == nil {
 		return fmt.Errorf("hook ingestor not configured")
+	}
+	if cfg.Hub == nil {
+		return fmt.Errorf("hook hub not configured")
 	}
 
 	if err := os.MkdirAll(filepath.Dir(cfg.SocketPath), 0o755); err != nil {
@@ -67,7 +71,7 @@ func Serve(ctx context.Context, cfg ServerConfig) error {
 	healthServer := &http.Server{Handler: healthMux}
 
 	hookMux := http.NewServeMux()
-	hookMux.Handle("/hook", hookhttp.NewHTTPHandler(cfg.HookIngestor, cfg.Now))
+	hookMux.Handle("/hook", hookhttp.NewHTTPHandler(newPublishingHookIngestor(cfg.HookIngestor, cfg.Hub), cfg.Now))
 	hookServer := &http.Server{Handler: hookMux}
 
 	errCh := make(chan error, 2)
@@ -103,4 +107,27 @@ func Serve(ctx context.Context, cfg ServerConfig) error {
 	wg.Wait()
 
 	return nil
+}
+
+type publishingHookIngestor struct {
+	ingestor core.HookEventIngestor
+	hub      *Hub
+}
+
+func newPublishingHookIngestor(ingestor core.HookEventIngestor, hub *Hub) core.HookEventIngestor {
+	return &publishingHookIngestor{
+		ingestor: ingestor,
+		hub:      hub,
+	}
+}
+
+func (p *publishingHookIngestor) IngestHookEvent(ctx context.Context, input core.HookEventInput) (*core.HookSessionSummary, error) {
+	summary, err := p.ingestor.IngestHookEvent(ctx, input)
+	if err != nil {
+		return summary, err
+	}
+	if summary != nil && p.hub != nil {
+		p.hub.Publish(*summary)
+	}
+	return summary, nil
 }

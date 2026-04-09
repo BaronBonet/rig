@@ -89,8 +89,12 @@ func NewRootCommand(deps Dependencies) *cobra.Command {
 }
 
 func newHookIngestCommand(deps Dependencies) *cobra.Command {
+	return newIngestCommand("hook-ingest <event-name>", deps)
+}
+
+func newIngestCommand(use string, deps Dependencies) *cobra.Command {
 	cmd := &cobra.Command{
-		Use:    "hook-ingest <event-name>",
+		Use:    use,
 		Hidden: true,
 		Args:   cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
@@ -135,9 +139,11 @@ func newObserverCommand(deps Dependencies) *cobra.Command {
 				SocketPath:     deps.ObserverSocketPath,
 				HookListenAddr: deps.HookListenAddr,
 				HookIngestor:   deps.HookIngestor,
+				Hub:            observer.NewHub(),
 			})
 		},
 	})
+	cmd.AddCommand(newIngestCommand("ingest <event-name>", deps))
 
 	return cmd
 }

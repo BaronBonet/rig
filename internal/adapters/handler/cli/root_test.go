@@ -160,6 +160,23 @@ func TestNewRootCommand_HookIngestDispatchesToConfiguredIngestor(t *testing.T) {
 	require.Equal(t, "sess-1", ingestor.input.SessionID)
 }
 
+func TestNewRootCommand_ObserverIngestDispatchesToConfiguredIngestor(t *testing.T) {
+	out := &bytes.Buffer{}
+	ingestor := &stubHookEventIngestor{}
+
+	cmd := NewRootCommand(Dependencies{Stdout: out, Stderr: out, HookIngestor: ingestor})
+	cmd.SetIn(strings.NewReader(`{"cwd":"/tmp/worktree","session_id":"sess-1","hook_event_name":"SessionStart"}`))
+	cmd.SetOut(out)
+	cmd.SetErr(out)
+	cmd.SetArgs([]string{"observer", "ingest", "SessionStart"})
+
+	err := cmd.Execute()
+	require.NoError(t, err)
+	require.Equal(t, "SessionStart", ingestor.input.EventName)
+	require.Equal(t, "/tmp/worktree", ingestor.input.Cwd)
+	require.Equal(t, "sess-1", ingestor.input.SessionID)
+}
+
 type stubHookEventIngestor struct {
 	input core.HookEventInput
 }
