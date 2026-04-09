@@ -70,7 +70,7 @@ func TestModelUpdate_CreateFlowSuggestsNameThenCreatesTask(t *testing.T) {
 	require.NotNil(t, suggestCmd)
 
 	m.selected = 1
-	suggestMsg := suggestCmd()
+	suggestMsg := executeBatchUntil[suggestNameFinishedMsg](t, suggestCmd)
 	m, _ = updateTUIModel(t, m, suggestMsg)
 	require.Equal(t, tuiModeNameConfirm, m.mode)
 	require.Equal(t, "billing retry flow", m.nameInput.Value())
@@ -130,7 +130,7 @@ func TestModelUpdate_CreateFlowWithoutTasksUsesModelCwdFallback(t *testing.T) {
 	m, suggestCmd := updateTUIModel(t, m, tea.KeyPressMsg{Code: tea.KeyEnter})
 	require.NotNil(t, suggestCmd)
 
-	suggestMsg := suggestCmd()
+	suggestMsg := executeBatchUntil[suggestNameFinishedMsg](t, suggestCmd)
 	m, _ = updateTUIModel(t, m, suggestMsg)
 	require.Equal(t, tuiModeNameConfirm, m.mode)
 
@@ -189,7 +189,7 @@ func TestModelUpdate_CreateFlowUsesConfiguredDefaultProvider(t *testing.T) {
 	m, suggestCmd := updateTUIModel(t, m, tea.KeyPressMsg{Code: tea.KeyEnter})
 	require.NotNil(t, suggestCmd)
 
-	suggestMsg := suggestCmd()
+	suggestMsg := executeBatchUntil[suggestNameFinishedMsg](t, suggestCmd)
 	m, _ = updateTUIModel(t, m, suggestMsg)
 	require.Equal(t, "claude", m.provider)
 
@@ -244,7 +244,7 @@ func TestModelUpdate_SuggestNameFailureReturnsToPromptModeAndRendersError(t *tes
 	require.NotNil(t, suggestCmd)
 	require.True(t, m.busy)
 
-	msg := suggestCmd()
+	msg := executeBatchUntil[suggestNameFinishedMsg](t, suggestCmd)
 	m, followup := updateTUIModel(t, m, msg)
 	require.Nil(t, followup)
 	require.Equal(t, tuiModePromptInput, m.mode)
@@ -267,7 +267,7 @@ func TestModelUpdate_CreateFailureReturnsToNameConfirmModeAndRendersError(t *tes
 		Return("billing retry flow", nil).
 		Once()
 	m, suggestCmd := updateTUIModel(t, m, tea.KeyPressMsg{Code: tea.KeyEnter})
-	msg := suggestCmd()
+	msg := executeBatchUntil[suggestNameFinishedMsg](t, suggestCmd)
 	m, _ = updateTUIModel(t, m, msg)
 
 	service.EXPECT().
@@ -311,7 +311,7 @@ func TestModelUpdate_CreateFailureWithPersistedTaskReturnsToListModeAndPreserves
 		Return("billing retry flow", nil).
 		Once()
 	m, suggestCmd := updateTUIModel(t, m, tea.KeyPressMsg{Code: tea.KeyEnter})
-	msg := suggestCmd()
+	msg := executeBatchUntil[suggestNameFinishedMsg](t, suggestCmd)
 	m, _ = updateTUIModel(t, m, msg)
 
 	service.EXPECT().
@@ -368,7 +368,7 @@ func TestModelUpdate_NameConfirmModeEscapeReturnsToListMode(t *testing.T) {
 		Return("billing retry flow", nil).
 		Once()
 	m, suggestCmd := updateTUIModel(t, m, tea.KeyPressMsg{Code: tea.KeyEnter})
-	msg := suggestCmd()
+	msg := executeBatchUntil[suggestNameFinishedMsg](t, suggestCmd)
 	m, _ = updateTUIModel(t, m, msg)
 
 	m, cmd := updateTUIModel(t, m, tea.KeyPressMsg{Code: tea.KeyEscape})
@@ -1182,4 +1182,26 @@ func executeBatchUntil[T tea.Msg](t *testing.T, cmd tea.Cmd) T {
 	}
 	t.Fatalf("expected message of type %T not found in batch", *new(T))
 	return *new(T)
+}
+
+func TestPromptInputView_ShowsShimmerDuringNameSuggestion(t *testing.T) {
+	m := newLoadedTUIModel(t, NewMockTaskService(t), tuiTask("task-one"))
+
+	m.mode = tuiModePromptInput
+	m.createInput.Prompt = "add dark mode toggle"
+	m.creationProgress = core.TaskProgressNaming
+	m.shimmerTick = 5
+
+	view := stripANSI(m.promptInputView())
+	require.Contains(t, view, "Suggesting name...")
+}
+
+func TestPromptInputView_NoShimmerWhenNotBusy(t *testing.T) {
+	m := newLoadedTUIModel(t, NewMockTaskService(t), tuiTask("task-one"))
+
+	m.mode = tuiModePromptInput
+	m.creationProgress = ""
+
+	view := stripANSI(m.promptInputView())
+	require.NotContains(t, view, "Suggesting name...")
 }

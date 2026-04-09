@@ -231,6 +231,8 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, m.nextRefreshTasksCmd()
 	case suggestNameFinishedMsg:
 		m.busy = false
+		m.creationProgress = ""
+		m.shimmerTick = 0
 		m.err = msg.err
 		if msg.err != nil {
 			m.mode = tuiModePromptInput
@@ -446,10 +448,15 @@ func (m model) updatePromptInputKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 
 		m.err = nil
 		m.busy = true
+		m.creationProgress = core.TaskProgressNaming
+		m.shimmerTick = 0
 		m.createInput.Prompt = prompt
 		m.createInput.Provider = m.provider
 		m.promptInput.Blur()
-		return m, suggestTaskNameCmd(m.service, prompt, m.provider)
+		return m, tea.Batch(
+			suggestTaskNameCmd(m.service, prompt, m.provider),
+			tea.Tick(shimmerTickInterval, func(time.Time) tea.Msg { return shimmerTickMsg{} }),
+		)
 	}
 
 	var cmd tea.Cmd
@@ -807,6 +814,10 @@ func (m model) promptInputView() string {
 		b.WriteString(errorStyle.Render("Error: "+m.err.Error()) + "\n\n")
 	}
 	b.WriteString(m.promptInput.View())
+	if m.creationProgress == core.TaskProgressNaming {
+		label := progressStepLabel(core.TaskProgressNaming)
+		b.WriteString("\n\n" + warningStyle.Render("●") + " " + renderShimmer(label, m.shimmerTick))
+	}
 	return b.String()
 }
 
