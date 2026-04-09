@@ -509,15 +509,14 @@ func (m model) listView() string {
 	}
 
 	// Column header
-	colHeaderStyle := dimStyle.Bold(true)
 	colHeader := fmt.Sprintf("   %s  %s  %s  %s  %s",
-		padRight("TASK", colWidthName),
-		padRight("PROVIDER", colWidthProvider),
-		padRight("PR", colWidthPR),
-		padRight("TIME", colWidthTime),
-		padRight("STATUS", colWidthStatus),
+		padRight("Task", colWidthName),
+		padRight("Provider", colWidthProvider),
+		padRight("Pr", colWidthPR),
+		padRight("Time", colWidthTime),
+		padRight("Status", colWidthStatus),
 	)
-	b.WriteString(colHeaderStyle.Render(colHeader) + "\n")
+	b.WriteString(titleStyle.Render(colHeader) + "\n")
 
 	// Task rows
 	for i, task := range m.tasks {
