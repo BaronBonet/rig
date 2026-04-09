@@ -612,9 +612,9 @@ func TestModelUpdate_MainListViewRendersControlCenterDetails(t *testing.T) {
 	view := stripANSI(m.View().Content)
 
 	require.Contains(t, view, "Control Center")
-	require.Contains(t, view, "TASK")
-	require.Contains(t, view, "PROVIDER")
-	require.Contains(t, view, "STATUS")
+	require.Contains(t, view, "Task")
+	require.Contains(t, view, "Provider")
+	require.Contains(t, view, "Status")
 	require.Contains(t, view, "billing retry flow")
 	require.Contains(t, view, "running")
 }
