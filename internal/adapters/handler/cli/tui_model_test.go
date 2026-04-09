@@ -101,7 +101,7 @@ func TestModelUpdate_CreateFlowSuggestsNameThenCreatesTask(t *testing.T) {
 	require.NotNil(t, createCmd)
 	require.True(t, m.busy)
 
-	createMsg := createCmd()
+	createMsg := executeBatchUntil[createFinishedMsg](t, createCmd)
 	m, refreshCmd := updateTUIModel(t, m, createMsg)
 	require.Equal(t, tuiModeList, m.mode)
 	require.NotNil(t, refreshCmd)
@@ -159,7 +159,7 @@ func TestModelUpdate_CreateFlowWithoutTasksUsesModelCwdFallback(t *testing.T) {
 	m, createCmd := updateTUIModel(t, m, tea.KeyPressMsg{Code: tea.KeyEnter})
 	require.NotNil(t, createCmd)
 
-	createMsg := createCmd()
+	createMsg := executeBatchUntil[createFinishedMsg](t, createCmd)
 	m, refreshCmd := updateTUIModel(t, m, createMsg)
 	require.Equal(t, tuiModeList, m.mode)
 	require.NotNil(t, refreshCmd)
@@ -218,7 +218,7 @@ func TestModelUpdate_CreateFlowUsesConfiguredDefaultProvider(t *testing.T) {
 	m, createCmd := updateTUIModel(t, m, tea.KeyPressMsg{Code: tea.KeyEnter})
 	require.NotNil(t, createCmd)
 
-	createMsg := createCmd()
+	createMsg := executeBatchUntil[createFinishedMsg](t, createCmd)
 	m, followup := updateTUIModel(t, m, createMsg)
 	require.NotNil(t, followup)
 	openMsg := followup()
@@ -288,7 +288,7 @@ func TestModelUpdate_CreateFailureReturnsToNameConfirmModeAndRendersError(t *tes
 	require.NotNil(t, createCmd)
 	require.True(t, m.busy)
 
-	createMsg := createCmd()
+	createMsg := executeBatchUntil[createFinishedMsg](t, createCmd)
 	m, followup := updateTUIModel(t, m, createMsg)
 	require.Nil(t, followup)
 	require.Equal(t, tuiModeNameConfirm, m.mode)
@@ -332,7 +332,7 @@ func TestModelUpdate_CreateFailureWithPersistedTaskReturnsToListModeAndPreserves
 	require.NotNil(t, createCmd)
 	require.True(t, m.busy)
 
-	createMsg := createCmd()
+	createMsg := executeBatchUntil[createFinishedMsg](t, createCmd)
 	m, followup := updateTUIModel(t, m, createMsg)
 	require.Nil(t, followup)
 	require.Equal(t, tuiModeList, m.mode)
@@ -1161,4 +1161,25 @@ func taskSlugs(tasks []*core.Task) []string {
 	}
 
 	return slugs
+}
+
+func executeBatchUntil[T tea.Msg](t *testing.T, cmd tea.Cmd) T {
+	t.Helper()
+	msg := cmd()
+	if batch, ok := msg.(tea.BatchMsg); ok {
+		for _, sub := range batch {
+			result := sub()
+			if result == nil {
+				continue
+			}
+			if typed, ok := result.(T); ok {
+				return typed
+			}
+		}
+	}
+	if typed, ok := msg.(T); ok {
+		return typed
+	}
+	t.Fatalf("expected message of type %T not found in batch", *new(T))
+	return *new(T)
 }

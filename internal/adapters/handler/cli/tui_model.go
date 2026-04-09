@@ -48,6 +48,7 @@ type model struct {
 	creationProgress   core.TaskProgressStep
 	creationSteps      []string
 	shimmerTick        int
+	progressCh         <-chan taskProgressMsg
 	tasksRequestSeq    int
 	icons              IconSet
 }
@@ -246,6 +247,10 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 	case createFinishedMsg:
 		m.busy = false
+		m.creationProgress = ""
+		m.creationSteps = nil
+		m.shimmerTick = 0
+		m.progressCh = nil
 		m.err = msg.err
 		if msg.task != nil {
 			m.upsertTask(msg.task)
@@ -285,7 +290,10 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 		}
 		m.shimmerTick = 0
-		return m, tea.Tick(shimmerTickInterval, func(time.Time) tea.Msg { return shimmerTickMsg{} })
+		return m, tea.Batch(
+			waitForProgressCmd(m.progressCh),
+			tea.Tick(shimmerTickInterval, func(time.Time) tea.Msg { return shimmerTickMsg{} }),
+		)
 	case shimmerTickMsg:
 		if m.creationProgress == "" {
 			return m, nil
@@ -467,7 +475,9 @@ func (m model) updateNameConfirmKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		input := m.createInput
 		input.ConfirmedDisplayName = name
 		input.Provider = m.provider
-		return m, createTaskCmd(m.service, input)
+		progressCh, createCmd := createTaskCmd(m.service, input)
+		m.progressCh = progressCh
+		return m, tea.Batch(createCmd, waitForProgressCmd(progressCh))
 	}
 
 	var cmd tea.Cmd
@@ -1105,15 +1115,32 @@ func suggestTaskNameCmd(service TaskService, prompt string, provider string) tea
 	}
 }
 
-func createTaskCmd(service TaskService, input core.NewTaskInput) tea.Cmd {
-	return func() tea.Msg {
+func createTaskCmd(service TaskService, input core.NewTaskInput) (<-chan taskProgressMsg, tea.Cmd) {
+	progressCh := make(chan taskProgressMsg, 8)
+
+	cmd := func() tea.Msg {
 		task, err := service.CreateTaskWithProgress(
 			context.Background(),
 			input,
 			core.CreateTaskOptions{OpenSession: false},
-			func(core.TaskProgress) {},
+			func(p core.TaskProgress) {
+				progressCh <- taskProgressMsg{step: p.Step, message: p.Message}
+			},
 		)
+		close(progressCh)
 		return createFinishedMsg{task: task, err: err}
+	}
+
+	return progressCh, cmd
+}
+
+func waitForProgressCmd(ch <-chan taskProgressMsg) tea.Cmd {
+	return func() tea.Msg {
+		msg, ok := <-ch
+		if !ok {
+			return nil
+		}
+		return msg
 	}
 }
 
