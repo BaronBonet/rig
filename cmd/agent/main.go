@@ -8,6 +8,7 @@ import (
 	claudeclient "agent/internal/adapters/client/claude"
 	codexclient "agent/internal/adapters/client/codex"
 	gitclient "agent/internal/adapters/client/git"
+	ghclient "agent/internal/adapters/client/github"
 	tmuxclient "agent/internal/adapters/client/tmux"
 	agentconfigfs "agent/internal/adapters/filesystem/agentconfig"
 	workspacefs "agent/internal/adapters/filesystem/workspace"
@@ -68,6 +69,7 @@ func buildDependencies() (cli.Dependencies, error) {
 		workspacefs.NewSeeder(),
 		cfg.Service,
 	)
+	service.SetPRStatusChecker(ghclient.NewPRStatusChecker(runner))
 	observerWatcher := observer.NewTMuxWatcher(observer.TMuxWatcherConfig{
 		Tasks:     taskRepo,
 		Monitor:   tmuxclient.NewRuntimeMonitor(),
