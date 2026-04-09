@@ -823,17 +823,45 @@ func (m model) promptInputView() string {
 
 func (m model) nameConfirmView() string {
 	var b strings.Builder
-	b.WriteString(titleStyle.Render(iconHeaderCreate+" Confirm Task Name") + "\n\n")
-	b.WriteString(
-		dimStyle.Render(
-			"Edit the suggested name if needed. Press Enter to create and open the session, or Esc to cancel.",
-		) + "\n\n",
-	)
+	b.WriteString(titleStyle.Render(iconHeaderCreate+" Create Task") + "\n\n")
+
 	if m.err != nil {
 		b.WriteString(errorStyle.Render("Error: "+m.err.Error()) + "\n\n")
 	}
-	b.WriteString(dimStyle.Render("prompt: "+m.createInput.Prompt) + "\n\n")
-	b.WriteString(m.nameInput.View())
+
+	// Checkmark recap: completed prompt and provider.
+	b.WriteString(healthyStyle.Render("✔") + " " + dimStyle.Render(m.createInput.Prompt) + "\n")
+	b.WriteString(
+		healthyStyle.Render("✔") + " " +
+			dimStyle.Render("provider: ") + providerStyle(m.provider).Render(m.provider) + "\n",
+	)
+
+	if m.busy && len(m.creationSteps) > 0 {
+		// Name is confirmed — show it as a completed step.
+		b.WriteString(healthyStyle.Render("✔") + " " + dimStyle.Render("name: "+m.nameInput.Value()) + "\n")
+		b.WriteString("\n")
+
+		// Render completed creation steps and active shimmer step.
+		for i, label := range m.creationSteps {
+			if i == len(m.creationSteps)-1 {
+				// Active (last) step gets shimmer.
+				b.WriteString(warningStyle.Render("●") + " " + renderShimmer(label, m.shimmerTick) + "\n")
+			} else {
+				// Completed steps get checkmarks.
+				b.WriteString(healthyStyle.Render("✔") + " " + dimStyle.Render(label) + "\n")
+			}
+		}
+	} else {
+		// Name input is active — show editable input.
+		b.WriteString("\n")
+		b.WriteString(warningStyle.Render("▸ Name: ") + m.nameInput.View() + "\n")
+		b.WriteString("\n")
+		b.WriteString(
+			healthyStyle.Render("Enter") + dimStyle.Render(" to create · ") +
+				errorStyle.Render("Esc") + dimStyle.Render(" to cancel"),
+		)
+	}
+
 	return b.String()
 }
 

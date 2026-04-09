@@ -1184,6 +1184,44 @@ func executeBatchUntil[T tea.Msg](t *testing.T, cmd tea.Cmd) T {
 	return *new(T)
 }
 
+func TestNameConfirmView_ShowsCheckmarkRecap(t *testing.T) {
+	m := newLoadedTUIModel(t, NewMockTaskService(t), tuiTask("task-one"))
+
+	m.mode = tuiModeNameConfirm
+	m.createInput.Prompt = "add dark mode toggle to settings page"
+	m.provider = "codex"
+	m.nameInput.SetValue("dark-mode-settings-toggle")
+
+	view := stripANSI(m.nameConfirmView())
+
+	require.Contains(t, view, "✔")
+	require.Contains(t, view, "add dark mode toggle to settings page")
+	require.Contains(t, view, "codex")
+	require.Contains(t, view, "Name:")
+	require.Contains(t, view, "Enter to create")
+}
+
+func TestNameConfirmView_ShowsProgressStepsDuringCreation(t *testing.T) {
+	m := newLoadedTUIModel(t, NewMockTaskService(t), tuiTask("task-one"))
+
+	m.mode = tuiModeNameConfirm
+	m.createInput.Prompt = "add dark mode toggle"
+	m.provider = "codex"
+	m.nameInput.SetValue("dark-mode-toggle")
+	m.busy = true
+	m.creationProgress = core.TaskProgressAgentLaunching
+	m.creationSteps = []string{"Creating worktree...", "Starting session...", "Launching agent..."}
+	m.shimmerTick = 5
+
+	view := stripANSI(m.nameConfirmView())
+
+	// Completed steps should show checkmarks.
+	require.Contains(t, view, "Creating worktree...")
+	require.Contains(t, view, "Starting session...")
+	// Active step should be visible.
+	require.Contains(t, view, "Launching agent...")
+}
+
 func TestPromptInputView_ShowsShimmerDuringNameSuggestion(t *testing.T) {
 	m := newLoadedTUIModel(t, NewMockTaskService(t), tuiTask("task-one"))
 
