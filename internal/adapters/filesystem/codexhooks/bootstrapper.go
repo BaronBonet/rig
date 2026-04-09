@@ -189,13 +189,13 @@ if [ -n "$collector_url" ]; then
 fi
 
 if command -v agent >/dev/null 2>&1; then
-	if AGENT_SQLITE_PATH="$sqlite_path" agent hook-ingest "$event_name" <"$payload_file" >/dev/null 2>"$error_file"; then
+	if AGENT_SQLITE_PATH="$sqlite_path" agent observer ingest "$event_name" <"$payload_file" >/dev/null 2>"$error_file"; then
 		exit 0
 	fi
 fi
 
 if [ -n "$agent_exec" ] && [ -x "$agent_exec" ]; then
-	if AGENT_SQLITE_PATH="$sqlite_path" "$agent_exec" hook-ingest "$event_name" <"$payload_file" >/dev/null 2>"$error_file"; then
+	if AGENT_SQLITE_PATH="$sqlite_path" "$agent_exec" observer ingest "$event_name" <"$payload_file" >/dev/null 2>"$error_file"; then
 		exit 0
 	fi
 fi
@@ -203,7 +203,7 @@ fi
 if command -v go >/dev/null 2>&1 && [ -n "$agent_source_root" ] && [ -f "$agent_source_root/go.mod" ]; then
 	if (
 		cd "$agent_source_root" &&
-		AGENT_SQLITE_PATH="$sqlite_path" go run ./cmd/agent hook-ingest "$event_name" <"$payload_file"
+		AGENT_SQLITE_PATH="$sqlite_path" go run ./cmd/agent observer ingest "$event_name" <"$payload_file"
 	) >/dev/null 2>"$error_file"; then
 		exit 0
 	fi

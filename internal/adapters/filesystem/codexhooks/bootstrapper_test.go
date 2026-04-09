@@ -10,7 +10,7 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func TestBootstrapperBootstrapTaskWorkspace_WritesCodexHookAssets(t *testing.T) {
+func TestGeneratedForwarderTargetsObserverEndpoint(t *testing.T) {
 	worktree := t.TempDir()
 	bootstrapper := NewBootstrapper("/tmp/state.db", "http://127.0.0.1:4123/hook", "/tmp/agent-bin", "/tmp/agent-src")
 
@@ -34,8 +34,10 @@ func TestBootstrapperBootstrapTaskWorkspace_WritesCodexHookAssets(t *testing.T) 
 	require.Contains(t, string(script), `sqlite_path='/tmp/state.db'`)
 	require.Contains(t, string(script), `agent_exec='/tmp/agent-bin'`)
 	require.Contains(t, string(script), `agent_source_root='/tmp/agent-src'`)
-	require.Contains(t, string(script), `agent hook-ingest "$event_name"`)
-	require.Contains(t, string(script), `"$agent_exec" hook-ingest "$event_name"`)
+	require.Contains(t, string(script), `agent observer ingest "$event_name"`)
+	require.Contains(t, string(script), `"$agent_exec" observer ingest "$event_name"`)
+	require.Contains(t, string(script), `go run ./cmd/agent observer ingest "$event_name"`)
+	require.NotContains(t, string(script), `hook-ingest "$event_name"`)
 	require.Contains(t, string(script), `cd "$agent_source_root"`)
 
 	info, err := os.Stat(scriptPath)
