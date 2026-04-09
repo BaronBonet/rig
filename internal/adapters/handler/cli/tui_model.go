@@ -48,9 +48,11 @@ type model struct {
 	width              int
 	loading            bool
 	busy               bool
+	tasksRequestSeq    int
 }
 
 type tasksLoadedMsg struct {
+	requestID int
 	err   error
 	views []*core.TaskView
 }
@@ -120,12 +122,13 @@ func newTUIModel(
 		defaultCreationCwd: emptyFallback(defaultCreationCwd, "."),
 		observerSocketPath: strings.TrimSpace(observerSocketPath),
 		provider:           emptyFallback(defaultProvider, "codex"),
+		tasksRequestSeq:    1,
 	}
 }
 
 func (m model) Init() tea.Cmd {
 	return tea.Batch(
-		refreshTasksCmd(m.service),
+		refreshTasksCmd(m.service, m.tasksRequestSeq),
 		subscribeObserverUpdatesCmd(m.observerSocketPath),
 	)
 }
@@ -139,6 +142,9 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case tea.KeyPressMsg:
 		return m.updateKey(msg)
 	case tasksLoadedMsg:
+		if msg.requestID != 0 && msg.requestID < m.tasksRequestSeq {
+			return m, nil
+		}
 		m.loading = false
 		m.busy = false
 		if msg.err != nil {
@@ -189,10 +195,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case observerTaskUpdatedMsg:
 		m.applyObserverTaskUpdate(msg.update)
 
-		nextCmds := []tea.Cmd{
-			waitForObserverUpdateCmd(m.observerUpdates),
-			refreshTasksCmd(m.service),
-		}
+		nextCmds := []tea.Cmd{waitForObserverUpdateCmd(m.observerUpdates)}
 		task := m.selectedTask()
 		if task != nil && task.ID == msg.update.TaskID {
 			nextCmds = append(nextCmds, m.loadSelectedHookEventsCmd())
@@ -216,7 +219,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 		m.busy = true
-		return m, refreshTasksCmd(m.service)
+		return m, m.nextRefreshTasksCmd()
 	case openFinishedMsg:
 		m.err = msg.err
 		if msg.err != nil {
@@ -225,7 +228,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 
 		m.loading = true
-		return m, refreshTasksCmd(m.service)
+		return m, m.nextRefreshTasksCmd()
 	case suggestNameFinishedMsg:
 		m.busy = false
 		m.err = msg.err
@@ -247,6 +250,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.err = msg.err
 		if msg.task != nil {
 			m.upsertTask(msg.task)
+			m.tasksRequestSeq++
 		}
 		if msg.err != nil {
 			if msg.task != nil {
@@ -362,7 +366,7 @@ func (m model) updateListKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		m.err = nil
 		m.busy = true
 		m.loading = true
-		return m, refreshTasksCmd(m.service)
+		return m, m.nextRefreshTasksCmd()
 	default:
 		return m, nil
 	}
@@ -953,10 +957,15 @@ func isVisibleTask(task *core.Task) bool {
 	return task != nil && (task.SessionExists || task.WorktreeExists)
 }
 
-func refreshTasksCmd(service TaskService) tea.Cmd {
+func (m *model) nextRefreshTasksCmd() tea.Cmd {
+	m.tasksRequestSeq++
+	return refreshTasksCmd(m.service, m.tasksRequestSeq)
+}
+
+func refreshTasksCmd(service TaskService, requestID int) tea.Cmd {
 	return func() tea.Msg {
 		views, err := service.ListTaskViews(context.Background())
-		return tasksLoadedMsg{views: views, err: err}
+		return tasksLoadedMsg{requestID: requestID, views: views, err: err}
 	}
 }
 
