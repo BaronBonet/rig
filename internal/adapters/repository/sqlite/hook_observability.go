@@ -119,6 +119,10 @@ func (r *Repository) IngestHookEvent(ctx context.Context, raw core.HookEventInpu
 	if err != nil {
 		return nil, err
 	}
+	previousObserver, err := loadObserverSummary(ctx, tx, taskID)
+	if err != nil {
+		return nil, err
+	}
 	if err := insertHookEvent(ctx, tx, record); err != nil {
 		return nil, err
 	}
@@ -126,6 +130,9 @@ func (r *Repository) IngestHookEvent(ctx context.Context, raw core.HookEventInpu
 	next := deriveHookSessionSummary(previous, record)
 	next.TaskID = taskID
 	if err := upsertHookSessionSummary(ctx, tx, next); err != nil {
+		return nil, err
+	}
+	if err := upsertObserverSummary(ctx, tx, deriveObserverSummary(previousObserver, next)); err != nil {
 		return nil, err
 	}
 
@@ -321,6 +328,18 @@ func loadHookSessionSummary(ctx context.Context, tx *sql.Tx, taskID string) (*co
 	return summary, err
 }
 
+func loadObserverSummary(ctx context.Context, tx *sql.Tx, taskID string) (*core.ObserverSummary, error) {
+	row := tx.QueryRowContext(ctx, `select task_id, display_status, display_activity, process_alive, last_runtime_observed_at
+from task_observer_summaries
+where task_id = ?`, taskID)
+
+	summary, err := scanObserverSummary(row)
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil, nil
+	}
+	return summary, err
+}
+
 func insertHookEvent(ctx context.Context, tx *sql.Tx, record hookRecord) error {
 	_, err := tx.ExecContext(ctx, `insert into task_hook_events (
 		task_id, session_id, turn_id, event_name, occurred_at,
@@ -386,6 +405,31 @@ func upsertHookSessionSummary(ctx context.Context, tx *sql.Tx, summary *core.Hoo
 		summary.LastAssistantMessage,
 		summary.CommandCount,
 		formatTime(summary.LastActivityAt),
+	)
+	return err
+}
+
+func upsertObserverSummary(ctx context.Context, tx *sql.Tx, summary *core.ObserverSummary) error {
+	if summary == nil {
+		return nil
+	}
+
+	_, err := tx.ExecContext(ctx, `insert into task_observer_summaries (
+		task_id, display_status, display_activity, process_alive,
+		last_runtime_observed_at, updated_at
+	) values (?, ?, ?, ?, ?, ?)
+	on conflict(task_id) do update set
+		display_status = excluded.display_status,
+		display_activity = excluded.display_activity,
+		process_alive = excluded.process_alive,
+		last_runtime_observed_at = excluded.last_runtime_observed_at,
+		updated_at = excluded.updated_at`,
+		summary.TaskID,
+		string(summary.DisplayStatus),
+		string(summary.DisplayActivity),
+		boolToInt(summary.ProcessAlive),
+		formatTime(summary.LastRuntimeObservedAt),
+		formatTime(time.Now().UTC()),
 	)
 	return err
 }
@@ -523,6 +567,30 @@ func deriveHookSessionSummary(previous *core.HookSessionSummary, event hookRecor
 	}
 
 	return next
+}
+
+func deriveObserverSummary(previous *core.ObserverSummary, hookSession *core.HookSessionSummary) *core.ObserverSummary {
+	next := cloneObserverSummary(previous)
+	if hookSession != nil {
+		next.TaskID = firstNonEmpty(next.TaskID, hookSession.TaskID)
+	}
+
+	if hookSession != nil && hookSession.RuntimePhase == core.HookRuntimePhaseRunningCommand {
+		next.DisplayActivity = core.DisplayActivityCommand
+		return next
+	}
+
+	next.DisplayActivity = core.DisplayActivityNone
+	return next
+}
+
+func cloneObserverSummary(summary *core.ObserverSummary) *core.ObserverSummary {
+	if summary == nil {
+		return &core.ObserverSummary{}
+	}
+
+	clone := *summary
+	return &clone
 }
 
 func cloneHookSessionSummary(summary *core.HookSessionSummary) *core.HookSessionSummary {

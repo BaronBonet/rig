@@ -40,6 +40,27 @@ const (
 	HookRuntimePhaseFinished       HookRuntimePhase = "finished"
 )
 
+type DisplayStatus string
+
+const (
+	DisplayStatusFinished     DisplayStatus = "finished"
+	DisplayStatusNeedsInput   DisplayStatus = "needs_input"
+	DisplayStatusWorking      DisplayStatus = "working"
+	DisplayStatusDisconnected DisplayStatus = "disconnected"
+)
+
+type DisplayActivity string
+
+const (
+	DisplayActivityNone    DisplayActivity = ""
+	DisplayActivityCommand DisplayActivity = "command"
+)
+
+type DisplayState struct {
+	Primary  DisplayStatus   `json:"primary"`
+	Activity DisplayActivity `json:"activity"`
+}
+
 type Task struct {
 	CreatedAt             time.Time    `json:"created_at"`
 	UpdatedAt             time.Time    `json:"updated_at"`
@@ -86,6 +107,14 @@ type HookSessionSummary struct {
 	LastCommandResultText string
 	LastAssistantMessage  string
 	CommandCount          int
+}
+
+type ObserverSummary struct {
+	TaskID                string
+	DisplayStatus         DisplayStatus
+	DisplayActivity       DisplayActivity
+	ProcessAlive          bool
+	LastRuntimeObservedAt time.Time
 }
 
 type HookEvent struct {
