@@ -153,6 +153,25 @@ func TestServiceCreateTaskWithProgress_EmitsEventsAndOpensSession(t *testing.T) 
 	require.Equal(t, task.DisplayName, events[len(events)-2].Task.DisplayName)
 }
 
+func TestServiceCreateTaskWithProgress_DoesNotOpenSessionWhenDisabled(t *testing.T) {
+	svc := newTestService(t)
+	svc.providerRepo.launchRequest = LaunchRequest{
+		Command:      []string{"codex"},
+		Prompt:       "›",
+		InitialInput: []string{"add billing retry flow"},
+	}
+
+	task, err := svc.service.CreateTaskWithProgress(t.Context(), NewTaskInput{
+		Cwd:                  "/tmp/repo",
+		Prompt:               "add billing retry flow",
+		ConfirmedDisplayName: "billing retry flow",
+	}, CreateTaskOptions{OpenSession: false}, nil)
+
+	require.NoError(t, err)
+	require.NotNil(t, task)
+	require.Nil(t, svc.sessionClient.openedTask)
+}
+
 func TestServiceCreateTaskWithProgress_SeedsWorkspaceBeforeTmux(t *testing.T) {
 	svc := newTestService(t)
 	svc.configRepo.repoConfig = RepoConfig{

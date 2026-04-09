@@ -84,10 +84,14 @@ func TestModelUpdate_CreateFlowSuggestsNameThenCreatesTask(t *testing.T) {
 				ConfirmedDisplayName: "billing retry flow",
 				Provider:             "codex",
 			},
-			core.CreateTaskOptions{OpenSession: true},
+			core.CreateTaskOptions{OpenSession: false},
 			mock.Anything,
 		).
 		Return(tuiTask("billing-retry-flow"), nil).
+		Once()
+	service.EXPECT().
+		OpenTask(mock.Anything, "billing-retry-flow").
+		Return(nil).
 		Once()
 	m, createCmd := updateTUIModel(t, m, tea.KeyPressMsg{Code: tea.KeyEnter})
 	require.NotNil(t, createCmd)
@@ -96,8 +100,12 @@ func TestModelUpdate_CreateFlowSuggestsNameThenCreatesTask(t *testing.T) {
 	createMsg := createCmd()
 	m, refreshCmd := updateTUIModel(t, m, createMsg)
 	require.Equal(t, tuiModeList, m.mode)
-	require.True(t, m.loading)
 	require.NotNil(t, refreshCmd)
+	require.Contains(t, taskSlugs(m.tasks), "billing-retry-flow")
+
+	openMsg := refreshCmd()
+	m, _ = updateTUIModel(t, m, openMsg)
+	require.False(t, m.busy)
 }
 
 func TestModelUpdate_CreateFlowWithoutTasksUsesModelCwdFallback(t *testing.T) {
@@ -128,10 +136,14 @@ func TestModelUpdate_CreateFlowWithoutTasksUsesModelCwdFallback(t *testing.T) {
 				ConfirmedDisplayName: "billing retry flow",
 				Provider:             "codex",
 			},
-			core.CreateTaskOptions{OpenSession: true},
+			core.CreateTaskOptions{OpenSession: false},
 			mock.Anything,
 		).
 		Return(tuiTask("billing-retry-flow"), nil).
+		Once()
+	service.EXPECT().
+		OpenTask(mock.Anything, "billing-retry-flow").
+		Return(nil).
 		Once()
 	m, createCmd := updateTUIModel(t, m, tea.KeyPressMsg{Code: tea.KeyEnter})
 	require.NotNil(t, createCmd)
@@ -139,8 +151,12 @@ func TestModelUpdate_CreateFlowWithoutTasksUsesModelCwdFallback(t *testing.T) {
 	createMsg := createCmd()
 	m, refreshCmd := updateTUIModel(t, m, createMsg)
 	require.Equal(t, tuiModeList, m.mode)
-	require.True(t, m.loading)
 	require.NotNil(t, refreshCmd)
+	require.Contains(t, taskSlugs(m.tasks), "billing-retry-flow")
+
+	openMsg := refreshCmd()
+	m, _ = updateTUIModel(t, m, openMsg)
+	require.False(t, m.busy)
 }
 
 func TestModelUpdate_CreateFlowUsesConfiguredDefaultProvider(t *testing.T) {
@@ -172,17 +188,25 @@ func TestModelUpdate_CreateFlowUsesConfiguredDefaultProvider(t *testing.T) {
 				ConfirmedDisplayName: "billing retry flow",
 				Provider:             "claude",
 			},
-			core.CreateTaskOptions{OpenSession: true},
+			core.CreateTaskOptions{OpenSession: false},
 			mock.Anything,
 		).
 		Return(tuiTask("billing-retry-flow"), nil).
+		Once()
+	service.EXPECT().
+		OpenTask(mock.Anything, "billing-retry-flow").
+		Return(nil).
 		Once()
 	m, createCmd := updateTUIModel(t, m, tea.KeyPressMsg{Code: tea.KeyEnter})
 	require.NotNil(t, createCmd)
 
 	createMsg := createCmd()
-	m, _ = updateTUIModel(t, m, createMsg)
+	m, followup := updateTUIModel(t, m, createMsg)
+	require.NotNil(t, followup)
+	openMsg := followup()
+	m, _ = updateTUIModel(t, m, openMsg)
 	require.Equal(t, "claude", m.createInput.Provider)
+	require.False(t, m.busy)
 }
 
 func TestModelUpdate_SuggestNameFailureReturnsToPromptModeAndRendersError(t *testing.T) {
@@ -234,7 +258,7 @@ func TestModelUpdate_CreateFailureReturnsToNameConfirmModeAndRendersError(t *tes
 				ConfirmedDisplayName: "billing retry flow",
 				Provider:             "codex",
 			},
-			core.CreateTaskOptions{OpenSession: true},
+			core.CreateTaskOptions{OpenSession: false},
 			mock.Anything,
 		).
 		Return(nil, errors.New("create failed")).
@@ -278,7 +302,7 @@ func TestModelUpdate_CreateFailureWithPersistedTaskReturnsToListModeAndPreserves
 				ConfirmedDisplayName: "billing retry flow",
 				Provider:             "codex",
 			},
-			core.CreateTaskOptions{OpenSession: true},
+			core.CreateTaskOptions{OpenSession: false},
 			mock.Anything,
 		).
 		Return(tuiTask("billing-retry-flow"), errors.New("create failed after persist")).
@@ -1009,4 +1033,15 @@ func taskViewWithObserver(
 		HookSession: hook,
 		Observer:    observer,
 	}
+}
+
+func taskSlugs(tasks []*core.Task) []string {
+	slugs := make([]string, 0, len(tasks))
+	for _, task := range tasks {
+		if task != nil {
+			slugs = append(slugs, task.Slug)
+		}
+	}
+
+	return slugs
 }

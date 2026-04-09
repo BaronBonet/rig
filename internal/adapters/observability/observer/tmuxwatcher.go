@@ -17,6 +17,7 @@ type TMuxWatcherConfig struct {
 	Tasks     observerTaskLister
 	Monitor   core.RuntimeMonitor
 	Repo      core.ObserverRuntimeRepository
+	Hub       *Hub
 	Providers map[string]core.ProviderClient
 	Now       func() time.Time
 }
@@ -25,6 +26,7 @@ type TMuxWatcher struct {
 	tasks     observerTaskLister
 	monitor   core.RuntimeMonitor
 	repo      core.ObserverRuntimeRepository
+	hub       *Hub
 	providers map[string]core.ProviderClient
 	now       func() time.Time
 }
@@ -38,6 +40,7 @@ func NewTMuxWatcher(cfg TMuxWatcherConfig) *TMuxWatcher {
 		tasks:     cfg.Tasks,
 		monitor:   cfg.Monitor,
 		repo:      cfg.Repo,
+		hub:       cfg.Hub,
 		providers: cfg.Providers,
 		now:       cfg.Now,
 	}
@@ -110,7 +113,7 @@ func (w *TMuxWatcher) refreshTask(ctx context.Context, task *core.Task) error {
 
 	snapshot, err := w.monitor.Snapshot(ctx, task)
 	if err != nil {
-		return w.repo.UpsertObserverSummary(ctx, &core.ObserverSummary{
+		return w.persistSummary(ctx, &core.ObserverSummary{
 			TaskID:                task.ID,
 			DisplayStatus:         core.DisplayStatusDisconnected,
 			DisplayActivity:       core.DisplayActivityNone,
@@ -140,11 +143,7 @@ func (w *TMuxWatcher) refreshTask(ctx context.Context, task *core.Task) error {
 		ProcessAlive:          processAlive,
 		LastRuntimeObservedAt: observedAt,
 	}
-	if err := w.repo.UpsertObserverSummary(ctx, summary); err != nil {
-		return err
-	}
-
-	return nil
+	return w.persistSummary(ctx, summary)
 }
 
 func (w *TMuxWatcher) findTaskBySession(ctx context.Context, sessionName string) (*core.Task, error) {
@@ -178,4 +177,14 @@ func isForegroundCommandActivity(command string) bool {
 	default:
 		return true
 	}
+}
+
+func (w *TMuxWatcher) persistSummary(ctx context.Context, summary *core.ObserverSummary) error {
+	if err := w.repo.UpsertObserverSummary(ctx, summary); err != nil {
+		return err
+	}
+	if w.hub != nil {
+		w.hub.Publish(observerTaskUpdateFromSummary(summary))
+	}
+	return nil
 }

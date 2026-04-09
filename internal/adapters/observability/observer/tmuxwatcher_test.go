@@ -117,6 +117,52 @@ func TestTMuxWatcher_RefreshAllMarksTaskDisconnectedWhenProviderFinished(t *test
 	require.Equal(t, now, repo.lastUpsert.LastRuntimeObservedAt)
 }
 
+func TestTMuxWatcher_RefreshAllPublishesObserverUpdate(t *testing.T) {
+	now := time.Date(2026, 4, 9, 12, 15, 0, 0, time.UTC)
+	task := &core.Task{
+		ID:              "task-1",
+		TmuxSession:     "repo_task-1",
+		AgentWindowName: "agent",
+		Provider:        "codex",
+		Status:          core.TaskStatusRunning,
+	}
+
+	monitor := core.NewMockRuntimeMonitor(t)
+	monitor.EXPECT().Snapshot(mock.Anything, task).Return(core.RuntimeSnapshot{
+		SessionName:       task.TmuxSession,
+		PaneID:            "%24",
+		ForegroundCommand: "go",
+		HadAgentBinding:   true,
+		ObservedAt:        now,
+	}, nil).Once()
+
+	repo := &stubWatcherObserverRepository{}
+	hub := NewHub()
+	updates, release := hub.Subscribe(t.Context())
+	defer release()
+
+	watcher := NewTMuxWatcher(TMuxWatcherConfig{
+		Tasks:     stubObserverTaskLister{tasks: []*core.Task{task}},
+		Monitor:   monitor,
+		Repo:      repo,
+		Providers: map[string]core.ProviderClient{"codex": stubTMuxWatcherProvider{runtimeState: core.RuntimeStateRunning}},
+		Hub:       hub,
+	})
+
+	err := watcher.RefreshAll(context.Background())
+	require.NoError(t, err)
+
+	select {
+	case update := <-updates:
+		require.Equal(t, task.ID, update.TaskID)
+		require.Equal(t, core.DisplayStatusWorking, update.DisplayStatus)
+		require.Equal(t, core.DisplayActivityCommand, update.DisplayActivity)
+		require.Equal(t, now, update.LastActivityAt)
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for observer task update")
+	}
+}
+
 type stubObserverTaskLister struct {
 	tasks []*core.Task
 	err   error
