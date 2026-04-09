@@ -3,8 +3,6 @@ package main
 import (
 	"fmt"
 	"os"
-	"path/filepath"
-	"runtime"
 	"strconv"
 
 	claudeclient "agent/internal/adapters/client/claude"
@@ -12,7 +10,6 @@ import (
 	gitclient "agent/internal/adapters/client/git"
 	tmuxclient "agent/internal/adapters/client/tmux"
 	agentconfigfs "agent/internal/adapters/filesystem/agentconfig"
-	codexhooksfs "agent/internal/adapters/filesystem/codexhooks"
 	workspacefs "agent/internal/adapters/filesystem/workspace"
 	"agent/internal/adapters/handler/cli"
 	observer "agent/internal/adapters/observability/observer"
@@ -69,12 +66,6 @@ func buildDependencies() (cli.Dependencies, error) {
 		providers,
 		agentconfigfs.NewLoader(),
 		workspacefs.NewSeeder(),
-		codexhooksfs.NewBootstrapper(
-			cfg.SQLite.Path,
-			"http://"+cfg.Hooks.ListenAddr+"/hook",
-			agentExec,
-			detectAgentSourceRoot(),
-		),
 		cfg.Service,
 	)
 	observerWatcher := observer.NewTMuxWatcher(observer.TMuxWatcherConfig{
@@ -85,30 +76,21 @@ func buildDependencies() (cli.Dependencies, error) {
 	})
 
 	return cli.Dependencies{
-		Service:            service,
-		HookIngestor:       taskRepo,
+		Service:      service,
+		HookIngestor: taskRepo,
 		ObserverProcess: observer.NewProcessManager(observer.ProcessConfig{
 			SocketPath:          cfg.Observer.SocketPath,
 			ExecPath:            agentExec,
 			ExpectedFingerprint: observerFingerprint,
 		}),
-		ObserverWatcher:    observerWatcher,
-		HookListenAddr:     cfg.Hooks.ListenAddr,
-		ObserverSocketPath: cfg.Observer.SocketPath,
+		ObserverWatcher:     observerWatcher,
+		HookListenAddr:      cfg.Hooks.ListenAddr,
+		ObserverSocketPath:  cfg.Observer.SocketPath,
 		ObserverFingerprint: observerFingerprint,
-		Stdout:             os.Stdout,
-		Stderr:             os.Stderr,
-		DefaultProvider:    cfg.Service.Provider,
+		Stdout:              os.Stdout,
+		Stderr:              os.Stderr,
+		DefaultProvider:     cfg.Service.Provider,
 	}, nil
-}
-
-func detectAgentSourceRoot() string {
-	_, file, _, ok := runtime.Caller(0)
-	if !ok || file == "" {
-		return ""
-	}
-
-	return filepath.Clean(filepath.Join(filepath.Dir(file), "..", ".."))
 }
 
 func binaryFingerprint(path string) (string, error) {

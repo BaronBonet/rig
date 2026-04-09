@@ -381,7 +381,10 @@ func (r *Repository) ListTasks(ctx context.Context) ([]*core.Task, error) {
 	return tasks, rows.Err()
 }
 
-func (r *Repository) ListObserverSummaries(ctx context.Context, taskIDs []string) (map[string]*core.ObserverSummary, error) {
+func (r *Repository) ListObserverSummaries(
+	ctx context.Context,
+	taskIDs []string,
+) (map[string]*core.ObserverSummary, error) {
 	if err := r.unavailableErr(); err != nil {
 		return nil, err
 	}

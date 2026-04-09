@@ -190,7 +190,10 @@ func (r *Repository) IngestHookEvent(ctx context.Context, raw core.HookEventInpu
 	return next, nil
 }
 
-func (r *Repository) ListHookSessionSummaries(ctx context.Context, taskIDs []string) (map[string]*core.HookSessionSummary, error) {
+func (r *Repository) ListHookSessionSummaries(
+	ctx context.Context,
+	taskIDs []string,
+) (map[string]*core.HookSessionSummary, error) {
 	if err := r.unavailableErr(); err != nil {
 		return nil, err
 	}
@@ -413,9 +416,13 @@ func loadHookSessionSummary(ctx context.Context, tx *sql.Tx, taskID string) (*co
 }
 
 func loadObserverSummary(ctx context.Context, tx *sql.Tx, taskID string) (*core.ObserverSummary, error) {
-	row := tx.QueryRowContext(ctx, `select task_id, display_status, display_activity, process_alive, last_runtime_observed_at
+	row := tx.QueryRowContext(
+		ctx,
+		`select task_id, display_status, display_activity, process_alive, last_runtime_observed_at
 from task_observer_summaries
-where task_id = ?`, taskID)
+where task_id = ?`,
+		taskID,
+	)
 
 	summary, err := scanObserverSummary(row)
 	if errors.Is(err, sql.ErrNoRows) {

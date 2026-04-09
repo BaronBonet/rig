@@ -16,8 +16,8 @@ import (
 func TestEnsureObserverRunning_ReusesHealthyObserver(t *testing.T) {
 	var spawnCalls int
 	manager := NewProcessManager(ProcessConfig{
-		SocketPath:         "/tmp/agent-observer-test.sock",
-		ExecPath:           "/bin/agent",
+		SocketPath:          "/tmp/agent-observer-test.sock",
+		ExecPath:            "/bin/agent",
 		ExpectedFingerprint: "build-123",
 		Dial: func(context.Context, string) error {
 			return nil

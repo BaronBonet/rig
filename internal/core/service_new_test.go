@@ -26,7 +26,6 @@ func TestNewService_AcceptsBusinessPorts(t *testing.T) {
 		map[string]ProviderClient{"codex": providerClient},
 		configRepo,
 		workspaceSeeder,
-		NewMockTaskWorkspaceBootstrapper(t),
 		Config{Provider: "codex"},
 	)
 
@@ -210,21 +209,6 @@ func TestServiceCreateTaskWithProgress_SeedsWorkspaceBeforeTmux(t *testing.T) {
 	require.Equal(t, "Copied .env", events[3].Message)
 	require.Equal(t, "Copied local/", events[4].Message)
 	require.Equal(t, TaskStatusRunning, task.Status)
-}
-
-func TestServiceCreateTaskWithProgress_BootstrapsManagedWorkspaceBeforeTmux(t *testing.T) {
-	svc := newTestService(t)
-
-	task, err := svc.service.CreateTaskWithProgress(t.Context(), NewTaskInput{
-		Cwd:                  "/tmp/repo",
-		Prompt:               "test managed hooks",
-		ConfirmedDisplayName: "test managed hooks",
-	}, CreateTaskOptions{}, nil)
-
-	require.NoError(t, err)
-	require.NotNil(t, svc.workspaceBootstrapper.bootstrappedTask)
-	require.Equal(t, task.WorktreePath, svc.workspaceBootstrapper.bootstrappedTask.WorktreePath)
-	require.True(t, svc.workspaceBootstrapper.bootstrappedBeforeTmux)
 }
 
 func TestServiceCreateTaskWithProgress_FailsBeforeCreatingTaskWhenWorkspaceValidationFails(t *testing.T) {

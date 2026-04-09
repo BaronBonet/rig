@@ -108,14 +108,27 @@ func TestObserverHookEndpoint_PersistsEventAndPublishesTaskUpdate(t *testing.T) 
 			return false
 		default:
 		}
-		status, err := unixHTTPStatus(hookListener.Addr().String(), http.MethodPost, "/hook", `{"cwd":"/tmp/worktree","session_id":"sess-1","hook_event_name":"SessionStart"}`)
+		status, err := unixHTTPStatus(
+			hookListener.Addr().String(),
+			http.MethodPost,
+			"/hook",
+			`{"cwd":"/tmp/worktree","session_id":"sess-1","hook_event_name":"SessionStart"}`,
+		)
 		if err != nil {
 			return false
 		}
 		return status == http.StatusAccepted
 	}, 2*time.Second, 20*time.Millisecond)
 
-	req, err := http.NewRequest(http.MethodPost, "http://"+hookListener.Addr().String()+"/hook", bytes.NewReader([]byte(`{"cwd":"`+task.WorktreePath+`","session_id":"sess-1","hook_event_name":"SessionStart","model":"gpt-5"}`)))
+	req, err := http.NewRequest(
+		http.MethodPost,
+		"http://"+hookListener.Addr().String()+"/hook",
+		bytes.NewReader(
+			[]byte(
+				`{"cwd":"`+task.WorktreePath+`","session_id":"sess-1","hook_event_name":"SessionStart","model":"gpt-5"}`,
+			),
+		),
+	)
 	require.NoError(t, err)
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("X-Codex-Hook-Event", "SessionStart")
@@ -187,7 +200,11 @@ func TestObserverDropsUnmanagedHookEventsWithoutBroadcast(t *testing.T) {
 		return socketHealthOK(socketPath) == nil
 	}, 2*time.Second, 20*time.Millisecond)
 
-	req, err := http.NewRequest(http.MethodPost, "http://"+hookListener.Addr().String()+"/hook", strings.NewReader(`{"hook_event_name":"Stop"}`))
+	req, err := http.NewRequest(
+		http.MethodPost,
+		"http://"+hookListener.Addr().String()+"/hook",
+		strings.NewReader(`{"hook_event_name":"Stop"}`),
+	)
 	require.NoError(t, err)
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("X-Codex-Hook-Event", "Stop")
@@ -246,10 +263,12 @@ func TestServe_RefreshLoopPublishesTaskUpdatesFromWatcher(t *testing.T) {
 	monitor.EXPECT().Close().Return(nil).Once()
 
 	watcher := NewTMuxWatcher(TMuxWatcherConfig{
-		Tasks:     repo,
-		Monitor:   monitor,
-		Repo:      repo,
-		Providers: map[string]core.ProviderClient{"codex": stubTMuxWatcherProvider{runtimeState: core.RuntimeStateRunning}},
+		Tasks:   repo,
+		Monitor: monitor,
+		Repo:    repo,
+		Providers: map[string]core.ProviderClient{
+			"codex": stubTMuxWatcherProvider{runtimeState: core.RuntimeStateRunning},
+		},
 	})
 	hub := NewHub()
 	updates, release := mustSubscribeHub(t, hub)
@@ -341,7 +360,10 @@ type stubObserverHookIngestor struct {
 	err    error
 }
 
-func (s *stubObserverHookIngestor) IngestHookEvent(_ context.Context, input core.HookEventInput) (*core.HookSessionSummary, error) {
+func (s *stubObserverHookIngestor) IngestHookEvent(
+	_ context.Context,
+	input core.HookEventInput,
+) (*core.HookSessionSummary, error) {
 	s.called = true
 	s.input = input
 	return nil, s.err

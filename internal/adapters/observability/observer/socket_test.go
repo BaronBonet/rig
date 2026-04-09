@@ -81,9 +81,9 @@ func TestSocketServer_BroadcastsObserverTaskUpdate(t *testing.T) {
 func TestSocketServer_HealthIncludesFingerprint(t *testing.T) {
 	socketPath := fmt.Sprintf("/tmp/observer-%d.sock", time.Now().UnixNano())
 	server := NewSocketServer(SocketServerConfig{
-		SocketPath:   socketPath,
-		Hub:          NewHub(),
-		Fingerprint:  "build-123",
+		SocketPath:  socketPath,
+		Hub:         NewHub(),
+		Fingerprint: "build-123",
 	})
 
 	ctx, cancel := context.WithCancel(t.Context())
