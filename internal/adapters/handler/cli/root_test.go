@@ -2,6 +2,7 @@ package cli
 
 import (
 	"bytes"
+	"context"
 	"strings"
 	"testing"
 
@@ -36,6 +37,7 @@ func TestNewRootCommand_RunsTUIWhenNoArgsProvided(t *testing.T) {
 	service := NewMockTaskService(t)
 	updates := make(chan core.HookSessionSummary)
 	close(updates)
+	started := false
 	service.EXPECT().
 		ListTaskViews(mock.Anything).
 		Return([]*core.TaskView{}, nil).
@@ -45,13 +47,22 @@ func TestNewRootCommand_RunsTUIWhenNoArgsProvided(t *testing.T) {
 		Return((<-chan core.HookSessionSummary)(updates), func() {}, nil).
 		Once()
 
-	cmd := NewRootCommand(Dependencies{Service: service, Stdout: out, Stderr: out})
+	cmd := NewRootCommand(Dependencies{
+		Service: service,
+		Stdout:  out,
+		Stderr:  out,
+		StartHookServer: func() (func(), error) {
+			started = true
+			return func() {}, nil
+		},
+	})
 	cmd.SetIn(strings.NewReader("q"))
 	cmd.SetOut(out)
 	cmd.SetErr(out)
 
 	err := cmd.Execute()
 	require.NoError(t, err)
+	require.True(t, started)
 }
 
 func TestNewRootCommand_DoctorDispatchBypassesRootTUI(t *testing.T) {
@@ -70,4 +81,30 @@ func TestNewRootCommand_DoctorDispatchBypassesRootTUI(t *testing.T) {
 	err := cmd.Execute()
 	require.NoError(t, err)
 	require.Contains(t, out.String(), "doctor: ok")
+}
+
+func TestNewRootCommand_HookIngestDispatchesToConfiguredIngestor(t *testing.T) {
+	out := &bytes.Buffer{}
+	ingestor := &stubHookEventIngestor{}
+
+	cmd := NewRootCommand(Dependencies{Stdout: out, Stderr: out, HookIngestor: ingestor})
+	cmd.SetIn(strings.NewReader(`{"cwd":"/tmp/worktree","session_id":"sess-1","hook_event_name":"SessionStart"}`))
+	cmd.SetOut(out)
+	cmd.SetErr(out)
+	cmd.SetArgs([]string{"hook-ingest", "SessionStart"})
+
+	err := cmd.Execute()
+	require.NoError(t, err)
+	require.Equal(t, "SessionStart", ingestor.input.EventName)
+	require.Equal(t, "/tmp/worktree", ingestor.input.Cwd)
+	require.Equal(t, "sess-1", ingestor.input.SessionID)
+}
+
+type stubHookEventIngestor struct {
+	input core.HookEventInput
+}
+
+func (s *stubHookEventIngestor) IngestHookEvent(_ context.Context, input core.HookEventInput) (*core.HookSessionSummary, error) {
+	s.input = input
+	return nil, nil
 }

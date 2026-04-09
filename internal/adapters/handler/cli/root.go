@@ -2,9 +2,12 @@ package cli
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
+	"time"
 
+	hookhttp "agent/internal/adapters/observability/codexhooks"
 	"agent/internal/core"
 
 	tea "charm.land/bubbletea/v2"
@@ -30,6 +33,8 @@ type TaskService interface {
 
 type Dependencies struct {
 	Service         TaskService
+	HookIngestor    core.HookEventIngestor
+	StartHookServer func() (func(), error)
 	Stdout          io.Writer
 	Stderr          io.Writer
 	Cwd             string
@@ -45,6 +50,17 @@ func NewRootCommand(deps Dependencies) *cobra.Command {
 			if deps.Service == nil {
 				return fmt.Errorf("service not configured")
 			}
+			stopHookServer := func() {}
+			if deps.StartHookServer != nil {
+				cleanup, err := deps.StartHookServer()
+				if err != nil {
+					return err
+				}
+				if cleanup != nil {
+					stopHookServer = cleanup
+				}
+			}
+			defer stopHookServer()
 
 			program := tea.NewProgram(
 				newTUIModel(deps.Service, deps.Cwd, deps.DefaultProvider),
@@ -66,6 +82,34 @@ func NewRootCommand(deps Dependencies) *cobra.Command {
 	}
 
 	cmd.AddCommand(newDoctorCommand(deps))
+	cmd.AddCommand(newHookIngestCommand(deps))
+
+	return cmd
+}
+
+func newHookIngestCommand(deps Dependencies) *cobra.Command {
+	cmd := &cobra.Command{
+		Use:    "hook-ingest <event-name>",
+		Hidden: true,
+		Args:   cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			if deps.HookIngestor == nil {
+				return fmt.Errorf("hook ingestor not configured")
+			}
+
+			body, err := io.ReadAll(cmd.InOrStdin())
+			if err != nil {
+				return fmt.Errorf("read hook payload: %w", err)
+			}
+
+			input := hookhttp.DecodeHookEventInput(time.Now, args[0], body)
+			if _, err := deps.HookIngestor.IngestHookEvent(cmd.Context(), input); err != nil && !errors.Is(err, core.ErrUnmanagedHookEvent) {
+				return err
+			}
+
+			return nil
+		},
+	}
 
 	return cmd
 }

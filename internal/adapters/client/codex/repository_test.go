@@ -28,7 +28,7 @@ func TestRepositoryLaunchRequest_UsesBinaryPromptAndTaskPrompt(t *testing.T) {
 	launch, err := repo.LaunchRequest(&core.Task{Prompt: "add billing retry flow"})
 	require.NoError(t, err)
 	require.Equal(t, core.LaunchRequest{
-		Command:      []string{"codex"},
+		Command:      []string{"codex", "--enable", "codex_hooks"},
 		Prompt:       "›",
 		InitialInput: []string{"add billing retry flow"},
 	}, launch)

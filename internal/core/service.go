@@ -36,6 +36,7 @@ type Service struct {
 	providers  map[string]ProviderClient
 	repoConfig RepoConfigLoader
 	workspace  WorkspaceSeeder
+	bootstrap  TaskWorkspaceBootstrapper
 	cfg        Config
 }
 
@@ -184,6 +185,12 @@ func (s *Service) CreateTaskWithProgress(
 		})
 		if err != nil {
 			return s.markBroken(ctx, task, fmt.Errorf("seed workspace: %w", err))
+		}
+	}
+
+	if s.bootstrap != nil {
+		if err := s.bootstrap.BootstrapTaskWorkspace(ctx, task); err != nil {
+			return s.markBroken(ctx, task, fmt.Errorf("prepare workspace: %w", err))
 		}
 	}
 
@@ -423,6 +430,7 @@ func NewService(
 	providers map[string]ProviderClient,
 	repoConfig RepoConfigLoader,
 	workspace WorkspaceSeeder,
+	bootstrap TaskWorkspaceBootstrapper,
 	cfg Config,
 ) *Service {
 	return &Service{
@@ -433,6 +441,7 @@ func NewService(
 		providers:  providers,
 		repoConfig: repoConfig,
 		workspace:  workspace,
+		bootstrap:  bootstrap,
 		cfg:        cfg,
 	}
 }

@@ -19,6 +19,11 @@ type Config struct {
 	SQLite  sqlite.Config
 	Codex   codexclient.Config
 	Claude  claudeclient.Config
+	Hooks   HookConfig
+}
+
+type HookConfig struct {
+	ListenAddr string
 }
 
 type envConfig struct {
@@ -26,6 +31,7 @@ type envConfig struct {
 	SQLitePath   string `env:"AGENT_SQLITE_PATH"`
 	CodexBinary  string `env:"AGENT_CODEX_BINARY"  envDefault:"codex"`
 	ClaudeBinary string `env:"AGENT_CLAUDE_BINARY" envDefault:"claude"`
+	HookListen   string `env:"AGENT_HOOK_LISTEN_ADDR" envDefault:"127.0.0.1:4123"`
 }
 
 func LoadConfig() (*Config, error) {
@@ -53,6 +59,9 @@ func LoadConfig() (*Config, error) {
 		},
 		Claude: claudeclient.Config{
 			Binary: raw.ClaudeBinary,
+		},
+		Hooks: HookConfig{
+			ListenAddr: raw.HookListen,
 		},
 	}, nil
 }
