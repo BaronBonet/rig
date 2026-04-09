@@ -27,7 +27,8 @@
       "Bash(curl -sL \"https://github.com/charmbracelet/bubbletea/releases/tag/v2.0.0\")",
       "Bash(curl -sL \"https://raw.githubusercontent.com/charmbracelet/bubbletea/v2/key.go\")",
       "Bash(curl -sL \"https://raw.githubusercontent.com/charmbracelet/bubbletea/v2/tea.go\")",
-      "WebFetch(domain:github.com)"
+      "WebFetch(domain:github.com)",
+      "Bash(/Users/ericbonet/.claude/plugins/cache/claude-plugins-official/superpowers/5.0.7/scripts/start-server.sh:*)"
     ]
   }
 }
