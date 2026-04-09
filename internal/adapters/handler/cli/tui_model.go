@@ -89,7 +89,7 @@ type createFinishedMsg struct {
 	err  error
 }
 
-func newTUIModel(service TaskService, defaultCreationCwd string, defaultProvider string) model {
+func newTUIModel(service TaskService, defaultCreationCwd string, defaultProvider string, initialErr error) model {
 	promptInput := textarea.New()
 	promptInput.Placeholder = "Describe the task to create..."
 	promptInput.ShowLineNumbers = false
@@ -102,6 +102,7 @@ func newTUIModel(service TaskService, defaultCreationCwd string, defaultProvider
 
 	return model{
 		service:            service,
+		err:                initialErr,
 		loading:            true,
 		mode:               tuiModeList,
 		promptInput:        promptInput,

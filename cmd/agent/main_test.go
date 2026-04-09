@@ -23,7 +23,7 @@ func TestBuildDependencies_ReturnsConcreteService(t *testing.T) {
 	require.NoError(t, err)
 	require.IsType(t, &core.Service{}, deps.Service)
 	require.NotNil(t, deps.HookIngestor)
-	require.NotNil(t, deps.StartHookServer)
+	require.NotNil(t, deps.ObserverProcess)
 	require.Equal(t, "codex", deps.DefaultProvider)
 }
 

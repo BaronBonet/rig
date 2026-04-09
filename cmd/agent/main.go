@@ -1,16 +1,10 @@
 package main
 
 import (
-	"context"
-	"errors"
 	"fmt"
-	"net"
-	"net/http"
 	"os"
 	"path/filepath"
 	"runtime"
-	"strings"
-	"time"
 
 	claudeclient "agent/internal/adapters/client/claude"
 	codexclient "agent/internal/adapters/client/codex"
@@ -20,7 +14,7 @@ import (
 	codexhooksfs "agent/internal/adapters/filesystem/codexhooks"
 	workspacefs "agent/internal/adapters/filesystem/workspace"
 	"agent/internal/adapters/handler/cli"
-	hookhttp "agent/internal/adapters/observability/codexhooks"
+	observer "agent/internal/adapters/observability/observer"
 	sqliterepo "agent/internal/adapters/repository/sqlite"
 	"agent/internal/core"
 	"agent/internal/infrastructure"
@@ -53,7 +47,10 @@ func buildDependencies() (cli.Dependencies, error) {
 		return cli.Dependencies{}, err
 	}
 
-	agentExec, _ := os.Executable()
+	agentExec, err := os.Executable()
+	if err != nil {
+		return cli.Dependencies{}, err
+	}
 	service := core.NewService(
 		taskRepo,
 		taskRepo,
@@ -75,41 +72,15 @@ func buildDependencies() (cli.Dependencies, error) {
 	)
 
 	return cli.Dependencies{
-		Service:         service,
-		HookIngestor:    taskRepo,
-		StartHookServer: func() (func(), error) { return startHookServer(taskRepo, cfg.Hooks.ListenAddr) },
-		Stdout:          os.Stdout,
-		Stderr:          os.Stderr,
-		DefaultProvider: cfg.Service.Provider,
+		Service:            service,
+		HookIngestor:       taskRepo,
+		ObserverProcess:    observer.NewProcessManager(observer.ProcessConfig{SocketPath: cfg.Observer.SocketPath, ExecPath: agentExec}),
+		HookListenAddr:     cfg.Hooks.ListenAddr,
+		ObserverSocketPath: cfg.Observer.SocketPath,
+		Stdout:             os.Stdout,
+		Stderr:             os.Stderr,
+		DefaultProvider:    cfg.Service.Provider,
 	}, nil
-}
-
-func startHookServer(repo core.HookEventIngestor, listenAddr string) (func(), error) {
-	listener, err := net.Listen("tcp", listenAddr)
-	if err != nil {
-		if isAddrInUse(err) {
-			return func() {}, nil
-		}
-		return nil, err
-	}
-
-	mux := http.NewServeMux()
-	mux.Handle("/hook", hookhttp.NewHTTPHandler(repo, time.Now))
-	server := &http.Server{Handler: mux}
-
-	go func() {
-		_ = server.Serve(listener)
-	}()
-
-	return func() {
-		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
-		defer cancel()
-		_ = server.Shutdown(ctx)
-	}, nil
-}
-
-func isAddrInUse(err error) bool {
-	return errors.Is(err, os.ErrExist) || strings.Contains(err.Error(), "address already in use")
 }
 
 func detectAgentSourceRoot() string {

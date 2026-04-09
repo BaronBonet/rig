@@ -3,6 +3,7 @@ package cli
 import (
 	"bytes"
 	"context"
+	"errors"
 	"strings"
 	"testing"
 
@@ -37,24 +38,19 @@ func TestNewRootCommand_RunsTUIWhenNoArgsProvided(t *testing.T) {
 	service := NewMockTaskService(t)
 	updates := make(chan core.HookSessionSummary)
 	close(updates)
-	started := false
 	service.EXPECT().
 		ListTaskViews(mock.Anything).
 		Return([]*core.TaskView{}, nil).
-		Once()
+		Maybe()
 	service.EXPECT().
 		SubscribeTaskHookUpdates(mock.Anything).
 		Return((<-chan core.HookSessionSummary)(updates), func() {}, nil).
-		Once()
+		Maybe()
 
 	cmd := NewRootCommand(Dependencies{
 		Service: service,
 		Stdout:  out,
 		Stderr:  out,
-		StartHookServer: func() (func(), error) {
-			started = true
-			return func() {}, nil
-		},
 	})
 	cmd.SetIn(strings.NewReader("q"))
 	cmd.SetOut(out)
@@ -62,7 +58,71 @@ func TestNewRootCommand_RunsTUIWhenNoArgsProvided(t *testing.T) {
 
 	err := cmd.Execute()
 	require.NoError(t, err)
-	require.True(t, started)
+}
+
+func TestNewRootCommand_StartsObserverBeforeLaunchingTUI(t *testing.T) {
+	out := &bytes.Buffer{}
+	service := NewMockTaskService(t)
+	updates := make(chan core.HookSessionSummary)
+	close(updates)
+	observer := &stubObserverProcess{}
+
+	service.EXPECT().
+		ListTaskViews(mock.Anything).
+		Run(func(context.Context) {
+			require.True(t, observer.started)
+		}).
+		Return([]*core.TaskView{}, nil).
+		Maybe()
+	service.EXPECT().
+		SubscribeTaskHookUpdates(mock.Anything).
+		Return((<-chan core.HookSessionSummary)(updates), func() {}, nil).
+		Maybe()
+
+	cmd := NewRootCommand(Dependencies{
+		Service:         service,
+		Stdout:          out,
+		Stderr:          out,
+		ObserverProcess: observer,
+	})
+	cmd.SetIn(strings.NewReader("q"))
+	cmd.SetOut(out)
+	cmd.SetErr(out)
+
+	err := cmd.Execute()
+	require.NoError(t, err)
+	require.True(t, observer.started)
+}
+
+func TestNewRootCommand_ContinuesWhenObserverStartupFails(t *testing.T) {
+	out := &bytes.Buffer{}
+	service := NewMockTaskService(t)
+	updates := make(chan core.HookSessionSummary)
+	close(updates)
+	observer := &stubObserverProcess{err: errors.New("observer unavailable")}
+
+	service.EXPECT().
+		ListTaskViews(mock.Anything).
+		Return([]*core.TaskView{}, nil).
+		Maybe()
+	service.EXPECT().
+		SubscribeTaskHookUpdates(mock.Anything).
+		Return((<-chan core.HookSessionSummary)(updates), func() {}, nil).
+		Maybe()
+
+	cmd := NewRootCommand(Dependencies{
+		Service:         service,
+		Stdout:          out,
+		Stderr:          out,
+		ObserverProcess: observer,
+	})
+	cmd.SetIn(strings.NewReader("q"))
+	cmd.SetOut(out)
+	cmd.SetErr(out)
+
+	err := cmd.Execute()
+	require.NoError(t, err)
+	require.True(t, observer.started)
 }
 
 func TestNewRootCommand_DoctorDispatchBypassesRootTUI(t *testing.T) {
@@ -107,4 +167,14 @@ type stubHookEventIngestor struct {
 func (s *stubHookEventIngestor) IngestHookEvent(_ context.Context, input core.HookEventInput) (*core.HookSessionSummary, error) {
 	s.input = input
 	return nil, nil
+}
+
+type stubObserverProcess struct {
+	started bool
+	err     error
+}
+
+func (s *stubObserverProcess) EnsureRunning(context.Context) error {
+	s.started = true
+	return s.err
 }
