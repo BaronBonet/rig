@@ -21,7 +21,10 @@ type stubObserverRuntimeRepository struct {
 	lastUpsert            *ObserverSummary
 }
 
-func (s stubHookObservabilityRepository) ListHookSessionSummaries(ctx context.Context, taskIDs []string) (map[string]*HookSessionSummary, error) {
+func (s stubHookObservabilityRepository) ListHookSessionSummaries(
+	ctx context.Context,
+	taskIDs []string,
+) (map[string]*HookSessionSummary, error) {
 	if s.listHookSessionSummaries == nil {
 		return map[string]*HookSessionSummary{}, nil
 	}
@@ -29,7 +32,11 @@ func (s stubHookObservabilityRepository) ListHookSessionSummaries(ctx context.Co
 	return s.listHookSessionSummaries(ctx, taskIDs)
 }
 
-func (s stubHookObservabilityRepository) ListHookEvents(ctx context.Context, taskID string, limit int) ([]HookEvent, error) {
+func (s stubHookObservabilityRepository) ListHookEvents(
+	ctx context.Context,
+	taskID string,
+	limit int,
+) ([]HookEvent, error) {
 	if s.listHookEvents == nil {
 		return nil, nil
 	}
@@ -37,7 +44,9 @@ func (s stubHookObservabilityRepository) ListHookEvents(ctx context.Context, tas
 	return s.listHookEvents(ctx, taskID, limit)
 }
 
-func (s stubHookObservabilityRepository) SubscribeHookSessionUpdates(ctx context.Context) (<-chan HookSessionSummary, func(), error) {
+func (s stubHookObservabilityRepository) SubscribeHookSessionUpdates(
+	ctx context.Context,
+) (<-chan HookSessionSummary, func(), error) {
 	if s.subscribeHookUpdates == nil {
 		ch := make(chan HookSessionSummary)
 		close(ch)
@@ -47,7 +56,10 @@ func (s stubHookObservabilityRepository) SubscribeHookSessionUpdates(ctx context
 	return s.subscribeHookUpdates(ctx)
 }
 
-func (s *stubObserverRuntimeRepository) ListObserverSummaries(ctx context.Context, taskIDs []string) (map[string]*ObserverSummary, error) {
+func (s *stubObserverRuntimeRepository) ListObserverSummaries(
+	ctx context.Context,
+	taskIDs []string,
+) (map[string]*ObserverSummary, error) {
 	if s == nil || s.listObserverSummaries == nil {
 		return map[string]*ObserverSummary{}, nil
 	}
@@ -70,7 +82,9 @@ func (s *stubObserverRuntimeRepository) UpsertObserverSummary(ctx context.Contex
 	return s.upsertObserverSummary(ctx, summary)
 }
 
-func (s *stubObserverRuntimeRepository) SubscribeObserverTaskUpdates(ctx context.Context) (<-chan ObserverTaskUpdate, func(), error) {
+func (s *stubObserverRuntimeRepository) SubscribeObserverTaskUpdates(
+	ctx context.Context,
+) (<-chan ObserverTaskUpdate, func(), error) {
 	if s == nil || s.subscribeTaskUpdates == nil {
 		ch := make(chan ObserverTaskUpdate)
 		close(ch)

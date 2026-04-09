@@ -37,17 +37,17 @@ type ObserverProcessRunner interface {
 }
 
 type Dependencies struct {
-	Service            TaskService
-	HookIngestor       core.HookEventIngestor
-	ObserverProcess    ObserverProcessRunner
-	ObserverWatcher    *observer.TMuxWatcher
-	HookListenAddr     string
-	ObserverSocketPath string
+	Service             TaskService
+	HookIngestor        core.HookEventIngestor
+	ObserverProcess     ObserverProcessRunner
+	ObserverWatcher     *observer.TMuxWatcher
+	HookListenAddr      string
+	ObserverSocketPath  string
 	ObserverFingerprint string
-	Stdout             io.Writer
-	Stderr             io.Writer
-	Cwd                string
-	DefaultProvider    string
+	Stdout              io.Writer
+	Stderr              io.Writer
+	Cwd                 string
+	DefaultProvider     string
 }
 
 func NewRootCommand(deps Dependencies) *cobra.Command {
@@ -105,7 +105,8 @@ func newIngestCommand(use string, deps Dependencies) *cobra.Command {
 			}
 
 			input := hookhttp.DecodeHookEventInput(time.Now, args[0], body)
-			if _, err := deps.HookIngestor.IngestHookEvent(cmd.Context(), input); err != nil && !errors.Is(err, core.ErrUnmanagedHookEvent) {
+			if _, err := deps.HookIngestor.IngestHookEvent(cmd.Context(), input); err != nil &&
+				!errors.Is(err, core.ErrUnmanagedHookEvent) {
 				return err
 			}
 
@@ -133,12 +134,12 @@ func newObserverCommand(deps Dependencies) *cobra.Command {
 			}
 
 			return observer.Serve(cmd.Context(), observer.ServerConfig{
-				SocketPath:      deps.ObserverSocketPath,
-				HookListenAddr:  deps.HookListenAddr,
-				HookIngestor:    deps.HookIngestor,
-				Watcher:         deps.ObserverWatcher,
-				Hub:             observer.NewHub(),
-				Fingerprint:     deps.ObserverFingerprint,
+				SocketPath:     deps.ObserverSocketPath,
+				HookListenAddr: deps.HookListenAddr,
+				HookIngestor:   deps.HookIngestor,
+				Watcher:        deps.ObserverWatcher,
+				Hub:            observer.NewHub(),
+				Fingerprint:    deps.ObserverFingerprint,
 			})
 		},
 	})

@@ -146,7 +146,10 @@ type stubHookEventIngestor struct {
 	input core.HookEventInput
 }
 
-func (s *stubHookEventIngestor) IngestHookEvent(_ context.Context, input core.HookEventInput) (*core.HookSessionSummary, error) {
+func (s *stubHookEventIngestor) IngestHookEvent(
+	_ context.Context,
+	input core.HookEventInput,
+) (*core.HookSessionSummary, error) {
 	s.input = input
 	return nil, nil
 }

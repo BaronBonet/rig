@@ -14,14 +14,14 @@ import (
 )
 
 type ServerConfig struct {
-	SocketPath     string
-	HookListenAddr string
-	HookIngestor   core.HookEventIngestor
-	Watcher        *TMuxWatcher
-	Hub            *Hub
-	Now            func() time.Time
-	HookListener   net.Listener
-	Fingerprint    string
+	SocketPath      string
+	HookListenAddr  string
+	HookIngestor    core.HookEventIngestor
+	Watcher         *TMuxWatcher
+	Hub             *Hub
+	Now             func() time.Time
+	HookListener    net.Listener
+	Fingerprint     string
 	RefreshInterval time.Duration
 }
 
@@ -158,7 +158,10 @@ func newPublishingHookIngestor(ingestor core.HookEventIngestor, hub *Hub) core.H
 	}
 }
 
-func (p *publishingHookIngestor) IngestHookEvent(ctx context.Context, input core.HookEventInput) (*core.HookSessionSummary, error) {
+func (p *publishingHookIngestor) IngestHookEvent(
+	ctx context.Context,
+	input core.HookEventInput,
+) (*core.HookSessionSummary, error) {
 	summary, err := p.ingestor.IngestHookEvent(ctx, input)
 	if err != nil {
 		return summary, err

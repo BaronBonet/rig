@@ -53,8 +53,8 @@ type model struct {
 
 type tasksLoadedMsg struct {
 	requestID int
-	err   error
-	views []*core.TaskView
+	err       error
+	views     []*core.TaskView
 }
 
 type hookEventsLoadedMsg struct {
@@ -577,7 +577,11 @@ func (m model) selectedTaskDetailView() string {
 	if view != nil && view.Observer != nil {
 		if !view.Observer.LastRuntimeObservedAt.IsZero() {
 			b.WriteString(
-				primaryStyle.Render("Last Activity: ") + view.Observer.LastRuntimeObservedAt.Local().Format(taskDetailTimeLayout) + "\n",
+				primaryStyle.Render(
+					"Last Activity: ",
+				) + view.Observer.LastRuntimeObservedAt.Local().
+					Format(taskDetailTimeLayout) +
+					"\n",
 			)
 		}
 		if view.Observer.ProcessAlive {

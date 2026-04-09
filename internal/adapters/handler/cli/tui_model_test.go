@@ -1023,7 +1023,13 @@ func newLoadedTUIModelWithProviderAndViews(
 ) model {
 	t.Helper()
 
-	next, cmd := newTUIModel(service, "/tmp/default", provider, "", nil).Update(tasksLoadedMsg{requestID: 1, views: views})
+	next, cmd := newTUIModel(
+		service,
+		"/tmp/default",
+		provider,
+		"",
+		nil,
+	).Update(tasksLoadedMsg{requestID: 1, views: views})
 	m, ok := next.(model)
 	require.True(t, ok)
 	if cmd == nil {

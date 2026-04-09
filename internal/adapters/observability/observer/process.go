@@ -118,7 +118,11 @@ func ensureObserverRunningLocked(ctx context.Context, cfg ProcessConfig) error {
 	return waitForHealthyObserver(ctx, cfg)
 }
 
-func acquireObserverStartupLock(ctx context.Context, socketPath string, retryInterval time.Duration) (func() error, error) {
+func acquireObserverStartupLock(
+	ctx context.Context,
+	socketPath string,
+	retryInterval time.Duration,
+) (func() error, error) {
 	lockPath := observerStartupLockPath(socketPath)
 	semaphore := observerStartupSemaphore(lockPath)
 

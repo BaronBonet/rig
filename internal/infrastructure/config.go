@@ -1,11 +1,12 @@
 package infrastructure
 
 import (
-	"agent/internal/adapters/repository/sqlite"
-	"agent/internal/core"
 	"fmt"
 	"os"
 	"path/filepath"
+
+	"agent/internal/adapters/repository/sqlite"
+	"agent/internal/core"
 
 	"github.com/caarlos0/env/v11"
 
@@ -32,11 +33,11 @@ type ObserverConfig struct {
 }
 
 type envConfig struct {
-	Provider     string `env:"AGENT_PROVIDER"      envDefault:"codex"`
+	Provider     string `env:"AGENT_PROVIDER"             envDefault:"codex"`
 	SQLitePath   string `env:"AGENT_SQLITE_PATH"`
-	CodexBinary  string `env:"AGENT_CODEX_BINARY"  envDefault:"codex"`
-	ClaudeBinary string `env:"AGENT_CLAUDE_BINARY" envDefault:"claude"`
-	HookListen   string `env:"AGENT_HOOK_LISTEN_ADDR" envDefault:"127.0.0.1:4123"`
+	CodexBinary  string `env:"AGENT_CODEX_BINARY"         envDefault:"codex"`
+	ClaudeBinary string `env:"AGENT_CLAUDE_BINARY"        envDefault:"claude"`
+	HookListen   string `env:"AGENT_HOOK_LISTEN_ADDR"     envDefault:"127.0.0.1:4123"`
 	ObserverSock string `env:"AGENT_OBSERVER_SOCKET_PATH"`
 }
 

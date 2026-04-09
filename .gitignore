@@ -9,3 +9,6 @@ internal/core/mock_*.go
 internal/adapters/handler/cli/mock_*.go
 internal/pkg/execx/mock_*.go
 internal/adapters/client/tmux/mock_*.go
+mock_*
+docs/superpowers/*
+.superpowers/*

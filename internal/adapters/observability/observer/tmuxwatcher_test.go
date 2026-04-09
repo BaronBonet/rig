@@ -102,10 +102,12 @@ func TestTMuxWatcher_RefreshAllMarksTaskDisconnectedWhenProviderFinished(t *test
 
 	repo := &stubWatcherObserverRepository{}
 	watcher := NewTMuxWatcher(TMuxWatcherConfig{
-		Tasks:     stubObserverTaskLister{tasks: []*core.Task{task}},
-		Monitor:   monitor,
-		Repo:      repo,
-		Providers: map[string]core.ProviderClient{"codex": stubTMuxWatcherProvider{runtimeState: core.RuntimeStateFinished}},
+		Tasks:   stubObserverTaskLister{tasks: []*core.Task{task}},
+		Monitor: monitor,
+		Repo:    repo,
+		Providers: map[string]core.ProviderClient{
+			"codex": stubTMuxWatcherProvider{runtimeState: core.RuntimeStateFinished},
+		},
 	})
 
 	err := watcher.RefreshAll(context.Background())
@@ -142,11 +144,13 @@ func TestTMuxWatcher_RefreshAllPublishesObserverUpdate(t *testing.T) {
 	defer release()
 
 	watcher := NewTMuxWatcher(TMuxWatcherConfig{
-		Tasks:     stubObserverTaskLister{tasks: []*core.Task{task}},
-		Monitor:   monitor,
-		Repo:      repo,
-		Providers: map[string]core.ProviderClient{"codex": stubTMuxWatcherProvider{runtimeState: core.RuntimeStateRunning}},
-		Hub:       hub,
+		Tasks:   stubObserverTaskLister{tasks: []*core.Task{task}},
+		Monitor: monitor,
+		Repo:    repo,
+		Providers: map[string]core.ProviderClient{
+			"codex": stubTMuxWatcherProvider{runtimeState: core.RuntimeStateRunning},
+		},
+		Hub: hub,
 	})
 
 	err := watcher.RefreshAll(context.Background())
@@ -176,7 +180,10 @@ type stubWatcherObserverRepository struct {
 	lastUpsert *core.ObserverSummary
 }
 
-func (s *stubWatcherObserverRepository) ListObserverSummaries(context.Context, []string) (map[string]*core.ObserverSummary, error) {
+func (s *stubWatcherObserverRepository) ListObserverSummaries(
+	context.Context,
+	[]string,
+) (map[string]*core.ObserverSummary, error) {
 	return map[string]*core.ObserverSummary{}, nil
 }
 
@@ -189,7 +196,9 @@ func (s *stubWatcherObserverRepository) UpsertObserverSummary(_ context.Context,
 	return nil
 }
 
-func (s *stubWatcherObserverRepository) SubscribeObserverTaskUpdates(context.Context) (<-chan core.ObserverTaskUpdate, func(), error) {
+func (s *stubWatcherObserverRepository) SubscribeObserverTaskUpdates(
+	context.Context,
+) (<-chan core.ObserverTaskUpdate, func(), error) {
 	ch := make(chan core.ObserverTaskUpdate)
 	close(ch)
 	return ch, func() {}, nil
