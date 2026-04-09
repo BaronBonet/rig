@@ -17,7 +17,11 @@ func NewPRStatusChecker(runner execx.Runner) *PRStatusChecker {
 	return &PRStatusChecker{runner: runner}
 }
 
-func (c *PRStatusChecker) CheckPRStatus(ctx context.Context, repoRoot string, branchName string) (*core.PRStatus, error) {
+func (c *PRStatusChecker) CheckPRStatus(
+	ctx context.Context,
+	repoRoot string,
+	branchName string,
+) (*core.PRStatus, error) {
 	result, err := c.runner.Run(
 		ctx, repoRoot,
 		"gh", "pr", "view",

@@ -67,7 +67,14 @@ func NewRootCommand(deps Dependencies) *cobra.Command {
 			}
 
 			program := tea.NewProgram(
-				newTUIModel(deps.Service, deps.Cwd, deps.DefaultProvider, deps.ObserverSocketPath, deps.UseNerdFont, startupErr),
+				newTUIModel(
+					deps.Service,
+					deps.Cwd,
+					deps.DefaultProvider,
+					deps.ObserverSocketPath,
+					deps.UseNerdFont,
+					startupErr,
+				),
 				tea.WithInput(cmd.InOrStdin()),
 				tea.WithOutput(cmd.OutOrStdout()),
 			)
