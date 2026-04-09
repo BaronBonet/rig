@@ -641,7 +641,7 @@ func (m model) selectedTaskDetailView() string {
 		if visibleWidth < colWidth {
 			left += strings.Repeat(" ", colWidth-visibleWidth)
 		}
-		b.WriteString(left + right + "\n")
+		b.WriteString("   " + left + right + "\n")
 	}
 
 	return strings.TrimRight(b.String(), "\n")
