@@ -56,6 +56,19 @@ const (
 	DisplayActivityCommand DisplayActivity = "command"
 )
 
+type PRState string
+
+const (
+	PRStateNone   PRState = ""
+	PRStateOpen   PRState = "open"
+	PRStateMerged PRState = "merged"
+)
+
+type PRStatus struct {
+	State  PRState
+	Number int
+}
+
 type DisplayState struct {
 	Primary  DisplayStatus   `json:"primary"`
 	Activity DisplayActivity `json:"activity"`
@@ -161,6 +174,7 @@ type TaskView struct {
 	Task        *Task
 	HookSession *HookSessionSummary
 	Observer    *ObserverSummary
+	PR          *PRStatus
 }
 
 type TaskProgressStep string

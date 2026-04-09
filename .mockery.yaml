@@ -19,6 +19,7 @@ packages:
       SessionClient:
       RuntimeMonitor:
       ProviderClient:
+      PRStatusChecker:
   agent/internal/adapters/handler/cli:
     interfaces:
       TaskService:

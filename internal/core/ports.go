@@ -116,3 +116,7 @@ type ProviderClient interface {
 	LaunchRequest(task *Task) (LaunchRequest, error)
 	DetectRuntimeState(snapshot RuntimeSnapshot) RuntimeState
 }
+
+type PRStatusChecker interface {
+	CheckPRStatus(ctx context.Context, repoRoot string, branchName string) (*PRStatus, error)
+}
