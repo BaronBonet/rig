@@ -33,7 +33,7 @@ func TestRepository_StartTaskSession_LaunchesCommandAndTypesInitialInput(t *test
 			"capture-pane", "-t", "=repo_task:agent", "-p",
 		),
 		expectTmuxRun(runner, execx.Result{}, nil,
-			"send-keys", "-t", "=repo_task:agent", "'fix billing retry flow'",
+			"send-keys", "-t", "=repo_task:agent", "fix billing retry flow",
 		),
 	)
 
@@ -281,7 +281,7 @@ func TestRepositoryTypeInWindow_SendsKeysWithoutEnter(t *testing.T) {
 	runner := execx.NewMockRunner(t)
 	repo := NewRepository(runner)
 	expectTmuxRun(runner, execx.Result{}, nil,
-		"send-keys", "-t", "=repo-billing-retry-flow:agent", "codex 'fix bug'",
+		"send-keys", "-t", "=repo-billing-retry-flow:agent", "codex fix bug",
 	)
 
 	err := repo.TypeInWindow(
