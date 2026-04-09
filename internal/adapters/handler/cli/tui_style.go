@@ -101,7 +101,7 @@ var (
 				BorderLeft(true).
 				BorderStyle(lipgloss.ThickBorder()).
 				BorderForeground(colorAccent).
-				PaddingLeft(1).
+				PaddingLeft(2).
 				Bold(true).
 				Foreground(colorPrimary)
 
