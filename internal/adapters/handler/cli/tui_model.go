@@ -470,6 +470,15 @@ func padRight(s string, width int) string {
 	return s + strings.Repeat(" ", width-len(runes))
 }
 
+// padRightVisible pads s based on visible width (ignoring ANSI escape codes).
+func padRightVisible(s string, width int) string {
+	visible := lipgloss.Width(s)
+	if visible >= width {
+		return s
+	}
+	return s + strings.Repeat(" ", width-visible)
+}
+
 func (m model) listView() string {
 	var b strings.Builder
 
@@ -500,6 +509,7 @@ func (m model) listView() string {
 	}
 
 	// Column header
+	colHeaderStyle := dimStyle.Bold(true)
 	colHeader := fmt.Sprintf("   %s  %s  %s  %s  %s",
 		padRight("TASK", colWidthName),
 		padRight("PROVIDER", colWidthProvider),
@@ -507,7 +517,7 @@ func (m model) listView() string {
 		padRight("TIME", colWidthTime),
 		padRight("STATUS", colWidthStatus),
 	)
-	b.WriteString(dimStyle.Render(colHeader) + "\n")
+	b.WriteString(colHeaderStyle.Render(colHeader) + "\n")
 
 	// Task rows
 	for i, task := range m.tasks {
@@ -522,10 +532,10 @@ func (m model) listView() string {
 			timeText = m.icons.Time + " " + elapsed
 		}
 
-		providerCell := padRight(providerText, colWidthProvider)
-		prCell := padRight(prIcon, colWidthPR)
-		timeCell := padRight(timeText, colWidthTime)
-		stateCell := padRight(stateText, colWidthStatus)
+		providerCell := padRightVisible(providerText, colWidthProvider)
+		prCell := padRightVisible(prIcon, colWidthPR)
+		timeCell := padRightVisible(timeText, colWidthTime)
+		stateCell := padRightVisible(stateText, colWidthStatus)
 
 		if i == m.selected {
 			nameCell := padRight(truncateStr(iconSelected+" "+task.DisplayName, colWidthName), colWidthName)
