@@ -538,11 +538,11 @@ func (m model) listView() string {
 
 		if i == m.selected {
 			nameCell := padRight(truncateStr(iconSelected+" "+task.DisplayName, colWidthName), colWidthName)
-			row := nameCell + "  " + primaryStyle.Render(providerCell) + "  " + prCell + "  " + timeCell + "  " + stateStyle.Render(stateCell)
+			row := nameCell + "  " + providerStyle(task.Provider).Render(providerCell) + "  " + prCell + "  " + timeCell + "  " + stateStyle.Render(stateCell)
 			b.WriteString(selectedRowStyle.Render(row) + "\n")
 		} else {
 			nameCell := padRight(truncateStr("  "+task.DisplayName, colWidthName), colWidthName)
-			row := nameCell + "  " + primaryStyle.Render(providerCell) + "  " + prCell + "  " + timeCell + "  " + stateStyle.Render(stateCell)
+			row := nameCell + "  " + providerStyle(task.Provider).Render(providerCell) + "  " + prCell + "  " + timeCell + "  " + stateStyle.Render(stateCell)
 			b.WriteString(normalRowStyle.Render(row) + "\n")
 		}
 	}
@@ -943,6 +943,15 @@ func providerIcon(provider string) string {
 		return iconProviderClaude
 	default:
 		return iconProviderCodex
+	}
+}
+
+func providerStyle(provider string) lipgloss.Style {
+	switch provider {
+	case "claude":
+		return claudeStyle
+	default:
+		return codexStyle
 	}
 }
 

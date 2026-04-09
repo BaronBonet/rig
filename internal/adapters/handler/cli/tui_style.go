@@ -52,12 +52,14 @@ func activeIcons(useNerdFont bool) IconSet {
 
 // Colors
 var (
-	colorPrimary = lipgloss.Color("#c8c8d4")
-	colorDimmed  = lipgloss.Color("#7b7b8e")
-	colorAccent  = lipgloss.Color("#6c6ce0")
-	colorHealthy = lipgloss.Color("#5a9e6f")
-	colorWarning = lipgloss.Color("#c4a24e")
-	colorError   = lipgloss.Color("#c05050")
+	colorPrimary  = lipgloss.Color("#c8c8d4")
+	colorDimmed   = lipgloss.Color("#7b7b8e")
+	colorAccent   = lipgloss.Color("#6c6ce0")
+	colorHealthy  = lipgloss.Color("#5a9e6f")
+	colorWarning  = lipgloss.Color("#c4a24e")
+	colorError    = lipgloss.Color("#c05050")
+	colorClaude   = lipgloss.Color("#e08a5a")
+	colorCodex    = lipgloss.Color("#5ac4a0")
 )
 
 // Icons
@@ -96,6 +98,12 @@ var (
 
 	healthyStyle = lipgloss.NewStyle().
 			Foreground(colorHealthy)
+
+	claudeStyle = lipgloss.NewStyle().
+			Foreground(colorClaude)
+
+	codexStyle = lipgloss.NewStyle().
+			Foreground(colorCodex)
 
 	selectedRowStyle = lipgloss.NewStyle().
 				BorderLeft(true).
