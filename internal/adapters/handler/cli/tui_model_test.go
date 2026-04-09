@@ -1007,6 +1007,29 @@ func TestModelUpdate_RefreshInvalidatesPRCache(t *testing.T) {
 	require.True(t, m.busy)
 }
 
+func TestModelUpdate_ShimmerTickIncrementsCounter(t *testing.T) {
+	m := newLoadedTUIModel(t, NewMockTaskService(t), tuiTask("task-one"))
+
+	m.mode = tuiModePromptInput
+	m.creationProgress = core.TaskProgressNaming
+	m.shimmerTick = 3
+
+	m, cmd := updateTUIModel(t, m, shimmerTickMsg{})
+	require.Equal(t, 4, m.shimmerTick)
+	require.NotNil(t, cmd, "should return another tick command to keep animation going")
+}
+
+func TestModelUpdate_ShimmerTickIgnoredWhenNoProgress(t *testing.T) {
+	m := newLoadedTUIModel(t, NewMockTaskService(t), tuiTask("task-one"))
+
+	m.shimmerTick = 0
+	m.creationProgress = ""
+
+	m, cmd := updateTUIModel(t, m, shimmerTickMsg{})
+	require.Equal(t, 0, m.shimmerTick, "tick should not increment when no progress active")
+	require.Nil(t, cmd, "should not schedule another tick")
+}
+
 func newLoadedTUIModel(t *testing.T, service *MockTaskService, tasks ...*core.Task) model {
 	return newLoadedTUIModelWithProvider(t, service, "codex", tasks...)
 }
