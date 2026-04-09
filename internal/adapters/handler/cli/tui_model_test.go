@@ -436,6 +436,7 @@ func TestModelUpdate_RTriggersRefreshCommand(t *testing.T) {
 	tasks := []*core.Task{tuiTask("task-one")}
 	m := newLoadedTUIModel(t, service, tasks...)
 
+	service.EXPECT().InvalidatePRCache().Once()
 	service.EXPECT().
 		ListTaskViews(mock.Anything).
 		Return(taskViews(tasks...), nil).
@@ -579,6 +580,8 @@ func TestModelUpdate_RefreshInFlightBlocksOverlappingActions(t *testing.T) {
 	service := NewMockTaskService(t)
 	tasks := []*core.Task{tuiTask("task-one"), tuiTask("task-two")}
 	m := newLoadedTUIModel(t, service, tasks...)
+	service.EXPECT().InvalidatePRCache().Once()
+	service.EXPECT().ListTaskViews(mock.Anything).Return(taskViews(tasks...), nil).Maybe()
 	m, refreshCmd := updateTUIModel(t, m, keyRunes("r"))
 	require.NotNil(t, refreshCmd)
 	require.True(t, m.busy)
@@ -966,6 +969,44 @@ func TestModelView_ShowsLoadingBeforeInitialLoadCompletes(t *testing.T) {
 	require.Contains(t, stripANSI(m.View().Content), "Loading tasks")
 }
 
+func TestModelView_PRStatusShownInDetailPanel(t *testing.T) {
+	service := NewMockTaskService(t)
+	task := tuiTask("auth-rewrite")
+	task.RepoName = "tmux-llm"
+	task.RepoRoot = "/tmp/repo"
+	task.BranchName = "feat/auth-rewrite"
+
+	service.EXPECT().
+		GetPRStatus(mock.Anything, "/tmp/repo", "feat/auth-rewrite").
+		Return(&core.PRStatus{State: core.PRStateOpen, Number: 42}, nil).
+		Maybe()
+
+	view := &core.TaskView{Task: task}
+	m := newLoadedTUIModelWithViews(t, service, view)
+
+	// Simulate PR status response
+	m, _ = updateTUIModel(t, m, prStatusLoadedMsg{
+		taskID: task.ID,
+		status: &core.PRStatus{State: core.PRStateOpen, Number: 42},
+	})
+
+	rendered := stripANSI(m.View().Content)
+	require.Contains(t, rendered, "#42 open")
+}
+
+func TestModelUpdate_RefreshInvalidatesPRCache(t *testing.T) {
+	service := NewMockTaskService(t)
+	task := tuiTask("auth-rewrite")
+	m := newLoadedTUIModel(t, service, task)
+
+	service.EXPECT().InvalidatePRCache().Once()
+	service.EXPECT().ListTaskViews(mock.Anything).Return(nil, nil).Maybe()
+
+	m, cmd := updateTUIModel(t, m, keyRunes("r"))
+	require.NotNil(t, cmd)
+	require.True(t, m.busy)
+}
+
 func newLoadedTUIModel(t *testing.T, service *MockTaskService, tasks ...*core.Task) model {
 	return newLoadedTUIModelWithProvider(t, service, "codex", tasks...)
 }
@@ -989,6 +1030,12 @@ func newLoadedTUIModelWithProviderAndViews(
 	views ...*core.TaskView,
 ) model {
 	t.Helper()
+
+	// Allow PR status fetches that may be triggered during task load.
+	service.EXPECT().
+		GetPRStatus(mock.Anything, mock.Anything, mock.Anything).
+		Return(&core.PRStatus{State: core.PRStateNone}, nil).
+		Maybe()
 
 	next, cmd := newTUIModel(
 		service,
