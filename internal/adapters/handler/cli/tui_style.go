@@ -1,6 +1,12 @@
 package cli
 
-import "charm.land/lipgloss/v2"
+import (
+	"fmt"
+	"image/color"
+	"strings"
+
+	"charm.land/lipgloss/v2"
+)
 
 // IconSet holds all icons used in the TUI. Two sets are available:
 // Nerd Font (primary) and Unicode fallback.
@@ -164,4 +170,45 @@ func displayStateStyle(status string, activity string) (string, lipgloss.Style) 
 	default:
 		return "", dimStyle
 	}
+}
+
+// shimmerWidth is the number of characters in the bright "wave" of the shimmer.
+const shimmerWidth = 4
+
+// renderShimmer renders text with a left-to-right shimmer highlight.
+// Most characters use colorDimmed; a window of shimmerWidth characters near
+// the tick position interpolates toward colorPrimary.
+func renderShimmer(text string, tick int) string {
+	runes := []rune(text)
+	if len(runes) == 0 {
+		return ""
+	}
+
+	// Wrap tick so the shimmer cycles continuously.
+	cycle := len(runes) + shimmerWidth + 2
+	pos := tick % cycle
+
+	var b strings.Builder
+	for i, r := range runes {
+		dist := pos - i
+		if dist >= 0 && dist < shimmerWidth {
+			intensity := 1.0 - float64(dist)/float64(shimmerWidth)
+			col := lerpColor(colorDimmed, colorPrimary, intensity)
+			b.WriteString(lipgloss.NewStyle().Foreground(col).Render(string(r)))
+		} else {
+			b.WriteString(dimStyle.Render(string(r)))
+		}
+	}
+	return b.String()
+}
+
+// lerpColor linearly interpolates between two colors.
+func lerpColor(from, to color.Color, t float64) color.Color {
+	fr, fg, fb, _ := from.RGBA()
+	tr, tg, tb, _ := to.RGBA()
+	// RGBA returns pre-multiplied values in [0, 0xffff]; shift to [0, 255].
+	r := uint8(float64(fr>>8) + float64(int(tr>>8)-int(fr>>8))*t)
+	g := uint8(float64(fg>>8) + float64(int(tg>>8)-int(fg>>8))*t)
+	b := uint8(float64(fb>>8) + float64(int(tb>>8)-int(fb>>8))*t)
+	return lipgloss.Color(fmt.Sprintf("#%02x%02x%02x", r, g, b))
 }
