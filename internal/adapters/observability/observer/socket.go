@@ -16,13 +16,21 @@ import (
 )
 
 type SocketServerConfig struct {
-	SocketPath string
-	Hub        *Hub
+	SocketPath  string
+	Hub         *Hub
+	Fingerprint string
+	Stop        func()
 }
 
 type SocketServer struct {
-	socketPath string
-	hub        *Hub
+	socketPath  string
+	hub         *Hub
+	fingerprint string
+	stop        func()
+}
+
+type HealthStatus struct {
+	Fingerprint string
 }
 
 type socketRequest struct {
@@ -30,16 +38,19 @@ type socketRequest struct {
 }
 
 type socketEnvelope struct {
-	Type   string                   `json:"type"`
-	OK     bool                     `json:"ok,omitempty"`
-	Error  string                   `json:"error,omitempty"`
-	Update *core.ObserverTaskUpdate `json:"update,omitempty"`
+	Type        string                   `json:"type"`
+	OK          bool                     `json:"ok,omitempty"`
+	Error       string                   `json:"error,omitempty"`
+	Fingerprint string                   `json:"fingerprint,omitempty"`
+	Update      *core.ObserverTaskUpdate `json:"update,omitempty"`
 }
 
 func NewSocketServer(cfg SocketServerConfig) *SocketServer {
 	return &SocketServer{
-		socketPath: cfg.SocketPath,
-		hub:        cfg.Hub,
+		socketPath:  cfg.SocketPath,
+		hub:         cfg.Hub,
+		fingerprint: cfg.Fingerprint,
+		stop:        cfg.Stop,
 	}
 }
 
@@ -98,9 +109,14 @@ func (s *SocketServer) handleConn(ctx context.Context, conn net.Conn) {
 
 	switch req.Command {
 	case "health":
-		_ = encoder.Encode(socketEnvelope{Type: "health", OK: true})
+		_ = encoder.Encode(socketEnvelope{Type: "health", OK: true, Fingerprint: s.fingerprint})
 	case "subscribe":
 		s.serveSubscription(ctx, encoder)
+	case "stop":
+		_ = encoder.Encode(socketEnvelope{Type: "stopping", OK: true})
+		if s.stop != nil {
+			s.stop()
+		}
 	default:
 		_ = encoder.Encode(socketEnvelope{Type: "error", Error: fmt.Sprintf("unsupported command %q", req.Command)})
 	}
@@ -132,11 +148,11 @@ func (s *SocketServer) serveSubscription(ctx context.Context, encoder *json.Enco
 	}
 }
 
-func dialSocketHealth(ctx context.Context, socketPath string) error {
+func probeSocketHealth(ctx context.Context, socketPath string) (HealthStatus, error) {
 	var d net.Dialer
 	conn, err := d.DialContext(ctx, "unix", socketPath)
 	if err != nil {
-		return err
+		return HealthStatus{}, err
 	}
 	defer conn.Close()
 
@@ -158,16 +174,21 @@ func dialSocketHealth(ctx context.Context, socketPath string) error {
 	wg.Wait()
 
 	if writeErr != nil {
-		return writeErr
+		return HealthStatus{}, writeErr
 	}
 	if readErr != nil {
-		return readErr
+		return HealthStatus{}, readErr
 	}
 	if resp.Type != "health" || !resp.OK {
-		return fmt.Errorf("observer unhealthy")
+		return HealthStatus{}, fmt.Errorf("observer unhealthy")
 	}
 
-	return nil
+	return HealthStatus{Fingerprint: resp.Fingerprint}, nil
+}
+
+func dialSocketHealth(ctx context.Context, socketPath string) error {
+	_, err := probeSocketHealth(ctx, socketPath)
+	return err
 }
 
 func Subscribe(ctx context.Context, socketPath string) (<-chan core.ObserverTaskUpdate, func(), error) {
@@ -234,4 +255,30 @@ func Subscribe(ctx context.Context, socketPath string) (<-chan core.ObserverTask
 	}()
 
 	return updates, cleanup, nil
+}
+
+var stopSocket = func(ctx context.Context, socketPath string) error {
+	var d net.Dialer
+	conn, err := d.DialContext(ctx, "unix", socketPath)
+	if err != nil {
+		return err
+	}
+	defer conn.Close()
+
+	if err := json.NewEncoder(conn).Encode(socketRequest{Command: "stop"}); err != nil {
+		return err
+	}
+
+	var resp socketEnvelope
+	if err := json.NewDecoder(bufio.NewReader(conn)).Decode(&resp); err != nil {
+		return err
+	}
+	if resp.Type != "stopping" || !resp.OK {
+		if resp.Error != "" {
+			return errors.New(resp.Error)
+		}
+		return fmt.Errorf("unexpected observer stop response %q", resp.Type)
+	}
+
+	return nil
 }

@@ -12,14 +12,16 @@ import (
 )
 
 type ProcessConfig struct {
-	SocketPath     string
-	ExecPath       string
-	CommandArgs    []string
-	Spawn          func(context.Context, string, []string) error
-	Dial           func(context.Context, string) error
-	Remove         func(string) error
-	HealthyTimeout time.Duration
-	RetryInterval  time.Duration
+	SocketPath          string
+	ExecPath            string
+	CommandArgs         []string
+	ExpectedFingerprint string
+	Spawn               func(context.Context, string, []string) error
+	Dial                func(context.Context, string) error
+	Probe               func(context.Context, string) (HealthStatus, error)
+	Remove              func(string) error
+	HealthyTimeout      time.Duration
+	RetryInterval       time.Duration
 }
 
 type ProcessManager struct {
@@ -62,6 +64,9 @@ func (m *ProcessManager) EnsureRunning(ctx context.Context) (err error) {
 	if cfg.Dial == nil {
 		cfg.Dial = defaultProcessDial
 	}
+	if cfg.Probe == nil && cfg.ExpectedFingerprint != "" {
+		cfg.Probe = defaultProcessProbe
+	}
 	if cfg.Remove == nil {
 		cfg.Remove = os.Remove
 	}
@@ -72,7 +77,7 @@ func (m *ProcessManager) EnsureRunning(ctx context.Context) (err error) {
 		cfg.RetryInterval = 25 * time.Millisecond
 	}
 
-	if err := cfg.Dial(ctx, cfg.SocketPath); err == nil {
+	if err := observerHealthy(ctx, cfg); err == nil {
 		return nil
 	}
 
@@ -88,7 +93,7 @@ func (m *ProcessManager) EnsureRunning(ctx context.Context) (err error) {
 }
 
 func ensureObserverRunningLocked(ctx context.Context, cfg ProcessConfig) error {
-	if err := cfg.Dial(ctx, cfg.SocketPath); err == nil {
+	if err := observerHealthy(ctx, cfg); err == nil {
 		return nil
 	}
 
@@ -100,15 +105,9 @@ func ensureObserverRunningLocked(ctx context.Context, cfg ProcessConfig) error {
 		if err := waitForHealthyObserver(ctx, cfg); err == nil {
 			return nil
 		}
-
-		socketExists, err = socketPathExists(cfg.SocketPath)
-		if err != nil {
-			return err
-		}
-		if socketExists {
-			if err := cfg.Remove(cfg.SocketPath); err != nil && !errors.Is(err, os.ErrNotExist) {
-				return fmt.Errorf("remove stale observer socket: %w", err)
-			}
+		_ = stopStaleObserver(ctx, cfg)
+		if err := cfg.Remove(cfg.SocketPath); err != nil && !errors.Is(err, os.ErrNotExist) {
+			return fmt.Errorf("remove stale observer socket: %w", err)
 		}
 	}
 
@@ -233,6 +232,10 @@ func defaultProcessDial(ctx context.Context, socketPath string) error {
 	return dialSocketHealth(ctx, socketPath)
 }
 
+func defaultProcessProbe(ctx context.Context, socketPath string) (HealthStatus, error) {
+	return probeSocketHealth(ctx, socketPath)
+}
+
 func waitForHealthyObserver(ctx context.Context, cfg ProcessConfig) error {
 	waitCtx, cancel := context.WithTimeout(ctx, cfg.HealthyTimeout)
 	defer cancel()
@@ -241,13 +244,70 @@ func waitForHealthyObserver(ctx context.Context, cfg ProcessConfig) error {
 	defer ticker.Stop()
 
 	for {
-		if err := cfg.Dial(waitCtx, cfg.SocketPath); err == nil {
+		if err := observerHealthy(waitCtx, cfg); err == nil {
 			return nil
 		}
 
 		select {
 		case <-waitCtx.Done():
 			return fmt.Errorf("observer did not become healthy: %w", waitCtx.Err())
+		case <-ticker.C:
+		}
+	}
+}
+
+func probeObserver(ctx context.Context, cfg ProcessConfig) (HealthStatus, error) {
+	if cfg.Probe == nil {
+		return HealthStatus{}, nil
+	}
+
+	return cfg.Probe(ctx, cfg.SocketPath)
+}
+
+func observerHealthy(ctx context.Context, cfg ProcessConfig) error {
+	if err := cfg.Dial(ctx, cfg.SocketPath); err != nil {
+		return err
+	}
+
+	status, err := probeObserver(ctx, cfg)
+	if err != nil {
+		return err
+	}
+	if !observerMatchesFingerprint(cfg, status) {
+		return fmt.Errorf("observer fingerprint mismatch")
+	}
+
+	return nil
+}
+
+func observerMatchesFingerprint(cfg ProcessConfig, status HealthStatus) bool {
+	if cfg.ExpectedFingerprint == "" {
+		return true
+	}
+
+	return status.Fingerprint == cfg.ExpectedFingerprint
+}
+
+func stopStaleObserver(ctx context.Context, cfg ProcessConfig) error {
+	stopCtx, cancel := context.WithTimeout(ctx, cfg.HealthyTimeout)
+	defer cancel()
+
+	if err := stopSocket(stopCtx, cfg.SocketPath); err != nil {
+		return err
+	}
+
+	ticker := time.NewTicker(cfg.RetryInterval)
+	defer ticker.Stop()
+
+	for {
+		exists, err := socketPathExists(cfg.SocketPath)
+		if err == nil && !exists {
+			return nil
+		}
+
+		select {
+		case <-stopCtx.Done():
+			return stopCtx.Err()
 		case <-ticker.C:
 		}
 	}

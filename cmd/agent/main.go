@@ -5,6 +5,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"strconv"
 
 	claudeclient "agent/internal/adapters/client/claude"
 	codexclient "agent/internal/adapters/client/codex"
@@ -55,6 +56,10 @@ func buildDependencies() (cli.Dependencies, error) {
 	if err != nil {
 		return cli.Dependencies{}, err
 	}
+	observerFingerprint, err := binaryFingerprint(agentExec)
+	if err != nil {
+		return cli.Dependencies{}, err
+	}
 	service := core.NewService(
 		taskRepo,
 		taskRepo,
@@ -82,10 +87,15 @@ func buildDependencies() (cli.Dependencies, error) {
 	return cli.Dependencies{
 		Service:            service,
 		HookIngestor:       taskRepo,
-		ObserverProcess:    observer.NewProcessManager(observer.ProcessConfig{SocketPath: cfg.Observer.SocketPath, ExecPath: agentExec}),
+		ObserverProcess: observer.NewProcessManager(observer.ProcessConfig{
+			SocketPath:          cfg.Observer.SocketPath,
+			ExecPath:            agentExec,
+			ExpectedFingerprint: observerFingerprint,
+		}),
 		ObserverWatcher:    observerWatcher,
 		HookListenAddr:     cfg.Hooks.ListenAddr,
 		ObserverSocketPath: cfg.Observer.SocketPath,
+		ObserverFingerprint: observerFingerprint,
 		Stdout:             os.Stdout,
 		Stderr:             os.Stderr,
 		DefaultProvider:    cfg.Service.Provider,
@@ -99,4 +109,13 @@ func detectAgentSourceRoot() string {
 	}
 
 	return filepath.Clean(filepath.Join(filepath.Dir(file), "..", ".."))
+}
+
+func binaryFingerprint(path string) (string, error) {
+	info, err := os.Stat(path)
+	if err != nil {
+		return "", fmt.Errorf("stat agent executable: %w", err)
+	}
+
+	return strconv.FormatInt(info.Size(), 10) + ":" + strconv.FormatInt(info.ModTime().UTC().UnixNano(), 10), nil
 }

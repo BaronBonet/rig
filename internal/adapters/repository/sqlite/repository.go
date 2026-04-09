@@ -52,6 +52,14 @@ func NewRepository(cfg Config) (*Repository, error) {
 		repo.initErr = err
 		return repo, nil
 	}
+	db.SetMaxOpenConns(1)
+	db.SetMaxIdleConns(1)
+
+	if err := configureSQLiteConnection(db); err != nil {
+		repo.initErr = err
+		_ = db.Close()
+		return repo, nil
+	}
 
 	repo.db = db
 	if err := repo.initSchema(); err != nil {
@@ -71,6 +79,26 @@ func ValidateConfig(cfg Config) error {
 
 	if err := os.MkdirAll(filepath.Dir(cfg.Path), 0o755); err != nil {
 		return err
+	}
+
+	return nil
+}
+
+func configureSQLiteConnection(db *sql.DB) error {
+	if db == nil {
+		return fmt.Errorf("sqlite database is nil")
+	}
+
+	ctx := context.Background()
+	for _, pragma := range []string{
+		`pragma journal_mode = wal`,
+		`pragma busy_timeout = 5000`,
+		`pragma synchronous = normal`,
+		`pragma foreign_keys = on`,
+	} {
+		if _, err := db.ExecContext(ctx, pragma); err != nil {
+			return err
+		}
 	}
 
 	return nil
