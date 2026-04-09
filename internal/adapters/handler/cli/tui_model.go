@@ -281,21 +281,20 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 	case taskProgressMsg:
 		m.creationProgress = msg.step
-		if msg.step == core.TaskProgressWorktreeCreating ||
-			msg.step == core.TaskProgressWorkspaceSeeding ||
-			msg.step == core.TaskProgressTmuxStarting ||
-			msg.step == core.TaskProgressAgentLaunching ||
-			msg.step == core.TaskProgressTaskCreated {
-			label := progressStepLabel(msg.step)
-			if label != "" {
+		if label := progressStepLabel(msg.step); label != "" {
+			// Avoid duplicating the initial "Creating worktree..." step
+			// that was seeded when entering the creation phase.
+			if len(m.creationSteps) == 0 || m.creationSteps[len(m.creationSteps)-1] != label {
 				m.creationSteps = append(m.creationSteps, label)
 			}
 		}
 		m.shimmerTick = 0
-		return m, tea.Batch(
-			waitForProgressCmd(m.progressCh),
-			tea.Tick(shimmerTickInterval, func(time.Time) tea.Msg { return shimmerTickMsg{} }),
-		)
+		var cmds []tea.Cmd
+		if m.progressCh != nil {
+			cmds = append(cmds, waitForProgressCmd(m.progressCh))
+		}
+		cmds = append(cmds, tea.Tick(shimmerTickInterval, func(time.Time) tea.Msg { return shimmerTickMsg{} }))
+		return m, tea.Batch(cmds...)
 	case shimmerTickMsg:
 		if m.creationProgress == "" {
 			return m, nil
@@ -479,12 +478,19 @@ func (m model) updateNameConfirmKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		m.err = nil
 		m.busy = true
 		m.nameInput.Blur()
+		m.creationProgress = core.TaskProgressWorktreeCreating
+		m.creationSteps = []string{progressStepLabel(core.TaskProgressWorktreeCreating)}
+		m.shimmerTick = 0
 		input := m.createInput
 		input.ConfirmedDisplayName = name
 		input.Provider = m.provider
 		progressCh, createCmd := createTaskCmd(m.service, input)
 		m.progressCh = progressCh
-		return m, tea.Batch(createCmd, waitForProgressCmd(progressCh))
+		return m, tea.Batch(
+			createCmd,
+			waitForProgressCmd(progressCh),
+			tea.Tick(shimmerTickInterval, func(time.Time) tea.Msg { return shimmerTickMsg{} }),
+		)
 	}
 
 	var cmd tea.Cmd
@@ -587,7 +593,12 @@ func (m model) listView() string {
 
 		if i == m.selected {
 			nameCell := padRight(truncateStr(iconSelected+" "+task.DisplayName, colWidthName), colWidthName)
-			row := nameCell + "  " + providerStyle(task.Provider).Render(providerCell) + "  " + prCell + "  " + timeCell + "  " + stateStyle.Render(stateCell)
+			row := nameCell + "  " + providerStyle(
+				task.Provider,
+			).Render(providerCell) +
+				"  " + prCell + "  " + timeCell + "  " + stateStyle.Render(
+				stateCell,
+			)
 			b.WriteString(selectedRowStyle.Render(row) + "\n")
 		} else {
 			nameCell := padRight(truncateStr("  "+task.DisplayName, colWidthName), colWidthName)
@@ -843,7 +854,7 @@ func (m model) nameConfirmView() string {
 
 		// Render completed creation steps and active shimmer step.
 		for i, label := range m.creationSteps {
-			if i == len(m.creationSteps)-1 {
+			if i == len(m.creationSteps)-1 && m.creationProgress != core.TaskProgressTaskCreated {
 				// Active (last) step gets shimmer.
 				b.WriteString(warningStyle.Render("●") + " " + renderShimmer(label, m.shimmerTick) + "\n")
 			} else {
@@ -1174,6 +1185,9 @@ func createTaskCmd(service TaskService, input core.NewTaskInput) (<-chan taskPro
 }
 
 func waitForProgressCmd(ch <-chan taskProgressMsg) tea.Cmd {
+	if ch == nil {
+		return nil
+	}
 	return func() tea.Msg {
 		msg, ok := <-ch
 		if !ok {

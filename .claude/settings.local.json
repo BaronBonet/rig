@@ -40,7 +40,10 @@
       "Bash(git -C /Users/ericbonet/software/tmux-llm-v1-refactor-brainstorm add internal/core/domain.go internal/core/ports.go .mockery.yaml)",
       "Bash(echo \"Exit: $?\")",
       "Bash(git:*)",
-      "Bash(go vet:*)"
+      "Bash(go vet:*)",
+      "Bash(/Users/ericbonet/.claude/plugins/cache/claude-plugins-official/superpowers/5.0.7/skills/brainstorming/scripts/start-server.sh:*)",
+      "Bash(make generate:*)",
+      "Bash(go doc:*)"
     ]
   }
 }
