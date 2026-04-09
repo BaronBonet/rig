@@ -22,6 +22,8 @@ func TestBuildDependencies_ReturnsConcreteService(t *testing.T) {
 	deps, err := buildDependencies()
 	require.NoError(t, err)
 	require.IsType(t, &core.Service{}, deps.Service)
+	require.NotNil(t, deps.HookIngestor)
+	require.NotNil(t, deps.StartHookServer)
 	require.Equal(t, "codex", deps.DefaultProvider)
 }
 

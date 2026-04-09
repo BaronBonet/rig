@@ -29,6 +29,9 @@ type testServiceHarness struct {
 
 	workspaceSeederMock *MockWorkspaceSeeder
 	workspaceSeeder     workspaceSeederState
+
+	workspaceBootstrapperMock *MockTaskWorkspaceBootstrapper
+	workspaceBootstrapper     workspaceBootstrapperState
 }
 
 type taskRepositoryState struct {
@@ -106,16 +109,23 @@ type workspaceSeederState struct {
 	seededBeforeSession bool
 }
 
+type workspaceBootstrapperState struct {
+	bootstrapErr           error
+	bootstrappedTask       *Task
+	bootstrappedBeforeTmux bool
+}
+
 func newTestService(t *testing.T) *testServiceHarness {
 	t.Helper()
 
 	h := &testServiceHarness{
-		taskRepoMock:        NewMockTaskRepository(t),
-		repoClientMock:      NewMockRepoClient(t),
-		sessionClientMock:   NewMockSessionClient(t),
-		providerRepoMock:    NewMockProviderClient(t),
-		configRepoMock:      NewMockRepoConfigLoader(t),
-		workspaceSeederMock: NewMockWorkspaceSeeder(t),
+		taskRepoMock:              NewMockTaskRepository(t),
+		repoClientMock:            NewMockRepoClient(t),
+		sessionClientMock:         NewMockSessionClient(t),
+		providerRepoMock:          NewMockProviderClient(t),
+		configRepoMock:            NewMockRepoConfigLoader(t),
+		workspaceSeederMock:       NewMockWorkspaceSeeder(t),
+		workspaceBootstrapperMock: NewMockTaskWorkspaceBootstrapper(t),
 		repoClient: repoClientState{
 			repoContext: RepoContext{
 				Root:       "/tmp/repo",
@@ -135,6 +145,7 @@ func newTestService(t *testing.T) *testServiceHarness {
 	wireProviderClientMock(h)
 	wireRepoConfigLoaderMock(h)
 	wireWorkspaceSeederMock(h)
+	wireWorkspaceBootstrapperMock(h)
 
 	h.service = NewService(
 		h.taskRepoMock,
@@ -146,6 +157,7 @@ func newTestService(t *testing.T) *testServiceHarness {
 		},
 		h.configRepoMock,
 		h.workspaceSeederMock,
+		h.workspaceBootstrapperMock,
 		Config{Provider: "codex"},
 	)
 
@@ -363,6 +375,15 @@ func wireWorkspaceSeederMock(h *testServiceHarness) {
 			h.workspaceSeeder.validateRepoRoot = repoRoot
 			h.workspaceSeeder.validatePaths = append([]string(nil), relativePaths...)
 			return h.workspaceSeeder.validateErr
+		}).Maybe()
+}
+
+func wireWorkspaceBootstrapperMock(h *testServiceHarness) {
+	h.workspaceBootstrapperMock.On("BootstrapTaskWorkspace", mock.Anything, mock.Anything).
+		Return(func(_ context.Context, task *Task) error {
+			h.workspaceBootstrapper.bootstrappedTask = cloneTask(task)
+			h.workspaceBootstrapper.bootstrappedBeforeTmux = h.sessionClient.startedTask == nil
+			return h.workspaceBootstrapper.bootstrapErr
 		}).Maybe()
 }
 

@@ -82,7 +82,7 @@ func (r *Repository) BuildLaunchCommand(task *core.Task) ([]string, error) {
 
 func (r *Repository) LaunchRequest(task *core.Task) (core.LaunchRequest, error) {
 	return core.LaunchRequest{
-		Command:      []string{r.binary},
+		Command:      []string{r.binary, "--enable", "codex_hooks"},
 		Prompt:       "›",
 		InitialInput: []string{task.Prompt},
 	}, nil
