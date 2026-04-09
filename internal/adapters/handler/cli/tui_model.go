@@ -55,6 +55,11 @@ type tasksLoadedMsg struct {
 	views     []*core.TaskView
 }
 
+type prStatusLoadedMsg struct {
+	taskID string
+	status *core.PRStatus
+}
+
 type observerSubscriptionReadyMsg struct {
 	err     error
 	updates <-chan core.ObserverTaskUpdate
@@ -160,6 +165,15 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.selected = len(m.tasks) - 1
 		}
 
+		var prCmds []tea.Cmd
+		for _, view := range m.taskViews {
+			if view != nil && view.Task != nil && strings.TrimSpace(view.Task.BranchName) != "" && strings.TrimSpace(view.Task.RepoRoot) != "" {
+				prCmds = append(prCmds, fetchPRStatusCmd(m.service, view.Task.ID, view.Task.RepoRoot, view.Task.BranchName))
+			}
+		}
+		if len(prCmds) > 0 {
+			return m, tea.Batch(prCmds...)
+		}
 		return m, nil
 	case observerSubscriptionReadyMsg:
 		if msg.err != nil {
@@ -238,6 +252,14 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.mode = tuiModeList
 		m.busy = true
 		return m, openTaskCmd(m.service, selectedIDOrSlug(msg.task))
+	case prStatusLoadedMsg:
+		for _, view := range m.taskViews {
+			if view != nil && view.Task != nil && view.Task.ID == msg.taskID {
+				view.PR = msg.status
+				break
+			}
+		}
+		return m, nil
 	default:
 		return m, nil
 	}
@@ -336,6 +358,7 @@ func (m model) updateListKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		m.nameInput.Blur()
 		return m, nil
 	case "r":
+		m.service.InvalidatePRCache()
 		m.err = nil
 		m.busy = true
 		m.loading = true
@@ -941,6 +964,16 @@ func isVisibleTask(task *core.Task) bool {
 func (m *model) nextRefreshTasksCmd() tea.Cmd {
 	m.tasksRequestSeq++
 	return refreshTasksCmd(m.service, m.tasksRequestSeq)
+}
+
+func fetchPRStatusCmd(service TaskService, taskID, repoRoot, branch string) tea.Cmd {
+	return func() tea.Msg {
+		status, err := service.GetPRStatus(context.Background(), repoRoot, branch)
+		if err != nil {
+			return prStatusLoadedMsg{taskID: taskID, status: &core.PRStatus{State: core.PRStateNone}}
+		}
+		return prStatusLoadedMsg{taskID: taskID, status: status}
+	}
 }
 
 func refreshTasksCmd(service TaskService, requestID int) tea.Cmd {
