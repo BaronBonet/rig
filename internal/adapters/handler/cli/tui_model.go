@@ -49,6 +49,7 @@ type model struct {
 	loading            bool
 	busy               bool
 	tasksRequestSeq    int
+	icons              IconSet
 }
 
 type tasksLoadedMsg struct {
@@ -100,6 +101,7 @@ func newTUIModel(
 	defaultCreationCwd string,
 	defaultProvider string,
 	observerSocketPath string,
+	useNerdFont bool,
 	initialErr error,
 ) model {
 	promptInput := textarea.New()
@@ -123,6 +125,7 @@ func newTUIModel(
 		observerSocketPath: strings.TrimSpace(observerSocketPath),
 		provider:           emptyFallback(defaultProvider, "codex"),
 		tasksRequestSeq:    1,
+		icons:              activeIcons(useNerdFont),
 	}
 }
 
