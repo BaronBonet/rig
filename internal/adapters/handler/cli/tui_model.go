@@ -627,7 +627,12 @@ func (m model) selectedTaskDetailView() string {
 		if i < len(sessLines) {
 			right = sessLines[i]
 		}
-		b.WriteString(padRight(left, colWidth) + right + "\n")
+		// Use lipgloss.Width to measure visible width (ignoring ANSI escapes)
+		visibleWidth := lipgloss.Width(left)
+		if visibleWidth < colWidth {
+			left += strings.Repeat(" ", colWidth-visibleWidth)
+		}
+		b.WriteString(left + right + "\n")
 	}
 
 	return strings.TrimRight(b.String(), "\n")
