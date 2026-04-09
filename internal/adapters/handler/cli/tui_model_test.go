@@ -737,10 +737,6 @@ func TestModelView_TaskRowsUseObserverStatusAndHookPreview(t *testing.T) {
 	task := tuiTask("billing-retry-flow")
 	task.DisplayName = "billing retry flow"
 
-	service.EXPECT().
-		GetTaskHookEvents(mock.Anything, task.ID, 5).
-		Return(nil, nil).
-		Once()
 	m := newLoadedTUIModelWithViews(t, service, taskViewWithObserver(task, &core.HookSessionSummary{
 		TaskID:          task.ID,
 		RuntimePhase:    core.HookRuntimePhaseRunningCommand,
@@ -758,80 +754,57 @@ func TestModelView_TaskRowsUseObserverStatusAndHookPreview(t *testing.T) {
 		if !strings.Contains(row, "billing retry flow") {
 			continue
 		}
-
-		require.Contains(t, row, "working · command")
-		require.Contains(t, row, "go test ./internal/adapters/handler/cli -count=1")
-		require.NotContains(t, row, "◐ degraded")
+		require.Contains(t, row, "working")
 		return
 	}
-
 	t.Fatalf("did not find row for %q in view:\n%s", "billing retry flow", view)
 }
 
-func TestModelView_SelectedTaskDetailShowsHookMetadataAndRecentEvents(t *testing.T) {
+func TestModelView_DetailPanelShowsGitAndSessionColumns(t *testing.T) {
 	service := NewMockTaskService(t)
-	task := tuiTask("billing-retry-flow")
-	task.DisplayName = "billing retry flow"
+	task := tuiTask("auth-rewrite")
+	task.DisplayName = "auth rewrite"
 	task.Provider = "codex"
-	task.RepoName = "tmux-llm-v1-refactor-brainstorm"
-	task.RepoRoot = "/tmp/repo"
-	task.WorktreePath = "/tmp/repo/.branches/billing-retry-flow"
-	task.TmuxSession = "repo-billing-retry-flow"
-	task.BranchName = "feat/billing-retry-flow"
+	task.RepoName = "tmux-llm"
+	task.BranchName = "feat/auth-rewrite"
+
 	summary := &core.HookSessionSummary{
 		TaskID:               task.ID,
-		SessionID:            "sess-123",
-		Model:                "gpt-5",
-		Cwd:                  "/tmp/repo",
-		TranscriptPath:       "/tmp/repo/transcripts/sess-123.jsonl",
-		StartSource:          "UserPromptSubmit",
+		StartedAt:            time.Now().Add(-2*time.Hour - 13*time.Minute),
+		LastPromptText:       "refactor the token validation to use JWT",
+		LastAssistantMessage: "Updated validateToken() to use jwt.Parse",
 		LastEventName:        "PostToolUse",
-		RuntimePhase:         core.HookRuntimePhaseRunningCommand,
-		LastCommandText:      "go test ./internal/adapters/handler/cli -count=1",
-		LastActivityAt:       time.Date(2026, 4, 8, 10, 3, 0, 0, time.UTC),
-		LastAssistantMessage: "working on cli hook detail view",
 	}
 	observerSummary := &core.ObserverSummary{
-		TaskID:                task.ID,
-		DisplayStatus:         core.DisplayStatusWorking,
-		DisplayActivity:       core.DisplayActivityCommand,
-		ProcessAlive:          true,
-		LastRuntimeObservedAt: time.Date(2026, 4, 8, 10, 3, 0, 0, time.UTC),
+		TaskID:        task.ID,
+		DisplayStatus: core.DisplayStatusWorking,
+		ProcessAlive:  true,
 	}
 
-	service.EXPECT().
-		GetTaskHookEvents(mock.Anything, task.ID, 5).
-		Return([]core.HookEvent{
-			{
-				TaskID:      task.ID,
-				EventName:   "PostToolUse",
-				CommandText: "go test ./internal/adapters/handler/cli -count=1",
-				OccurredAt:  time.Date(2026, 4, 8, 10, 2, 0, 0, time.UTC),
-			},
-			{
-				TaskID:               task.ID,
-				EventName:            "Stop",
-				CommandResultText:    "PASS",
-				LastAssistantMessage: "tests complete",
-				OccurredAt:           time.Date(2026, 4, 8, 10, 3, 0, 0, time.UTC),
-			},
-		}, nil).
-		Once()
-	m := newLoadedTUIModelWithViews(t, service, taskViewWithObserver(task, summary, observerSummary))
-
+	m := newLoadedTUIModelWithViews(t, service,
+		taskViewWithObserver(task, summary, observerSummary),
+	)
 	view := stripANSI(m.View().Content)
-	require.Contains(t, view, "Selected Task")
-	require.Contains(t, view, "Session Activity")
-	require.Contains(t, view, "Status: working · command")
-	require.Contains(t, view, "Session ID: sess-123")
-	require.Contains(t, view, "Model: gpt-5")
-	require.Contains(t, view, "Process: connected")
-	require.Contains(t, view, "Last Activity: 2026-04-08 12:03:00")
-	require.Contains(t, view, "Recent Hook Events")
-	require.Contains(t, view, "PostToolUse")
-	require.Contains(t, view, "go test ./internal/adapters/handler/cli -count=1")
-	require.Contains(t, view, "Stop")
-	require.Contains(t, view, "PASS")
+
+	// Git column
+	require.Contains(t, view, "Git")
+	require.Contains(t, view, "feat/auth-rewrite")
+	require.Contains(t, view, "tmux-llm")
+
+	// Session column
+	require.Contains(t, view, "Session")
+	require.Contains(t, view, "2h 13m")
+	require.Contains(t, view, "connected")
+	require.Contains(t, view, "refactor the token validation to use JWT")
+	require.Contains(t, view, "Updated validateToken() to use jwt.Parse")
+
+	// Removed fields should NOT appear
+	require.NotContains(t, view, "Selected Task")
+	require.NotContains(t, view, "Session Activity")
+	require.NotContains(t, view, "Recent Hook Events")
+	require.NotContains(t, view, "Session ID")
+	require.NotContains(t, view, "Transcript")
+	require.NotContains(t, view, "Start Source")
 }
 
 func TestModelView_SelectedTaskDetailShowsFallbackWhenHookDataMissing(t *testing.T) {
@@ -839,23 +812,17 @@ func TestModelView_SelectedTaskDetailShowsFallbackWhenHookDataMissing(t *testing
 	task := tuiTask("billing-retry-flow")
 	task.DisplayName = "billing retry flow"
 	task.Provider = "claude"
-	task.RepoName = "tmux-llm-v1-refactor-brainstorm"
-	task.RepoRoot = "/tmp/repo"
-	task.WorktreePath = "/tmp/repo/.branches/billing-retry-flow"
-	task.TmuxSession = "repo-billing-retry-flow"
+	task.RepoName = "tmux-llm"
 	task.BranchName = "feat/billing-retry-flow"
-	task.Status = core.TaskStatusDegraded
 
 	m := newLoadedTUIModel(t, service, task)
 	view := stripANSI(m.View().Content)
 
-	require.Contains(t, view, "Selected Task")
-	require.Contains(t, view, "Session Activity")
-	require.Contains(t, view, "No hook activity has been recorded for this task yet.")
-	require.Contains(t, view, "Provider: claude")
-	require.Contains(t, view, "Branch: feat/billing-retry-flow")
-	require.Contains(t, view, "Repo: tmux-llm-v1-refactor-brainstorm")
-	require.Contains(t, view, "Status: degraded")
+	require.Contains(t, view, "Git")
+	require.Contains(t, view, "Session")
+	require.Contains(t, view, "feat/billing-retry-flow")
+	require.Contains(t, view, "tmux-llm")
+	require.NotContains(t, view, "connected")
 }
 
 func TestTaskStateText_PrefersNeedsInputOverHookActivity(t *testing.T) {
