@@ -84,14 +84,9 @@ func NewRootCommand(deps Dependencies) *cobra.Command {
 	}
 
 	cmd.AddCommand(newDoctorCommand(deps))
-	cmd.AddCommand(newHookIngestCommand(deps))
 	cmd.AddCommand(newObserverCommand(deps))
 
 	return cmd
-}
-
-func newHookIngestCommand(deps Dependencies) *cobra.Command {
-	return newIngestCommand("hook-ingest <event-name>", deps)
 }
 
 func newIngestCommand(use string, deps Dependencies) *cobra.Command {
