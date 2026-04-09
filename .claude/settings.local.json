@@ -28,7 +28,19 @@
       "Bash(curl -sL \"https://raw.githubusercontent.com/charmbracelet/bubbletea/v2/key.go\")",
       "Bash(curl -sL \"https://raw.githubusercontent.com/charmbracelet/bubbletea/v2/tea.go\")",
       "WebFetch(domain:github.com)",
-      "Bash(/Users/ericbonet/.claude/plugins/cache/claude-plugins-official/superpowers/5.0.7/scripts/start-server.sh:*)"
+      "Bash(/Users/ericbonet/.claude/plugins/cache/claude-plugins-official/superpowers/5.0.7/scripts/start-server.sh:*)",
+      "Bash(bash:*)",
+      "Bash(mockery:*)",
+      "Bash(ls /Users/ericbonet/software/tmux-llm-v1-refactor-brainstorm/internal/core/mock_*.go)",
+      "Bash(go env:*)",
+      "Bash(GOFLAGS=\"\" mockery:*)",
+      "Bash(go version:*)",
+      "Bash(git -C /Users/ericbonet/software/tmux-llm-v1-refactor-brainstorm add internal/core/domain.go internal/core/ports.go .mockery.yaml internal/core/mock_pr_status_checker.go)",
+      "Bash(git -C /Users/ericbonet/software/tmux-llm-v1-refactor-brainstorm commit -m ':*)",
+      "Bash(git -C /Users/ericbonet/software/tmux-llm-v1-refactor-brainstorm add internal/core/domain.go internal/core/ports.go .mockery.yaml)",
+      "Bash(echo \"Exit: $?\")",
+      "Bash(git:*)",
+      "Bash(go vet:*)"
     ]
   }
 }
