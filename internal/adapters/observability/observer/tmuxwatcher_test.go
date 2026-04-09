@@ -81,6 +81,42 @@ func TestTMuxWatcher_RefreshAllMarksTaskDisconnectedWhenSnapshotFails(t *testing
 	require.Equal(t, now, repo.lastUpsert.LastRuntimeObservedAt)
 }
 
+func TestTMuxWatcher_RefreshAllMarksTaskDisconnectedWhenProviderFinished(t *testing.T) {
+	now := time.Date(2026, 4, 9, 12, 10, 0, 0, time.UTC)
+	task := &core.Task{
+		ID:              "task-1",
+		TmuxSession:     "repo_task-1",
+		AgentWindowName: "agent",
+		Provider:        "codex",
+		Status:          core.TaskStatusRunning,
+	}
+
+	monitor := core.NewMockRuntimeMonitor(t)
+	monitor.EXPECT().Snapshot(mock.Anything, task).Return(core.RuntimeSnapshot{
+		SessionName:       task.TmuxSession,
+		PaneID:            "%24",
+		ForegroundCommand: "zsh",
+		HadAgentBinding:   true,
+		ObservedAt:        now,
+	}, nil).Once()
+
+	repo := &stubWatcherObserverRepository{}
+	watcher := NewTMuxWatcher(TMuxWatcherConfig{
+		Tasks:     stubObserverTaskLister{tasks: []*core.Task{task}},
+		Monitor:   monitor,
+		Repo:      repo,
+		Providers: map[string]core.ProviderClient{"codex": stubTMuxWatcherProvider{runtimeState: core.RuntimeStateFinished}},
+	})
+
+	err := watcher.RefreshAll(context.Background())
+	require.NoError(t, err)
+	require.NotNil(t, repo.lastUpsert)
+	require.Equal(t, core.DisplayStatusDisconnected, repo.lastUpsert.DisplayStatus)
+	require.Equal(t, core.DisplayActivityNone, repo.lastUpsert.DisplayActivity)
+	require.False(t, repo.lastUpsert.ProcessAlive)
+	require.Equal(t, now, repo.lastUpsert.LastRuntimeObservedAt)
+}
+
 type stubObserverTaskLister struct {
 	tasks []*core.Task
 	err   error

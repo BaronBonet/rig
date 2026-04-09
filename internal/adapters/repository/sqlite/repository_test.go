@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -242,6 +243,19 @@ func TestRepository_IsAvailable(t *testing.T) {
 	require.NoError(t, err)
 
 	require.NoError(t, repo.IsAvailable(context.Background()))
+}
+
+func TestNewRepository_ConfiguresSQLiteForConcurrentAccess(t *testing.T) {
+	repo, err := NewRepository(Config{Path: filepath.Join(t.TempDir(), "state.db")})
+	require.NoError(t, err)
+
+	var journalMode string
+	require.NoError(t, repo.db.QueryRowContext(context.Background(), `pragma journal_mode`).Scan(&journalMode))
+	require.Equal(t, "wal", strings.ToLower(journalMode))
+
+	var busyTimeout int
+	require.NoError(t, repo.db.QueryRowContext(context.Background(), `pragma busy_timeout`).Scan(&busyTimeout))
+	require.Greater(t, busyTimeout, 0)
 }
 
 func TestNewRepository_ReturnsUnavailableRepositoryForInvalidConfig(t *testing.T) {

@@ -16,10 +16,14 @@ import (
 func TestEnsureObserverRunning_ReusesHealthyObserver(t *testing.T) {
 	var spawnCalls int
 	manager := NewProcessManager(ProcessConfig{
-		SocketPath: "/tmp/agent-observer-test.sock",
-		ExecPath:   "/bin/agent",
+		SocketPath:         "/tmp/agent-observer-test.sock",
+		ExecPath:           "/bin/agent",
+		ExpectedFingerprint: "build-123",
 		Dial: func(context.Context, string) error {
 			return nil
+		},
+		Probe: func(context.Context, string) (HealthStatus, error) {
+			return HealthStatus{Fingerprint: "build-123"}, nil
 		},
 		Spawn: func(context.Context, string, []string) error {
 			spawnCalls++
@@ -30,6 +34,59 @@ func TestEnsureObserverRunning_ReusesHealthyObserver(t *testing.T) {
 	err := manager.EnsureRunning(context.Background())
 	require.NoError(t, err)
 	require.Zero(t, spawnCalls)
+}
+
+func TestEnsureObserverRunning_RestartsStaleHealthyObserver(t *testing.T) {
+	socketPath := filepath.Join(t.TempDir(), "observer.sock")
+	require.NoError(t, os.WriteFile(socketPath, []byte("x"), 0o600))
+
+	var (
+		spawnCalls  int
+		removeCalls int
+		probeCalls  int
+		stopCalls   int
+	)
+
+	manager := NewProcessManager(ProcessConfig{
+		SocketPath:          socketPath,
+		ExecPath:            "/bin/agent",
+		ExpectedFingerprint: "build-new",
+		Dial: func(context.Context, string) error {
+			return nil
+		},
+		Probe: func(context.Context, string) (HealthStatus, error) {
+			probeCalls++
+			if spawnCalls == 0 {
+				return HealthStatus{Fingerprint: "build-old"}, nil
+			}
+			return HealthStatus{Fingerprint: "build-new"}, nil
+		},
+		Remove: func(string) error {
+			removeCalls++
+			return nil
+		},
+		Spawn: func(context.Context, string, []string) error {
+			spawnCalls++
+			return nil
+		},
+	})
+
+	originalStopSocket := stopSocket
+	stopSocket = func(_ context.Context, path string) error {
+		require.Equal(t, socketPath, path)
+		stopCalls++
+		return nil
+	}
+	defer func() {
+		stopSocket = originalStopSocket
+	}()
+
+	err := manager.EnsureRunning(context.Background())
+	require.NoError(t, err)
+	require.Equal(t, 1, spawnCalls)
+	require.Equal(t, 1, stopCalls)
+	require.Equal(t, 1, removeCalls)
+	require.GreaterOrEqual(t, probeCalls, 2)
 }
 
 func TestEnsureObserverRunning_SpawnsObserverWhenUnavailable(t *testing.T) {

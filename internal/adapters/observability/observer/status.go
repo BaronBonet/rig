@@ -15,6 +15,8 @@ func DeriveDisplayStatus(in StatusInput) core.DisplayState {
 		return core.DisplayState{Primary: core.DisplayStatusFinished}
 	case in.RuntimeState == core.RuntimeStateNeedsInput:
 		return core.DisplayState{Primary: core.DisplayStatusNeedsInput}
+	case in.RuntimeState == core.RuntimeStateFinished:
+		return core.DisplayState{Primary: core.DisplayStatusDisconnected}
 	case in.ProcessAlive && in.ActiveCommand:
 		return core.DisplayState{Primary: core.DisplayStatusWorking, Activity: core.DisplayActivityCommand}
 	case in.ProcessAlive:

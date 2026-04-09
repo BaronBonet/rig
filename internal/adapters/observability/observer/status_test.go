@@ -63,3 +63,15 @@ func TestDeriveDisplayStatus_ReturnsDisconnectedWhenProcessMissing(t *testing.T)
 	require.Equal(t, core.DisplayStatusDisconnected, status.Primary)
 	require.Equal(t, core.DisplayActivityNone, status.Activity)
 }
+
+func TestDeriveDisplayStatus_TreatsFinishedRuntimeAsDisconnected(t *testing.T) {
+	status := DeriveDisplayStatus(StatusInput{
+		TaskStatus:    core.TaskStatusRunning,
+		RuntimeState:  core.RuntimeStateFinished,
+		ProcessAlive:  true,
+		ActiveCommand: false,
+	})
+
+	require.Equal(t, core.DisplayStatusDisconnected, status.Primary)
+	require.Equal(t, core.DisplayActivityNone, status.Activity)
+}

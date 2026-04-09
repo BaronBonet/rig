@@ -120,10 +120,11 @@ func (w *TMuxWatcher) refreshTask(ctx context.Context, task *core.Task) error {
 	}
 
 	runtimeState := provider.DetectRuntimeState(snapshot)
+	processAlive := runtimeState == core.RuntimeStateRunning || runtimeState == core.RuntimeStateNeedsInput
 	display := DeriveDisplayStatus(StatusInput{
 		TaskStatus:    task.Status,
 		RuntimeState:  runtimeState,
-		ProcessAlive:  strings.TrimSpace(snapshot.PaneID) != "",
+		ProcessAlive:  processAlive,
 		ActiveCommand: isForegroundCommandActivity(snapshot.ForegroundCommand),
 	})
 
@@ -136,7 +137,7 @@ func (w *TMuxWatcher) refreshTask(ctx context.Context, task *core.Task) error {
 		TaskID:                task.ID,
 		DisplayStatus:         display.Primary,
 		DisplayActivity:       display.Activity,
-		ProcessAlive:          strings.TrimSpace(snapshot.PaneID) != "",
+		ProcessAlive:          processAlive,
 		LastRuntimeObservedAt: observedAt,
 	}
 	if err := w.repo.UpsertObserverSummary(ctx, summary); err != nil {

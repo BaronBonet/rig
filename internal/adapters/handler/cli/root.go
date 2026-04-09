@@ -43,6 +43,7 @@ type Dependencies struct {
 	ObserverWatcher    *observer.TMuxWatcher
 	HookListenAddr     string
 	ObserverSocketPath string
+	ObserverFingerprint string
 	Stdout             io.Writer
 	Stderr             io.Writer
 	Cwd                string
@@ -142,6 +143,7 @@ func newObserverCommand(deps Dependencies) *cobra.Command {
 				HookIngestor:    deps.HookIngestor,
 				Watcher:         deps.ObserverWatcher,
 				Hub:             observer.NewHub(),
+				Fingerprint:     deps.ObserverFingerprint,
 			})
 		},
 	})

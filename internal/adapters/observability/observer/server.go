@@ -21,10 +21,14 @@ type ServerConfig struct {
 	Hub            *Hub
 	Now            func() time.Time
 	HookListener   net.Listener
+	Fingerprint    string
 	RefreshInterval time.Duration
 }
 
 func Serve(ctx context.Context, cfg ServerConfig) error {
+	serveCtx, stop := context.WithCancel(ctx)
+	defer stop()
+
 	if cfg.Now == nil {
 		cfg.Now = time.Now
 	}
@@ -61,8 +65,10 @@ func Serve(ctx context.Context, cfg ServerConfig) error {
 	hookMux.Handle("/hook", hookhttp.NewHTTPHandler(newPublishingHookIngestor(cfg.HookIngestor, cfg.Hub), cfg.Now))
 	hookServer := &http.Server{Handler: hookMux}
 	socketServer := NewSocketServer(SocketServerConfig{
-		SocketPath: cfg.SocketPath,
-		Hub:        cfg.Hub,
+		SocketPath:  cfg.SocketPath,
+		Hub:         cfg.Hub,
+		Fingerprint: cfg.Fingerprint,
+		Stop:        stop,
 	})
 
 	errCh := make(chan error, 2)
@@ -78,7 +84,7 @@ func Serve(ctx context.Context, cfg ServerConfig) error {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			errCh <- socketServer.Serve(ctx)
+			errCh <- socketServer.Serve(serveCtx)
 		}()
 	}
 
@@ -88,12 +94,12 @@ func Serve(ctx context.Context, cfg ServerConfig) error {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			runRefreshLoop(ctx, cfg.Watcher, cfg.RefreshInterval)
+			runRefreshLoop(serveCtx, cfg.Watcher, cfg.RefreshInterval)
 		}()
 	}
 
 	select {
-	case <-ctx.Done():
+	case <-serveCtx.Done():
 	case err := <-errCh:
 		if err != nil && !errors.Is(err, http.ErrServerClosed) {
 			shutdownCtx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
