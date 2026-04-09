@@ -218,9 +218,14 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.busy = true
 		return m, refreshTasksCmd(m.service)
 	case openFinishedMsg:
-		m.busy = false
 		m.err = msg.err
-		return m, nil
+		if msg.err != nil {
+			m.busy = false
+			return m, nil
+		}
+
+		m.loading = true
+		return m, refreshTasksCmd(m.service)
 	case suggestNameFinishedMsg:
 		m.busy = false
 		m.err = msg.err

@@ -93,6 +93,10 @@ func TestModelUpdate_CreateFlowSuggestsNameThenCreatesTask(t *testing.T) {
 		OpenTask(mock.Anything, "billing-retry-flow").
 		Return(nil).
 		Once()
+	service.EXPECT().
+		ListTaskViews(mock.Anything).
+		Return(taskViews(existing, other, tuiTask("billing-retry-flow")), nil).
+		Once()
 	m, createCmd := updateTUIModel(t, m, tea.KeyPressMsg{Code: tea.KeyEnter})
 	require.NotNil(t, createCmd)
 	require.True(t, m.busy)
@@ -104,7 +108,10 @@ func TestModelUpdate_CreateFlowSuggestsNameThenCreatesTask(t *testing.T) {
 	require.Contains(t, taskSlugs(m.tasks), "billing-retry-flow")
 
 	openMsg := refreshCmd()
-	m, _ = updateTUIModel(t, m, openMsg)
+	m, followup := updateTUIModel(t, m, openMsg)
+	require.NotNil(t, followup)
+	refreshMsg := followup()
+	m, _ = updateTUIModel(t, m, refreshMsg)
 	require.False(t, m.busy)
 }
 
@@ -145,6 +152,10 @@ func TestModelUpdate_CreateFlowWithoutTasksUsesModelCwdFallback(t *testing.T) {
 		OpenTask(mock.Anything, "billing-retry-flow").
 		Return(nil).
 		Once()
+	service.EXPECT().
+		ListTaskViews(mock.Anything).
+		Return(taskViews(tuiTask("billing-retry-flow")), nil).
+		Once()
 	m, createCmd := updateTUIModel(t, m, tea.KeyPressMsg{Code: tea.KeyEnter})
 	require.NotNil(t, createCmd)
 
@@ -155,7 +166,10 @@ func TestModelUpdate_CreateFlowWithoutTasksUsesModelCwdFallback(t *testing.T) {
 	require.Contains(t, taskSlugs(m.tasks), "billing-retry-flow")
 
 	openMsg := refreshCmd()
-	m, _ = updateTUIModel(t, m, openMsg)
+	m, followup := updateTUIModel(t, m, openMsg)
+	require.NotNil(t, followup)
+	refreshMsg := followup()
+	m, _ = updateTUIModel(t, m, refreshMsg)
 	require.False(t, m.busy)
 }
 
@@ -197,6 +211,10 @@ func TestModelUpdate_CreateFlowUsesConfiguredDefaultProvider(t *testing.T) {
 		OpenTask(mock.Anything, "billing-retry-flow").
 		Return(nil).
 		Once()
+	service.EXPECT().
+		ListTaskViews(mock.Anything).
+		Return(taskViews(existing, tuiTask("billing-retry-flow")), nil).
+		Once()
 	m, createCmd := updateTUIModel(t, m, tea.KeyPressMsg{Code: tea.KeyEnter})
 	require.NotNil(t, createCmd)
 
@@ -204,7 +222,10 @@ func TestModelUpdate_CreateFlowUsesConfiguredDefaultProvider(t *testing.T) {
 	m, followup := updateTUIModel(t, m, createMsg)
 	require.NotNil(t, followup)
 	openMsg := followup()
-	m, _ = updateTUIModel(t, m, openMsg)
+	m, refreshAfterOpen := updateTUIModel(t, m, openMsg)
+	require.NotNil(t, refreshAfterOpen)
+	refreshMsg := refreshAfterOpen()
+	m, _ = updateTUIModel(t, m, refreshMsg)
 	require.Equal(t, "claude", m.createInput.Provider)
 	require.False(t, m.busy)
 }
@@ -439,11 +460,19 @@ func TestModelUpdate_EnterDispatchesOpenAndKeepsTUIOpen(t *testing.T) {
 		OpenTask(mock.Anything, "task-two").
 		Return(nil).
 		Once()
+	service.EXPECT().
+		ListTaskViews(mock.Anything).
+		Return(taskViews(tasks...), nil).
+		Once()
 	m, cmd := updateTUIModel(t, m, tea.KeyPressMsg{Code: tea.KeyEnter})
 	require.NotNil(t, cmd)
 	require.True(t, m.busy)
 
 	msg := cmd()
+	m, cmd = updateTUIModel(t, m, msg)
+	require.NotNil(t, cmd)
+
+	msg = cmd()
 	m, cmd = updateTUIModel(t, m, msg)
 	require.Nil(t, cmd)
 	require.False(t, m.busy)

@@ -253,16 +253,6 @@ func (r *Repository) CapturePaneContent(ctx context.Context, session, window str
 func (r *Repository) TypeInWindow(ctx context.Context, session, window string, command []string) error {
 	window = windowOrDefault(window, "agent")
 
-	quoted := make([]string, 0, len(command))
-	for _, part := range command {
-		if strings.ContainsRune(part, ' ') {
-			quoted = append(quoted, "'"+strings.ReplaceAll(part, "'", "'\\''")+"'")
-			continue
-		}
-
-		quoted = append(quoted, part)
-	}
-
 	_, err := r.runner.Run(
 		ctx,
 		"",
@@ -270,7 +260,7 @@ func (r *Repository) TypeInWindow(ctx context.Context, session, window string, c
 		"send-keys",
 		"-t",
 		exactWindowTarget(session, window),
-		strings.Join(quoted, " "),
+		strings.Join(command, " "),
 	)
 	return err
 }
