@@ -450,6 +450,50 @@ func TestModelUpdate_RTriggersRefreshCommand(t *testing.T) {
 	require.True(t, ok)
 }
 
+func TestModelUpdate_IgnoresStaleTasksLoadedMessages(t *testing.T) {
+	service := NewMockTaskService(t)
+	existing := tuiTask("existing-task")
+	existing.RepoRoot = "/tmp/repo"
+	newTask := tuiTask("billing-retry-flow")
+	newTask.RepoRoot = "/tmp/repo-billing-retry-flow"
+	m := newLoadedTUIModel(t, service, existing)
+
+	m, followup := updateTUIModel(t, m, createFinishedMsg{task: newTask})
+	require.NotNil(t, followup)
+	require.Contains(t, taskSlugs(m.tasks), "billing-retry-flow")
+
+	m, cmd := updateTUIModel(t, m, tasksLoadedMsg{
+		requestID: 1,
+		views:     taskViews(existing),
+	})
+	require.Nil(t, cmd)
+	require.Contains(t, taskSlugs(m.tasks), "billing-retry-flow")
+}
+
+func TestModelUpdate_ObserverTaskUpdatedDoesNotTriggerFullRefresh(t *testing.T) {
+	service := NewMockTaskService(t)
+	task := tuiTask("billing-retry-flow")
+	m := newLoadedTUIModelWithViews(t, service, taskViewWithObserver(task, nil, &core.ObserverSummary{
+		TaskID:          task.ID,
+		DisplayStatus:   core.DisplayStatusWorking,
+		DisplayActivity: core.DisplayActivityNone,
+		ProcessAlive:    true,
+	}))
+	updates := make(chan core.ObserverTaskUpdate)
+	m.observerUpdates = updates
+
+	m, cmd := updateTUIModel(t, m, observerTaskUpdatedMsg{update: core.ObserverTaskUpdate{
+		TaskID:          task.ID,
+		DisplayStatus:   core.DisplayStatusNeedsInput,
+		DisplayActivity: core.DisplayActivityCommand,
+		LastActivityAt:  time.Date(2026, 4, 9, 17, 30, 0, 0, time.UTC),
+	}})
+	require.NotNil(t, cmd)
+	require.Equal(t, core.DisplayStatusNeedsInput, m.selectedTaskView().Observer.DisplayStatus)
+	require.Equal(t, core.DisplayActivityCommand, m.selectedTaskView().Observer.DisplayActivity)
+	require.False(t, m.loading)
+}
+
 func TestModelUpdate_EnterDispatchesOpenAndKeepsTUIOpen(t *testing.T) {
 	service := NewMockTaskService(t)
 	tasks := []*core.Task{tuiTask("task-one"), tuiTask("task-two")}
@@ -979,7 +1023,7 @@ func newLoadedTUIModelWithProviderAndViews(
 ) model {
 	t.Helper()
 
-	next, cmd := newTUIModel(service, "/tmp/default", provider, "", nil).Update(tasksLoadedMsg{views: views})
+	next, cmd := newTUIModel(service, "/tmp/default", provider, "", nil).Update(tasksLoadedMsg{requestID: 1, views: views})
 	m, ok := next.(model)
 	require.True(t, ok)
 	if cmd == nil {
