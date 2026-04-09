@@ -48,6 +48,7 @@ func Serve(ctx context.Context, cfg ServerConfig) error {
 		cfg.RefreshInterval = time.Second
 	}
 	if cfg.Watcher != nil {
+		cfg.Watcher.hub = cfg.Hub
 		defer cfg.Watcher.Close()
 	}
 

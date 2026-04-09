@@ -254,8 +254,8 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 
 		m.mode = tuiModeList
-		m.loading = true
-		return m, refreshTasksCmd(m.service)
+		m.busy = true
+		return m, openTaskCmd(m.service, selectedIDOrSlug(msg.task))
 	default:
 		return m, nil
 	}
@@ -1034,7 +1034,7 @@ func createTaskCmd(service TaskService, input core.NewTaskInput) tea.Cmd {
 		task, err := service.CreateTaskWithProgress(
 			context.Background(),
 			input,
-			core.CreateTaskOptions{OpenSession: true},
+			core.CreateTaskOptions{OpenSession: false},
 			func(core.TaskProgress) {},
 		)
 		return createFinishedMsg{task: task, err: err}

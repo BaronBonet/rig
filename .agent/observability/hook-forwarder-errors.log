@@ -1,0 +1,2 @@
+2026-04-09T14:06:10Z event=PreToolUse url=http://127.0.0.1:4123/hook status=500
+2026-04-09T14:38:59Z event=UserPromptSubmit url=http://127.0.0.1:4123/hook status=500

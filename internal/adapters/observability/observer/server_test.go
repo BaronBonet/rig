@@ -17,6 +17,7 @@ import (
 	sqliterepo "agent/internal/adapters/repository/sqlite"
 	"agent/internal/core"
 
+	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
 )
 
@@ -204,6 +205,82 @@ func TestObserverDropsUnmanagedHookEventsWithoutBroadcast(t *testing.T) {
 	}
 
 	release()
+	cancel()
+	require.Eventually(t, func() bool {
+		select {
+		case err := <-done:
+			require.NoError(t, err)
+			return true
+		default:
+			return false
+		}
+	}, 2*time.Second, 20*time.Millisecond)
+}
+
+func TestServe_RefreshLoopPublishesTaskUpdatesFromWatcher(t *testing.T) {
+	socketPath := filepath.Join("/tmp", fmt.Sprintf("observer-%d.sock", time.Now().UnixNano()))
+	hookListener := mustListenTCP(t)
+	repo := mustCreateTaskRepository(t)
+	task := mustSeedTask(t, repo, core.Task{
+		ID:               "task-1",
+		DisplayName:      "watcher refresh",
+		Slug:             "watcher-refresh",
+		WorktreePath:     "/tmp/watcher-refresh",
+		TmuxSession:      "repo-watcher-refresh",
+		Provider:         "codex",
+		Status:           core.TaskStatusRunning,
+		AgentWindowName:  "agent",
+		EditorWindowName: "editor",
+	})
+	now := time.Date(2026, 4, 9, 12, 20, 0, 0, time.UTC)
+	monitor := core.NewMockRuntimeMonitor(t)
+	monitor.EXPECT().Snapshot(mock.Anything, mock.MatchedBy(func(in *core.Task) bool {
+		return in != nil && in.ID == task.ID
+	})).Return(core.RuntimeSnapshot{
+		SessionName:       task.TmuxSession,
+		PaneID:            "%24",
+		ForegroundCommand: "go",
+		HadAgentBinding:   true,
+		ObservedAt:        now,
+	}, nil).Maybe()
+	monitor.EXPECT().Close().Return(nil).Once()
+
+	watcher := NewTMuxWatcher(TMuxWatcherConfig{
+		Tasks:     repo,
+		Monitor:   monitor,
+		Repo:      repo,
+		Providers: map[string]core.ProviderClient{"codex": stubTMuxWatcherProvider{runtimeState: core.RuntimeStateRunning}},
+	})
+	hub := NewHub()
+	updates, release := mustSubscribeHub(t, hub)
+	defer release()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	done := make(chan error, 1)
+	go func() {
+		done <- Serve(ctx, ServerConfig{
+			SocketPath:      socketPath,
+			HookListenAddr:  hookListener.Addr().String(),
+			HookListener:    hookListener,
+			HookIngestor:    repo,
+			Watcher:         watcher,
+			Hub:             hub,
+			RefreshInterval: 25 * time.Millisecond,
+		})
+	}()
+
+	select {
+	case update := <-updates:
+		require.Equal(t, task.ID, update.TaskID)
+		require.Equal(t, core.DisplayStatusWorking, update.DisplayStatus)
+		require.Equal(t, core.DisplayActivityCommand, update.DisplayActivity)
+		require.Equal(t, now, update.LastActivityAt)
+	case <-time.After(2 * time.Second):
+		t.Fatal("timed out waiting for tmux watcher update")
+	}
+
 	cancel()
 	require.Eventually(t, func() bool {
 		select {

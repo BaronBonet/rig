@@ -327,14 +327,14 @@ func wireProviderClientMock(h *testServiceHarness) {
 			return LaunchRequest{}, h.providerRepo.launchErr
 		}
 		if hasCustomLaunchRequest(h.providerRepo.launchRequest) {
-			return h.providerRepo.launchRequest, nil
-		}
+		return h.providerRepo.launchRequest, nil
+	}
 
-		return LaunchRequest{
-			Command:      []string{"codex"},
-			Prompt:       "›",
-			InitialInput: []string{task.Prompt},
-		}, nil
+	return LaunchRequest{
+		Command:      []string{"codex"},
+		Prompt:       "›",
+		InitialInput: []string{task.Prompt},
+	}, nil
 	}).Maybe()
 	h.providerRepoMock.EXPECT().DetectRuntimeState(mock.Anything).RunAndReturn(func(RuntimeSnapshot) RuntimeState {
 		return h.providerRepo.runtimeState
