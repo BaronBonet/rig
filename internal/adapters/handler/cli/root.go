@@ -40,6 +40,7 @@ type Dependencies struct {
 	Service            TaskService
 	HookIngestor       core.HookEventIngestor
 	ObserverProcess    ObserverProcessRunner
+	ObserverWatcher    *observer.TMuxWatcher
 	HookListenAddr     string
 	ObserverSocketPath string
 	Stdout             io.Writer
@@ -63,7 +64,7 @@ func NewRootCommand(deps Dependencies) *cobra.Command {
 			}
 
 			program := tea.NewProgram(
-				newTUIModel(deps.Service, deps.Cwd, deps.DefaultProvider, startupErr),
+				newTUIModel(deps.Service, deps.Cwd, deps.DefaultProvider, deps.ObserverSocketPath, startupErr),
 				tea.WithInput(cmd.InOrStdin()),
 				tea.WithOutput(cmd.OutOrStdout()),
 			)
@@ -136,10 +137,11 @@ func newObserverCommand(deps Dependencies) *cobra.Command {
 			}
 
 			return observer.Serve(cmd.Context(), observer.ServerConfig{
-				SocketPath:     deps.ObserverSocketPath,
-				HookListenAddr: deps.HookListenAddr,
-				HookIngestor:   deps.HookIngestor,
-				Hub:            observer.NewHub(),
+				SocketPath:      deps.ObserverSocketPath,
+				HookListenAddr:  deps.HookListenAddr,
+				HookIngestor:    deps.HookIngestor,
+				Watcher:         deps.ObserverWatcher,
+				Hub:             observer.NewHub(),
 			})
 		},
 	})

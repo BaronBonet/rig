@@ -102,7 +102,7 @@ func TestModelUpdate_CreateFlowSuggestsNameThenCreatesTask(t *testing.T) {
 
 func TestModelUpdate_CreateFlowWithoutTasksUsesModelCwdFallback(t *testing.T) {
 	service := NewMockTaskService(t)
-	m := newTUIModel(service, "/tmp/fallback-repo", "codex", nil)
+	m := newTUIModel(service, "/tmp/fallback-repo", "codex", "", nil)
 	m.loading = false
 
 	m, _ = updateTUIModel(t, m, keyRunes("n"))
@@ -635,7 +635,7 @@ func TestModelView_ProviderBadgeCoexistsWithRuntimeBadge(t *testing.T) {
 	t.Fatalf("did not find row for %q in view:\n%s", "running task", view)
 }
 
-func TestModelView_TaskRowsUseHookPhaseBadgeAndPreview(t *testing.T) {
+func TestModelView_TaskRowsUseObserverStatusAndHookPreview(t *testing.T) {
 	service := NewMockTaskService(t)
 	task := tuiTask("billing-retry-flow")
 	task.DisplayName = "billing retry flow"
@@ -644,10 +644,15 @@ func TestModelView_TaskRowsUseHookPhaseBadgeAndPreview(t *testing.T) {
 		GetTaskHookEvents(mock.Anything, task.ID, 5).
 		Return(nil, nil).
 		Once()
-	m := newLoadedTUIModelWithViews(t, service, taskView(task, &core.HookSessionSummary{
+	m := newLoadedTUIModelWithViews(t, service, taskViewWithObserver(task, &core.HookSessionSummary{
 		TaskID:          task.ID,
 		RuntimePhase:    core.HookRuntimePhaseRunningCommand,
 		LastCommandText: "go test ./internal/adapters/handler/cli -count=1",
+	}, &core.ObserverSummary{
+		TaskID:          task.ID,
+		DisplayStatus:   core.DisplayStatusWorking,
+		DisplayActivity: core.DisplayActivityCommand,
+		ProcessAlive:    true,
 	}))
 	view := stripANSI(m.View().Content)
 	rows := strings.Split(view, "\n")
@@ -657,7 +662,7 @@ func TestModelView_TaskRowsUseHookPhaseBadgeAndPreview(t *testing.T) {
 			continue
 		}
 
-		require.Contains(t, row, "running command")
+		require.Contains(t, row, "working · command")
 		require.Contains(t, row, "go test ./internal/adapters/handler/cli -count=1")
 		require.NotContains(t, row, "◐ degraded")
 		return
@@ -689,6 +694,13 @@ func TestModelView_SelectedTaskDetailShowsHookMetadataAndRecentEvents(t *testing
 		LastActivityAt:       time.Date(2026, 4, 8, 10, 3, 0, 0, time.UTC),
 		LastAssistantMessage: "working on cli hook detail view",
 	}
+	observerSummary := &core.ObserverSummary{
+		TaskID:                task.ID,
+		DisplayStatus:         core.DisplayStatusWorking,
+		DisplayActivity:       core.DisplayActivityCommand,
+		ProcessAlive:          true,
+		LastRuntimeObservedAt: time.Date(2026, 4, 8, 10, 3, 0, 0, time.UTC),
+	}
 
 	service.EXPECT().
 		GetTaskHookEvents(mock.Anything, task.ID, 5).
@@ -708,15 +720,16 @@ func TestModelView_SelectedTaskDetailShowsHookMetadataAndRecentEvents(t *testing
 			},
 		}, nil).
 		Once()
-	m := newLoadedTUIModelWithViews(t, service, taskView(task, summary))
+	m := newLoadedTUIModelWithViews(t, service, taskViewWithObserver(task, summary, observerSummary))
 
 	view := stripANSI(m.View().Content)
 	require.Contains(t, view, "Selected Task")
-	require.Contains(t, view, "Hook Activity")
+	require.Contains(t, view, "Session Activity")
+	require.Contains(t, view, "Status: working · command")
 	require.Contains(t, view, "Session ID: sess-123")
 	require.Contains(t, view, "Model: gpt-5")
-	require.Contains(t, view, "Phase: running command")
-	require.Contains(t, view, "Last Event: PostToolUse")
+	require.Contains(t, view, "Process: connected")
+	require.Contains(t, view, "Last Activity: 2026-04-08 12:03:00")
 	require.Contains(t, view, "Recent Hook Events")
 	require.Contains(t, view, "PostToolUse")
 	require.Contains(t, view, "go test ./internal/adapters/handler/cli -count=1")
@@ -740,7 +753,7 @@ func TestModelView_SelectedTaskDetailShowsFallbackWhenHookDataMissing(t *testing
 	view := stripANSI(m.View().Content)
 
 	require.Contains(t, view, "Selected Task")
-	require.Contains(t, view, "Hook Activity")
+	require.Contains(t, view, "Session Activity")
 	require.Contains(t, view, "No hook activity has been recorded for this task yet.")
 	require.Contains(t, view, "Provider: claude")
 	require.Contains(t, view, "Branch: feat/billing-retry-flow")
@@ -748,44 +761,48 @@ func TestModelView_SelectedTaskDetailShowsFallbackWhenHookDataMissing(t *testing
 	require.Contains(t, view, "Status: degraded")
 }
 
-func TestModelUpdate_HookSessionUpdateRefreshesSelectedTaskDetails(t *testing.T) {
-	service := NewMockTaskService(t)
-	task := tuiTask("billing-retry-flow")
-	task.DisplayName = "billing retry flow"
-
-	service.EXPECT().
-		GetTaskHookEvents(mock.Anything, task.ID, 5).
-		Return([]core.HookEvent{
-			{
-				TaskID:            task.ID,
-				EventName:         "PostToolUse",
-				CommandText:       "go test ./internal/adapters/handler/cli -count=1",
-				CommandResultText: "PASS",
-			},
-		}, nil).
-		Once()
-
-	m := newLoadedTUIModel(t, service, task)
-	m, cmd := updateTUIModel(t, m, hookSessionUpdatedMsg{
-		summary: core.HookSessionSummary{
-			TaskID:                task.ID,
-			SessionID:             "sess-123",
-			RuntimePhase:          core.HookRuntimePhaseRunningCommand,
-			LastCommandText:       "go test ./internal/adapters/handler/cli -count=1",
-			LastCommandResultText: "PASS",
+func TestTaskStateText_PrefersNeedsInputOverHookActivity(t *testing.T) {
+	view := taskViewWithObserver(
+		tuiTask("billing-retry-flow"),
+		&core.HookSessionSummary{LastCommandText: "go test ./..."},
+		&core.ObserverSummary{
+			DisplayStatus:   core.DisplayStatusNeedsInput,
+			DisplayActivity: core.DisplayActivityCommand,
+			ProcessAlive:    true,
 		},
-	})
-	require.NotNil(t, cmd)
+	)
 
-	msg := cmd()
-	m, followup := updateTUIModel(t, m, msg)
-	require.Nil(t, followup)
+	text, _ := taskStateText(view)
+	require.Equal(t, "◐ needs input", text)
+}
 
-	view := stripANSI(m.View().Content)
-	require.Contains(t, view, "running command")
-	require.Contains(t, view, "Session ID: sess-123")
-	require.Contains(t, view, "Recent Hook Events")
-	require.Contains(t, view, "PASS")
+func TestTaskStateText_ShowsWorkingCommandForActiveCommand(t *testing.T) {
+	view := taskViewWithObserver(
+		tuiTask("billing-retry-flow"),
+		nil,
+		&core.ObserverSummary{
+			DisplayStatus:   core.DisplayStatusWorking,
+			DisplayActivity: core.DisplayActivityCommand,
+			ProcessAlive:    true,
+		},
+	)
+
+	text, _ := taskStateText(view)
+	require.Equal(t, "◐ working · command", text)
+}
+
+func TestTaskStateText_ShowsDisconnectedWhenProcessMissing(t *testing.T) {
+	view := taskViewWithObserver(
+		tuiTask("billing-retry-flow"),
+		nil,
+		&core.ObserverSummary{
+			DisplayStatus: core.DisplayStatusDisconnected,
+			ProcessAlive:  false,
+		},
+	)
+
+	text, _ := taskStateText(view)
+	require.Equal(t, "○ disconnected", text)
 }
 
 func TestModelView_OmitsRuntimeBadgeWhenRuntimeStateIsEmpty(t *testing.T) {
@@ -881,7 +898,7 @@ func TestModelUpdate_CleanupSuccessRefreshFailureRemovesTaskFromVisibleList(t *t
 }
 
 func TestModelView_ShowsLoadingBeforeInitialLoadCompletes(t *testing.T) {
-	m := newTUIModel(NewMockTaskService(t), "/tmp/default", "codex", nil)
+	m := newTUIModel(NewMockTaskService(t), "/tmp/default", "codex", "", nil)
 	require.Contains(t, stripANSI(m.View().Content), "Loading tasks")
 }
 
@@ -909,7 +926,7 @@ func newLoadedTUIModelWithProviderAndViews(
 ) model {
 	t.Helper()
 
-	next, cmd := newTUIModel(service, "/tmp/default", provider, nil).Update(tasksLoadedMsg{views: views})
+	next, cmd := newTUIModel(service, "/tmp/default", provider, "", nil).Update(tasksLoadedMsg{views: views})
 	m, ok := next.(model)
 	require.True(t, ok)
 	if cmd == nil {
@@ -945,7 +962,7 @@ func stripANSI(s string) string {
 }
 
 func TestListViewShowsInitialError(t *testing.T) {
-	m := newTUIModel(NewMockTaskService(t), "/tmp/default", "codex", errors.New("observer unavailable"))
+	m := newTUIModel(NewMockTaskService(t), "/tmp/default", "codex", "", errors.New("observer unavailable"))
 	m.loading = false
 
 	view := stripANSI(m.listView())
@@ -979,5 +996,17 @@ func taskView(task *core.Task, hook *core.HookSessionSummary) *core.TaskView {
 	return &core.TaskView{
 		Task:        task,
 		HookSession: hook,
+	}
+}
+
+func taskViewWithObserver(
+	task *core.Task,
+	hook *core.HookSessionSummary,
+	observer *core.ObserverSummary,
+) *core.TaskView {
+	return &core.TaskView{
+		Task:        task,
+		HookSession: hook,
+		Observer:    observer,
 	}
 }

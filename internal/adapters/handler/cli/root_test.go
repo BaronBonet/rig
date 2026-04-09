@@ -36,15 +36,9 @@ func TestNewRootCommand_HelpOnlyIncludesDoctorSubcommand(t *testing.T) {
 func TestNewRootCommand_RunsTUIWhenNoArgsProvided(t *testing.T) {
 	out := &bytes.Buffer{}
 	service := NewMockTaskService(t)
-	updates := make(chan core.HookSessionSummary)
-	close(updates)
 	service.EXPECT().
 		ListTaskViews(mock.Anything).
 		Return([]*core.TaskView{}, nil).
-		Maybe()
-	service.EXPECT().
-		SubscribeTaskHookUpdates(mock.Anything).
-		Return((<-chan core.HookSessionSummary)(updates), func() {}, nil).
 		Maybe()
 
 	cmd := NewRootCommand(Dependencies{
@@ -63,8 +57,6 @@ func TestNewRootCommand_RunsTUIWhenNoArgsProvided(t *testing.T) {
 func TestNewRootCommand_StartsObserverBeforeLaunchingTUI(t *testing.T) {
 	out := &bytes.Buffer{}
 	service := NewMockTaskService(t)
-	updates := make(chan core.HookSessionSummary)
-	close(updates)
 	observer := &stubObserverProcess{}
 
 	service.EXPECT().
@@ -73,10 +65,6 @@ func TestNewRootCommand_StartsObserverBeforeLaunchingTUI(t *testing.T) {
 			require.True(t, observer.started)
 		}).
 		Return([]*core.TaskView{}, nil).
-		Maybe()
-	service.EXPECT().
-		SubscribeTaskHookUpdates(mock.Anything).
-		Return((<-chan core.HookSessionSummary)(updates), func() {}, nil).
 		Maybe()
 
 	cmd := NewRootCommand(Dependencies{
@@ -97,17 +85,11 @@ func TestNewRootCommand_StartsObserverBeforeLaunchingTUI(t *testing.T) {
 func TestNewRootCommand_ContinuesWhenObserverStartupFails(t *testing.T) {
 	out := &bytes.Buffer{}
 	service := NewMockTaskService(t)
-	updates := make(chan core.HookSessionSummary)
-	close(updates)
 	observer := &stubObserverProcess{err: errors.New("observer unavailable")}
 
 	service.EXPECT().
 		ListTaskViews(mock.Anything).
 		Return([]*core.TaskView{}, nil).
-		Maybe()
-	service.EXPECT().
-		SubscribeTaskHookUpdates(mock.Anything).
-		Return((<-chan core.HookSessionSummary)(updates), func() {}, nil).
 		Maybe()
 
 	cmd := NewRootCommand(Dependencies{

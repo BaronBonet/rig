@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"strings"
 
+	observer "agent/internal/adapters/observability/observer"
 	"agent/internal/core"
 
 	"charm.land/bubbles/v2/textarea"
@@ -14,6 +15,8 @@ import (
 )
 
 var availableProviders = []string{"codex", "claude"}
+
+const taskDetailTimeLayout = "2006-01-02 15:04:05"
 
 type tuiMode string
 
@@ -36,8 +39,9 @@ type model struct {
 	tasks              []*core.Task
 	hookEvents         []core.HookEvent
 	hookEventsTaskID   string
-	hookUpdates        <-chan core.HookSessionSummary
-	unsubscribeHooks   func()
+	observerSocketPath string
+	observerUpdates    <-chan core.ObserverTaskUpdate
+	unsubscribeUpdates func()
 	promptInput        textarea.Model
 	nameInput          textinput.Model
 	selected           int
@@ -57,17 +61,17 @@ type hookEventsLoadedMsg struct {
 	events []core.HookEvent
 }
 
-type hookSubscriptionReadyMsg struct {
+type observerSubscriptionReadyMsg struct {
 	err     error
-	updates <-chan core.HookSessionSummary
+	updates <-chan core.ObserverTaskUpdate
 	cleanup func()
 }
 
-type hookSessionUpdatedMsg struct {
-	summary core.HookSessionSummary
+type observerTaskUpdatedMsg struct {
+	update core.ObserverTaskUpdate
 }
 
-type hookSubscriptionClosedMsg struct{}
+type observerSubscriptionClosedMsg struct{}
 
 type cleanupFinishedMsg struct {
 	task *core.Task
@@ -89,7 +93,13 @@ type createFinishedMsg struct {
 	err  error
 }
 
-func newTUIModel(service TaskService, defaultCreationCwd string, defaultProvider string, initialErr error) model {
+func newTUIModel(
+	service TaskService,
+	defaultCreationCwd string,
+	defaultProvider string,
+	observerSocketPath string,
+	initialErr error,
+) model {
 	promptInput := textarea.New()
 	promptInput.Placeholder = "Describe the task to create..."
 	promptInput.ShowLineNumbers = false
@@ -108,6 +118,7 @@ func newTUIModel(service TaskService, defaultCreationCwd string, defaultProvider
 		promptInput:        promptInput,
 		nameInput:          nameInput,
 		defaultCreationCwd: emptyFallback(defaultCreationCwd, "."),
+		observerSocketPath: strings.TrimSpace(observerSocketPath),
 		provider:           emptyFallback(defaultProvider, "codex"),
 	}
 }
@@ -115,7 +126,7 @@ func newTUIModel(service TaskService, defaultCreationCwd string, defaultProvider
 func (m model) Init() tea.Cmd {
 	return tea.Batch(
 		refreshTasksCmd(m.service),
-		subscribeTaskHookUpdatesCmd(m.service),
+		subscribeObserverUpdatesCmd(m.observerSocketPath),
 	)
 }
 
@@ -165,32 +176,34 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.hookEventsTaskID = msg.taskID
 		m.hookEvents = msg.events
 		return m, nil
-	case hookSubscriptionReadyMsg:
+	case observerSubscriptionReadyMsg:
 		if msg.err != nil {
-			m.err = msg.err
 			return m, nil
 		}
-		if m.unsubscribeHooks != nil {
-			m.unsubscribeHooks()
+		if m.unsubscribeUpdates != nil {
+			m.unsubscribeUpdates()
 		}
-		m.unsubscribeHooks = msg.cleanup
-		m.hookUpdates = msg.updates
-		return m, waitForHookUpdateCmd(msg.updates)
-	case hookSessionUpdatedMsg:
-		m.applyHookSessionUpdate(msg.summary)
+		m.unsubscribeUpdates = msg.cleanup
+		m.observerUpdates = msg.updates
+		return m, waitForObserverUpdateCmd(msg.updates)
+	case observerTaskUpdatedMsg:
+		m.applyObserverTaskUpdate(msg.update)
 
-		nextCmds := []tea.Cmd{waitForHookUpdateCmd(m.hookUpdates)}
+		nextCmds := []tea.Cmd{
+			waitForObserverUpdateCmd(m.observerUpdates),
+			refreshTasksCmd(m.service),
+		}
 		task := m.selectedTask()
-		if task != nil && task.ID == msg.summary.TaskID {
+		if task != nil && task.ID == msg.update.TaskID {
 			nextCmds = append(nextCmds, m.loadSelectedHookEventsCmd())
 		}
 		return m, tea.Batch(nextCmds...)
-	case hookSubscriptionClosedMsg:
-		if m.unsubscribeHooks != nil {
-			m.unsubscribeHooks()
-			m.unsubscribeHooks = nil
+	case observerSubscriptionClosedMsg:
+		if m.unsubscribeUpdates != nil {
+			m.unsubscribeUpdates()
+			m.unsubscribeUpdates = nil
 		}
-		m.hookUpdates = nil
+		m.observerUpdates = nil
 		return m, nil
 	case cleanupFinishedMsg:
 		m.mode = tuiModeList
@@ -533,7 +546,7 @@ func (m model) selectedTaskDetailView() string {
 	b.WriteString(titleStyle.Render("Selected Task") + "\n")
 	b.WriteString(primaryStyle.Render("Name: ") + task.DisplayName + "\n")
 	b.WriteString(primaryStyle.Render("Provider: ") + emptyFallback(task.Provider, "-") + "\n")
-	b.WriteString(primaryStyle.Render("Status: ") + string(task.Status) + "\n")
+	b.WriteString(primaryStyle.Render("Status: ") + taskStateLabel(view) + "\n")
 	if strings.TrimSpace(task.RepoName) != "" {
 		b.WriteString(primaryStyle.Render("Repo: ") + task.RepoName + "\n")
 	}
@@ -551,7 +564,19 @@ func (m model) selectedTaskDetailView() string {
 	}
 
 	b.WriteString("\n")
-	b.WriteString(titleStyle.Render("Hook Activity") + "\n")
+	b.WriteString(titleStyle.Render("Session Activity") + "\n")
+	if view != nil && view.Observer != nil {
+		if !view.Observer.LastRuntimeObservedAt.IsZero() {
+			b.WriteString(
+				primaryStyle.Render("Last Activity: ") + view.Observer.LastRuntimeObservedAt.Local().Format(taskDetailTimeLayout) + "\n",
+			)
+		}
+		if view.Observer.ProcessAlive {
+			b.WriteString(primaryStyle.Render("Process: ") + "connected" + "\n")
+		} else {
+			b.WriteString(primaryStyle.Render("Process: ") + "disconnected" + "\n")
+		}
+	}
 	if view == nil || view.HookSession == nil {
 		b.WriteString(dimStyle.Render("No hook activity has been recorded for this task yet.") + "\n")
 		return strings.TrimRight(b.String(), "\n")
@@ -563,12 +588,6 @@ func (m model) selectedTaskDetailView() string {
 	}
 	if strings.TrimSpace(hook.Model) != "" {
 		b.WriteString(primaryStyle.Render("Model: ") + hook.Model + "\n")
-	}
-	if hook.RuntimePhase != "" {
-		b.WriteString(primaryStyle.Render("Phase: ") + strings.ReplaceAll(string(hook.RuntimePhase), "_", " ") + "\n")
-	}
-	if strings.TrimSpace(hook.LastEventName) != "" {
-		b.WriteString(primaryStyle.Render("Last Event: ") + hook.LastEventName + "\n")
 	}
 	if strings.TrimSpace(hook.Cwd) != "" {
 		b.WriteString(primaryStyle.Render("Hook Cwd: ") + hook.Cwd + "\n")
@@ -602,23 +621,48 @@ func (m model) selectedTaskDetailView() string {
 }
 
 func taskStateText(view *core.TaskView) (string, lipgloss.Style) {
-	if view == nil || view.Task == nil {
+	label := taskStateLabel(view)
+	if label == "" {
 		return "", dimStyle
 	}
 
-	if view != nil && view.HookSession != nil && view.HookSession.RuntimePhase != "" {
-		icon, style := hookPhaseStyle(string(view.HookSession.RuntimePhase))
-		return strings.TrimSpace(icon + " " + strings.ReplaceAll(string(view.HookSession.RuntimePhase), "_", " ")), style
+	icon, style := taskStateStyle(view)
+	return strings.TrimSpace(icon + " " + label), style
+}
+
+func taskStateLabel(view *core.TaskView) string {
+	if view == nil || view.Task == nil {
+		return ""
+	}
+
+	if view.Observer != nil && view.Observer.DisplayStatus != "" {
+		label := strings.ReplaceAll(string(view.Observer.DisplayStatus), "_", " ")
+		if view.Observer.DisplayStatus == core.DisplayStatusWorking &&
+			view.Observer.DisplayActivity == core.DisplayActivityCommand {
+			label += " · " + string(core.DisplayActivityCommand)
+		}
+		return label
 	}
 
 	task := view.Task
 	if task.RuntimeState != core.RuntimeStateNone {
-		icon, style := runtimeStateStyle(string(task.RuntimeState))
-		return strings.TrimSpace(icon + " " + strings.ReplaceAll(string(task.RuntimeState), "_", " ")), style
+		return strings.ReplaceAll(string(task.RuntimeState), "_", " ")
 	}
 
-	icon, style := statusStyle(string(task.Status))
-	return strings.TrimSpace(icon + " " + string(task.Status)), style
+	return string(task.Status)
+}
+
+func taskStateStyle(view *core.TaskView) (string, lipgloss.Style) {
+	if view != nil && view.Observer != nil && view.Observer.DisplayStatus != "" {
+		return displayStateStyle(string(view.Observer.DisplayStatus), string(view.Observer.DisplayActivity))
+	}
+
+	task := view.Task
+	if task.RuntimeState != core.RuntimeStateNone {
+		return runtimeStateStyle(string(task.RuntimeState))
+	}
+
+	return statusStyle(string(task.Status))
 }
 
 func taskPreview(view *core.TaskView) string {
@@ -813,29 +857,35 @@ func (m *model) clearHookEvents() {
 }
 
 func (m *model) cleanupHookSubscription() {
-	if m.unsubscribeHooks != nil {
-		m.unsubscribeHooks()
-		m.unsubscribeHooks = nil
+	if m.unsubscribeUpdates != nil {
+		m.unsubscribeUpdates()
+		m.unsubscribeUpdates = nil
 	}
-	m.hookUpdates = nil
+	m.observerUpdates = nil
 }
 
-func (m *model) applyHookSessionUpdate(summary core.HookSessionSummary) {
-	if strings.TrimSpace(summary.TaskID) == "" {
+func (m *model) applyObserverTaskUpdate(update core.ObserverTaskUpdate) {
+	if strings.TrimSpace(update.TaskID) == "" {
 		return
 	}
 
 	for i, view := range m.taskViews {
-		if view == nil || view.Task == nil || view.Task.ID != summary.TaskID {
+		if view == nil || view.Task == nil || view.Task.ID != update.TaskID {
 			continue
 		}
 
-		copySummary := summary
-		if view.HookSession == nil {
+		copySummary := &core.ObserverSummary{
+			TaskID:                update.TaskID,
+			DisplayStatus:         update.DisplayStatus,
+			DisplayActivity:       update.DisplayActivity,
+			LastRuntimeObservedAt: update.LastActivityAt,
+			ProcessAlive:          update.DisplayStatus != core.DisplayStatusDisconnected,
+		}
+		if view.Observer == nil {
 			view = &core.TaskView{Task: view.Task}
 			m.taskViews[i] = view
 		}
-		view.HookSession = &copySummary
+		view.Observer = copySummary
 		return
 	}
 }
@@ -947,24 +997,28 @@ func loadTaskHookEventsCmd(service TaskService, taskID string, limit int) tea.Cm
 	}
 }
 
-func subscribeTaskHookUpdatesCmd(service TaskService) tea.Cmd {
+func subscribeObserverUpdatesCmd(socketPath string) tea.Cmd {
 	return func() tea.Msg {
-		updates, cleanup, err := service.SubscribeTaskHookUpdates(context.Background())
-		return hookSubscriptionReadyMsg{updates: updates, cleanup: cleanup, err: err}
+		if strings.TrimSpace(socketPath) == "" {
+			return observerSubscriptionReadyMsg{}
+		}
+
+		updates, cleanup, err := observer.Subscribe(context.Background(), socketPath)
+		return observerSubscriptionReadyMsg{updates: updates, cleanup: cleanup, err: err}
 	}
 }
 
-func waitForHookUpdateCmd(updates <-chan core.HookSessionSummary) tea.Cmd {
+func waitForObserverUpdateCmd(updates <-chan core.ObserverTaskUpdate) tea.Cmd {
 	if updates == nil {
 		return nil
 	}
 
 	return func() tea.Msg {
-		summary, ok := <-updates
+		update, ok := <-updates
 		if !ok {
-			return hookSubscriptionClosedMsg{}
+			return observerSubscriptionClosedMsg{}
 		}
-		return hookSessionUpdatedMsg{summary: summary}
+		return observerTaskUpdatedMsg{update: update}
 	}
 }
 

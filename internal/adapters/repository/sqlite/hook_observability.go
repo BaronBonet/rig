@@ -38,6 +38,12 @@ type hookSubscriber struct {
 	closed bool
 }
 
+type observerSubscriber struct {
+	ch     chan core.ObserverTaskUpdate
+	mu     sync.RWMutex
+	closed bool
+}
+
 func newHookSubscriber(buffer int) *hookSubscriber {
 	if buffer < 0 {
 		buffer = 0
@@ -65,6 +71,44 @@ func (s *hookSubscriber) publish(summary core.HookSessionSummary) bool {
 }
 
 func (s *hookSubscriber) close() {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	if s.closed {
+		return
+	}
+
+	s.closed = true
+	close(s.ch)
+}
+
+func newObserverSubscriber(buffer int) *observerSubscriber {
+	if buffer < 0 {
+		buffer = 0
+	}
+
+	return &observerSubscriber{
+		ch: make(chan core.ObserverTaskUpdate, buffer),
+	}
+}
+
+func (s *observerSubscriber) publish(update core.ObserverTaskUpdate) bool {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	if s.closed {
+		return false
+	}
+
+	select {
+	case s.ch <- update:
+		return true
+	default:
+		return false
+	}
+}
+
+func (s *observerSubscriber) close() {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
@@ -129,10 +173,11 @@ func (r *Repository) IngestHookEvent(ctx context.Context, raw core.HookEventInpu
 
 	next := deriveHookSessionSummary(previous, record)
 	next.TaskID = taskID
+	nextObserver := deriveObserverSummary(previousObserver, next)
 	if err := upsertHookSessionSummary(ctx, tx, next); err != nil {
 		return nil, err
 	}
-	if err := upsertObserverSummary(ctx, tx, deriveObserverSummary(previousObserver, next)); err != nil {
+	if err := upsertObserverSummary(ctx, tx, nextObserver); err != nil {
 		return nil, err
 	}
 
@@ -141,6 +186,7 @@ func (r *Repository) IngestHookEvent(ctx context.Context, raw core.HookEventInpu
 	}
 
 	r.publishHookSessionUpdate(*next)
+	r.publishObserverTaskUpdate(observerTaskUpdateFromSummary(nextObserver))
 	return next, nil
 }
 
@@ -253,6 +299,44 @@ func (r *Repository) SubscribeHookSessionUpdates(ctx context.Context) (<-chan co
 	if done := ctx.Done(); done != nil {
 		go func() {
 			<-done
+			cleanup()
+		}()
+	}
+
+	return subscriber.ch, cleanup, nil
+}
+
+func (r *Repository) SubscribeObserverTaskUpdates(ctx context.Context) (<-chan core.ObserverTaskUpdate, func(), error) {
+	if err := r.unavailableErr(); err != nil {
+		return nil, nil, err
+	}
+
+	subscriber := newObserverSubscriber(16)
+
+	r.mu.Lock()
+	id := r.nextObserverSubscriberID
+	r.nextObserverSubscriberID++
+	r.observerSubscribers[id] = subscriber
+	r.mu.Unlock()
+
+	var once sync.Once
+	cleanup := func() {
+		once.Do(func() {
+			r.mu.Lock()
+			current, ok := r.observerSubscribers[id]
+			if ok {
+				delete(r.observerSubscribers, id)
+			}
+			r.mu.Unlock()
+			if ok {
+				current.close()
+			}
+		})
+	}
+
+	if ctx != nil && ctx.Done() != nil {
+		go func() {
+			<-ctx.Done()
 			cleanup()
 		}()
 	}
@@ -660,5 +744,35 @@ func (r *Repository) publishHookSessionUpdate(summary core.HookSessionSummary) {
 
 	for _, subscriber := range subscribers {
 		subscriber.publish(summary)
+	}
+}
+
+func (r *Repository) publishObserverTaskUpdate(update core.ObserverTaskUpdate) {
+	if r == nil || strings.TrimSpace(update.TaskID) == "" {
+		return
+	}
+
+	r.mu.Lock()
+	subscribers := make([]*observerSubscriber, 0, len(r.observerSubscribers))
+	for _, subscriber := range r.observerSubscribers {
+		subscribers = append(subscribers, subscriber)
+	}
+	r.mu.Unlock()
+
+	for _, subscriber := range subscribers {
+		subscriber.publish(update)
+	}
+}
+
+func observerTaskUpdateFromSummary(summary *core.ObserverSummary) core.ObserverTaskUpdate {
+	if summary == nil {
+		return core.ObserverTaskUpdate{}
+	}
+
+	return core.ObserverTaskUpdate{
+		TaskID:          summary.TaskID,
+		DisplayStatus:   summary.DisplayStatus,
+		DisplayActivity: summary.DisplayActivity,
+		LastActivityAt:  summary.LastRuntimeObservedAt,
 	}
 }

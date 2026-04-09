@@ -117,6 +117,13 @@ type ObserverSummary struct {
 	LastRuntimeObservedAt time.Time
 }
 
+type ObserverTaskUpdate struct {
+	TaskID          string          `json:"task_id"`
+	DisplayStatus   DisplayStatus   `json:"display_status"`
+	DisplayActivity DisplayActivity `json:"display_activity"`
+	LastActivityAt  time.Time       `json:"last_activity_at"`
+}
+
 type HookEvent struct {
 	OccurredAt           time.Time
 	ID                   int64
@@ -153,6 +160,7 @@ type HookEventInput struct {
 type TaskView struct {
 	Task        *Task
 	HookSession *HookSessionSummary
+	Observer    *ObserverSummary
 }
 
 type TaskProgressStep string

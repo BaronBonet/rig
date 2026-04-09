@@ -18,12 +18,11 @@ func TestHub_PublishesToSubscribers(t *testing.T) {
 	second, releaseSecond := hub.Subscribe(t.Context())
 	defer releaseSecond()
 
-	expected := core.HookSessionSummary{
+	expected := core.ObserverTaskUpdate{
 		TaskID:          "task-1",
-		SessionID:       "sess-1",
-		LastEventName:   "SessionStart",
-		RuntimePhase:    core.HookRuntimePhaseReady,
-		LastCommandText: "go test ./...",
+		DisplayStatus:   core.DisplayStatusWorking,
+		DisplayActivity: core.DisplayActivityCommand,
+		LastActivityAt:  time.Date(2026, 4, 9, 12, 0, 0, 0, time.UTC),
 	}
 
 	hub.Publish(expected)

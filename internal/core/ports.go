@@ -76,6 +76,7 @@ type HookObservabilityRepository interface {
 type ObserverRuntimeRepository interface {
 	ListObserverSummaries(ctx context.Context, taskIDs []string) (map[string]*ObserverSummary, error)
 	UpsertObserverSummary(ctx context.Context, summary *ObserverSummary) error
+	SubscribeObserverTaskUpdates(ctx context.Context) (<-chan ObserverTaskUpdate, func(), error)
 }
 
 type RepoConfigLoader interface {
