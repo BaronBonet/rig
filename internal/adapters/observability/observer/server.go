@@ -6,8 +6,6 @@ import (
 	"fmt"
 	"net"
 	"net/http"
-	"os"
-	"path/filepath"
 	"sync"
 	"time"
 
@@ -19,9 +17,11 @@ type ServerConfig struct {
 	SocketPath     string
 	HookListenAddr string
 	HookIngestor   core.HookEventIngestor
+	Watcher        *TMuxWatcher
 	Hub            *Hub
 	Now            func() time.Time
 	HookListener   net.Listener
+	RefreshInterval time.Duration
 }
 
 func Serve(ctx context.Context, cfg ServerConfig) error {
@@ -40,22 +40,15 @@ func Serve(ctx context.Context, cfg ServerConfig) error {
 	if cfg.Hub == nil {
 		return fmt.Errorf("hook hub not configured")
 	}
-
-	if err := os.MkdirAll(filepath.Dir(cfg.SocketPath), 0o755); err != nil {
-		return fmt.Errorf("prepare observer socket directory: %w", err)
+	if cfg.RefreshInterval <= 0 {
+		cfg.RefreshInterval = time.Second
 	}
-	if err := os.Remove(cfg.SocketPath); err != nil && !errors.Is(err, os.ErrNotExist) {
-		return fmt.Errorf("remove stale observer socket: %w", err)
+	if cfg.Watcher != nil {
+		defer cfg.Watcher.Close()
 	}
-
-	healthListener, err := net.Listen("unix", cfg.SocketPath)
-	if err != nil {
-		return fmt.Errorf("listen on observer socket: %w", err)
-	}
-	defer healthListener.Close()
-	defer os.Remove(cfg.SocketPath)
 
 	hookListener := cfg.HookListener
+	var err error
 	if hookListener == nil {
 		hookListener, err = net.Listen("tcp", cfg.HookListenAddr)
 		if err != nil {
@@ -64,28 +57,40 @@ func Serve(ctx context.Context, cfg ServerConfig) error {
 	}
 	defer hookListener.Close()
 
-	healthMux := http.NewServeMux()
-	healthMux.HandleFunc("/healthz", func(w http.ResponseWriter, _ *http.Request) {
-		w.WriteHeader(http.StatusOK)
-	})
-	healthServer := &http.Server{Handler: healthMux}
-
 	hookMux := http.NewServeMux()
 	hookMux.Handle("/hook", hookhttp.NewHTTPHandler(newPublishingHookIngestor(cfg.HookIngestor, cfg.Hub), cfg.Now))
 	hookServer := &http.Server{Handler: hookMux}
+	socketServer := NewSocketServer(SocketServerConfig{
+		SocketPath: cfg.SocketPath,
+		Hub:        cfg.Hub,
+	})
 
 	errCh := make(chan error, 2)
 	var wg sync.WaitGroup
-	start := func(server *http.Server, listener net.Listener) {
+	startHTTP := func(server *http.Server, listener net.Listener) {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
 			errCh <- server.Serve(listener)
 		}()
 	}
+	startSocket := func() {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			errCh <- socketServer.Serve(ctx)
+		}()
+	}
 
-	start(healthServer, healthListener)
-	start(hookServer, hookListener)
+	startSocket()
+	startHTTP(hookServer, hookListener)
+	if cfg.Watcher != nil {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			runRefreshLoop(ctx, cfg.Watcher, cfg.RefreshInterval)
+		}()
+	}
 
 	select {
 	case <-ctx.Done():
@@ -93,7 +98,6 @@ func Serve(ctx context.Context, cfg ServerConfig) error {
 		if err != nil && !errors.Is(err, http.ErrServerClosed) {
 			shutdownCtx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 			defer cancel()
-			_ = healthServer.Shutdown(shutdownCtx)
 			_ = hookServer.Shutdown(shutdownCtx)
 			wg.Wait()
 			return err
@@ -102,22 +106,48 @@ func Serve(ctx context.Context, cfg ServerConfig) error {
 
 	shutdownCtx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
-	_ = healthServer.Shutdown(shutdownCtx)
 	_ = hookServer.Shutdown(shutdownCtx)
 	wg.Wait()
 
 	return nil
 }
 
+func runRefreshLoop(ctx context.Context, watcher *TMuxWatcher, interval time.Duration) {
+	if watcher == nil {
+		return
+	}
+
+	_ = watcher.RefreshAll(ctx)
+
+	ticker := time.NewTicker(interval)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			_ = watcher.RefreshAll(ctx)
+		}
+	}
+}
+
 type publishingHookIngestor struct {
-	ingestor core.HookEventIngestor
-	hub      *Hub
+	ingestor  core.HookEventIngestor
+	observers core.ObserverRuntimeRepository
+	hub       *Hub
 }
 
 func newPublishingHookIngestor(ingestor core.HookEventIngestor, hub *Hub) core.HookEventIngestor {
+	var observers core.ObserverRuntimeRepository
+	if repo, ok := ingestor.(core.ObserverRuntimeRepository); ok {
+		observers = repo
+	}
+
 	return &publishingHookIngestor{
-		ingestor: ingestor,
-		hub:      hub,
+		ingestor:  ingestor,
+		observers: observers,
+		hub:       hub,
 	}
 }
 
@@ -126,8 +156,26 @@ func (p *publishingHookIngestor) IngestHookEvent(ctx context.Context, input core
 	if err != nil {
 		return summary, err
 	}
-	if summary != nil && p.hub != nil {
-		p.hub.Publish(*summary)
+	if summary != nil && p.hub != nil && p.observers != nil {
+		summaries, listErr := p.observers.ListObserverSummaries(ctx, []string{summary.TaskID})
+		if listErr == nil {
+			if observerSummary := summaries[summary.TaskID]; observerSummary != nil {
+				p.hub.Publish(observerTaskUpdateFromSummary(observerSummary))
+			}
+		}
 	}
 	return summary, nil
+}
+
+func observerTaskUpdateFromSummary(summary *core.ObserverSummary) core.ObserverTaskUpdate {
+	if summary == nil {
+		return core.ObserverTaskUpdate{}
+	}
+
+	return core.ObserverTaskUpdate{
+		TaskID:          summary.TaskID,
+		DisplayStatus:   summary.DisplayStatus,
+		DisplayActivity: summary.DisplayActivity,
+		LastActivityAt:  summary.LastRuntimeObservedAt,
+	}
 }

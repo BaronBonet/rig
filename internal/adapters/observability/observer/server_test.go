@@ -45,11 +45,7 @@ func TestServe_HealthCheckOverUnixSocket(t *testing.T) {
 			return false
 		default:
 		}
-		status, err := unixHTTPStatus(socketPath, http.MethodGet, "/healthz", "")
-		if err != nil {
-			return false
-		}
-		return status == http.StatusOK
+		return socketHealthOK(socketPath) == nil
 	}, 2*time.Second, 20*time.Millisecond)
 
 	cancel()
@@ -129,15 +125,13 @@ func TestObserverHookEndpoint_PersistsEventAndPublishesTaskUpdate(t *testing.T) 
 	_, _ = io.Copy(io.Discard, resp.Body)
 	require.Equal(t, http.StatusAccepted, resp.StatusCode)
 
-	var update core.HookSessionSummary
+	var update core.ObserverTaskUpdate
 	select {
 	case update = <-updates:
 	case <-time.After(2 * time.Second):
 		t.Fatal("timed out waiting for hub update")
 	}
 	require.Equal(t, task.ID, update.TaskID)
-	require.Equal(t, "sess-1", update.SessionID)
-	require.Equal(t, "SessionStart", update.LastEventName)
 
 	events, err := repo.ListHookEvents(t.Context(), task.ID, 10)
 	require.NoError(t, err)
@@ -189,11 +183,7 @@ func TestObserverDropsUnmanagedHookEventsWithoutBroadcast(t *testing.T) {
 			return false
 		default:
 		}
-		status, err := unixHTTPStatus(socketPath, http.MethodGet, "/healthz", "")
-		if err != nil {
-			return false
-		}
-		return status == http.StatusOK
+		return socketHealthOK(socketPath) == nil
 	}, 2*time.Second, 20*time.Millisecond)
 
 	req, err := http.NewRequest(http.MethodPost, "http://"+hookListener.Addr().String()+"/hook", strings.NewReader(`{"hook_event_name":"Stop"}`))
@@ -333,11 +323,17 @@ func mustSeedTask(t *testing.T, repo *sqliterepo.Repository, task core.Task) *co
 	return &task
 }
 
-func mustSubscribeHub(t *testing.T, hub *Hub) (<-chan core.HookSessionSummary, func()) {
+func mustSubscribeHub(t *testing.T, hub *Hub) (<-chan core.ObserverTaskUpdate, func()) {
 	t.Helper()
 
 	updates, release := hub.Subscribe(t.Context())
 	require.NotNil(t, updates)
 	require.NotNil(t, release)
 	return updates, release
+}
+
+func socketHealthOK(socketPath string) error {
+	ctx, cancel := context.WithTimeout(context.Background(), 200*time.Millisecond)
+	defer cancel()
+	return dialSocketHealth(ctx, socketPath)
 }

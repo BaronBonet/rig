@@ -31,6 +31,7 @@ type CreateTaskOptions struct {
 type Service struct {
 	tasks      TaskRepository
 	hooks      HookObservabilityRepository
+	observers  ObserverRuntimeRepository
 	repo       RepoClient
 	session    SessionClient
 	providers  map[string]ProviderClient
@@ -283,6 +284,7 @@ func (s *Service) ListTaskViews(ctx context.Context) ([]*TaskView, error) {
 	}
 
 	var summaries map[string]*HookSessionSummary
+	var observerSummaries map[string]*ObserverSummary
 	if s.hooks != nil {
 		taskIDs := make([]string, 0, len(tasks))
 		for _, task := range tasks {
@@ -297,11 +299,28 @@ func (s *Service) ListTaskViews(ctx context.Context) ([]*TaskView, error) {
 			return nil, err
 		}
 	}
+	if s.observers != nil {
+		taskIDs := make([]string, 0, len(tasks))
+		for _, task := range tasks {
+			if task == nil {
+				continue
+			}
+			taskIDs = append(taskIDs, task.ID)
+		}
+
+		observerSummaries, err = s.observers.ListObserverSummaries(ctx, taskIDs)
+		if err != nil {
+			return nil, err
+		}
+	}
 
 	for _, task := range tasks {
 		view := &TaskView{Task: task}
 		if summaries != nil && task != nil {
 			view.HookSession = summaries[task.ID]
+		}
+		if observerSummaries != nil && task != nil {
+			view.Observer = observerSummaries[task.ID]
 		}
 		views = append(views, view)
 	}
@@ -325,6 +344,16 @@ func (s *Service) SubscribeTaskHookUpdates(ctx context.Context) (<-chan HookSess
 	}
 
 	return s.hooks.SubscribeHookSessionUpdates(ctx)
+}
+
+func (s *Service) SubscribeTaskUpdates(ctx context.Context) (<-chan ObserverTaskUpdate, func(), error) {
+	if s.observers == nil {
+		ch := make(chan ObserverTaskUpdate)
+		close(ch)
+		return ch, func() {}, nil
+	}
+
+	return s.observers.SubscribeObserverTaskUpdates(ctx)
 }
 
 func (s *Service) GetTask(ctx context.Context, idOrSlug string) (*Task, error) {
@@ -425,6 +454,7 @@ func (s *Service) DeleteTaskResources(ctx context.Context, idOrSlug string) (*Ta
 func NewService(
 	tasks TaskRepository,
 	hooks HookObservabilityRepository,
+	observers ObserverRuntimeRepository,
 	repo RepoClient,
 	session SessionClient,
 	providers map[string]ProviderClient,
@@ -436,6 +466,7 @@ func NewService(
 	return &Service{
 		tasks:      tasks,
 		hooks:      hooks,
+		observers:  observers,
 		repo:       repo,
 		session:    session,
 		providers:  providers,

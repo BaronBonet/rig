@@ -4,10 +4,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"io"
-	"net"
-	"net/http"
-	"net/url"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -234,35 +230,7 @@ func defaultProcessSpawn(ctx context.Context, execPath string, args []string) er
 }
 
 func defaultProcessDial(ctx context.Context, socketPath string) error {
-	transport := &http.Transport{
-		Proxy: func(*http.Request) (*url.URL, error) {
-			return nil, nil
-		},
-	}
-	transport.DialContext = func(ctx context.Context, _, _ string) (net.Conn, error) {
-		var d net.Dialer
-		return d.DialContext(ctx, "unix", socketPath)
-	}
-	defer transport.CloseIdleConnections()
-
-	client := &http.Client{Transport: transport}
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, "http://unix/healthz", nil)
-	if err != nil {
-		return err
-	}
-
-	resp, err := client.Do(req)
-	if err != nil {
-		return err
-	}
-	defer resp.Body.Close()
-	_, _ = io.Copy(io.Discard, resp.Body)
-
-	if resp.StatusCode != http.StatusOK {
-		return fmt.Errorf("observer unhealthy: %s", resp.Status)
-	}
-
-	return nil
+	return dialSocketHealth(ctx, socketPath)
 }
 
 func waitForHealthyObserver(ctx context.Context, cfg ProcessConfig) error {

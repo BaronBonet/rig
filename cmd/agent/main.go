@@ -41,6 +41,10 @@ func buildDependencies() (cli.Dependencies, error) {
 	}
 
 	runner := execx.ExecRunner{}
+	providers := map[string]core.ProviderClient{
+		"codex":  codexclient.NewRepository(runner, cfg.Codex),
+		"claude": claudeclient.NewRepository(runner, cfg.Claude),
+	}
 
 	taskRepo, err := sqliterepo.NewRepository(cfg.SQLite)
 	if err != nil {
@@ -54,12 +58,10 @@ func buildDependencies() (cli.Dependencies, error) {
 	service := core.NewService(
 		taskRepo,
 		taskRepo,
+		taskRepo,
 		gitclient.NewRepository(runner),
 		tmuxclient.NewRepository(runner),
-		map[string]core.ProviderClient{
-			"codex":  codexclient.NewRepository(runner, cfg.Codex),
-			"claude": claudeclient.NewRepository(runner, cfg.Claude),
-		},
+		providers,
 		agentconfigfs.NewLoader(),
 		workspacefs.NewSeeder(),
 		codexhooksfs.NewBootstrapper(
@@ -70,11 +72,18 @@ func buildDependencies() (cli.Dependencies, error) {
 		),
 		cfg.Service,
 	)
+	observerWatcher := observer.NewTMuxWatcher(observer.TMuxWatcherConfig{
+		Tasks:     taskRepo,
+		Monitor:   tmuxclient.NewRuntimeMonitor(),
+		Repo:      taskRepo,
+		Providers: providers,
+	})
 
 	return cli.Dependencies{
 		Service:            service,
 		HookIngestor:       taskRepo,
 		ObserverProcess:    observer.NewProcessManager(observer.ProcessConfig{SocketPath: cfg.Observer.SocketPath, ExecPath: agentExec}),
+		ObserverWatcher:    observerWatcher,
 		HookListenAddr:     cfg.Hooks.ListenAddr,
 		ObserverSocketPath: cfg.Observer.SocketPath,
 		Stdout:             os.Stdout,

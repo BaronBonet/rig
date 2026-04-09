@@ -16,12 +16,14 @@ import (
 )
 
 type Repository struct {
-	db                   *sql.DB
-	path                 string
-	initErr              error
-	mu                   sync.Mutex
-	nextHookSubscriberID int
-	hookSubscribers      map[int]*hookSubscriber
+	db                       *sql.DB
+	path                     string
+	initErr                  error
+	mu                       sync.Mutex
+	nextHookSubscriberID     int
+	hookSubscribers          map[int]*hookSubscriber
+	nextObserverSubscriberID int
+	observerSubscribers      map[int]*observerSubscriber
 }
 
 type Config struct {
@@ -34,7 +36,11 @@ const (
 )
 
 func NewRepository(cfg Config) (*Repository, error) {
-	repo := &Repository{path: cfg.Path}
+	repo := &Repository{
+		path:                cfg.Path,
+		hookSubscribers:     make(map[int]*hookSubscriber),
+		observerSubscribers: make(map[int]*observerSubscriber),
+	}
 
 	if err := ValidateConfig(cfg); err != nil {
 		repo.initErr = err
@@ -408,7 +414,12 @@ func (r *Repository) UpsertObserverSummary(ctx context.Context, summary *core.Ob
 		formatTime(summary.LastRuntimeObservedAt),
 		formatTime(time.Now().UTC()),
 	)
-	return err
+	if err != nil {
+		return err
+	}
+
+	r.publishObserverTaskUpdate(observerTaskUpdateFromSummary(summary))
+	return nil
 }
 
 func (r *Repository) AppendEvent(ctx context.Context, taskID, eventType, payload string) error {
@@ -500,11 +511,11 @@ func scanTask(scanner rowScanner) (*core.Task, error) {
 
 func scanObserverSummary(scanner rowScanner) (*core.ObserverSummary, error) {
 	var (
-		summary                core.ObserverSummary
-		displayStatus          string
-		displayActivity        string
-		processAlive           int
-		lastRuntimeObservedAt  string
+		summary               core.ObserverSummary
+		displayStatus         string
+		displayActivity       string
+		processAlive          int
+		lastRuntimeObservedAt string
 	)
 
 	err := scanner.Scan(

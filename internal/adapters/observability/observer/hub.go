@@ -14,7 +14,7 @@ type Hub struct {
 }
 
 type hubSubscriber struct {
-	ch     chan core.HookSessionSummary
+	ch     chan core.ObserverTaskUpdate
 	mu     sync.RWMutex
 	closed bool
 }
@@ -25,9 +25,9 @@ func NewHub() *Hub {
 	}
 }
 
-func (h *Hub) Subscribe(ctx context.Context) (<-chan core.HookSessionSummary, func()) {
+func (h *Hub) Subscribe(ctx context.Context) (<-chan core.ObserverTaskUpdate, func()) {
 	if h == nil {
-		ch := make(chan core.HookSessionSummary)
+		ch := make(chan core.ObserverTaskUpdate)
 		close(ch)
 		return ch, func() {}
 	}
@@ -65,7 +65,7 @@ func (h *Hub) Subscribe(ctx context.Context) (<-chan core.HookSessionSummary, fu
 	return subscriber.ch, cleanup
 }
 
-func (h *Hub) Publish(summary core.HookSessionSummary) {
+func (h *Hub) Publish(update core.ObserverTaskUpdate) {
 	if h == nil {
 		return
 	}
@@ -78,7 +78,7 @@ func (h *Hub) Publish(summary core.HookSessionSummary) {
 	h.mu.Unlock()
 
 	for _, subscriber := range subscribers {
-		subscriber.publish(summary)
+		subscriber.publish(update)
 	}
 }
 
@@ -88,11 +88,11 @@ func newHubSubscriber(buffer int) *hubSubscriber {
 	}
 
 	return &hubSubscriber{
-		ch: make(chan core.HookSessionSummary, buffer),
+		ch: make(chan core.ObserverTaskUpdate, buffer),
 	}
 }
 
-func (s *hubSubscriber) publish(summary core.HookSessionSummary) bool {
+func (s *hubSubscriber) publish(update core.ObserverTaskUpdate) bool {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
@@ -101,7 +101,7 @@ func (s *hubSubscriber) publish(summary core.HookSessionSummary) bool {
 	}
 
 	select {
-	case s.ch <- summary:
+	case s.ch <- update:
 		return true
 	default:
 		return false

@@ -20,6 +20,7 @@ func TestNewService_AcceptsBusinessPorts(t *testing.T) {
 	service := NewService(
 		taskRepo,
 		hookRepo,
+		nil,
 		repoClient,
 		sessionClient,
 		map[string]ProviderClient{"codex": providerClient},
