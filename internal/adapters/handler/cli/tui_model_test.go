@@ -117,7 +117,7 @@ func TestModelUpdate_CreateFlowSuggestsNameThenCreatesTask(t *testing.T) {
 
 func TestModelUpdate_CreateFlowWithoutTasksUsesModelCwdFallback(t *testing.T) {
 	service := NewMockTaskService(t)
-	m := newTUIModel(service, "/tmp/fallback-repo", "codex", "", nil)
+	m := newTUIModel(service, "/tmp/fallback-repo", "codex", "", false, nil)
 	m.loading = false
 
 	m, _ = updateTUIModel(t, m, keyRunes("n"))
@@ -995,7 +995,7 @@ func TestModelUpdate_CleanupSuccessRefreshFailureRemovesTaskFromVisibleList(t *t
 }
 
 func TestModelView_ShowsLoadingBeforeInitialLoadCompletes(t *testing.T) {
-	m := newTUIModel(NewMockTaskService(t), "/tmp/default", "codex", "", nil)
+	m := newTUIModel(NewMockTaskService(t), "/tmp/default", "codex", "", false, nil)
 	require.Contains(t, stripANSI(m.View().Content), "Loading tasks")
 }
 
@@ -1028,6 +1028,7 @@ func newLoadedTUIModelWithProviderAndViews(
 		"/tmp/default",
 		provider,
 		"",
+		false,
 		nil,
 	).Update(tasksLoadedMsg{requestID: 1, views: views})
 	m, ok := next.(model)
@@ -1065,7 +1066,7 @@ func stripANSI(s string) string {
 }
 
 func TestListViewShowsInitialError(t *testing.T) {
-	m := newTUIModel(NewMockTaskService(t), "/tmp/default", "codex", "", errors.New("observer unavailable"))
+	m := newTUIModel(NewMockTaskService(t), "/tmp/default", "codex", "", false, errors.New("observer unavailable"))
 	m.loading = false
 
 	view := stripANSI(m.listView())

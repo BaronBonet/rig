@@ -50,6 +50,7 @@ type Dependencies struct {
 	Stderr              io.Writer
 	Cwd                 string
 	DefaultProvider     string
+	UseNerdFont         bool
 }
 
 func NewRootCommand(deps Dependencies) *cobra.Command {
@@ -67,7 +68,7 @@ func NewRootCommand(deps Dependencies) *cobra.Command {
 			}
 
 			program := tea.NewProgram(
-				newTUIModel(deps.Service, deps.Cwd, deps.DefaultProvider, deps.ObserverSocketPath, startupErr),
+				newTUIModel(deps.Service, deps.Cwd, deps.DefaultProvider, deps.ObserverSocketPath, deps.UseNerdFont, startupErr),
 				tea.WithInput(cmd.InOrStdin()),
 				tea.WithOutput(cmd.OutOrStdout()),
 			)
