@@ -732,7 +732,7 @@ func TestModelView_ProviderBadgeCoexistsWithRuntimeBadge(t *testing.T) {
 	t.Fatalf("did not find row for %q in view:\n%s", "running task", view)
 }
 
-func TestModelView_TaskRowsUseObserverStatusAndHookPreview(t *testing.T) {
+func TestModelView_TaskRowsUseObserverStatus(t *testing.T) {
 	service := NewMockTaskService(t)
 	task := tuiTask("billing-retry-flow")
 	task.DisplayName = "billing retry flow"
