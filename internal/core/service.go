@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"slices"
 	"strings"
+	"sync"
 	"time"
 
 	"agent/internal/pkg/slug"
@@ -38,6 +39,16 @@ type Service struct {
 	repoConfig RepoConfigLoader
 	workspace  WorkspaceSeeder
 	cfg        Config
+
+	prChecker  PRStatusChecker
+	prCacheTTL time.Duration
+	prCache    map[string]prCacheEntry
+	prCacheMu  sync.Mutex
+}
+
+type prCacheEntry struct {
+	status    *PRStatus
+	fetchedAt time.Time
 }
 
 func (s *Service) SuggestTaskName(ctx context.Context, prompt string, provider string) (string, error) {
@@ -442,6 +453,49 @@ func (s *Service) DeleteTaskResources(ctx context.Context, idOrSlug string) (*Ta
 	_ = s.tasks.AppendEvent(ctx, task.ID, "cleanup_completed", string(task.Status))
 
 	return task, nil
+}
+
+func (s *Service) GetPRStatus(ctx context.Context, repoRoot string, branchName string) (*PRStatus, error) {
+	if s.prChecker == nil {
+		return &PRStatus{State: PRStateNone}, nil
+	}
+
+	key := repoRoot + ":" + branchName
+	ttl := s.prCacheTTL
+	if ttl == 0 {
+		ttl = time.Minute
+	}
+
+	s.prCacheMu.Lock()
+	if s.prCache == nil {
+		s.prCache = make(map[string]prCacheEntry)
+	}
+	if entry, ok := s.prCache[key]; ok && time.Since(entry.fetchedAt) < ttl {
+		s.prCacheMu.Unlock()
+		return entry.status, nil
+	}
+	s.prCacheMu.Unlock()
+
+	status, err := s.prChecker.CheckPRStatus(ctx, repoRoot, branchName)
+	if err != nil {
+		return &PRStatus{State: PRStateNone}, nil
+	}
+
+	s.prCacheMu.Lock()
+	s.prCache[key] = prCacheEntry{status: status, fetchedAt: time.Now()}
+	s.prCacheMu.Unlock()
+
+	return status, nil
+}
+
+func (s *Service) InvalidatePRCache() {
+	s.prCacheMu.Lock()
+	s.prCache = nil
+	s.prCacheMu.Unlock()
+}
+
+func (s *Service) SetPRStatusChecker(checker PRStatusChecker) {
+	s.prChecker = checker
 }
 
 func NewService(
