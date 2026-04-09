@@ -8,6 +8,7 @@ import (
 	"time"
 
 	hookhttp "agent/internal/adapters/observability/codexhooks"
+	observer "agent/internal/adapters/observability/observer"
 	"agent/internal/core"
 
 	tea "charm.land/bubbletea/v2"
@@ -31,14 +32,20 @@ type TaskService interface {
 	DeleteTaskResources(ctx context.Context, idOrSlug string) (*core.Task, error)
 }
 
+type ObserverProcessRunner interface {
+	EnsureRunning(context.Context) error
+}
+
 type Dependencies struct {
-	Service         TaskService
-	HookIngestor    core.HookEventIngestor
-	StartHookServer func() (func(), error)
-	Stdout          io.Writer
-	Stderr          io.Writer
-	Cwd             string
-	DefaultProvider string
+	Service            TaskService
+	HookIngestor       core.HookEventIngestor
+	ObserverProcess    ObserverProcessRunner
+	HookListenAddr     string
+	ObserverSocketPath string
+	Stdout             io.Writer
+	Stderr             io.Writer
+	Cwd                string
+	DefaultProvider    string
 }
 
 func NewRootCommand(deps Dependencies) *cobra.Command {
@@ -50,20 +57,13 @@ func NewRootCommand(deps Dependencies) *cobra.Command {
 			if deps.Service == nil {
 				return fmt.Errorf("service not configured")
 			}
-			stopHookServer := func() {}
-			if deps.StartHookServer != nil {
-				cleanup, err := deps.StartHookServer()
-				if err != nil {
-					return err
-				}
-				if cleanup != nil {
-					stopHookServer = cleanup
-				}
+			var startupErr error
+			if deps.ObserverProcess != nil {
+				startupErr = deps.ObserverProcess.EnsureRunning(cmd.Context())
 			}
-			defer stopHookServer()
 
 			program := tea.NewProgram(
-				newTUIModel(deps.Service, deps.Cwd, deps.DefaultProvider),
+				newTUIModel(deps.Service, deps.Cwd, deps.DefaultProvider, startupErr),
 				tea.WithInput(cmd.InOrStdin()),
 				tea.WithOutput(cmd.OutOrStdout()),
 			)
@@ -83,6 +83,7 @@ func NewRootCommand(deps Dependencies) *cobra.Command {
 
 	cmd.AddCommand(newDoctorCommand(deps))
 	cmd.AddCommand(newHookIngestCommand(deps))
+	cmd.AddCommand(newObserverCommand(deps))
 
 	return cmd
 }
@@ -110,6 +111,33 @@ func newHookIngestCommand(deps Dependencies) *cobra.Command {
 			return nil
 		},
 	}
+
+	return cmd
+}
+
+func newObserverCommand(deps Dependencies) *cobra.Command {
+	cmd := &cobra.Command{
+		Use:    "observer",
+		Hidden: true,
+		Args:   cobra.NoArgs,
+	}
+
+	cmd.AddCommand(&cobra.Command{
+		Use:    "serve",
+		Hidden: true,
+		Args:   cobra.NoArgs,
+		RunE: func(cmd *cobra.Command, _ []string) error {
+			if deps.HookIngestor == nil {
+				return fmt.Errorf("hook ingestor not configured")
+			}
+
+			return observer.Serve(cmd.Context(), observer.ServerConfig{
+				SocketPath:     deps.ObserverSocketPath,
+				HookListenAddr: deps.HookListenAddr,
+				HookIngestor:   deps.HookIngestor,
+			})
+		},
+	})
 
 	return cmd
 }

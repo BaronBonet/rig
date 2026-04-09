@@ -102,7 +102,7 @@ func TestModelUpdate_CreateFlowSuggestsNameThenCreatesTask(t *testing.T) {
 
 func TestModelUpdate_CreateFlowWithoutTasksUsesModelCwdFallback(t *testing.T) {
 	service := NewMockTaskService(t)
-	m := newTUIModel(service, "/tmp/fallback-repo", "codex")
+	m := newTUIModel(service, "/tmp/fallback-repo", "codex", nil)
 	m.loading = false
 
 	m, _ = updateTUIModel(t, m, keyRunes("n"))
@@ -881,7 +881,7 @@ func TestModelUpdate_CleanupSuccessRefreshFailureRemovesTaskFromVisibleList(t *t
 }
 
 func TestModelView_ShowsLoadingBeforeInitialLoadCompletes(t *testing.T) {
-	m := newTUIModel(NewMockTaskService(t), "/tmp/default", "codex")
+	m := newTUIModel(NewMockTaskService(t), "/tmp/default", "codex", nil)
 	require.Contains(t, stripANSI(m.View().Content), "Loading tasks")
 }
 
@@ -909,7 +909,7 @@ func newLoadedTUIModelWithProviderAndViews(
 ) model {
 	t.Helper()
 
-	next, cmd := newTUIModel(service, "/tmp/default", provider).Update(tasksLoadedMsg{views: views})
+	next, cmd := newTUIModel(service, "/tmp/default", provider, nil).Update(tasksLoadedMsg{views: views})
 	m, ok := next.(model)
 	require.True(t, ok)
 	if cmd == nil {
@@ -942,6 +942,15 @@ var ansiPattern = regexp.MustCompile(`\x1b\[[0-9;]*m`)
 
 func stripANSI(s string) string {
 	return ansiPattern.ReplaceAllString(s, "")
+}
+
+func TestListViewShowsInitialError(t *testing.T) {
+	m := newTUIModel(NewMockTaskService(t), "/tmp/default", "codex", errors.New("observer unavailable"))
+	m.loading = false
+
+	view := stripANSI(m.listView())
+
+	require.Contains(t, view, "observer unavailable")
 }
 
 func tuiTask(slug string) *core.Task {
