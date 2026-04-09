@@ -45,6 +45,9 @@ type model struct {
 	width              int
 	loading            bool
 	busy               bool
+	creationProgress   core.TaskProgressStep
+	creationSteps      []string
+	shimmerTick        int
 	tasksRequestSeq    int
 	icons              IconSet
 }
@@ -91,6 +94,15 @@ type createFinishedMsg struct {
 	task *core.Task
 	err  error
 }
+
+type taskProgressMsg struct {
+	step    core.TaskProgressStep
+	message string
+}
+
+type shimmerTickMsg struct{}
+
+const shimmerTickInterval = 60 * time.Millisecond
 
 func newTUIModel(
 	service TaskService,
@@ -260,6 +272,26 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 		}
 		return m, nil
+	case taskProgressMsg:
+		m.creationProgress = msg.step
+		if msg.step == core.TaskProgressWorktreeCreating ||
+			msg.step == core.TaskProgressWorkspaceSeeding ||
+			msg.step == core.TaskProgressTmuxStarting ||
+			msg.step == core.TaskProgressAgentLaunching ||
+			msg.step == core.TaskProgressTaskCreated {
+			label := progressStepLabel(msg.step)
+			if label != "" {
+				m.creationSteps = append(m.creationSteps, label)
+			}
+		}
+		m.shimmerTick = 0
+		return m, tea.Tick(shimmerTickInterval, func(time.Time) tea.Msg { return shimmerTickMsg{} })
+	case shimmerTickMsg:
+		if m.creationProgress == "" {
+			return m, nil
+		}
+		m.shimmerTick++
+		return m, tea.Tick(shimmerTickInterval, func(time.Time) tea.Msg { return shimmerTickMsg{} })
 	default:
 		return m, nil
 	}
@@ -1108,4 +1140,23 @@ func emptyFallback(value string, fallback string) string {
 	}
 
 	return value
+}
+
+func progressStepLabel(step core.TaskProgressStep) string {
+	switch step {
+	case core.TaskProgressNaming:
+		return "Suggesting name..."
+	case core.TaskProgressWorktreeCreating:
+		return "Creating worktree..."
+	case core.TaskProgressWorkspaceSeeding:
+		return "Seeding workspace..."
+	case core.TaskProgressTmuxStarting:
+		return "Starting session..."
+	case core.TaskProgressAgentLaunching:
+		return "Launching agent..."
+	case core.TaskProgressTaskCreated:
+		return "Task created"
+	default:
+		return ""
+	}
 }
