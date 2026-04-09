@@ -2,6 +2,54 @@ package cli
 
 import "charm.land/lipgloss/v2"
 
+// IconSet holds all icons used in the TUI. Two sets are available:
+// Nerd Font (primary) and Unicode fallback.
+type IconSet struct {
+	Branch    string
+	Repo      string
+	PROpen    string
+	PRMerged  string
+	Time      string
+	Process   string
+	Prompt    string
+	LLMOutput string
+}
+
+func nerdFontIcons() IconSet {
+	return IconSet{
+		Branch:    "\uE725", // nf-dev-git_branch
+		Repo:      "\uF401", // nf-oct-repo
+		PROpen:    "\uE726", // nf-dev-git_pull_request
+		PRMerged:  "\uE727", // nf-dev-git_merge
+		Time:      "\uF017", // nf-fa-clock_o
+		Process:   "\uF1E6", // nf-fa-plug
+		Prompt:    "\uF007", // nf-fa-user
+		LLMOutput: "\U000F06A9", // nf-md-robot
+	}
+}
+
+func unicodeFallbackIcons() IconSet {
+	return IconSet{
+		Branch:    "🌿",
+		Repo:      "📁",
+		PROpen:    "◉",
+		PRMerged:  "✔",
+		Time:      "🕐",
+		Process:   "🔌",
+		Prompt:    "👤",
+		LLMOutput: "🤖",
+	}
+}
+
+// activeIcons returns the icon set to use. Defaults to Nerd Font.
+// Call with useNerdFont=false to get Unicode fallback.
+func activeIcons(useNerdFont bool) IconSet {
+	if useNerdFont {
+		return nerdFontIcons()
+	}
+	return unicodeFallbackIcons()
+}
+
 // Colors
 var (
 	colorPrimary = lipgloss.Color("#c8c8d4")
