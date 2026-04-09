@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"strings"
+	"time"
 
 	observer "agent/internal/adapters/observability/observer"
 	"agent/internal/core"
@@ -15,8 +16,6 @@ import (
 )
 
 var availableProviders = []string{"codex", "claude"}
-
-const taskDetailTimeLayout = "2006-01-02 15:04:05"
 
 type tuiMode string
 
@@ -37,8 +36,6 @@ type model struct {
 	mode               tuiMode
 	taskViews          []*core.TaskView
 	tasks              []*core.Task
-	hookEvents         []core.HookEvent
-	hookEventsTaskID   string
 	observerSocketPath string
 	observerUpdates    <-chan core.ObserverTaskUpdate
 	unsubscribeUpdates func()
@@ -56,12 +53,6 @@ type tasksLoadedMsg struct {
 	requestID int
 	err       error
 	views     []*core.TaskView
-}
-
-type hookEventsLoadedMsg struct {
-	err    error
-	taskID string
-	events []core.HookEvent
 }
 
 type observerSubscriptionReadyMsg struct {
@@ -159,7 +150,6 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.tasks = taskViewsToTasks(m.taskViews)
 		if len(m.tasks) == 0 {
 			m.selected = 0
-			m.clearHookEvents()
 			if m.mode == tuiModeCleanupConfirm {
 				m.mode = tuiModeList
 			}
@@ -170,20 +160,6 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.selected = len(m.tasks) - 1
 		}
 
-		return m, m.loadSelectedHookEventsCmd()
-	case hookEventsLoadedMsg:
-		if msg.err != nil {
-			m.err = msg.err
-			return m, nil
-		}
-
-		task := m.selectedTask()
-		if task == nil || task.ID != msg.taskID {
-			return m, nil
-		}
-
-		m.hookEventsTaskID = msg.taskID
-		m.hookEvents = msg.events
 		return m, nil
 	case observerSubscriptionReadyMsg:
 		if msg.err != nil {
@@ -197,13 +173,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, waitForObserverUpdateCmd(msg.updates)
 	case observerTaskUpdatedMsg:
 		m.applyObserverTaskUpdate(msg.update)
-
-		nextCmds := []tea.Cmd{waitForObserverUpdateCmd(m.observerUpdates)}
-		task := m.selectedTask()
-		if task != nil && task.ID == msg.update.TaskID {
-			nextCmds = append(nextCmds, m.loadSelectedHookEventsCmd())
-		}
-		return m, tea.Batch(nextCmds...)
+		return m, waitForObserverUpdateCmd(m.observerUpdates)
 	case observerSubscriptionClosedMsg:
 		if m.unsubscribeUpdates != nil {
 			m.unsubscribeUpdates()
@@ -329,25 +299,25 @@ func (m model) updateListKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	case "j", "down":
 		if m.selected < len(m.tasks)-1 {
 			m.selected++
-			return m, m.loadSelectedHookEventsCmd()
+			return m, nil
 		}
 		return m, nil
 	case "k", "up":
 		if m.selected > 0 {
 			m.selected--
-			return m, m.loadSelectedHookEventsCmd()
+			return m, nil
 		}
 		return m, nil
 	case "g", "home":
 		if len(m.tasks) > 0 {
 			m.selected = 0
-			return m, m.loadSelectedHookEventsCmd()
+			return m, nil
 		}
 		return m, nil
 	case "G", "end":
 		if len(m.tasks) > 0 {
 			m.selected = len(m.tasks) - 1
-			return m, m.loadSelectedHookEventsCmd()
+			return m, nil
 		}
 		return m, nil
 	case "x":
@@ -452,8 +422,10 @@ func (m model) updateNameConfirmKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 
 // Grid column widths.
 const (
-	colWidthName     = 96
+	colWidthName     = 40
 	colWidthProvider = 10
+	colWidthPR       = 4
+	colWidthTime     = 10
 	colWidthStatus   = 18
 )
 
@@ -482,7 +454,7 @@ func (m model) listView() string {
 	header := titleStyle.Render(iconHeaderList + " Control Center")
 	keys := dimStyle.Render("j/k move · enter open · n new · x clean · r refresh · q quit")
 	b.WriteString(header + "  " + keys + "\n")
-	totalWidth := 3 + colWidthName + 2 + colWidthProvider + 2 + colWidthStatus
+	totalWidth := 3 + colWidthName + 2 + colWidthProvider + 2 + colWidthPR + 2 + colWidthTime + 2 + colWidthStatus
 	b.WriteString(dimStyle.Render(strings.Repeat("─", totalWidth)) + "\n")
 
 	if m.err != nil {
@@ -505,9 +477,11 @@ func (m model) listView() string {
 	}
 
 	// Column header
-	colHeader := fmt.Sprintf("   %s  %s  %s",
+	colHeader := fmt.Sprintf("   %s  %s  %s  %s  %s",
 		padRight("TASK", colWidthName),
 		padRight("PROVIDER", colWidthProvider),
+		padRight("PR", colWidthPR),
+		padRight("TIME", colWidthTime),
 		padRight("STATUS", colWidthStatus),
 	)
 	b.WriteString(dimStyle.Render(colHeader) + "\n")
@@ -517,22 +491,26 @@ func (m model) listView() string {
 		view := m.taskViewAt(i)
 		providerText := providerIcon(task.Provider) + " " + emptyFallback(task.Provider, "-")
 		stateText, stateStyle := taskStateText(view)
-		preview := taskPreview(view)
-		nameText := task.DisplayName
-		if preview != "" {
-			nameText += " · " + preview
+		elapsed := taskElapsed(view)
+		prIcon := m.prIconForTask(view)
+
+		timeText := ""
+		if elapsed != "" {
+			timeText = m.icons.Time + " " + elapsed
 		}
 
 		providerCell := padRight(providerText, colWidthProvider)
+		prCell := padRight(prIcon, colWidthPR)
+		timeCell := padRight(timeText, colWidthTime)
 		stateCell := padRight(stateText, colWidthStatus)
 
 		if i == m.selected {
-			nameCell := padRight(truncateStr(iconSelected+" "+nameText, colWidthName), colWidthName)
-			row := nameCell + "  " + primaryStyle.Render(providerCell) + "  " + stateStyle.Render(stateCell)
+			nameCell := padRight(truncateStr(iconSelected+" "+task.DisplayName, colWidthName), colWidthName)
+			row := nameCell + "  " + primaryStyle.Render(providerCell) + "  " + prCell + "  " + timeCell + "  " + stateStyle.Render(stateCell)
 			b.WriteString(selectedRowStyle.Render(row) + "\n")
 		} else {
-			nameCell := padRight(truncateStr("  "+nameText, colWidthName), colWidthName)
-			row := nameCell + "  " + primaryStyle.Render(providerCell) + "  " + stateStyle.Render(stateCell)
+			nameCell := padRight(truncateStr("  "+task.DisplayName, colWidthName), colWidthName)
+			row := nameCell + "  " + primaryStyle.Render(providerCell) + "  " + prCell + "  " + timeCell + "  " + stateStyle.Render(stateCell)
 			b.WriteString(normalRowStyle.Render(row) + "\n")
 		}
 	}
@@ -555,82 +533,78 @@ func (m model) selectedTaskDetailView() string {
 
 	view := m.selectedTaskView()
 	var b strings.Builder
-	b.WriteString(titleStyle.Render("Selected Task") + "\n")
-	b.WriteString(primaryStyle.Render("Name: ") + task.DisplayName + "\n")
-	b.WriteString(primaryStyle.Render("Provider: ") + emptyFallback(task.Provider, "-") + "\n")
-	b.WriteString(primaryStyle.Render("Status: ") + taskStateLabel(view) + "\n")
-	if strings.TrimSpace(task.RepoName) != "" {
-		b.WriteString(primaryStyle.Render("Repo: ") + task.RepoName + "\n")
-	}
+
+	// Git column
+	var gitCol strings.Builder
+	gitCol.WriteString(titleStyle.Render("Git") + "\n")
 	if strings.TrimSpace(task.BranchName) != "" {
-		b.WriteString(primaryStyle.Render("Branch: ") + task.BranchName + "\n")
+		gitCol.WriteString(dimStyle.Render(m.icons.Branch) + " " + truncateStr(task.BranchName, 38) + "\n")
 	}
-	if strings.TrimSpace(task.RepoRoot) != "" {
-		b.WriteString(primaryStyle.Render("Repo Root: ") + task.RepoRoot + "\n")
+	if strings.TrimSpace(task.RepoName) != "" {
+		gitCol.WriteString(dimStyle.Render(m.icons.Repo) + " " + task.RepoName + "\n")
 	}
-	if strings.TrimSpace(task.WorktreePath) != "" {
-		b.WriteString(primaryStyle.Render("Worktree: ") + task.WorktreePath + "\n")
-	}
-	if strings.TrimSpace(task.TmuxSession) != "" {
-		b.WriteString(primaryStyle.Render("Tmux Session: ") + task.TmuxSession + "\n")
+	if view != nil && view.PR != nil && view.PR.State != core.PRStateNone {
+		prIcon, prStyle := m.prStatusDisplay(view.PR)
+		gitCol.WriteString(prStyle.Render(prIcon+fmt.Sprintf(" #%d %s", view.PR.Number, view.PR.State)) + "\n")
 	}
 
-	b.WriteString("\n")
-	b.WriteString(titleStyle.Render("Session Activity") + "\n")
+	// Session column
+	var sessCol strings.Builder
+	sessCol.WriteString(titleStyle.Render("Session") + "\n")
+	elapsed := taskElapsed(view)
+	if elapsed != "" {
+		sessCol.WriteString(dimStyle.Render(m.icons.Time) + " " + elapsed + "\n")
+	}
 	if view != nil && view.Observer != nil {
-		if !view.Observer.LastRuntimeObservedAt.IsZero() {
-			b.WriteString(
-				primaryStyle.Render(
-					"Last Activity: ",
-				) + view.Observer.LastRuntimeObservedAt.Local().
-					Format(taskDetailTimeLayout) +
-					"\n",
-			)
-		}
 		if view.Observer.ProcessAlive {
-			b.WriteString(primaryStyle.Render("Process: ") + "connected" + "\n")
+			sessCol.WriteString(dimStyle.Render(m.icons.Process) + " " + healthyStyle.Render("connected") + "\n")
 		} else {
-			b.WriteString(primaryStyle.Render("Process: ") + "disconnected" + "\n")
+			sessCol.WriteString(dimStyle.Render(m.icons.Process) + " " + dimStyle.Render("disconnected") + "\n")
 		}
 	}
-	if view == nil || view.HookSession == nil {
-		b.WriteString(dimStyle.Render("No hook activity has been recorded for this task yet.") + "\n")
-		return strings.TrimRight(b.String(), "\n")
-	}
+	if view != nil && view.HookSession != nil {
+		hook := view.HookSession
+		llmLatest := isLLMOutputLatest(hook)
+		promptText := truncateStr(strings.TrimSpace(hook.LastPromptText), 40)
+		outputText := truncateStr(strings.TrimSpace(hook.LastAssistantMessage), 40)
 
-	hook := view.HookSession
-	if strings.TrimSpace(hook.SessionID) != "" {
-		b.WriteString(primaryStyle.Render("Session ID: ") + hook.SessionID + "\n")
-	}
-	if strings.TrimSpace(hook.Model) != "" {
-		b.WriteString(primaryStyle.Render("Model: ") + hook.Model + "\n")
-	}
-	if strings.TrimSpace(hook.Cwd) != "" {
-		b.WriteString(primaryStyle.Render("Hook Cwd: ") + hook.Cwd + "\n")
-	}
-	if strings.TrimSpace(hook.TranscriptPath) != "" {
-		b.WriteString(primaryStyle.Render("Transcript: ") + hook.TranscriptPath + "\n")
-	}
-	if strings.TrimSpace(hook.StartSource) != "" {
-		b.WriteString(primaryStyle.Render("Start Source: ") + hook.StartSource + "\n")
-	}
-	if preview := hookPreview(hook); preview != "" {
-		b.WriteString(primaryStyle.Render("Preview: ") + preview + "\n")
-	}
-
-	b.WriteString("\n")
-	b.WriteString(titleStyle.Render("Recent Hook Events") + "\n")
-	if len(m.hookEvents) == 0 || m.hookEventsTaskID != task.ID {
-		b.WriteString(dimStyle.Render("No recent hook events recorded.") + "\n")
-		return strings.TrimRight(b.String(), "\n")
-	}
-
-	for _, event := range m.hookEvents {
-		line := event.EventName
-		if preview := hookEventPreview(event); preview != "" {
-			line += " · " + preview
+		if promptText != "" {
+			icon := dimStyle.Render(m.icons.Prompt)
+			if llmLatest {
+				sessCol.WriteString(icon + " " + dimStyle.Render(promptText) + "\n")
+			} else {
+				sessCol.WriteString(icon + " " + primaryStyle.Bold(true).Render(promptText) + "\n")
+			}
 		}
-		b.WriteString(dimStyle.Render("• ") + line + "\n")
+		if outputText != "" {
+			icon := dimStyle.Render(m.icons.LLMOutput)
+			if llmLatest {
+				sessCol.WriteString(icon + " " + primaryStyle.Bold(true).Render(outputText) + "\n")
+			} else {
+				sessCol.WriteString(icon + " " + dimStyle.Render(outputText) + "\n")
+			}
+		}
+	}
+
+	// Combine two columns side by side
+	gitLines := strings.Split(strings.TrimRight(gitCol.String(), "\n"), "\n")
+	sessLines := strings.Split(strings.TrimRight(sessCol.String(), "\n"), "\n")
+	maxLines := len(gitLines)
+	if len(sessLines) > maxLines {
+		maxLines = len(sessLines)
+	}
+
+	colWidth := 42
+	for i := 0; i < maxLines; i++ {
+		left := ""
+		if i < len(gitLines) {
+			left = gitLines[i]
+		}
+		right := ""
+		if i < len(sessLines) {
+			right = sessLines[i]
+		}
+		b.WriteString(padRight(left, colWidth) + right + "\n")
 	}
 
 	return strings.TrimRight(b.String(), "\n")
@@ -681,47 +655,68 @@ func taskStateStyle(view *core.TaskView) (string, lipgloss.Style) {
 	return statusStyle(string(task.Status))
 }
 
-func taskPreview(view *core.TaskView) string {
-	if view == nil || view.HookSession == nil {
-		return ""
+func formatElapsed(d time.Duration) string {
+	if d < 0 {
+		d = 0
 	}
-
-	return hookPreview(view.HookSession)
+	h := int(d.Hours())
+	m := int(d.Minutes()) % 60
+	if h > 0 {
+		return fmt.Sprintf("%dh %dm", h, m)
+	}
+	return fmt.Sprintf("%dm", m)
 }
 
-func hookPreview(hook *core.HookSessionSummary) string {
+func taskElapsed(view *core.TaskView) string {
+	if view == nil {
+		return ""
+	}
+	var started time.Time
+	if view.HookSession != nil && !view.HookSession.StartedAt.IsZero() {
+		started = view.HookSession.StartedAt
+	}
+	if started.IsZero() && view.Task != nil {
+		started = view.Task.CreatedAt
+	}
+	if started.IsZero() {
+		return ""
+	}
+	return formatElapsed(time.Since(started))
+}
+
+func (m model) prIconForTask(view *core.TaskView) string {
+	if view == nil || view.PR == nil {
+		return ""
+	}
+	switch view.PR.State {
+	case core.PRStateOpen:
+		return healthyStyle.Render(m.icons.PROpen)
+	case core.PRStateMerged:
+		return titleStyle.Render(m.icons.PRMerged)
+	default:
+		return ""
+	}
+}
+
+func isLLMOutputLatest(hook *core.HookSessionSummary) bool {
 	if hook == nil {
-		return ""
+		return false
 	}
-
-	return firstNonEmpty(
-		hook.LastCommandText,
-		hook.LastPromptText,
-		hook.LastAssistantMessage,
-		hook.LastCommandResultText,
-	)
+	return hook.LastEventName != "UserPromptSubmit"
 }
 
-func hookEventPreview(event core.HookEvent) string {
-	if result := strings.TrimSpace(event.CommandResultText); result != "" {
-		return result
+func (m model) prStatusDisplay(pr *core.PRStatus) (string, lipgloss.Style) {
+	if pr == nil {
+		return "", dimStyle
 	}
-
-	return firstNonEmpty(
-		event.CommandText,
-		event.PromptText,
-		event.LastAssistantMessage,
-	)
-}
-
-func firstNonEmpty(values ...string) string {
-	for _, value := range values {
-		if trimmed := strings.TrimSpace(value); trimmed != "" {
-			return trimmed
-		}
+	switch pr.State {
+	case core.PRStateOpen:
+		return m.icons.PROpen, healthyStyle
+	case core.PRStateMerged:
+		return m.icons.PRMerged, titleStyle
+	default:
+		return "", dimStyle
 	}
-
-	return ""
 }
 
 func (m model) promptInputView() string {
@@ -820,9 +815,6 @@ func (m *model) replaceTask(updated *core.Task) {
 				if m.selected >= len(m.tasks) && len(m.tasks) > 0 {
 					m.selected = len(m.tasks) - 1
 				}
-				if len(m.tasks) == 0 {
-					m.clearHookEvents()
-				}
 				return
 			}
 
@@ -846,9 +838,6 @@ func (m *model) upsertTask(updated *core.Task) {
 				if m.selected >= len(m.tasks) && len(m.tasks) > 0 {
 					m.selected = len(m.tasks) - 1
 				}
-				if len(m.tasks) == 0 {
-					m.clearHookEvents()
-				}
 				return
 			}
 
@@ -865,11 +854,6 @@ func (m *model) upsertTask(updated *core.Task) {
 		m.taskViews = append(m.taskViews, &core.TaskView{Task: updated})
 		m.selected = len(m.tasks) - 1
 	}
-}
-
-func (m *model) clearHookEvents() {
-	m.hookEvents = nil
-	m.hookEventsTaskID = ""
 }
 
 func (m *model) cleanupHookSubscription() {
@@ -904,16 +888,6 @@ func (m *model) applyObserverTaskUpdate(update core.ObserverTaskUpdate) {
 		view.Observer = copySummary
 		return
 	}
-}
-
-func (m *model) loadSelectedHookEventsCmd() tea.Cmd {
-	view := m.selectedTaskView()
-	if view == nil || view.Task == nil || view.HookSession == nil {
-		m.clearHookEvents()
-		return nil
-	}
-
-	return loadTaskHookEventsCmd(m.service, view.Task.ID, 5)
 }
 
 func nextProvider(current string) string {
@@ -1008,13 +982,6 @@ func cleanupTaskCmd(service TaskService, idOrSlug string) tea.Cmd {
 func openTaskCmd(service TaskService, idOrSlug string) tea.Cmd {
 	return func() tea.Msg {
 		return openFinishedMsg{err: service.OpenTask(context.Background(), idOrSlug)}
-	}
-}
-
-func loadTaskHookEventsCmd(service TaskService, taskID string, limit int) tea.Cmd {
-	return func() tea.Msg {
-		events, err := service.GetTaskHookEvents(context.Background(), taskID, limit)
-		return hookEventsLoadedMsg{taskID: taskID, events: events, err: err}
 	}
 }
 
