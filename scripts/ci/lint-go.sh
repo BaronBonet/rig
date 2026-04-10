@@ -24,7 +24,7 @@ go tool golangci-lint run --timeout=5m --config=.golangci.yaml || exit 1
 
 echo "Checking if goimports would make changes..."
 
-GO_FILES=$(find . -type f -name '*.go' -not -path "generated/*")
+GO_FILES=$(find . -type f -name '*.go' -not -path '*/generated/*')
 check_no_changes "go tool goimports -local ${MODULE_NAME}/ -d ${GO_FILES[@]}" "goimports" || exit 1
 echo "Checking if golines would make changes..."
 

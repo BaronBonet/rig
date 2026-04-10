@@ -15,7 +15,9 @@ dependencies-check:
 ################################################################################
 
 .PHONY: generate
-generate:
+generate: dependencies-check
+	@rm -rf ./internal/adapters/repository/sqlite/generated
+	@go tool sqlc generate -f ./internal/adapters/repository/sqlite/sqlc.yaml
 	@go tool mockery --config=.mockery.yaml
 
 ################################################################################
