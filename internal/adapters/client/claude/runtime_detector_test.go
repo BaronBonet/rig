@@ -299,3 +299,68 @@ func TestRuntimeDetector_Detect_RealWorldIdlePaneContent(t *testing.T) {
 
 	require.Equal(t, core.RuntimeStateNeedsInput, state)
 }
+
+func TestRuntimeDetector_Detect_ReturnsNeedsInputForPermissionPrompt(t *testing.T) {
+	detector := NewRuntimeDetector(2 * time.Second)
+
+	// Real Claude Code permission prompt. The selection indicator may not be
+	// the ❯ (U+276F) character, so we test with a generic ">" to simulate
+	// what tmux may actually capture. The footer "Esc to cancel" should be
+	// the reliable detection signal.
+	state := detector.Detect(core.RuntimeSnapshot{
+		PaneID:            "%24",
+		ForegroundCommand: "claude",
+		Content: "Bash command\n\n" +
+			"    git log --all --oneline --grep=\"branch\\|type\\|feat\\|fix\" -i | head -20\n" +
+			"    Run shell command\n\n" +
+			"Do you want to proceed?\n" +
+			"> 1. Yes\n" +
+			"  2. Yes, and don't ask again for: git log:*\n" +
+			"  3. No\n\n" +
+			"Esc to cancel \u00b7 Tab to amend \u00b7 ctrl+e to explain",
+		ObservedAt:   time.Date(2026, 4, 5, 10, 0, 0, 0, time.UTC),
+		LastOutputAt: time.Date(2026, 4, 5, 9, 59, 59, 0, time.UTC),
+	})
+
+	require.Equal(t, core.RuntimeStateNeedsInput, state)
+}
+
+func TestRuntimeDetector_Detect_ReturnsNeedsInputForWorkspaceTrustPrompt(t *testing.T) {
+	detector := NewRuntimeDetector(2 * time.Second)
+
+	// Workspace trust permission prompt with "Enter to confirm" footer
+	state := detector.Detect(core.RuntimeSnapshot{
+		PaneID:            "%24",
+		ForegroundCommand: "node",
+		Content: "Do you trust the files in this folder?\n" +
+			"> 1. Yes, proceed\n" +
+			"  2. No, exit\n\n" +
+			"Enter to confirm \u00b7 Esc to cancel",
+		ObservedAt:   time.Date(2026, 4, 5, 10, 0, 0, 0, time.UTC),
+		LastOutputAt: time.Date(2026, 4, 5, 9, 59, 59, 0, time.UTC),
+	})
+
+	require.Equal(t, core.RuntimeStateNeedsInput, state)
+}
+
+func TestRuntimeDetector_Detect_PermissionPromptNotConfusedWithBusy(t *testing.T) {
+	detector := NewRuntimeDetector(2 * time.Second)
+
+	// "Esc to cancel" must not be confused with "esc to interrupt" (busy marker).
+	// When HadAgentBinding is true the busy-marker check runs first,
+	// so ensure permission footers are not misclassified as busy.
+	state := detector.Detect(core.RuntimeSnapshot{
+		PaneID:            "%24",
+		HadAgentBinding:   true,
+		ForegroundCommand: "node",
+		Content: "Do you want to proceed?\n" +
+			"> 1. Yes\n" +
+			"  2. Yes, and don't ask again for: git log:*\n" +
+			"  3. No\n\n" +
+			"Esc to cancel \u00b7 Tab to amend \u00b7 ctrl+e to explain",
+		ObservedAt:   time.Date(2026, 4, 5, 10, 0, 0, 0, time.UTC),
+		LastOutputAt: time.Date(2026, 4, 5, 9, 59, 59, 0, time.UTC),
+	})
+
+	require.Equal(t, core.RuntimeStateNeedsInput, state)
+}
