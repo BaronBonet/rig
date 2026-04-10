@@ -118,10 +118,46 @@ create table if not exists schema_migrations (
 		return fmt.Errorf("create schema_migrations table: %w", err)
 	}
 
-	initialTasksAndEventsComplete, err := allTablesExist(ctx, db, "tasks", "events")
+	initialTasksAndEventsComplete, err := allColumnsExist(
+		ctx,
+		db,
+		"tasks",
+		"id",
+		"prompt",
+		"display_name",
+		"slug",
+		"repo_root",
+		"base_branch",
+		"branch_name",
+		"worktree_path",
+		"tmux_session",
+		"provider",
+		"status",
+		"worktree_exists",
+		"branch_exists",
+		"session_exists",
+		"last_error",
+		"created_at",
+		"updated_at",
+		"last_reconciled_at",
+	)
 	if err != nil {
-		return fmt.Errorf("check initial migration tables: %w", err)
+		return fmt.Errorf("check initial tasks table: %w", err)
 	}
+	eventsComplete, err := allColumnsExist(
+		ctx,
+		db,
+		"events",
+		"id",
+		"task_id",
+		"event_type",
+		"payload",
+		"created_at",
+	)
+	if err != nil {
+		return fmt.Errorf("check initial events table: %w", err)
+	}
+	initialTasksAndEventsComplete = initialTasksAndEventsComplete && eventsComplete
 
 	taskMetadataColumnsComplete, err := allColumnsExist(
 		ctx,
@@ -137,15 +173,65 @@ create table if not exists schema_migrations (
 		return fmt.Errorf("check task metadata columns: %w", err)
 	}
 
-	hookObservabilityTablesComplete, err := allTablesExist(
+	hookEventColumnsComplete, err := allColumnsExist(
 		ctx,
 		db,
 		"task_hook_events",
-		"task_hook_sessions",
-		"task_observer_summaries",
+		"id",
+		"task_id",
+		"session_id",
+		"turn_id",
+		"event_name",
+		"occurred_at",
+		"raw_payload_json",
+		"last_assistant_message",
+		"prompt_preview",
+		"command_preview",
+		"command_result_preview",
+		"tool_use_id",
 	)
 	if err != nil {
-		return fmt.Errorf("check hook observability tables: %w", err)
+		return fmt.Errorf("check task_hook_events columns: %w", err)
+	}
+	hookSessionColumnsComplete, err := allColumnsExist(
+		ctx,
+		db,
+		"task_hook_sessions",
+		"task_id",
+		"session_id",
+		"model",
+		"cwd",
+		"transcript_path",
+		"start_source",
+		"current_turn_id",
+		"last_event_name",
+		"runtime_phase",
+		"started_at",
+		"last_activity_at",
+		"last_stop_at",
+		"last_prompt_preview",
+		"last_command_preview",
+		"last_command_result_preview",
+		"last_assistant_message",
+		"command_count",
+		"updated_at",
+	)
+	if err != nil {
+		return fmt.Errorf("check task_hook_sessions columns: %w", err)
+	}
+	observerSummaryColumnsComplete, err := allColumnsExist(
+		ctx,
+		db,
+		"task_observer_summaries",
+		"task_id",
+		"display_status",
+		"display_activity",
+		"process_alive",
+		"last_runtime_observed_at",
+		"updated_at",
+	)
+	if err != nil {
+		return fmt.Errorf("check task_observer_summaries columns: %w", err)
 	}
 
 	hookObservabilityIndexesComplete, err := allIndexesExist(
@@ -157,25 +243,50 @@ create table if not exists schema_migrations (
 	if err != nil {
 		return fmt.Errorf("check hook observability indexes: %w", err)
 	}
+	hookObservabilityComplete := hookEventColumnsComplete &&
+		hookSessionColumnsComplete &&
+		observerSummaryColumnsComplete &&
+		hookObservabilityIndexesComplete
 
-	versions := make([]string, 0, 3)
-	if initialTasksAndEventsComplete {
-		versions = append(versions, "000001_initial_tasks_and_events")
-	}
-	if taskMetadataColumnsComplete {
-		versions = append(versions, "000002_add_task_metadata_columns")
-	}
-	if hookObservabilityTablesComplete && hookObservabilityIndexesComplete {
-		versions = append(versions, "000003_add_hook_observability_tables")
+	managedMigrations := []struct {
+		version  string
+		complete bool
+	}{
+		{version: "000001_initial_tasks_and_events", complete: initialTasksAndEventsComplete},
+		{version: "000002_add_task_metadata_columns", complete: taskMetadataColumnsComplete},
+		{version: "000003_add_hook_observability_tables", complete: hookObservabilityComplete},
 	}
 
-	for _, version := range versions {
-		if _, err := db.ExecContext(ctx, `
+	tx, err := db.BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("begin schema_migrations normalization: %w", err)
+	}
+
+	if _, err := tx.ExecContext(ctx, `delete from schema_migrations where version = ?`, "000001_sqlc_bootstrap"); err != nil {
+		_ = tx.Rollback()
+		return fmt.Errorf("remove legacy bootstrap migration row: %w", err)
+	}
+
+	for _, migration := range managedMigrations {
+		if !migration.complete {
+			if _, err := tx.ExecContext(ctx, `delete from schema_migrations where version = ?`, migration.version); err != nil {
+				_ = tx.Rollback()
+				return fmt.Errorf("remove stale migration %s: %w", migration.version, err)
+			}
+			continue
+		}
+
+		if _, err := tx.ExecContext(ctx, `
 insert into schema_migrations(version, applied_at)
 values (?, strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
-on conflict(version) do nothing`, version); err != nil {
-			return fmt.Errorf("seed migration %s: %w", version, err)
+on conflict(version) do nothing`, migration.version); err != nil {
+			_ = tx.Rollback()
+			return fmt.Errorf("seed migration %s: %w", migration.version, err)
 		}
+	}
+
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("commit schema_migrations normalization: %w", err)
 	}
 
 	return nil
