@@ -21,6 +21,7 @@ type LaunchRequest struct {
 	Command      []string
 	Prompt       string
 	InitialInput []string
+	SetupFiles   map[string][]byte // relative path -> content, written to worktree before launch
 }
 
 type RepoResources struct {

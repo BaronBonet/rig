@@ -17,6 +17,7 @@ type TMuxWatcherConfig struct {
 	Tasks     observerTaskLister
 	Monitor   core.RuntimeMonitor
 	Repo      core.ObserverRuntimeRepository
+	Hooks     core.HookObservabilityRepository
 	Hub       *Hub
 	Providers map[string]core.ProviderClient
 	Now       func() time.Time
@@ -26,6 +27,7 @@ type TMuxWatcher struct {
 	tasks     observerTaskLister
 	monitor   core.RuntimeMonitor
 	repo      core.ObserverRuntimeRepository
+	hooks     core.HookObservabilityRepository
 	hub       *Hub
 	providers map[string]core.ProviderClient
 	now       func() time.Time
@@ -40,6 +42,7 @@ func NewTMuxWatcher(cfg TMuxWatcherConfig) *TMuxWatcher {
 		tasks:     cfg.Tasks,
 		monitor:   cfg.Monitor,
 		repo:      cfg.Repo,
+		hooks:     cfg.Hooks,
 		hub:       cfg.Hub,
 		providers: cfg.Providers,
 		now:       cfg.Now,
@@ -123,6 +126,13 @@ func (w *TMuxWatcher) refreshTask(ctx context.Context, task *core.Task) error {
 	}
 
 	runtimeState := provider.DetectRuntimeState(snapshot)
+
+	// Hook data is more authoritative than tmux snapshot parsing. When
+	// hooks indicate Claude is actively working, override the tmux-based
+	// runtime state which may incorrectly detect a visible prompt as
+	// "needs input".
+	runtimeState = w.overrideWithHookPhase(ctx, task.ID, runtimeState, snapshot.ObservedAt)
+
 	processAlive := runtimeState == core.RuntimeStateRunning || runtimeState == core.RuntimeStateNeedsInput
 	display := DeriveDisplayStatus(StatusInput{
 		TaskStatus:    task.Status,
@@ -163,6 +173,61 @@ func (w *TMuxWatcher) findTaskBySession(ctx context.Context, sessionName string)
 	}
 
 	return nil, nil
+}
+
+// hookStaleThreshold is a safety net: if no hook events arrive for this
+// long, stop trusting the hook phase and fall back to tmux detection.
+// This guards against hooks silently breaking.
+const hookStaleThreshold = 5 * time.Minute
+
+func (w *TMuxWatcher) overrideWithHookPhase(
+	ctx context.Context,
+	taskID string,
+	rs core.RuntimeState,
+	observedAt time.Time,
+) core.RuntimeState {
+	if w.hooks == nil {
+		return rs
+	}
+
+	// If tmux says the process isn't running at all, trust tmux —
+	// the agent has exited regardless of what hooks last reported.
+	if rs == core.RuntimeStateNone || rs == core.RuntimeStateFinished {
+		return rs
+	}
+
+	summaries, err := w.hooks.ListHookSessionSummaries(ctx, []string{taskID})
+	if err != nil {
+		return rs
+	}
+
+	hs := summaries[taskID]
+	if hs == nil || hs.LastActivityAt.IsZero() {
+		return rs
+	}
+
+	// Safety net: if hooks haven't arrived in a long time, they may
+	// have broken. Fall back to tmux detection.
+	age := observedAt.Sub(hs.LastActivityAt)
+	if age > hookStaleThreshold {
+		return rs
+	}
+
+	switch hs.RuntimePhase {
+	case core.HookRuntimePhasePrompted, core.HookRuntimePhaseRunningCommand:
+		// Hook says Claude is actively working — trust it.
+		return core.RuntimeStateRunning
+	case core.HookRuntimePhaseIdle:
+		// PostToolUse sets idle, but Claude may be thinking between tool
+		// calls. Only treat as truly idle when the last event was Stop.
+		if hs.LastEventName == "Stop" {
+			return rs
+		}
+		// Between tool calls — still working.
+		return core.RuntimeStateRunning
+	}
+
+	return rs
 }
 
 func isForegroundCommandActivity(command string) bool {

@@ -9,6 +9,7 @@ import (
 	"sync"
 	"time"
 
+	claudehookhttp "agent/internal/adapters/observability/claudehooks"
 	hookhttp "agent/internal/adapters/observability/codexhooks"
 	"agent/internal/core"
 )
@@ -63,7 +64,9 @@ func Serve(ctx context.Context, cfg ServerConfig) error {
 	defer hookListener.Close()
 
 	hookMux := http.NewServeMux()
-	hookMux.Handle("/hook", hookhttp.NewHTTPHandler(newPublishingHookIngestor(cfg.HookIngestor, cfg.Hub), cfg.Now))
+	publishingIngestor := newPublishingHookIngestor(cfg.HookIngestor, cfg.Hub)
+	hookMux.Handle("/hook", hookhttp.NewHTTPHandler(publishingIngestor, cfg.Now))
+	hookMux.Handle("/claude-hook", claudehookhttp.NewHTTPHandler(publishingIngestor, cfg.Now))
 	hookServer := &http.Server{Handler: hookMux}
 	socketServer := NewSocketServer(SocketServerConfig{
 		SocketPath:  cfg.SocketPath,
