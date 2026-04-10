@@ -167,6 +167,54 @@ func TestTMuxWatcher_RefreshAllPublishesObserverUpdate(t *testing.T) {
 	}
 }
 
+func TestTMuxWatcher_OverrideWithHookPhase_PermissionRequestYieldsNeedsInput(t *testing.T) {
+	now := time.Date(2026, 4, 9, 12, 20, 0, 0, time.UTC)
+	task := &core.Task{
+		ID:              "task-1",
+		TmuxSession:     "repo_task-1",
+		AgentWindowName: "agent",
+		Provider:        "claude",
+		Status:          core.TaskStatusRunning,
+	}
+
+	monitor := core.NewMockRuntimeMonitor(t)
+	monitor.EXPECT().Snapshot(mock.Anything, task).Return(core.RuntimeSnapshot{
+		SessionName:       task.TmuxSession,
+		PaneID:            "%24",
+		ForegroundCommand: "claude",
+		ObservedAt:        now,
+	}, nil).Once()
+
+	// The tmux detector returns Running (from recent output), but hooks
+	// report WaitingPermission — the hook should win.
+	provider := stubTMuxWatcherProvider{runtimeState: core.RuntimeStateRunning}
+	repo := &stubWatcherObserverRepository{}
+	hooks := &stubHookObservabilityRepository{
+		summaries: map[string]*core.HookSessionSummary{
+			task.ID: {
+				TaskID:         task.ID,
+				RuntimePhase:   core.HookRuntimePhaseWaitingPermission,
+				LastActivityAt: now.Add(-1 * time.Second),
+				LastEventName:  "PermissionRequest",
+			},
+		},
+	}
+
+	watcher := NewTMuxWatcher(TMuxWatcherConfig{
+		Tasks:     stubObserverTaskLister{tasks: []*core.Task{task}},
+		Monitor:   monitor,
+		Repo:      repo,
+		Hooks:     hooks,
+		Providers: map[string]core.ProviderClient{"claude": provider},
+	})
+
+	err := watcher.RefreshAll(context.Background())
+	require.NoError(t, err)
+	require.NotNil(t, repo.lastUpsert)
+	require.Equal(t, core.DisplayStatusNeedsInput, repo.lastUpsert.DisplayStatus)
+	require.True(t, repo.lastUpsert.ProcessAlive)
+}
+
 type stubObserverTaskLister struct {
 	tasks []*core.Task
 	err   error
@@ -222,4 +270,37 @@ func (s stubTMuxWatcherProvider) LaunchRequest(*core.Task) (core.LaunchRequest, 
 
 func (s stubTMuxWatcherProvider) DetectRuntimeState(core.RuntimeSnapshot) core.RuntimeState {
 	return s.runtimeState
+}
+
+type stubHookObservabilityRepository struct {
+	summaries map[string]*core.HookSessionSummary
+}
+
+func (s *stubHookObservabilityRepository) ListHookSessionSummaries(
+	_ context.Context,
+	taskIDs []string,
+) (map[string]*core.HookSessionSummary, error) {
+	result := make(map[string]*core.HookSessionSummary)
+	for _, id := range taskIDs {
+		if hs, ok := s.summaries[id]; ok {
+			result[id] = hs
+		}
+	}
+	return result, nil
+}
+
+func (s *stubHookObservabilityRepository) ListHookEvents(
+	context.Context,
+	string,
+	int,
+) ([]core.HookEvent, error) {
+	return nil, nil
+}
+
+func (s *stubHookObservabilityRepository) SubscribeHookSessionUpdates(
+	context.Context,
+) (<-chan core.HookSessionSummary, func(), error) {
+	ch := make(chan core.HookSessionSummary)
+	close(ch)
+	return ch, func() {}, nil
 }

@@ -48,6 +48,25 @@ func TestDeriveHookSessionSummary_MarksIdleAfterStopAndTracksStopTime(t *testing
 	require.Equal(t, "go test ./...", summary.LastCommandText)
 }
 
+func TestDeriveHookSessionSummary_MarksWaitingPermissionOnPermissionRequest(t *testing.T) {
+	summary := deriveHookSessionSummary(&core.HookSessionSummary{
+		TaskID:          "task-1",
+		SessionID:       "sess-1",
+		RuntimePhase:    core.HookRuntimePhaseRunningCommand,
+		CommandCount:    1,
+		LastCommandText: "git log --all",
+	}, hookRecord{
+		EventName:   "PermissionRequest",
+		SessionID:   "sess-1",
+		TurnID:      "turn-1",
+		CommandText: "git log --all --oneline",
+		OccurredAt:  time.Date(2026, 4, 8, 10, 0, 30, 0, time.UTC),
+	})
+
+	require.Equal(t, core.HookRuntimePhaseWaitingPermission, summary.RuntimePhase)
+	require.Equal(t, "git log --all --oneline", summary.LastCommandText)
+}
+
 func TestTrimPreview_NormalizesWhitespaceAndTruncates(t *testing.T) {
 	long := "  line one\n\tline two  " + repeatString("x", hookPreviewMaxLen)
 

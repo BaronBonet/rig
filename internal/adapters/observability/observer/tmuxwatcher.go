@@ -214,6 +214,9 @@ func (w *TMuxWatcher) overrideWithHookPhase(
 	}
 
 	switch hs.RuntimePhase {
+	case core.HookRuntimePhaseWaitingPermission:
+		// Hook says Claude is waiting for user to approve/deny a tool.
+		return core.RuntimeStateNeedsInput
 	case core.HookRuntimePhasePrompted, core.HookRuntimePhaseRunningCommand:
 		// Hook says Claude is actively working — trust it.
 		return core.RuntimeStateRunning

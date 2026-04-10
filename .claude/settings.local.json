@@ -4,7 +4,9 @@
       "Bash(git log:*)",
       "Bash(ls:*)",
       "Bash(echo \"EXIT: $?\")",
-      "Bash(python3:*)"
+      "Bash(python3:*)",
+      "Bash(mockery)",
+      "Bash(GOFLAGS=\"\" mockery)"
     ]
   },
   "hooks": {

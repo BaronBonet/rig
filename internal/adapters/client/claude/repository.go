@@ -136,11 +136,12 @@ func buildHookSettings(listenAddr string) ([]byte, error) {
 
 	settings := map[string]any{
 		"hooks": map[string]any{
-			"SessionStart":     matchAll,
-			"UserPromptSubmit": matchAll,
-			"PreToolUse":       matchAll,
-			"PostToolUse":      matchAll,
-			"Stop":             matchAll,
+			"SessionStart":      matchAll,
+			"UserPromptSubmit":  matchAll,
+			"PreToolUse":        matchAll,
+			"PostToolUse":       matchAll,
+			"PermissionRequest": matchAll,
+			"Stop":              matchAll,
 		},
 	}
 

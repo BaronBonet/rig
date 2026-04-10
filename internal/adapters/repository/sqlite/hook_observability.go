@@ -640,6 +640,12 @@ func deriveHookSessionSummary(previous *core.HookSessionSummary, event hookRecor
 		next.LastCommandText = trimPreview(event.CommandText)
 		next.RuntimePhase = core.HookRuntimePhaseRunningCommand
 		next.CommandCount++
+	case "PermissionRequest":
+		next.CurrentTurnID = firstNonEmpty(event.TurnID, next.CurrentTurnID)
+		if event.CommandText != "" {
+			next.LastCommandText = trimPreview(event.CommandText)
+		}
+		next.RuntimePhase = core.HookRuntimePhaseWaitingPermission
 	case "PostToolUse":
 		next.CurrentTurnID = firstNonEmpty(event.TurnID, next.CurrentTurnID)
 		if event.CommandText != "" {
