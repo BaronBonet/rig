@@ -19,5 +19,7 @@ mv -f "${TMP_GOBIN}/golangci-lint" "${DEST_DIR}/golangci-lint"
 
 echo "Downloading Go module and tool dependencies..."
 go mod download
+go mod download github.com/sqlc-dev/sqlc
+go tool sqlc version >/dev/null
 
 echo "All dependencies installed! ✨"
