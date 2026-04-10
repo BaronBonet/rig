@@ -924,6 +924,55 @@ create table task_hook_events (
 	require.Contains(t, err.Error(), "incomplete managed schema for task_hook_events table")
 }
 
+func TestNewRepository_FailsForPartialTaskMetadataSchema(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "state.db")
+
+	db, err := sql.Open("sqlite", path)
+	require.NoError(t, err)
+
+	_, err = db.ExecContext(context.Background(), `
+create table tasks (
+  id text primary key,
+  prompt text not null,
+  display_name text not null,
+  slug text not null unique,
+  repo_root text not null,
+  repo_name text not null default '',
+  base_branch text not null,
+  branch_name text not null,
+  worktree_path text not null,
+  tmux_session text not null,
+  provider text not null,
+  status text not null,
+  worktree_exists integer not null,
+  branch_exists integer not null,
+  session_exists integer not null,
+  last_error text not null default '',
+  created_at text not null,
+  updated_at text not null,
+  last_reconciled_at text not null default ''
+);
+create table events (
+  id integer primary key autoincrement,
+  task_id text not null,
+  event_type text not null,
+  payload text not null,
+  created_at text not null
+);
+`)
+	require.NoError(t, err)
+	require.NoError(t, db.Close())
+
+	repo, err := NewRepository(Config{Path: path})
+	require.NoError(t, err)
+	require.NotNil(t, repo)
+
+	err = repo.IsAvailable(context.Background())
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "incomplete managed schema for task metadata columns")
+}
+
 func TestNewRepository_CreatesHookObservabilityTables(t *testing.T) {
 	repo := newTestRepository(t)
 
