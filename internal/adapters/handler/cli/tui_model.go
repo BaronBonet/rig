@@ -595,7 +595,7 @@ func (m model) listView() string {
 
 		timeText := ""
 		if elapsed != "" {
-			timeText = m.icons.Time + " " + elapsed
+			timeText = elapsed
 		}
 
 		providerCell := padRightVisible(providerText, colWidthProvider)

@@ -764,6 +764,35 @@ func TestModelView_TaskRowsUseObserverStatus(t *testing.T) {
 	t.Fatalf("did not find row for %q in view:\n%s", "billing retry flow", view)
 }
 
+func TestModelView_OverviewRowsShowElapsedTimeWithoutClockIcon(t *testing.T) {
+	service := NewMockTaskService(t)
+	task := tuiTask("auth-rewrite")
+	task.DisplayName = "auth rewrite"
+
+	summary := &core.HookSessionSummary{
+		TaskID:    task.ID,
+		StartedAt: time.Now().Add(-15 * time.Minute),
+	}
+
+	m := newLoadedTUIModelWithViews(t, service, taskView(task, summary))
+	view := stripANSI(m.View().Content)
+	lines := strings.Split(view, "\n")
+
+	require.GreaterOrEqual(t, len(lines), 3)
+	require.Contains(t, lines[2], "Time")
+
+	for _, row := range lines {
+		if !strings.Contains(row, "auth rewrite") {
+			continue
+		}
+		require.Contains(t, row, "15m")
+		require.NotContains(t, row, m.icons.Time)
+		return
+	}
+
+	t.Fatalf("did not find row for %q in view:\n%s", "auth rewrite", view)
+}
+
 func TestModelView_DetailPanelShowsGitAndSessionColumns(t *testing.T) {
 	service := NewMockTaskService(t)
 	task := tuiTask("auth-rewrite")
