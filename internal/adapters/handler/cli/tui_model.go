@@ -100,9 +100,9 @@ type openFinishedMsg struct {
 }
 
 type suggestNameFinishedMsg struct {
-	err    error
-	prompt string
-	name   string
+	err        error
+	prompt     string
+	suggestion core.TaskSuggestion
 }
 
 type createFinishedMsg struct {
@@ -280,7 +280,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 
 		m.createInput.Prompt = msg.prompt
-		m.nameInput.SetValue(msg.name)
+		m.nameInput.SetValue(msg.suggestion.Name)
 		m.nameInput.CursorEnd()
 		m.nameInput.Focus()
 		m.promptInput.Blur()
@@ -1265,8 +1265,8 @@ func waitForObserverUpdateCmd(updates <-chan core.ObserverTaskUpdate) tea.Cmd {
 
 func suggestTaskNameCmd(service TaskService, prompt string, provider string) tea.Cmd {
 	return safeCmd("suggestTaskNameCmd", func() tea.Msg {
-		name, err := service.SuggestTaskName(context.Background(), prompt, provider)
-		return suggestNameFinishedMsg{prompt: prompt, name: name, err: err}
+		suggestion, err := service.SuggestTaskName(context.Background(), prompt, provider)
+		return suggestNameFinishedMsg{prompt: prompt, suggestion: suggestion, err: err}
 	})
 }
 

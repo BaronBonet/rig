@@ -81,12 +81,13 @@ type sessionClientState struct {
 }
 
 type providerClientState struct {
-	isAvailableErr error
-	suggestErr     error
-	suggestedName  string
-	launchErr      error
-	launchRequest  LaunchRequest
-	runtimeState   RuntimeState
+	isAvailableErr      error
+	suggestErr          error
+	suggestedName       string
+	suggestedSuggestion TaskSuggestion
+	launchErr           error
+	launchRequest       LaunchRequest
+	runtimeState        RuntimeState
 }
 
 type repoConfigLoaderState struct {
@@ -304,12 +305,14 @@ func wireProviderClientMock(h *testServiceHarness) {
 		return h.providerRepo.isAvailableErr
 	}).Maybe()
 	h.providerRepoMock.EXPECT().SuggestTaskName(mock.Anything, mock.Anything).
-		RunAndReturn(func(context.Context, string) (string, error) {
+		RunAndReturn(func(context.Context, string) (TaskSuggestion, error) {
 			if h.providerRepo.suggestErr != nil {
-				return "", h.providerRepo.suggestErr
+				return TaskSuggestion{}, h.providerRepo.suggestErr
 			}
-
-			return h.providerRepo.suggestedName, nil
+			if h.providerRepo.suggestedSuggestion.Name != "" {
+				return h.providerRepo.suggestedSuggestion, nil
+			}
+			return TaskSuggestion{Name: h.providerRepo.suggestedName, BranchType: "feat"}, nil
 		}).Maybe()
 	h.providerRepoMock.EXPECT().LaunchRequest(mock.Anything).RunAndReturn(func(task *Task) (LaunchRequest, error) {
 		if h.providerRepo.launchErr != nil {
