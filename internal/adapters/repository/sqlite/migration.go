@@ -118,14 +118,6 @@ create table if not exists schema_migrations (
 		return fmt.Errorf("create schema_migrations table: %w", err)
 	}
 
-	var total int
-	if err := db.QueryRowContext(ctx, `select count(*) from schema_migrations`).Scan(&total); err != nil {
-		return fmt.Errorf("count schema_migrations rows: %w", err)
-	}
-	if total > 0 {
-		return nil
-	}
-
 	initialTasksAndEventsComplete, err := allTablesExist(ctx, db, "tasks", "events")
 	if err != nil {
 		return fmt.Errorf("check initial migration tables: %w", err)
