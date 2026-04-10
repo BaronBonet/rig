@@ -131,10 +131,11 @@ type ObserverSummary struct {
 }
 
 type ObserverTaskUpdate struct {
-	TaskID          string          `json:"task_id"`
-	DisplayStatus   DisplayStatus   `json:"display_status"`
-	DisplayActivity DisplayActivity `json:"display_activity"`
-	LastActivityAt  time.Time       `json:"last_activity_at"`
+	TaskID          string              `json:"task_id"`
+	DisplayStatus   DisplayStatus       `json:"display_status"`
+	DisplayActivity DisplayActivity     `json:"display_activity"`
+	LastActivityAt  time.Time           `json:"last_activity_at"`
+	HookSession     *HookSessionSummary `json:"hook_session,omitempty"`
 }
 
 type HookEvent struct {

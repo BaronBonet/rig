@@ -184,7 +184,7 @@ func (w *TMuxWatcher) persistSummary(ctx context.Context, summary *core.Observer
 		return err
 	}
 	if w.hub != nil {
-		w.hub.Publish(observerTaskUpdateFromSummary(summary))
+		w.hub.Publish(observerTaskUpdateFromSummary(summary, nil))
 	}
 	return nil
 }
