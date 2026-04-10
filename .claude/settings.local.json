@@ -1,50 +1,75 @@
 {
   "permissions": {
     "allow": [
-      "Bash(chmod +x:*)",
-      "Bash(go get:*)",
-      "Bash(go mod:*)",
-      "Bash(make format:*)",
-      "Bash(make lint-all:*)",
-      "Bash(go build:*)",
-      "Bash(go test:*)",
-      "Bash(golangci-lint run:*)",
-      "Bash(go tool:*)",
-      "Bash(make test:*)",
-      "Bash(git rebase:*)",
-      "Bash(git add:*)",
-      "Bash(git commit -m ':*)",
-      "Bash(git commit:*)",
-      "Bash(git stash:*)",
-      "Bash(/tmp/agent-test new:*)",
-      "Bash(grep:*)",
-      "Bash(tmux list-sessions:*)",
-      "Bash(tmux list-panes:*)",
-      "Bash(tmux capture-pane:*)",
-      "Bash(claude:*)",
-      "Bash(go list:*)",
-      "Bash(curl -sL \"https://raw.githubusercontent.com/charmbracelet/bubbletea/v2/README.md\")",
-      "Bash(curl -sL \"https://github.com/charmbracelet/bubbletea/releases/tag/v2.0.0\")",
-      "Bash(curl -sL \"https://raw.githubusercontent.com/charmbracelet/bubbletea/v2/key.go\")",
-      "Bash(curl -sL \"https://raw.githubusercontent.com/charmbracelet/bubbletea/v2/tea.go\")",
-      "WebFetch(domain:github.com)",
-      "Bash(/Users/ericbonet/.claude/plugins/cache/claude-plugins-official/superpowers/5.0.7/scripts/start-server.sh:*)",
-      "Bash(bash:*)",
-      "Bash(mockery:*)",
-      "Bash(ls /Users/ericbonet/software/tmux-llm-v1-refactor-brainstorm/internal/core/mock_*.go)",
-      "Bash(go env:*)",
-      "Bash(GOFLAGS=\"\" mockery:*)",
-      "Bash(go version:*)",
-      "Bash(git -C /Users/ericbonet/software/tmux-llm-v1-refactor-brainstorm add internal/core/domain.go internal/core/ports.go .mockery.yaml internal/core/mock_pr_status_checker.go)",
-      "Bash(git -C /Users/ericbonet/software/tmux-llm-v1-refactor-brainstorm commit -m ':*)",
-      "Bash(git -C /Users/ericbonet/software/tmux-llm-v1-refactor-brainstorm add internal/core/domain.go internal/core/ports.go .mockery.yaml)",
-      "Bash(echo \"Exit: $?\")",
-      "Bash(git:*)",
-      "Bash(go vet:*)",
-      "Bash(/Users/ericbonet/.claude/plugins/cache/claude-plugins-official/superpowers/5.0.7/skills/brainstorming/scripts/start-server.sh:*)",
-      "Bash(make generate:*)",
-      "Bash(go doc:*)",
-      "Bash(find:*)"
+      "Bash(git log:*)",
+      "Bash(grep -r \"go:generate\\\\|mockery\\\\|mock_\" /Users/ericbonet/software/tmux-llm-llm-driven-branch-type-selection/internal/core/*.go)",
+      "Bash(ls:*)",
+      "Bash(git -C /Users/ericbonet/software/tmux-llm-llm-driven-branch-type-selection add -f docs/superpowers/plans/2026-04-10-llm-driven-branch-type-selection.md)",
+      "Bash(git -C /Users/ericbonet/software/tmux-llm-llm-driven-branch-type-selection commit -m ':*)",
+      "Bash(echo \"EXIT: $?\")",
+      "Bash(python3:*)"
+    ]
+  },
+  "hooks": {
+    "PostToolUse": [
+      {
+        "matcher": "",
+        "hooks": [
+          {
+            "type": "http",
+            "url": "http://127.0.0.1:4123/claude-hook",
+            "timeout": 5
+          }
+        ]
+      }
+    ],
+    "PreToolUse": [
+      {
+        "matcher": "",
+        "hooks": [
+          {
+            "type": "http",
+            "url": "http://127.0.0.1:4123/claude-hook",
+            "timeout": 5
+          }
+        ]
+      }
+    ],
+    "SessionStart": [
+      {
+        "matcher": "",
+        "hooks": [
+          {
+            "type": "http",
+            "url": "http://127.0.0.1:4123/claude-hook",
+            "timeout": 5
+          }
+        ]
+      }
+    ],
+    "Stop": [
+      {
+        "matcher": "",
+        "hooks": [
+          {
+            "type": "http",
+            "url": "http://127.0.0.1:4123/claude-hook",
+            "timeout": 5
+          }
+        ]
+      }
+    ],
+    "UserPromptSubmit": [
+      {
+        "matcher": "",
+        "hooks": [
+          {
+            "type": "http",
+            "url": "http://127.0.0.1:4123/claude-hook",
+            "timeout": 5
+          }
+        ]
+      }
     ]
   }
 }
