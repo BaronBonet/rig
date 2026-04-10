@@ -9,6 +9,7 @@ import (
 	"sync"
 	"time"
 
+	"agent/internal/adapters/repository/sqlite/generated"
 	"agent/internal/core"
 )
 
@@ -159,26 +160,30 @@ func (r *Repository) IngestHookEvent(ctx context.Context, raw core.HookEventInpu
 		_ = tx.Rollback()
 	}()
 
-	previous, err := loadHookSessionSummary(ctx, tx, taskID)
+	qtx := r.queries.WithTx(tx)
+
+	previous, err := loadHookSessionSummary(ctx, qtx, taskID)
 	if err != nil {
 		return nil, err
 	}
-	previousObserver, err := loadObserverSummary(ctx, tx, taskID)
+	previousObserver, err := loadObserverSummary(ctx, qtx, taskID)
 	if err != nil {
 		return nil, err
 	}
-	if err := insertHookEvent(ctx, tx, record); err != nil {
+	if err := qtx.InsertHookEvent(ctx, hookEventParamsFromRecord(record)); err != nil {
 		return nil, err
 	}
 
 	next := deriveHookSessionSummary(previous, record)
 	next.TaskID = taskID
 	nextObserver := deriveObserverSummary(previousObserver, next)
-	if err := upsertHookSessionSummary(ctx, tx, next); err != nil {
+	if err := qtx.UpsertHookSessionSummary(ctx, hookSessionSummaryParams(next)); err != nil {
 		return nil, err
 	}
-	if err := upsertObserverSummary(ctx, tx, nextObserver); err != nil {
-		return nil, err
+	if nextObserver != nil {
+		if err := qtx.UpsertObserverSummary(ctx, observerSummaryParams(nextObserver, time.Now().UTC())); err != nil {
+			return nil, err
+		}
 	}
 
 	if err := tx.Commit(); err != nil {
@@ -198,38 +203,35 @@ func (r *Repository) ListHookSessionSummaries(
 		return nil, err
 	}
 
-	query := `select
-		task_id, session_id, model, cwd, transcript_path, start_source,
-		current_turn_id, last_event_name, runtime_phase, started_at,
-		last_activity_at, last_stop_at, last_prompt_preview,
-		last_command_preview, last_command_result_preview,
-		last_assistant_message, command_count
-	from task_hook_sessions`
-	args := make([]any, 0, len(taskIDs))
-	if len(taskIDs) > 0 {
-		query += ` where task_id in (` + placeholders(len(taskIDs)) + `)`
-		for _, taskID := range taskIDs {
-			args = append(args, taskID)
-		}
-	}
-	query += ` order by task_id asc`
-
-	rows, err := r.db.QueryContext(ctx, query, args...)
+	rows, err := r.queries.ListHookSessionSummaries(ctx)
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
 
 	summaries := make(map[string]*core.HookSessionSummary)
-	for rows.Next() {
-		summary, scanErr := scanHookSessionSummary(rows)
-		if scanErr != nil {
-			return nil, scanErr
+
+	if len(taskIDs) == 0 {
+		for _, row := range rows {
+			summary := hookSessionSummaryFromListRow(row)
+			summaries[summary.TaskID] = summary
 		}
+		return summaries, nil
+	}
+
+	requested := make(map[string]struct{}, len(taskIDs))
+	for _, taskID := range taskIDs {
+		requested[taskID] = struct{}{}
+	}
+
+	for _, row := range rows {
+		if _, ok := requested[row.TaskID]; !ok {
+			continue
+		}
+		summary := hookSessionSummaryFromListRow(row)
 		summaries[summary.TaskID] = summary
 	}
 
-	return summaries, rows.Err()
+	return summaries, nil
 }
 
 func (r *Repository) ListHookEvents(ctx context.Context, taskID string, limit int) ([]core.HookEvent, error) {
@@ -237,35 +239,28 @@ func (r *Repository) ListHookEvents(ctx context.Context, taskID string, limit in
 		return nil, err
 	}
 
-	args := []any{taskID}
-	query := `select
-		id, task_id, session_id, turn_id, event_name, occurred_at,
-		raw_payload_json, last_assistant_message, prompt_preview,
-		command_preview, command_result_preview, tool_use_id
-	from task_hook_events
-	where task_id = ?
-	order by occurred_at desc, id desc`
+	var (
+		rows []generated.TaskHookEvent
+		err  error
+	)
 	if limit > 0 {
-		query += ` limit ?`
-		args = append(args, limit)
+		rows, err = r.queries.ListHookEventsByTaskIDLimited(ctx, generated.ListHookEventsByTaskIDLimitedParams{
+			TaskID: taskID,
+			Limit:  int64(limit),
+		})
+	} else {
+		rows, err = r.queries.ListHookEventsByTaskID(ctx, taskID)
 	}
-
-	rows, err := r.db.QueryContext(ctx, query, args...)
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
 
-	events := make([]core.HookEvent, 0)
-	for rows.Next() {
-		event, scanErr := scanHookEvent(rows)
-		if scanErr != nil {
-			return nil, scanErr
-		}
-		events = append(events, event)
+	events := make([]core.HookEvent, 0, len(rows))
+	for _, row := range rows {
+		events = append(events, hookEventFromRow(row))
 	}
 
-	return events, rows.Err()
+	return events, nil
 }
 
 func (r *Repository) SubscribeHookSessionUpdates(ctx context.Context) (<-chan core.HookSessionSummary, func(), error) {
@@ -350,23 +345,19 @@ func (r *Repository) SubscribeObserverTaskUpdates(ctx context.Context) (<-chan c
 func (r *Repository) resolveHookTaskID(ctx context.Context, raw core.HookEventInput) (string, error) {
 	lookup := []struct {
 		value string
-		query string
-		args  []any
+		query func(context.Context, string) (string, error)
 	}{
 		{
 			value: raw.TaskID,
-			query: `select id from tasks where id = ? limit 1`,
-			args:  []any{raw.TaskID},
+			query: r.queries.GetTaskIDByID,
 		},
 		{
 			value: raw.Cwd,
-			query: `select id from tasks where worktree_path = ? order by created_at desc limit 1`,
-			args:  []any{raw.Cwd},
+			query: r.queries.GetTaskIDByWorktreePath,
 		},
 		{
 			value: raw.SessionID,
-			query: `select task_id from task_hook_sessions where session_id = ? limit 1`,
-			args:  []any{raw.SessionID},
+			query: r.queries.GetTaskIDBySessionID,
 		},
 	}
 
@@ -374,7 +365,7 @@ func (r *Repository) resolveHookTaskID(ctx context.Context, raw core.HookEventIn
 		if strings.TrimSpace(candidate.value) == "" {
 			continue
 		}
-		taskID, err := queryHookTaskID(ctx, r.db, candidate.query, candidate.args...)
+		taskID, err := candidate.query(ctx, candidate.value)
 		if err == nil {
 			return taskID, nil
 		}
@@ -386,210 +377,36 @@ func (r *Repository) resolveHookTaskID(ctx context.Context, raw core.HookEventIn
 	return "", fmt.Errorf("%w: map hook event to managed task", core.ErrUnmanagedHookEvent)
 }
 
-func queryHookTaskID(ctx context.Context, db queryRower, query string, args ...any) (string, error) {
-	var taskID string
-	if err := db.QueryRowContext(ctx, query, args...).Scan(&taskID); err != nil {
-		return "", err
-	}
-	return taskID, nil
+type hookSessionSummaryGetter interface {
+	GetHookSessionSummaryByTaskID(ctx context.Context, taskID string) (generated.GetHookSessionSummaryByTaskIDRow, error)
 }
 
-type queryRower interface {
-	QueryRowContext(ctx context.Context, query string, args ...any) *sql.Row
+type observerSummaryGetter interface {
+	GetObserverSummaryByTaskID(ctx context.Context, taskID string) (generated.GetObserverSummaryByTaskIDRow, error)
 }
 
-func loadHookSessionSummary(ctx context.Context, tx *sql.Tx, taskID string) (*core.HookSessionSummary, error) {
-	row := tx.QueryRowContext(ctx, `select
-		task_id, session_id, model, cwd, transcript_path, start_source,
-		current_turn_id, last_event_name, runtime_phase, started_at,
-		last_activity_at, last_stop_at, last_prompt_preview,
-		last_command_preview, last_command_result_preview,
-		last_assistant_message, command_count
-	from task_hook_sessions
-	where task_id = ?`, taskID)
-
-	summary, err := scanHookSessionSummary(row)
+func loadHookSessionSummary(ctx context.Context, q hookSessionSummaryGetter, taskID string) (*core.HookSessionSummary, error) {
+	row, err := q.GetHookSessionSummaryByTaskID(ctx, taskID)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, nil
 	}
-	return summary, err
-}
-
-func loadObserverSummary(ctx context.Context, tx *sql.Tx, taskID string) (*core.ObserverSummary, error) {
-	row := tx.QueryRowContext(
-		ctx,
-		`select task_id, display_status, display_activity, process_alive, last_runtime_observed_at
-from task_observer_summaries
-where task_id = ?`,
-		taskID,
-	)
-
-	summary, err := scanObserverSummary(row)
-	if errors.Is(err, sql.ErrNoRows) {
-		return nil, nil
-	}
-	return summary, err
-}
-
-func insertHookEvent(ctx context.Context, tx *sql.Tx, record hookRecord) error {
-	_, err := tx.ExecContext(ctx, `insert into task_hook_events (
-		task_id, session_id, turn_id, event_name, occurred_at,
-		raw_payload_json, last_assistant_message, prompt_preview,
-		command_preview, command_result_preview, tool_use_id
-	) values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-		record.TaskID,
-		record.SessionID,
-		record.TurnID,
-		record.EventName,
-		formatTime(record.OccurredAt),
-		record.RawPayloadJSON,
-		trimPreview(record.LastAssistantMessage),
-		trimPreview(record.PromptText),
-		trimPreview(record.CommandText),
-		trimPreview(record.CommandResultText),
-		record.ToolUseID,
-	)
-	return err
-}
-
-func upsertHookSessionSummary(ctx context.Context, tx *sql.Tx, summary *core.HookSessionSummary) error {
-	_, err := tx.ExecContext(ctx, `insert into task_hook_sessions (
-		task_id, session_id, model, cwd, transcript_path, start_source,
-		current_turn_id, last_event_name, runtime_phase, started_at,
-		last_activity_at, last_stop_at, last_prompt_preview,
-		last_command_preview, last_command_result_preview,
-		last_assistant_message, command_count, updated_at
-	) values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-	on conflict(task_id) do update set
-		session_id = excluded.session_id,
-		model = excluded.model,
-		cwd = excluded.cwd,
-		transcript_path = excluded.transcript_path,
-		start_source = excluded.start_source,
-		current_turn_id = excluded.current_turn_id,
-		last_event_name = excluded.last_event_name,
-		runtime_phase = excluded.runtime_phase,
-		started_at = excluded.started_at,
-		last_activity_at = excluded.last_activity_at,
-		last_stop_at = excluded.last_stop_at,
-		last_prompt_preview = excluded.last_prompt_preview,
-		last_command_preview = excluded.last_command_preview,
-		last_command_result_preview = excluded.last_command_result_preview,
-		last_assistant_message = excluded.last_assistant_message,
-		command_count = excluded.command_count,
-		updated_at = excluded.updated_at`,
-		summary.TaskID,
-		summary.SessionID,
-		summary.Model,
-		summary.Cwd,
-		summary.TranscriptPath,
-		summary.StartSource,
-		summary.CurrentTurnID,
-		summary.LastEventName,
-		string(summary.RuntimePhase),
-		formatTime(summary.StartedAt),
-		formatTime(summary.LastActivityAt),
-		formatTime(summary.LastStopAt),
-		summary.LastPromptText,
-		summary.LastCommandText,
-		summary.LastCommandResultText,
-		summary.LastAssistantMessage,
-		summary.CommandCount,
-		formatTime(summary.LastActivityAt),
-	)
-	return err
-}
-
-func upsertObserverSummary(ctx context.Context, tx *sql.Tx, summary *core.ObserverSummary) error {
-	if summary == nil {
-		return nil
-	}
-
-	_, err := tx.ExecContext(ctx, `insert into task_observer_summaries (
-		task_id, display_status, display_activity, process_alive,
-		last_runtime_observed_at, updated_at
-	) values (?, ?, ?, ?, ?, ?)
-	on conflict(task_id) do update set
-		display_status = excluded.display_status,
-		display_activity = excluded.display_activity,
-		process_alive = excluded.process_alive,
-		last_runtime_observed_at = excluded.last_runtime_observed_at,
-		updated_at = excluded.updated_at`,
-		summary.TaskID,
-		string(summary.DisplayStatus),
-		string(summary.DisplayActivity),
-		boolToInt(summary.ProcessAlive),
-		formatTime(summary.LastRuntimeObservedAt),
-		formatTime(time.Now().UTC()),
-	)
-	return err
-}
-
-func scanHookSessionSummary(scanner rowScanner) (*core.HookSessionSummary, error) {
-	var (
-		summary        core.HookSessionSummary
-		runtimePhase   string
-		startedAt      string
-		lastActivityAt string
-		lastStopAt     string
-	)
-
-	err := scanner.Scan(
-		&summary.TaskID,
-		&summary.SessionID,
-		&summary.Model,
-		&summary.Cwd,
-		&summary.TranscriptPath,
-		&summary.StartSource,
-		&summary.CurrentTurnID,
-		&summary.LastEventName,
-		&runtimePhase,
-		&startedAt,
-		&lastActivityAt,
-		&lastStopAt,
-		&summary.LastPromptText,
-		&summary.LastCommandText,
-		&summary.LastCommandResultText,
-		&summary.LastAssistantMessage,
-		&summary.CommandCount,
-	)
 	if err != nil {
 		return nil, err
 	}
 
-	summary.RuntimePhase = core.HookRuntimePhase(runtimePhase)
-	summary.StartedAt = parseTime(startedAt)
-	summary.LastActivityAt = parseTime(lastActivityAt)
-	summary.LastStopAt = parseTime(lastStopAt)
-	return &summary, nil
+	return hookSessionSummaryFromGetRow(row), nil
 }
 
-func scanHookEvent(scanner rowScanner) (core.HookEvent, error) {
-	var (
-		event      core.HookEvent
-		occurredAt string
-	)
-
-	err := scanner.Scan(
-		&event.ID,
-		&event.TaskID,
-		&event.SessionID,
-		&event.TurnID,
-		&event.EventName,
-		&occurredAt,
-		&event.RawPayloadJSON,
-		&event.LastAssistantMessage,
-		&event.PromptText,
-		&event.CommandText,
-		&event.CommandResultText,
-		&event.ToolUseID,
-	)
+func loadObserverSummary(ctx context.Context, q observerSummaryGetter, taskID string) (*core.ObserverSummary, error) {
+	row, err := q.GetObserverSummaryByTaskID(ctx, taskID)
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil, nil
+	}
 	if err != nil {
-		return core.HookEvent{}, err
+		return nil, err
 	}
 
-	event.OccurredAt = parseTime(occurredAt)
-	return event, nil
+	return observerSummaryFromGetRow(row), nil
 }
 
 func deriveHookSessionSummary(previous *core.HookSessionSummary, event hookRecord) *core.HookSessionSummary {
@@ -733,21 +550,6 @@ func firstNonZeroTime(current, candidate time.Time) time.Time {
 		return current
 	}
 	return candidate
-}
-
-func placeholders(n int) string {
-	if n <= 0 {
-		return ""
-	}
-
-	var builder strings.Builder
-	for i := 0; i < n; i++ {
-		if i > 0 {
-			builder.WriteString(", ")
-		}
-		builder.WriteString("?")
-	}
-	return builder.String()
 }
 
 func (r *Repository) publishHookSessionUpdate(summary core.HookSessionSummary) {

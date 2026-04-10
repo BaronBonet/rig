@@ -1396,6 +1396,46 @@ func TestRepositorySubscribeHookSessionUpdates_NotifiesOnIngest(t *testing.T) {
 	}
 }
 
+func TestRepositoryListObserverSummaries_FiltersRequestedTaskIDs(t *testing.T) {
+	repo := newTestRepository(t)
+	taskOne := seedTask(t, repo, core.Task{
+		ID:           "task-1",
+		Slug:         "task-1",
+		DisplayName:  "task 1",
+		WorktreePath: "/tmp/repo-task-1",
+	})
+	taskTwo := seedTask(t, repo, core.Task{
+		ID:           "task-2",
+		Slug:         "task-2",
+		DisplayName:  "task 2",
+		WorktreePath: "/tmp/repo-task-2",
+	})
+
+	require.NoError(t, repo.UpsertObserverSummary(context.Background(), &core.ObserverSummary{
+		TaskID:                taskOne.ID,
+		DisplayStatus:         core.DisplayStatusWorking,
+		DisplayActivity:       core.DisplayActivityCommand,
+		ProcessAlive:          true,
+		LastRuntimeObservedAt: time.Date(2026, 4, 8, 10, 0, 0, 0, time.UTC),
+	}))
+	require.NoError(t, repo.UpsertObserverSummary(context.Background(), &core.ObserverSummary{
+		TaskID:                taskTwo.ID,
+		DisplayStatus:         core.DisplayStatusFinished,
+		DisplayActivity:       core.DisplayActivityNone,
+		ProcessAlive:          false,
+		LastRuntimeObservedAt: time.Date(2026, 4, 8, 10, 1, 0, 0, time.UTC),
+	}))
+
+	summaries, err := repo.ListObserverSummaries(context.Background(), []string{taskOne.ID})
+	require.NoError(t, err)
+	require.Len(t, summaries, 1)
+	require.Contains(t, summaries, taskOne.ID)
+	require.NotContains(t, summaries, taskTwo.ID)
+	require.Equal(t, core.DisplayStatusWorking, summaries[taskOne.ID].DisplayStatus)
+	require.Equal(t, core.DisplayActivityCommand, summaries[taskOne.ID].DisplayActivity)
+	require.True(t, summaries[taskOne.ID].ProcessAlive)
+}
+
 func taskTableColumns(t *testing.T, db *sql.DB) map[string]struct{} {
 	t.Helper()
 	return tableColumns(t, db, "tasks")
