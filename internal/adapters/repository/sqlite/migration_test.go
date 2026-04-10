@@ -75,3 +75,92 @@ func TestApplyBootstrapSQL_UsesEmbeddedBootstrapAssetPragmas(t *testing.T) {
 	require.NoError(t, db.QueryRowContext(context.Background(), `pragma foreign_keys`).Scan(&foreignKeys))
 	require.Equal(t, 1, foreignKeys)
 }
+
+func TestColumnSupportsConflictTarget_RequiresExactSingleColumnConstraint(t *testing.T) {
+	db, err := sql.Open("sqlite", ":memory:")
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, db.Close()) })
+
+	_, err = db.ExecContext(context.Background(), `
+create table hook_sessions_good_pk (
+  task_id text primary key,
+  session_id text not null default ''
+);
+create table hook_sessions_good_unique (
+  task_id text not null,
+  session_id text not null default ''
+);
+create unique index idx_hook_sessions_good_unique_task_id on hook_sessions_good_unique(task_id);
+create table hook_sessions_composite_pk (
+  task_id text not null,
+  session_id text not null default '',
+  primary key (task_id, session_id)
+);
+create table observer_summaries_partial_unique (
+  task_id text not null,
+  updated_at text not null default ''
+);
+create unique index idx_observer_summaries_partial_task_id on observer_summaries_partial_unique(task_id)
+where updated_at <> '';
+`)
+	require.NoError(t, err)
+
+	ok, err := columnSupportsConflictTarget(context.Background(), db, "hook_sessions_good_pk", "task_id")
+	require.NoError(t, err)
+	require.True(t, ok)
+
+	ok, err = columnSupportsConflictTarget(context.Background(), db, "hook_sessions_good_unique", "task_id")
+	require.NoError(t, err)
+	require.True(t, ok)
+
+	ok, err = columnSupportsConflictTarget(context.Background(), db, "hook_sessions_composite_pk", "task_id")
+	require.NoError(t, err)
+	require.False(t, ok)
+
+	ok, err = columnSupportsConflictTarget(context.Background(), db, "observer_summaries_partial_unique", "task_id")
+	require.NoError(t, err)
+	require.False(t, ok)
+}
+
+func TestColumnIsExactIntegerPrimaryKey_RequiresRowIDCompatibleShape(t *testing.T) {
+	db, err := sql.Open("sqlite", ":memory:")
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, db.Close()) })
+
+	_, err = db.ExecContext(context.Background(), `
+create table events_good (
+  id integer primary key,
+  payload text not null default ''
+);
+create table events_missing_pk (
+  id integer not null,
+  payload text not null default ''
+);
+create table events_wrong_type (
+  id text primary key,
+  payload text not null default ''
+);
+create table events_composite_pk (
+  id integer not null,
+  task_id text not null,
+  primary key (id, task_id)
+);
+`)
+	require.NoError(t, err)
+
+	ok, err := columnIsExactIntegerPrimaryKey(context.Background(), db, "events_good", "id")
+	require.NoError(t, err)
+	require.True(t, ok)
+
+	ok, err = columnIsExactIntegerPrimaryKey(context.Background(), db, "events_missing_pk", "id")
+	require.NoError(t, err)
+	require.False(t, ok)
+
+	ok, err = columnIsExactIntegerPrimaryKey(context.Background(), db, "events_wrong_type", "id")
+	require.NoError(t, err)
+	require.False(t, ok)
+
+	ok, err = columnIsExactIntegerPrimaryKey(context.Background(), db, "events_composite_pk", "id")
+	require.NoError(t, err)
+	require.False(t, ok)
+}
