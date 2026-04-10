@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"strings"
 	"time"
 
 	hookhttp "agent/internal/adapters/observability/codexhooks"
@@ -126,6 +127,45 @@ func newIngestCommand(use string, deps Dependencies) *cobra.Command {
 	return cmd
 }
 
+func newForwardHookCommand(use string, deps Dependencies) *cobra.Command {
+	cmd := &cobra.Command{
+		Use:    use,
+		Hidden: true,
+		Args:   cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			body, err := io.ReadAll(cmd.InOrStdin())
+			if err != nil {
+				return fmt.Errorf("read hook payload: %w", err)
+			}
+
+			forwarder := hookhttp.Forwarder{
+				CollectorURL: observerCollectorURL(deps.HookListenAddr),
+				Ingestor:     deps.HookIngestor,
+			}
+
+			return forwarder.Forward(cmd.Context(), args[0], body)
+		},
+	}
+
+	return cmd
+}
+
+func observerCollectorURL(listenAddr string) string {
+	listenAddr = strings.TrimSpace(listenAddr)
+	if listenAddr == "" {
+		return ""
+	}
+
+	if !strings.Contains(listenAddr, "://") {
+		listenAddr = "http://" + listenAddr
+	}
+	if !strings.HasSuffix(listenAddr, "/hook") {
+		listenAddr += "/hook"
+	}
+
+	return listenAddr
+}
+
 func newObserverCommand(deps Dependencies) *cobra.Command {
 	cmd := &cobra.Command{
 		Use:    "observer",
@@ -153,6 +193,7 @@ func newObserverCommand(deps Dependencies) *cobra.Command {
 		},
 	})
 	cmd.AddCommand(newIngestCommand("ingest <event-name>", deps))
+	cmd.AddCommand(newForwardHookCommand("forward-hook <event-name>", deps))
 
 	return cmd
 }

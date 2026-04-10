@@ -37,7 +37,9 @@ func (s *stubPublishingHookRepo) UpsertObserverSummary(context.Context, *core.Ob
 	return nil
 }
 
-func (s *stubPublishingHookRepo) SubscribeObserverTaskUpdates(context.Context) (<-chan core.ObserverTaskUpdate, func(), error) {
+func (s *stubPublishingHookRepo) SubscribeObserverTaskUpdates(
+	context.Context,
+) (<-chan core.ObserverTaskUpdate, func(), error) {
 	ch := make(chan core.ObserverTaskUpdate)
 	close(ch)
 	return ch, func() {}, nil

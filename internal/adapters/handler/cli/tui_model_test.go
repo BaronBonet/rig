@@ -1,7 +1,6 @@
 package cli
 
 import (
-	"context"
 	"errors"
 	"regexp"
 	"strings"
@@ -1178,9 +1177,10 @@ func TestRefreshTasksCmd_ConvertsPanicsToErrorMessage(t *testing.T) {
 	service := NewMockTaskService(t)
 	service.EXPECT().
 		ListTaskViews(mock.Anything).
-		RunAndReturn(func(context.Context) ([]*core.TaskView, error) {
+		Run(func(mock.Arguments) {
 			panic("refresh exploded")
 		}).
+		Return(nil, nil).
 		Once()
 
 	cmd := refreshTasksCmd(service, 7)
