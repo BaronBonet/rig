@@ -67,6 +67,94 @@ func columnExists(ctx context.Context, db *sql.DB, table, column string) (bool, 
 	return false, rows.Err()
 }
 
+func columnHasPrimaryKeyOrUniqueConstraint(ctx context.Context, db *sql.DB, table, column string) (bool, error) {
+	rows, err := db.QueryContext(ctx, `pragma table_info(`+table+`)`)
+	if err != nil {
+		return false, err
+	}
+	defer rows.Close()
+
+	for rows.Next() {
+		var (
+			cid          int
+			name         string
+			colType      string
+			notNull      int
+			defaultValue sql.NullString
+			pk           int
+		)
+		if err := rows.Scan(&cid, &name, &colType, &notNull, &defaultValue, &pk); err != nil {
+			return false, err
+		}
+		if name == column && pk > 0 {
+			return true, nil
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return false, err
+	}
+
+	indexRows, err := db.QueryContext(ctx, `pragma index_list(`+table+`)`)
+	if err != nil {
+		return false, err
+	}
+	defer indexRows.Close()
+
+	for indexRows.Next() {
+		var (
+			seq     int
+			name    string
+			unique  int
+			origin  string
+			partial int
+		)
+		if err := indexRows.Scan(&seq, &name, &unique, &origin, &partial); err != nil {
+			return false, err
+		}
+		if unique != 1 {
+			continue
+		}
+
+		columnName, singleColumn, err := uniqueIndexColumn(ctx, db, name)
+		if err != nil {
+			return false, err
+		}
+		if singleColumn && columnName == column {
+			return true, nil
+		}
+	}
+
+	return false, indexRows.Err()
+}
+
+func uniqueIndexColumn(ctx context.Context, db *sql.DB, index string) (string, bool, error) {
+	rows, err := db.QueryContext(ctx, `pragma index_info(`+index+`)`)
+	if err != nil {
+		return "", false, err
+	}
+	defer rows.Close()
+
+	columnCount := 0
+	columnName := ""
+	for rows.Next() {
+		var (
+			seqno int
+			cid   int
+			name  string
+		)
+		if err := rows.Scan(&seqno, &cid, &name); err != nil {
+			return "", false, err
+		}
+		columnCount++
+		columnName = name
+	}
+	if err := rows.Err(); err != nil {
+		return "", false, err
+	}
+
+	return columnName, columnCount == 1, nil
+}
+
 func allTablesExist(ctx context.Context, db *sql.DB, tables ...string) (bool, error) {
 	for _, table := range tables {
 		exists, err := tableExists(ctx, db, table)
@@ -280,6 +368,15 @@ create table if not exists schema_migrations (
 	if hookSessionsExists && !hookSessionColumnsComplete {
 		return fmt.Errorf("incomplete managed schema for task_hook_sessions table")
 	}
+	if hookSessionsExists && hookSessionColumnsComplete {
+		hookSessionTaskIDUnique, err := columnHasPrimaryKeyOrUniqueConstraint(ctx, db, "task_hook_sessions", "task_id")
+		if err != nil {
+			return fmt.Errorf("check task_hook_sessions.task_id uniqueness: %w", err)
+		}
+		if !hookSessionTaskIDUnique {
+			return fmt.Errorf("incomplete managed schema for task_hook_sessions.task_id uniqueness")
+		}
+	}
 
 	observerSummariesExists, observerSummaryColumnsComplete, err := tableColumnState(
 		ctx,
@@ -297,6 +394,20 @@ create table if not exists schema_migrations (
 	}
 	if observerSummariesExists && !observerSummaryColumnsComplete {
 		return fmt.Errorf("incomplete managed schema for task_observer_summaries table")
+	}
+	if observerSummariesExists && observerSummaryColumnsComplete {
+		observerTaskIDUnique, err := columnHasPrimaryKeyOrUniqueConstraint(
+			ctx,
+			db,
+			"task_observer_summaries",
+			"task_id",
+		)
+		if err != nil {
+			return fmt.Errorf("check task_observer_summaries.task_id uniqueness: %w", err)
+		}
+		if !observerTaskIDUnique {
+			return fmt.Errorf("incomplete managed schema for task_observer_summaries.task_id uniqueness")
+		}
 	}
 
 	hookObservabilityIndexesComplete, err := allIndexesExist(
