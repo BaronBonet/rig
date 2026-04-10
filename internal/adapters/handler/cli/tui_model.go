@@ -280,6 +280,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 
 		m.createInput.Prompt = msg.prompt
+		m.createInput.ConfirmedBranchType = msg.suggestion.BranchType
 		m.nameInput.SetValue(msg.suggestion.Name)
 		m.nameInput.CursorEnd()
 		m.nameInput.Focus()

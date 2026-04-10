@@ -23,6 +23,7 @@ type NewTaskInput struct {
 	Cwd                  string
 	Prompt               string
 	ConfirmedDisplayName string
+	ConfirmedBranchType  string
 	Provider             string
 }
 
@@ -105,7 +106,7 @@ func (s *Service) CreateTaskWithProgress(
 
 	var suggestion TaskSuggestion
 	if strings.TrimSpace(input.ConfirmedDisplayName) != "" {
-		suggestion = TaskSuggestion{Name: strings.TrimSpace(input.ConfirmedDisplayName), BranchType: "feat"}
+		suggestion = TaskSuggestion{Name: strings.TrimSpace(input.ConfirmedDisplayName), BranchType: input.ConfirmedBranchType}
 	} else {
 		emitTaskProgress(progress, TaskProgress{
 			Step:    TaskProgressNaming,
