@@ -119,6 +119,17 @@ func hasClaudeLiveProgressMarker(content string) bool {
 }
 
 func hasClaudePromptMarker(content string) bool {
+	lower := strings.ToLower(content)
+	// Claude Code permission prompt footers — these always appear at the
+	// bottom of interactive permission dialogs (tool approval, workspace
+	// trust, external imports). Checking the full content avoids dependence
+	// on a specific line-window size.
+	if strings.Contains(lower, "esc to cancel") ||
+		strings.Contains(lower, "tab to amend") ||
+		strings.Contains(lower, "enter to confirm") {
+		return true
+	}
+
 	for _, line := range strings.Split(content, "\n") {
 		trimmed := strings.TrimSpace(line)
 		// Claude Code input prompt: ❯ (U+276F)
