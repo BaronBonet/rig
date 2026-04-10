@@ -474,6 +474,133 @@ create table task_observer_summaries (
 	require.Equal(t, 3, count)
 }
 
+func TestNewRepository_CreatesEventsTableForLegacyTasksOnlyDatabase(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "state.db")
+
+	db, err := sql.Open("sqlite", path)
+	require.NoError(t, err)
+
+	_, err = db.ExecContext(context.Background(), `
+create table tasks (
+  id text primary key,
+  prompt text not null,
+  display_name text not null,
+  slug text not null unique,
+  repo_root text not null,
+  base_branch text not null,
+  branch_name text not null,
+  worktree_path text not null,
+  tmux_session text not null,
+  provider text not null,
+  status text not null,
+  worktree_exists integer not null,
+  branch_exists integer not null,
+  session_exists integer not null,
+  last_error text not null default '',
+  created_at text not null,
+  updated_at text not null,
+  last_reconciled_at text not null default ''
+);
+`)
+	require.NoError(t, err)
+	require.NoError(t, db.Close())
+
+	repo, err := NewRepository(Config{Path: path})
+	require.NoError(t, err)
+	require.NotNil(t, repo)
+
+	exists, err := tableExists(context.Background(), repo.db, "events")
+	require.NoError(t, err)
+	require.True(t, exists)
+
+	var count int
+	require.NoError(t, repo.db.QueryRowContext(context.Background(), `select count(*) from schema_migrations`).Scan(&count))
+	require.Equal(t, 3, count)
+}
+
+func TestNewRepository_CompletesHookObservabilityMigrationForPartialLegacySchema(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "state.db")
+
+	db, err := sql.Open("sqlite", path)
+	require.NoError(t, err)
+
+	_, err = db.ExecContext(context.Background(), `
+create table tasks (
+  id text primary key,
+  prompt text not null,
+  display_name text not null,
+  slug text not null unique,
+  repo_root text not null,
+  repo_name text not null default '',
+  base_branch text not null,
+  branch_name text not null,
+  worktree_path text not null,
+  tmux_session text not null,
+  agent_window_name text not null default 'agent',
+  editor_window_name text not null default 'editor',
+  provider text not null,
+  status text not null,
+  worktree_exists integer not null,
+  branch_exists integer not null,
+  session_exists integer not null,
+  agent_window_exists integer not null default 0,
+  editor_window_exists integer not null default 0,
+  last_error text not null default '',
+  created_at text not null,
+  updated_at text not null,
+  last_reconciled_at text not null default ''
+);
+create table events (
+  id integer primary key autoincrement,
+  task_id text not null,
+  event_type text not null,
+  payload text not null,
+  created_at text not null
+);
+create table task_hook_events (
+  id integer primary key autoincrement,
+  task_id text not null,
+  session_id text not null default '',
+  turn_id text not null default '',
+  event_name text not null,
+  occurred_at text not null,
+  raw_payload_json text not null default '',
+  last_assistant_message text not null default '',
+  prompt_preview text not null default '',
+  command_preview text not null default '',
+  command_result_preview text not null default '',
+  tool_use_id text not null default ''
+);
+`)
+	require.NoError(t, err)
+	require.NoError(t, db.Close())
+
+	repo, err := NewRepository(Config{Path: path})
+	require.NoError(t, err)
+	require.NotNil(t, repo)
+
+	for _, table := range []string{"task_hook_events", "task_hook_sessions", "task_observer_summaries"} {
+		exists, tableErr := tableExists(context.Background(), repo.db, table)
+		require.NoError(t, tableErr)
+		require.True(t, exists, table)
+	}
+
+	for _, index := range []string{
+		"idx_task_hook_events_task_occurred_at",
+		"idx_task_hook_sessions_session_id",
+	} {
+		exists, indexErr := indexExists(context.Background(), repo.db, index)
+		require.NoError(t, indexErr)
+		require.True(t, exists, index)
+	}
+
+	var count int
+	require.NoError(t, repo.db.QueryRowContext(context.Background(), `select count(*) from schema_migrations`).Scan(&count))
+	require.Equal(t, 3, count)
+}
+
 func TestNewRepository_CreatesHookObservabilityTables(t *testing.T) {
 	repo := newTestRepository(t)
 
