@@ -1,2 +1,0 @@
--- Intentionally empty.
--- Schema consolidated into 00001_init.sql.
