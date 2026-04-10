@@ -7,7 +7,7 @@ import (
 	"agent/internal/core"
 )
 
-func taskFromRow(row generated.GetTaskByIDOrSlugRow) *core.Task {
+func taskFromRow(row generated.Task) *core.Task {
 	return &core.Task{
 		ID:                 row.ID,
 		Prompt:             row.Prompt,
@@ -35,7 +35,7 @@ func taskFromRow(row generated.GetTaskByIDOrSlugRow) *core.Task {
 	}
 }
 
-func tasksFromRows(rows []generated.ListTasksRow) []*core.Task {
+func tasksFromRows(rows []generated.Task) []*core.Task {
 	tasks := make([]*core.Task, 0, len(rows))
 	for _, row := range rows {
 		tasks = append(tasks, &core.Task{
