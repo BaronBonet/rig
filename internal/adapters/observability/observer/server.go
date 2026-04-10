@@ -170,16 +170,22 @@ func (p *publishingHookIngestor) IngestHookEvent(
 		summaries, listErr := p.observers.ListObserverSummaries(ctx, []string{summary.TaskID})
 		if listErr == nil {
 			if observerSummary := summaries[summary.TaskID]; observerSummary != nil {
-				p.hub.Publish(observerTaskUpdateFromSummary(observerSummary))
+				p.hub.Publish(observerTaskUpdateFromSummary(observerSummary, summary))
 			}
 		}
 	}
 	return summary, nil
 }
 
-func observerTaskUpdateFromSummary(summary *core.ObserverSummary) core.ObserverTaskUpdate {
+func observerTaskUpdateFromSummary(summary *core.ObserverSummary, hookSummary *core.HookSessionSummary) core.ObserverTaskUpdate {
 	if summary == nil {
 		return core.ObserverTaskUpdate{}
+	}
+
+	var hookCopy *core.HookSessionSummary
+	if hookSummary != nil {
+		copied := *hookSummary
+		hookCopy = &copied
 	}
 
 	return core.ObserverTaskUpdate{
@@ -187,5 +193,6 @@ func observerTaskUpdateFromSummary(summary *core.ObserverSummary) core.ObserverT
 		DisplayStatus:   summary.DisplayStatus,
 		DisplayActivity: summary.DisplayActivity,
 		LastActivityAt:  summary.LastRuntimeObservedAt,
+		HookSession:     hookCopy,
 	}
 }

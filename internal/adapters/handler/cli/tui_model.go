@@ -1079,6 +1079,10 @@ func (m *model) applyObserverTaskUpdate(update core.ObserverTaskUpdate) {
 			ProcessAlive:          update.DisplayStatus != core.DisplayStatusDisconnected,
 		}
 		view.Observer = copySummary
+		if update.HookSession != nil {
+			hookCopy := *update.HookSession
+			view.HookSession = &hookCopy
+		}
 		return
 	}
 }

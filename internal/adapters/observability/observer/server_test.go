@@ -125,13 +125,13 @@ func TestObserverHookEndpoint_PersistsEventAndPublishesTaskUpdate(t *testing.T) 
 		"http://"+hookListener.Addr().String()+"/hook",
 		bytes.NewReader(
 			[]byte(
-				`{"cwd":"`+task.WorktreePath+`","session_id":"sess-1","hook_event_name":"SessionStart","model":"gpt-5"}`,
+				`{"cwd":"`+task.WorktreePath+`","session_id":"sess-1","hook_event_name":"UserPromptSubmit","model":"gpt-5","prompt":"add observer hook ingest"}`,
 			),
 		),
 	)
 	require.NoError(t, err)
 	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("X-Codex-Hook-Event", "SessionStart")
+	req.Header.Set("X-Codex-Hook-Event", "UserPromptSubmit")
 
 	resp, err := http.DefaultClient.Do(req)
 	require.NoError(t, err)
@@ -146,11 +146,15 @@ func TestObserverHookEndpoint_PersistsEventAndPublishesTaskUpdate(t *testing.T) 
 		t.Fatal("timed out waiting for hub update")
 	}
 	require.Equal(t, task.ID, update.TaskID)
+	require.NotNil(t, update.HookSession)
+	require.Equal(t, task.ID, update.HookSession.TaskID)
+	require.Equal(t, "UserPromptSubmit", update.HookSession.LastEventName)
+	require.Equal(t, "add observer hook ingest", update.HookSession.LastPromptText)
 
 	events, err := repo.ListHookEvents(t.Context(), task.ID, 10)
 	require.NoError(t, err)
 	require.Len(t, events, 1)
-	require.Equal(t, "SessionStart", events[0].EventName)
+	require.Equal(t, "UserPromptSubmit", events[0].EventName)
 
 	summaries, err := repo.ListHookSessionSummaries(t.Context(), []string{task.ID})
 	require.NoError(t, err)

@@ -538,6 +538,35 @@ func TestModelUpdate_ObserverTaskUpdatedPreservesHookSession(t *testing.T) {
 	require.Equal(t, core.DisplayStatusNeedsInput, m.selectedTaskView().Observer.DisplayStatus)
 }
 
+func TestModelUpdate_ObserverTaskUpdatedAppliesHookSessionFromSocket(t *testing.T) {
+	service := NewMockTaskService(t)
+	task := tuiTask("billing-retry-flow")
+	m := newLoadedTUIModelWithViews(t, service, taskViewWithObserver(task, nil, &core.ObserverSummary{
+		TaskID:        task.ID,
+		DisplayStatus: core.DisplayStatusWorking,
+		ProcessAlive:  true,
+	}))
+	updates := make(chan core.ObserverTaskUpdate)
+	m.observerUpdates = updates
+
+	m, cmd := updateTUIModel(t, m, observerTaskUpdatedMsg{update: core.ObserverTaskUpdate{
+		TaskID:          task.ID,
+		DisplayStatus:   core.DisplayStatusWorking,
+		DisplayActivity: core.DisplayActivityCommand,
+		LastActivityAt:  time.Date(2026, 4, 9, 17, 30, 0, 0, time.UTC),
+		HookSession: &core.HookSessionSummary{
+			TaskID:               task.ID,
+			LastEventName:        "Stop",
+			LastPromptText:       "fix the billing retry flow",
+			LastAssistantMessage: "Updated the retry loop and tests",
+		},
+	}})
+	require.NotNil(t, cmd)
+	require.Equal(t, "fix the billing retry flow", m.selectedTaskView().HookSession.LastPromptText)
+	require.Equal(t, "Updated the retry loop and tests", m.selectedTaskView().HookSession.LastAssistantMessage)
+	require.Equal(t, "Stop", m.selectedTaskView().HookSession.LastEventName)
+}
+
 func TestModelUpdate_EnterDispatchesOpenAndKeepsTUIOpen(t *testing.T) {
 	service := NewMockTaskService(t)
 	tasks := []*core.Task{tuiTask("task-one"), tuiTask("task-two")}

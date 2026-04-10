@@ -57,6 +57,12 @@ func TestSocketServer_BroadcastsObserverTaskUpdate(t *testing.T) {
 		DisplayStatus:   core.DisplayStatusWorking,
 		DisplayActivity: core.DisplayActivityCommand,
 		LastActivityAt:  time.Date(2026, 4, 9, 12, 0, 0, 0, time.UTC),
+		HookSession: &core.HookSessionSummary{
+			TaskID:               "task-1",
+			LastEventName:        "Stop",
+			LastPromptText:       "fix the billing retry flow",
+			LastAssistantMessage: "Updated the retry loop and tests",
+		},
 	}
 	hub.Publish(expected)
 
