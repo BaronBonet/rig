@@ -177,7 +177,10 @@ func (p *publishingHookIngestor) IngestHookEvent(
 	return summary, nil
 }
 
-func observerTaskUpdateFromSummary(summary *core.ObserverSummary, hookSummary *core.HookSessionSummary) core.ObserverTaskUpdate {
+func observerTaskUpdateFromSummary(
+	summary *core.ObserverSummary,
+	hookSummary *core.HookSessionSummary,
+) core.ObserverTaskUpdate {
 	if summary == nil {
 		return core.ObserverTaskUpdate{}
 	}

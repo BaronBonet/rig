@@ -4,6 +4,9 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"io"
+	"net/http"
+	"net/http/httptest"
 	"strings"
 	"testing"
 
@@ -156,6 +159,32 @@ func TestNewRootCommand_ObserverIngestDispatchesToConfiguredIngestor(t *testing.
 	require.Equal(t, "SessionStart", ingestor.input.EventName)
 	require.Equal(t, "/tmp/worktree", ingestor.input.Cwd)
 	require.Equal(t, "sess-1", ingestor.input.SessionID)
+}
+
+func TestNewRootCommand_ObserverForwardHookPostsToObserverEndpoint(t *testing.T) {
+	out := &bytes.Buffer{}
+	var capturedEvent string
+	var capturedBody string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		capturedEvent = r.Header.Get("X-Codex-Hook-Event")
+		body, err := io.ReadAll(r.Body)
+		require.NoError(t, err)
+		capturedBody = string(body)
+		w.WriteHeader(http.StatusAccepted)
+	}))
+	defer server.Close()
+
+	listenAddr := strings.TrimPrefix(server.URL, "http://")
+	cmd := NewRootCommand(Dependencies{Stdout: out, Stderr: out, HookListenAddr: listenAddr})
+	cmd.SetIn(strings.NewReader(`{"cwd":"/tmp/worktree","session_id":"sess-1","hook_event_name":"Stop"}`))
+	cmd.SetOut(out)
+	cmd.SetErr(out)
+	cmd.SetArgs([]string{"observer", "forward-hook", "Stop"})
+
+	err := cmd.Execute()
+	require.NoError(t, err)
+	require.Equal(t, "Stop", capturedEvent)
+	require.JSONEq(t, `{"cwd":"/tmp/worktree","session_id":"sess-1","hook_event_name":"Stop"}`, capturedBody)
 }
 
 type stubHookEventIngestor struct {

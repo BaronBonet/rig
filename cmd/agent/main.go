@@ -71,8 +71,6 @@ func buildDependencies() (cli.Dependencies, error) {
 		agentconfigfs.NewLoader(),
 		workspacefs.NewSeeder(),
 		codexhooksfs.NewBootstrapper(
-			cfg.SQLite.Path,
-			"http://"+cfg.Hooks.ListenAddr+"/hook",
 			agentExec,
 			detectAgentSourceRoot(),
 		),
