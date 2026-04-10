@@ -32,15 +32,38 @@ func TestBootstrapperWritesHooksJSONForObserverForwardHook(t *testing.T) {
 	require.Contains(t, hooksConfig.Hooks, "Stop")
 	require.Len(t, hooksConfig.Hooks["SessionStart"], 1)
 	command := hooksConfig.Hooks["SessionStart"][0].Hooks[0].Command
-	require.Contains(t, command, `agent observer forward-hook`)
-	require.Contains(t, command, `'/tmp/agent-bin'`)
-	require.Contains(t, command, `go run ./cmd/agent observer forward-hook`)
+	require.Contains(t, command, `repo_root=$(git rev-parse --show-toplevel 2>/dev/null)`)
+	require.Contains(t, command, `.codex/hooks/forward-to-agent.sh`)
 	require.Contains(t, command, `SessionStart`)
-	require.NotContains(t, string(rawHooks), `forward-to-collector.sh`)
+	require.NotContains(t, string(rawHooks), `go run ./cmd/agent observer forward-hook`)
+	require.NotContains(t, string(rawHooks), `observer forward-hook`)
+}
 
-	_, statErr := os.Stat(filepath.Join(worktree, ".codex", "hooks", "forward-to-collector.sh"))
-	require.Error(t, statErr)
-	require.True(t, os.IsNotExist(statErr))
+func TestBootstrapperWritesWorktreeLocalForwarderScript(t *testing.T) {
+	worktree := t.TempDir()
+	bootstrapper := NewBootstrapper("/tmp/agent-bin", "/tmp/agent-src")
+
+	err := bootstrapper.BootstrapTaskWorkspace(t.Context(), &core.Task{
+		Provider:     "codex",
+		WorktreePath: worktree,
+	})
+	require.NoError(t, err)
+
+	rawHooks, err := os.ReadFile(filepath.Join(worktree, ".codex", "hooks.json"))
+	require.NoError(t, err)
+	require.Contains(t, string(rawHooks), `repo_root=$(git rev-parse --show-toplevel 2>/dev/null)`)
+	require.Contains(t, string(rawHooks), `.codex/hooks/forward-to-agent.sh`)
+	require.NotContains(t, string(rawHooks), `go run ./cmd/agent observer forward-hook`)
+	require.NotContains(t, string(rawHooks), `observer forward-hook`)
+
+	scriptPath := filepath.Join(worktree, ".codex", "hooks", "forward-to-agent.sh")
+	rawScript, err := os.ReadFile(scriptPath)
+	require.NoError(t, err)
+	require.Contains(t, string(rawScript), `collector_url=${CODEX_HOOK_COLLECTOR_URL:-http://127.0.0.1:4123/hook}`)
+	require.Contains(t, string(rawScript), `curl -fsS --max-time 2 -X POST`)
+	require.Contains(t, string(rawScript), `agent observer ingest "$event_name"`)
+	require.Contains(t, string(rawScript), `"$agent_exec" observer ingest "$event_name"`)
+	require.Contains(t, string(rawScript), `go run ./cmd/agent observer ingest "$event_name"`)
 }
 
 func TestBootstrapperBootstrapTaskWorkspace_NoopsForNonCodexTasks(t *testing.T) {

@@ -634,6 +634,9 @@ func deriveHookSessionSummary(previous *core.HookSessionSummary, event hookRecor
 	case "UserPromptSubmit":
 		next.CurrentTurnID = firstNonEmpty(event.TurnID, next.CurrentTurnID)
 		next.LastPromptText = trimPreview(event.PromptText)
+		next.LastAssistantMessage = ""
+		next.LastCommandText = ""
+		next.LastCommandResultText = ""
 		next.RuntimePhase = core.HookRuntimePhasePrompted
 	case "PreToolUse":
 		next.CurrentTurnID = firstNonEmpty(event.TurnID, next.CurrentTurnID)

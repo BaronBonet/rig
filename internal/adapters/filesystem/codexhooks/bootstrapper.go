@@ -1,15 +1,23 @@
 package codexhooks
 
 import (
+	"bytes"
 	"context"
+	_ "embed"
 	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
+	"text/template"
 
 	"agent/internal/core"
 )
+
+//go:embed forward-to-agent.sh.tmpl
+var forwarderScriptTemplateText string
+
+var forwarderScriptTemplate = template.Must(template.New("forward-to-agent.sh").Parse(forwarderScriptTemplateText))
 
 type Bootstrapper struct {
 	agentExec  string
@@ -29,7 +37,8 @@ func (b *Bootstrapper) BootstrapTaskWorkspace(_ context.Context, task *core.Task
 	}
 
 	hooksRoot := filepath.Join(task.WorktreePath, ".codex")
-	if err := os.MkdirAll(hooksRoot, 0o755); err != nil {
+	hooksDir := filepath.Join(hooksRoot, "hooks")
+	if err := os.MkdirAll(hooksDir, 0o755); err != nil {
 		return err
 	}
 
@@ -37,8 +46,16 @@ func (b *Bootstrapper) BootstrapTaskWorkspace(_ context.Context, task *core.Task
 	if err != nil {
 		return err
 	}
+	if err := os.WriteFile(filepath.Join(hooksRoot, "hooks.json"), rawHooks, 0o644); err != nil {
+		return err
+	}
 
-	return os.WriteFile(filepath.Join(hooksRoot, "hooks.json"), rawHooks, 0o644)
+	rawScript, err := b.renderForwarderScript()
+	if err != nil {
+		return err
+	}
+
+	return os.WriteFile(filepath.Join(hooksDir, "forward-to-agent.sh"), rawScript, 0o755)
 }
 
 func (b *Bootstrapper) renderHooksJSON() ([]byte, error) {
@@ -65,47 +82,38 @@ func (b *Bootstrapper) renderHooksJSON() ([]byte, error) {
 		},
 	}
 
-	raw, err := json.MarshalIndent(config, "", "  ")
-	if err != nil {
+	var buf bytes.Buffer
+	encoder := json.NewEncoder(&buf)
+	encoder.SetEscapeHTML(false)
+	encoder.SetIndent("", "  ")
+	if err := encoder.Encode(config); err != nil {
 		return nil, err
 	}
-
-	return append(raw, '\n'), nil
+	return buf.Bytes(), nil
 }
 
 func (b *Bootstrapper) commandForEvent(eventName string) string {
 	eventName = strings.TrimSpace(eventName)
 
-	commands := []string{
-		fmt.Sprintf(
-			"if command -v agent >/dev/null 2>&1; then exec agent observer forward-hook %s; fi",
-			shellQuote(eventName),
-		),
+	return "/bin/sh -c " + shellQuote(fmt.Sprintf(
+		`repo_root=$(git rev-parse --show-toplevel 2>/dev/null) || exit 0; exec /bin/sh "$repo_root/.codex/hooks/forward-to-agent.sh" %s`,
+		shellQuote(eventName),
+	))
+}
+
+func (b *Bootstrapper) renderForwarderScript() ([]byte, error) {
+	var buf bytes.Buffer
+	if err := forwarderScriptTemplate.Execute(&buf, struct {
+		AgentExecQuoted  string
+		SourceRootQuoted string
+	}{
+		AgentExecQuoted:  shellQuote(b.agentExec),
+		SourceRootQuoted: shellQuote(b.sourceRoot),
+	}); err != nil {
+		return nil, fmt.Errorf("render codex forwarder script: %w", err)
 	}
 
-	if b.agentExec != "" {
-		commands = append(commands, fmt.Sprintf("if [ -x %s ]; then exec %s observer forward-hook %s; fi",
-			shellQuote(b.agentExec),
-			shellQuote(b.agentExec),
-			shellQuote(eventName),
-		))
-	}
-
-	if b.sourceRoot != "" {
-		commands = append(
-			commands,
-			fmt.Sprintf(
-				"if command -v go >/dev/null 2>&1 && [ -f %s ]; then cd %s && exec go run ./cmd/agent observer forward-hook %s; fi",
-				shellQuote(filepath.Join(b.sourceRoot, "go.mod")),
-				shellQuote(b.sourceRoot),
-				shellQuote(eventName),
-			),
-		)
-	}
-
-	commands = append(commands, "exit 0")
-
-	return "/bin/sh -c " + shellQuote(strings.Join(commands, "; "))
+	return buf.Bytes(), nil
 }
 
 type hookConfig struct {

@@ -48,6 +48,57 @@ func TestDeriveHookSessionSummary_MarksIdleAfterStopAndTracksStopTime(t *testing
 	require.Equal(t, "go test ./...", summary.LastCommandText)
 }
 
+func TestDeriveHookSessionSummary_UserPromptSubmitClearsPriorTurnOutput(t *testing.T) {
+	summary := deriveHookSessionSummary(&core.HookSessionSummary{
+		TaskID:               "task-1",
+		SessionID:            "sess-1",
+		RuntimePhase:         core.HookRuntimePhaseIdle,
+		LastPromptText:       "first prompt",
+		LastAssistantMessage: "first answer",
+		LastCommandText:      "go test ./...",
+		LastCommandResultText: "PASS",
+	}, hookRecord{
+		EventName:  "UserPromptSubmit",
+		SessionID:  "sess-1",
+		TurnID:     "turn-2",
+		PromptText: "second prompt",
+		OccurredAt: time.Date(2026, 4, 10, 10, 0, 0, 0, time.UTC),
+	})
+
+	require.Equal(t, "turn-2", summary.CurrentTurnID)
+	require.Equal(t, "second prompt", summary.LastPromptText)
+	require.Equal(t, "", summary.LastAssistantMessage)
+	require.Equal(t, "", summary.LastCommandText)
+	require.Equal(t, "", summary.LastCommandResultText)
+	require.Equal(t, core.HookRuntimePhasePrompted, summary.RuntimePhase)
+}
+
+func TestDeriveHookSessionSummary_UserPromptSubmitClearsAssistantTextEvenWhenPayloadIncludesIt(t *testing.T) {
+	summary := deriveHookSessionSummary(&core.HookSessionSummary{
+		TaskID:               "task-1",
+		SessionID:            "sess-1",
+		RuntimePhase:         core.HookRuntimePhaseIdle,
+		LastPromptText:       "first prompt",
+		LastAssistantMessage: "first answer",
+		LastCommandText:      "go test ./...",
+		LastCommandResultText: "PASS",
+	}, hookRecord{
+		EventName:            "UserPromptSubmit",
+		SessionID:            "sess-1",
+		TurnID:               "turn-2",
+		PromptText:           "second prompt",
+		LastAssistantMessage: "current answer",
+		OccurredAt:           time.Date(2026, 4, 10, 10, 0, 0, 0, time.UTC),
+	})
+
+	require.Equal(t, "turn-2", summary.CurrentTurnID)
+	require.Equal(t, "second prompt", summary.LastPromptText)
+	require.Equal(t, "", summary.LastAssistantMessage)
+	require.Equal(t, "", summary.LastCommandText)
+	require.Equal(t, "", summary.LastCommandResultText)
+	require.Equal(t, core.HookRuntimePhasePrompted, summary.RuntimePhase)
+}
+
 func TestDeriveHookSessionSummary_MarksWaitingPermissionOnPermissionRequest(t *testing.T) {
 	summary := deriveHookSessionSummary(&core.HookSessionSummary{
 		TaskID:          "task-1",
