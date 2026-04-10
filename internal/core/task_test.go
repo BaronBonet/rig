@@ -14,6 +14,21 @@ func TestTaskStatusIsTerminal_BrokenIsTerminal(t *testing.T) {
 	require.False(t, core.TaskStatusDegraded.IsTerminal())
 }
 
+func TestTaskSuggestion_DefaultBranchType(t *testing.T) {
+	s := core.TaskSuggestion{Name: "billing retry flow"}
+	require.Equal(t, "feat", s.BranchTypeOrDefault())
+}
+
+func TestTaskSuggestion_ValidBranchType(t *testing.T) {
+	s := core.TaskSuggestion{Name: "billing retry flow", BranchType: "fix"}
+	require.Equal(t, "fix", s.BranchTypeOrDefault())
+}
+
+func TestTaskSuggestion_InvalidBranchTypeFallsBackToFeat(t *testing.T) {
+	s := core.TaskSuggestion{Name: "billing retry flow", BranchType: "banana"}
+	require.Equal(t, "feat", s.BranchTypeOrDefault())
+}
+
 func TestCorePublicTypesRemainUsable(t *testing.T) {
 	cfg := core.Config{Provider: "codex"}
 	task := core.Task{
