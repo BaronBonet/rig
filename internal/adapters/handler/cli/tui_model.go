@@ -37,7 +37,9 @@ type model struct {
 	taskViews          []*core.TaskView
 	tasks              []*core.Task
 	observerSocketPath string
+	hookUpdates        <-chan core.HookSessionSummary
 	observerUpdates    <-chan core.ObserverTaskUpdate
+	unsubscribeHooks   func()
 	unsubscribeUpdates func()
 	promptInput        textarea.Model
 	nameInput          textinput.Model
@@ -69,6 +71,18 @@ type observerSubscriptionReadyMsg struct {
 	updates <-chan core.ObserverTaskUpdate
 	cleanup func()
 }
+
+type hookSubscriptionReadyMsg struct {
+	err     error
+	updates <-chan core.HookSessionSummary
+	cleanup func()
+}
+
+type hookTaskUpdatedMsg struct {
+	update core.HookSessionSummary
+}
+
+type hookSubscriptionClosedMsg struct{}
 
 type observerTaskUpdatedMsg struct {
 	update core.ObserverTaskUpdate
@@ -145,6 +159,7 @@ func newTUIModel(
 func (m model) Init() tea.Cmd {
 	return tea.Batch(
 		refreshTasksCmd(m.service, m.tasksRequestSeq),
+		subscribeHookUpdatesCmd(m.service),
 		subscribeObserverUpdatesCmd(m.observerSocketPath),
 	)
 }
@@ -202,6 +217,26 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.unsubscribeUpdates = msg.cleanup
 		m.observerUpdates = msg.updates
 		return m, waitForObserverUpdateCmd(msg.updates)
+	case hookSubscriptionReadyMsg:
+		if msg.err != nil {
+			return m, nil
+		}
+		if m.unsubscribeHooks != nil {
+			m.unsubscribeHooks()
+		}
+		m.unsubscribeHooks = msg.cleanup
+		m.hookUpdates = msg.updates
+		return m, waitForHookUpdateCmd(msg.updates)
+	case hookTaskUpdatedMsg:
+		m.applyHookSessionUpdate(msg.update)
+		return m, waitForHookUpdateCmd(m.hookUpdates)
+	case hookSubscriptionClosedMsg:
+		if m.unsubscribeHooks != nil {
+			m.unsubscribeHooks()
+			m.unsubscribeHooks = nil
+		}
+		m.hookUpdates = nil
+		return m, nil
 	case observerTaskUpdatedMsg:
 		m.applyObserverTaskUpdate(msg.update)
 		return m, waitForObserverUpdateCmd(m.observerUpdates)
@@ -337,7 +372,7 @@ func (m model) View() tea.View {
 
 func (m model) updateKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	if msg.Code == 'c' && msg.Mod == tea.ModCtrl {
-		m.cleanupHookSubscription()
+		m.cleanupSubscriptions()
 		return m, tea.Quit
 	}
 
@@ -360,7 +395,7 @@ func (m model) updateKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 func (m model) updateListKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	switch msg.String() {
 	case "q":
-		m.cleanupHookSubscription()
+		m.cleanupSubscriptions()
 		return m, tea.Quit
 	case "enter":
 		task := m.selectedTask()
@@ -997,7 +1032,12 @@ func (m *model) upsertTask(updated *core.Task) {
 	}
 }
 
-func (m *model) cleanupHookSubscription() {
+func (m *model) cleanupSubscriptions() {
+	if m.unsubscribeHooks != nil {
+		m.unsubscribeHooks()
+		m.unsubscribeHooks = nil
+	}
+	m.hookUpdates = nil
 	if m.unsubscribeUpdates != nil {
 		m.unsubscribeUpdates()
 		m.unsubscribeUpdates = nil
@@ -1005,12 +1045,28 @@ func (m *model) cleanupHookSubscription() {
 	m.observerUpdates = nil
 }
 
+func (m *model) applyHookSessionUpdate(update core.HookSessionSummary) {
+	if strings.TrimSpace(update.TaskID) == "" {
+		return
+	}
+
+	for _, view := range m.taskViews {
+		if view == nil || view.Task == nil || view.Task.ID != update.TaskID {
+			continue
+		}
+
+		copySummary := update
+		view.HookSession = &copySummary
+		return
+	}
+}
+
 func (m *model) applyObserverTaskUpdate(update core.ObserverTaskUpdate) {
 	if strings.TrimSpace(update.TaskID) == "" {
 		return
 	}
 
-	for i, view := range m.taskViews {
+	for _, view := range m.taskViews {
 		if view == nil || view.Task == nil || view.Task.ID != update.TaskID {
 			continue
 		}
@@ -1021,10 +1077,6 @@ func (m *model) applyObserverTaskUpdate(update core.ObserverTaskUpdate) {
 			DisplayActivity:       update.DisplayActivity,
 			LastRuntimeObservedAt: update.LastActivityAt,
 			ProcessAlive:          update.DisplayStatus != core.DisplayStatusDisconnected,
-		}
-		if view.Observer == nil {
-			view = &core.TaskView{Task: view.Task}
-			m.taskViews[i] = view
 		}
 		view.Observer = copySummary
 		return
@@ -1154,6 +1206,27 @@ func subscribeObserverUpdatesCmd(socketPath string) tea.Cmd {
 		updates, cleanup, err := observer.Subscribe(context.Background(), socketPath)
 		return observerSubscriptionReadyMsg{updates: updates, cleanup: cleanup, err: err}
 	})
+}
+
+func subscribeHookUpdatesCmd(service TaskService) tea.Cmd {
+	return func() tea.Msg {
+		updates, cleanup, err := service.SubscribeTaskHookUpdates(context.Background())
+		return hookSubscriptionReadyMsg{updates: updates, cleanup: cleanup, err: err}
+	}
+}
+
+func waitForHookUpdateCmd(updates <-chan core.HookSessionSummary) tea.Cmd {
+	if updates == nil {
+		return nil
+	}
+
+	return func() tea.Msg {
+		update, ok := <-updates
+		if !ok {
+			return hookSubscriptionClosedMsg{}
+		}
+		return hookTaskUpdatedMsg{update: update}
+	}
 }
 
 func waitForObserverUpdateCmd(updates <-chan core.ObserverTaskUpdate) tea.Cmd {

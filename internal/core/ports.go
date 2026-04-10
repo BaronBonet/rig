@@ -88,6 +88,10 @@ type WorkspaceSeeder interface {
 	ValidateSeedPaths(ctx context.Context, repoRoot string, relativePaths []string) error
 }
 
+type TaskWorkspaceBootstrapper interface {
+	BootstrapTaskWorkspace(ctx context.Context, task *Task) error
+}
+
 type RepoClient interface {
 	IsAvailable(ctx context.Context) error
 	DetectRepo(ctx context.Context, cwd string) (RepoContext, error)
