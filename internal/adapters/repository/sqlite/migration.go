@@ -109,6 +109,20 @@ func allColumnsExist(ctx context.Context, db *sql.DB, table string, columns ...s
 	return true, nil
 }
 
+func anyColumnsExist(ctx context.Context, db *sql.DB, table string, columns ...string) (bool, error) {
+	for _, column := range columns {
+		exists, err := columnExists(ctx, db, table, column)
+		if err != nil {
+			return false, err
+		}
+		if exists {
+			return true, nil
+		}
+	}
+
+	return false, nil
+}
+
 func tableColumnState(ctx context.Context, db *sql.DB, table string, columns ...string) (bool, bool, error) {
 	exists, err := tableExists(ctx, db, table)
 	if err != nil {
@@ -195,6 +209,22 @@ create table if not exists schema_migrations (
 	)
 	if err != nil {
 		return fmt.Errorf("check task metadata columns: %w", err)
+	}
+	taskMetadataColumnsPresent, err := anyColumnsExist(
+		ctx,
+		db,
+		"tasks",
+		"repo_name",
+		"agent_window_name",
+		"editor_window_name",
+		"agent_window_exists",
+		"editor_window_exists",
+	)
+	if err != nil {
+		return fmt.Errorf("check task metadata column presence: %w", err)
+	}
+	if taskMetadataColumnsPresent && !taskMetadataColumnsComplete {
+		return fmt.Errorf("incomplete managed schema for task metadata columns")
 	}
 
 	hookEventsExists, hookEventColumnsComplete, err := tableColumnState(
