@@ -109,6 +109,23 @@ func allColumnsExist(ctx context.Context, db *sql.DB, table string, columns ...s
 	return true, nil
 }
 
+func tableColumnState(ctx context.Context, db *sql.DB, table string, columns ...string) (bool, bool, error) {
+	exists, err := tableExists(ctx, db, table)
+	if err != nil {
+		return false, false, err
+	}
+	if !exists {
+		return false, false, nil
+	}
+
+	complete, err := allColumnsExist(ctx, db, table, columns...)
+	if err != nil {
+		return false, false, err
+	}
+
+	return true, complete, nil
+}
+
 func seedLegacyMigrationState(ctx context.Context, db *sql.DB) error {
 	if _, err := db.ExecContext(ctx, `
 create table if not exists schema_migrations (
@@ -118,7 +135,7 @@ create table if not exists schema_migrations (
 		return fmt.Errorf("create schema_migrations table: %w", err)
 	}
 
-	initialTasksAndEventsComplete, err := allColumnsExist(
+	tasksExists, tasksComplete, err := tableColumnState(
 		ctx,
 		db,
 		"tasks",
@@ -144,7 +161,11 @@ create table if not exists schema_migrations (
 	if err != nil {
 		return fmt.Errorf("check initial tasks table: %w", err)
 	}
-	eventsComplete, err := allColumnsExist(
+	if tasksExists && !tasksComplete {
+		return fmt.Errorf("incomplete managed schema for tasks table")
+	}
+
+	eventsExists, eventsComplete, err := tableColumnState(
 		ctx,
 		db,
 		"events",
@@ -157,7 +178,10 @@ create table if not exists schema_migrations (
 	if err != nil {
 		return fmt.Errorf("check initial events table: %w", err)
 	}
-	initialTasksAndEventsComplete = initialTasksAndEventsComplete && eventsComplete
+	if eventsExists && !eventsComplete {
+		return fmt.Errorf("incomplete managed schema for events table")
+	}
+	initialTasksAndEventsComplete := tasksComplete && eventsComplete
 
 	taskMetadataColumnsComplete, err := allColumnsExist(
 		ctx,
@@ -173,7 +197,7 @@ create table if not exists schema_migrations (
 		return fmt.Errorf("check task metadata columns: %w", err)
 	}
 
-	hookEventColumnsComplete, err := allColumnsExist(
+	hookEventsExists, hookEventColumnsComplete, err := tableColumnState(
 		ctx,
 		db,
 		"task_hook_events",
@@ -193,7 +217,11 @@ create table if not exists schema_migrations (
 	if err != nil {
 		return fmt.Errorf("check task_hook_events columns: %w", err)
 	}
-	hookSessionColumnsComplete, err := allColumnsExist(
+	if hookEventsExists && !hookEventColumnsComplete {
+		return fmt.Errorf("incomplete managed schema for task_hook_events table")
+	}
+
+	hookSessionsExists, hookSessionColumnsComplete, err := tableColumnState(
 		ctx,
 		db,
 		"task_hook_sessions",
@@ -219,7 +247,11 @@ create table if not exists schema_migrations (
 	if err != nil {
 		return fmt.Errorf("check task_hook_sessions columns: %w", err)
 	}
-	observerSummaryColumnsComplete, err := allColumnsExist(
+	if hookSessionsExists && !hookSessionColumnsComplete {
+		return fmt.Errorf("incomplete managed schema for task_hook_sessions table")
+	}
+
+	observerSummariesExists, observerSummaryColumnsComplete, err := tableColumnState(
 		ctx,
 		db,
 		"task_observer_summaries",
@@ -232,6 +264,9 @@ create table if not exists schema_migrations (
 	)
 	if err != nil {
 		return fmt.Errorf("check task_observer_summaries columns: %w", err)
+	}
+	if observerSummariesExists && !observerSummaryColumnsComplete {
+		return fmt.Errorf("incomplete managed schema for task_observer_summaries table")
 	}
 
 	hookObservabilityIndexesComplete, err := allIndexesExist(
