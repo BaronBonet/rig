@@ -33,12 +33,12 @@ const (
 type HookRuntimePhase string
 
 const (
-	HookRuntimePhaseReady              HookRuntimePhase = "ready"
-	HookRuntimePhasePrompted           HookRuntimePhase = "prompted"
-	HookRuntimePhaseRunningCommand     HookRuntimePhase = "running_command"
-	HookRuntimePhaseWaitingPermission  HookRuntimePhase = "waiting_permission"
-	HookRuntimePhaseIdle               HookRuntimePhase = "idle"
-	HookRuntimePhaseFinished           HookRuntimePhase = "finished"
+	HookRuntimePhaseReady             HookRuntimePhase = "ready"
+	HookRuntimePhasePrompted          HookRuntimePhase = "prompted"
+	HookRuntimePhaseRunningCommand    HookRuntimePhase = "running_command"
+	HookRuntimePhaseWaitingPermission HookRuntimePhase = "waiting_permission"
+	HookRuntimePhaseIdle              HookRuntimePhase = "idle"
+	HookRuntimePhaseFinished          HookRuntimePhase = "finished"
 )
 
 type DisplayStatus string

@@ -101,6 +101,27 @@ func (r *Repository) LaunchRequest(task *core.Task) (core.LaunchRequest, error) 
 		InitialInput: []string{task.Prompt},
 	}
 
+	return r.withHookSettings(req)
+}
+
+func (r *Repository) RestoreLaunchRequest(
+	_ *core.Task,
+	hookSession *core.HookSessionSummary,
+) (core.LaunchRequest, error) {
+	command := []string{r.binary, "--resume"}
+	if hookSession != nil && strings.TrimSpace(hookSession.SessionID) != "" {
+		command = append(command, strings.TrimSpace(hookSession.SessionID))
+	}
+
+	req := core.LaunchRequest{
+		Command: command,
+		Prompt:  "❯",
+	}
+
+	return r.withHookSettings(req)
+}
+
+func (r *Repository) withHookSettings(req core.LaunchRequest) (core.LaunchRequest, error) {
 	if r.hookListenAddr != "" {
 		settings, err := buildHookSettings(r.hookListenAddr)
 		if err != nil {

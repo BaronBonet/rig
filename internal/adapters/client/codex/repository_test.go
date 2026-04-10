@@ -34,6 +34,30 @@ func TestRepositoryLaunchRequest_UsesBinaryPromptAndTaskPrompt(t *testing.T) {
 	}, launch)
 }
 
+func TestRepositoryRestoreLaunchRequest_UsesResumeWithSessionID(t *testing.T) {
+	repo := NewRepository(execx.NewMockRunner(t), Config{Binary: "codex"})
+
+	launch, err := repo.RestoreLaunchRequest(&core.Task{Prompt: "add billing retry flow"}, &core.HookSessionSummary{
+		SessionID: "sess-1",
+	})
+	require.NoError(t, err)
+	require.Equal(t, core.LaunchRequest{
+		Command: []string{"codex", "resume", "sess-1"},
+		Prompt:  "›",
+	}, launch)
+}
+
+func TestRepositoryRestoreLaunchRequest_FallsBackToGenericResumeWithoutSessionID(t *testing.T) {
+	repo := NewRepository(execx.NewMockRunner(t), Config{Binary: "codex"})
+
+	launch, err := repo.RestoreLaunchRequest(&core.Task{Prompt: "add billing retry flow"}, nil)
+	require.NoError(t, err)
+	require.Equal(t, core.LaunchRequest{
+		Command: []string{"codex", "resume"},
+		Prompt:  "›",
+	}, launch)
+}
+
 func TestRepositorySuggestTaskName_DelegatesToCodexProposal(t *testing.T) {
 	runner := execx.NewMockRunner(t)
 	runner.EXPECT().
