@@ -10,7 +10,6 @@ import (
 	"sync"
 	"time"
 
-	"agent/internal/adapters/repository/sqlite/generated"
 	"agent/internal/core"
 
 	_ "modernc.org/sqlite"
@@ -18,7 +17,6 @@ import (
 
 type Repository struct {
 	db                       *sql.DB
-	queries                  *generated.Queries
 	path                     string
 	initErr                  error
 	mu                       sync.Mutex
@@ -77,12 +75,10 @@ func NewRepository(cfg Config) (*Repository, error) {
 	}
 
 	repo.db = db
-	repo.queries = generated.New(db)
 	if err := repo.backfillLegacyTaskRows(); err != nil {
 		repo.initErr = err
 		_ = db.Close()
 		repo.db = nil
-		repo.queries = nil
 		return repo, nil
 	}
 

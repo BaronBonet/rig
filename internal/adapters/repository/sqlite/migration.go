@@ -21,14 +21,23 @@ func applyBootstrapSQL(ctx context.Context, db *sql.DB, files fs.FS, path string
 	return nil
 }
 
-func tableExists(ctx context.Context, db *sql.DB, table string) (bool, error) {
+func schemaObjectExists(ctx context.Context, db *sql.DB, objectType, name string) (bool, error) {
 	var count int
 	err := db.QueryRowContext(
 		ctx,
-		`select count(*) from sqlite_master where type = 'table' and name = ?`,
-		table,
+		`select count(*) from sqlite_master where type = ? and name = ?`,
+		objectType,
+		name,
 	).Scan(&count)
 	return count > 0, err
+}
+
+func tableExists(ctx context.Context, db *sql.DB, table string) (bool, error) {
+	return schemaObjectExists(ctx, db, "table", table)
+}
+
+func indexExists(ctx context.Context, db *sql.DB, index string) (bool, error) {
+	return schemaObjectExists(ctx, db, "index", index)
 }
 
 func columnExists(ctx context.Context, db *sql.DB, table, column string) (bool, error) {
@@ -58,6 +67,48 @@ func columnExists(ctx context.Context, db *sql.DB, table, column string) (bool, 
 	return false, rows.Err()
 }
 
+func allTablesExist(ctx context.Context, db *sql.DB, tables ...string) (bool, error) {
+	for _, table := range tables {
+		exists, err := tableExists(ctx, db, table)
+		if err != nil {
+			return false, err
+		}
+		if !exists {
+			return false, nil
+		}
+	}
+
+	return true, nil
+}
+
+func allIndexesExist(ctx context.Context, db *sql.DB, indexes ...string) (bool, error) {
+	for _, index := range indexes {
+		exists, err := indexExists(ctx, db, index)
+		if err != nil {
+			return false, err
+		}
+		if !exists {
+			return false, nil
+		}
+	}
+
+	return true, nil
+}
+
+func allColumnsExist(ctx context.Context, db *sql.DB, table string, columns ...string) (bool, error) {
+	for _, column := range columns {
+		exists, err := columnExists(ctx, db, table, column)
+		if err != nil {
+			return false, err
+		}
+		if !exists {
+			return false, nil
+		}
+	}
+
+	return true, nil
+}
+
 func seedLegacyMigrationState(ctx context.Context, db *sql.DB) error {
 	if _, err := db.ExecContext(ctx, `
 create table if not exists schema_migrations (
@@ -75,29 +126,54 @@ create table if not exists schema_migrations (
 		return nil
 	}
 
-	tasksExists, err := tableExists(ctx, db, "tasks")
+	initialTasksAndEventsComplete, err := allTablesExist(ctx, db, "tasks", "events")
 	if err != nil {
-		return fmt.Errorf("check tasks table: %w", err)
-	}
-	if !tasksExists {
-		return nil
+		return fmt.Errorf("check initial migration tables: %w", err)
 	}
 
-	versions := []string{"000001_initial_tasks_and_events"}
-
-	hasRepoName, err := columnExists(ctx, db, "tasks", "repo_name")
+	taskMetadataColumnsComplete, err := allColumnsExist(
+		ctx,
+		db,
+		"tasks",
+		"repo_name",
+		"agent_window_name",
+		"editor_window_name",
+		"agent_window_exists",
+		"editor_window_exists",
+	)
 	if err != nil {
-		return fmt.Errorf("check tasks.repo_name column: %w", err)
+		return fmt.Errorf("check task metadata columns: %w", err)
 	}
-	if hasRepoName {
+
+	hookObservabilityTablesComplete, err := allTablesExist(
+		ctx,
+		db,
+		"task_hook_events",
+		"task_hook_sessions",
+		"task_observer_summaries",
+	)
+	if err != nil {
+		return fmt.Errorf("check hook observability tables: %w", err)
+	}
+
+	hookObservabilityIndexesComplete, err := allIndexesExist(
+		ctx,
+		db,
+		"idx_task_hook_events_task_occurred_at",
+		"idx_task_hook_sessions_session_id",
+	)
+	if err != nil {
+		return fmt.Errorf("check hook observability indexes: %w", err)
+	}
+
+	versions := make([]string, 0, 3)
+	if initialTasksAndEventsComplete {
+		versions = append(versions, "000001_initial_tasks_and_events")
+	}
+	if taskMetadataColumnsComplete {
 		versions = append(versions, "000002_add_task_metadata_columns")
 	}
-
-	hookTablesExist, err := tableExists(ctx, db, "task_hook_events")
-	if err != nil {
-		return fmt.Errorf("check task_hook_events table: %w", err)
-	}
-	if hookTablesExist {
+	if hookObservabilityTablesComplete && hookObservabilityIndexesComplete {
 		versions = append(versions, "000003_add_hook_observability_tables")
 	}
 
