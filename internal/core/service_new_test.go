@@ -242,3 +242,20 @@ func progressSteps(events []TaskProgress) []TaskProgressStep {
 
 	return steps
 }
+
+func TestServiceCreateTaskWithProgress_UsesLLMSuggestedBranchType(t *testing.T) {
+	svc := newTestService(t)
+	svc.providerRepo.suggestedSuggestion = TaskSuggestion{
+		Name:       "billing retry flow",
+		BranchType: "fix",
+	}
+
+	task, err := svc.service.CreateTaskWithProgress(t.Context(), NewTaskInput{
+		Cwd:    "/tmp/repo",
+		Prompt: "fix the billing retry flow",
+	}, CreateTaskOptions{}, nil)
+
+	require.NoError(t, err)
+	require.Equal(t, "fix/billing-retry-flow", task.BranchName)
+	require.Equal(t, "billing retry flow", task.DisplayName)
+}
