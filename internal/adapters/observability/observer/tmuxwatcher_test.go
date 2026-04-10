@@ -6,6 +6,7 @@ import (
 	"testing"
 	"time"
 
+	"agent/internal/adapters/client/codex"
 	"agent/internal/core"
 
 	"github.com/stretchr/testify/mock"
@@ -215,6 +216,96 @@ func TestTMuxWatcher_OverrideWithHookPhase_PermissionRequestYieldsNeedsInput(t *
 	require.True(t, repo.lastUpsert.ProcessAlive)
 }
 
+func TestTMuxWatcher_OverrideWithHookPhase_CodexPostToolUseContinuePromptYieldsNeedsInput(t *testing.T) {
+	now := time.Date(2026, 4, 10, 10, 30, 0, 0, time.UTC)
+	task := &core.Task{
+		ID:              "task-1",
+		TmuxSession:     "repo_task-1",
+		AgentWindowName: "agent",
+		Provider:        "codex",
+		Status:          core.TaskStatusRunning,
+	}
+
+	monitor := core.NewMockRuntimeMonitor(t)
+	monitor.EXPECT().Snapshot(mock.Anything, task).Return(core.RuntimeSnapshot{
+		SessionName:       task.TmuxSession,
+		PaneID:            "%24",
+		ForegroundCommand: "codex",
+		Content:           "Cont\x1b[32minue?\x1b[0m\n",
+		ObservedAt:        now,
+	}, nil).Once()
+
+	hooks := &stubHookObservabilityRepository{
+		summaries: map[string]*core.HookSessionSummary{
+			task.ID: {
+				TaskID:         task.ID,
+				RuntimePhase:   core.HookRuntimePhaseIdle,
+				LastEventName:  "PostToolUse",
+				LastActivityAt: now.Add(-1 * time.Second),
+			},
+		},
+	}
+
+	repo := &stubWatcherObserverRepository{}
+	watcher := NewTMuxWatcher(TMuxWatcherConfig{
+		Tasks:     stubObserverTaskLister{tasks: []*core.Task{task}},
+		Monitor:   monitor,
+		Repo:      repo,
+		Hooks:     hooks,
+		Providers: map[string]core.ProviderClient{"codex": detectingTMuxWatcherProvider{
+			detect: codex.NewRuntimeDetector(2 * time.Second).Detect,
+		}},
+	})
+
+	require.NoError(t, watcher.RefreshAll(context.Background()))
+	require.Equal(t, core.DisplayStatusNeedsInput, repo.lastUpsert.DisplayStatus)
+}
+
+func TestTMuxWatcher_OverrideWithHookPhase_CodexStopUsesPromptFallbackForNeedsInput(t *testing.T) {
+	now := time.Date(2026, 4, 10, 10, 35, 0, 0, time.UTC)
+	task := &core.Task{
+		ID:              "task-1",
+		TmuxSession:     "repo_task-1",
+		AgentWindowName: "agent",
+		Provider:        "codex",
+		Status:          core.TaskStatusRunning,
+	}
+
+	monitor := core.NewMockRuntimeMonitor(t)
+	monitor.EXPECT().Snapshot(mock.Anything, task).Return(core.RuntimeSnapshot{
+		SessionName:       task.TmuxSession,
+		PaneID:            "%24",
+		ForegroundCommand: "codex",
+		Content:           "› \n  gpt-5.4 high · 82% left\n",
+		ObservedAt:        now,
+	}, nil).Once()
+
+	hooks := &stubHookObservabilityRepository{
+		summaries: map[string]*core.HookSessionSummary{
+			task.ID: {
+				TaskID:         task.ID,
+				RuntimePhase:   core.HookRuntimePhaseIdle,
+				LastEventName:  "Stop",
+				LastActivityAt: now.Add(-1 * time.Second),
+			},
+		},
+	}
+
+	repo := &stubWatcherObserverRepository{}
+	watcher := NewTMuxWatcher(TMuxWatcherConfig{
+		Tasks:     stubObserverTaskLister{tasks: []*core.Task{task}},
+		Monitor:   monitor,
+		Repo:      repo,
+		Hooks:     hooks,
+		Providers: map[string]core.ProviderClient{"codex": detectingTMuxWatcherProvider{
+			detect: codex.NewRuntimeDetector(2 * time.Second).Detect,
+		}},
+	})
+
+	require.NoError(t, watcher.RefreshAll(context.Background()))
+	require.Equal(t, core.DisplayStatusNeedsInput, repo.lastUpsert.DisplayStatus)
+}
+
 type stubObserverTaskLister struct {
 	tasks []*core.Task
 	err   error
@@ -270,6 +361,29 @@ func (s stubTMuxWatcherProvider) LaunchRequest(*core.Task) (core.LaunchRequest, 
 
 func (s stubTMuxWatcherProvider) DetectRuntimeState(core.RuntimeSnapshot) core.RuntimeState {
 	return s.runtimeState
+}
+
+type detectingTMuxWatcherProvider struct {
+	detect func(core.RuntimeSnapshot) core.RuntimeState
+}
+
+func (s detectingTMuxWatcherProvider) IsAvailable(context.Context) error {
+	return nil
+}
+
+func (s detectingTMuxWatcherProvider) SuggestTaskName(context.Context, string) (core.TaskSuggestion, error) {
+	return core.TaskSuggestion{}, nil
+}
+
+func (s detectingTMuxWatcherProvider) LaunchRequest(*core.Task) (core.LaunchRequest, error) {
+	return core.LaunchRequest{}, nil
+}
+
+func (s detectingTMuxWatcherProvider) DetectRuntimeState(snapshot core.RuntimeSnapshot) core.RuntimeState {
+	if s.detect == nil {
+		return core.RuntimeStateNone
+	}
+	return s.detect(snapshot)
 }
 
 type stubHookObservabilityRepository struct {

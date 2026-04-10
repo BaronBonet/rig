@@ -520,6 +520,40 @@ func TestModelUpdate_HookTaskUpdatedDoesNotTriggerFullRefresh(t *testing.T) {
 	require.False(t, m.loading)
 }
 
+func TestModelUpdate_HookTaskUpdated_UserPromptSubmitReplacesPriorTurnPreview(t *testing.T) {
+	service := NewMockTaskService(t)
+	task := tuiTask("billing-retry-flow")
+	m := newLoadedTUIModelWithViews(t, service, taskView(task, &core.HookSessionSummary{
+		TaskID:                task.ID,
+		LastEventName:         "Stop",
+		LastPromptText:        "first prompt",
+		LastAssistantMessage:  "first answer",
+		LastCommandText:       "go test ./...",
+		LastCommandResultText: "PASS",
+	}))
+	updates := make(chan core.HookSessionSummary)
+	m.hookUpdates = updates
+
+	m, cmd := updateTUIModel(t, m, hookTaskUpdatedMsg{update: core.HookSessionSummary{
+		TaskID:         task.ID,
+		LastEventName:  "UserPromptSubmit",
+		RuntimePhase:   core.HookRuntimePhasePrompted,
+		LastPromptText: "second prompt",
+	}})
+
+	require.NotNil(t, cmd)
+	require.Equal(t, "second prompt", m.selectedTaskView().HookSession.LastPromptText)
+	require.Equal(t, "", m.selectedTaskView().HookSession.LastAssistantMessage)
+	require.Equal(t, "", m.selectedTaskView().HookSession.LastCommandText)
+	require.Equal(t, "", m.selectedTaskView().HookSession.LastCommandResultText)
+
+	rendered := stripANSI(m.View().Content)
+	require.Contains(t, rendered, "second prompt")
+	require.NotContains(t, rendered, "first answer")
+	require.NotContains(t, rendered, "go test ./...")
+	require.NotContains(t, rendered, "PASS")
+}
+
 func TestModelUpdate_ObserverTaskUpdatedPreservesHookSession(t *testing.T) {
 	service := NewMockTaskService(t)
 	task := tuiTask("billing-retry-flow")

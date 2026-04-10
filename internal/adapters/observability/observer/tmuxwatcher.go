@@ -128,10 +128,10 @@ func (w *TMuxWatcher) refreshTask(ctx context.Context, task *core.Task) error {
 	runtimeState := provider.DetectRuntimeState(snapshot)
 
 	// Hook data is more authoritative than tmux snapshot parsing. When
-	// hooks indicate Claude is actively working, override the tmux-based
-	// runtime state which may incorrectly detect a visible prompt as
-	// "needs input".
-	runtimeState = w.overrideWithHookPhase(ctx, task.ID, runtimeState, snapshot.ObservedAt)
+	// hooks indicate the provider is actively working, override the
+	// tmux-based runtime state which may incorrectly detect a visible
+	// prompt as "needs input".
+	runtimeState = w.overrideWithHookPhase(ctx, task, snapshot, runtimeState)
 
 	processAlive := runtimeState == core.RuntimeStateRunning || runtimeState == core.RuntimeStateNeedsInput
 	display := DeriveDisplayStatus(StatusInput{
@@ -182,11 +182,11 @@ const hookStaleThreshold = 5 * time.Minute
 
 func (w *TMuxWatcher) overrideWithHookPhase(
 	ctx context.Context,
-	taskID string,
+	task *core.Task,
+	snapshot core.RuntimeSnapshot,
 	rs core.RuntimeState,
-	observedAt time.Time,
 ) core.RuntimeState {
-	if w.hooks == nil {
+	if task == nil || w.hooks == nil {
 		return rs
 	}
 
@@ -196,37 +196,49 @@ func (w *TMuxWatcher) overrideWithHookPhase(
 		return rs
 	}
 
-	summaries, err := w.hooks.ListHookSessionSummaries(ctx, []string{taskID})
+	summaries, err := w.hooks.ListHookSessionSummaries(ctx, []string{task.ID})
 	if err != nil {
 		return rs
 	}
 
-	hs := summaries[taskID]
+	hs := summaries[task.ID]
 	if hs == nil || hs.LastActivityAt.IsZero() {
 		return rs
 	}
 
 	// Safety net: if hooks haven't arrived in a long time, they may
 	// have broken. Fall back to tmux detection.
-	age := observedAt.Sub(hs.LastActivityAt)
+	age := snapshot.ObservedAt.Sub(hs.LastActivityAt)
 	if age > hookStaleThreshold {
 		return rs
 	}
 
+	if task.Provider == "codex" {
+		switch hs.RuntimePhase {
+		case core.HookRuntimePhaseWaitingPermission:
+			return core.RuntimeStateNeedsInput
+		case core.HookRuntimePhasePrompted, core.HookRuntimePhaseRunningCommand:
+			return core.RuntimeStateRunning
+		case core.HookRuntimePhaseIdle:
+			if hs.LastEventName == "PostToolUse" && rs == core.RuntimeStateNeedsInput {
+				return rs
+			}
+			if hs.LastEventName == "Stop" {
+				return rs
+			}
+			return core.RuntimeStateRunning
+		}
+	}
+
 	switch hs.RuntimePhase {
 	case core.HookRuntimePhaseWaitingPermission:
-		// Hook says Claude is waiting for user to approve/deny a tool.
 		return core.RuntimeStateNeedsInput
 	case core.HookRuntimePhasePrompted, core.HookRuntimePhaseRunningCommand:
-		// Hook says Claude is actively working — trust it.
 		return core.RuntimeStateRunning
 	case core.HookRuntimePhaseIdle:
-		// PostToolUse sets idle, but Claude may be thinking between tool
-		// calls. Only treat as truly idle when the last event was Stop.
 		if hs.LastEventName == "Stop" {
 			return rs
 		}
-		// Between tool calls — still working.
 		return core.RuntimeStateRunning
 	}
 
