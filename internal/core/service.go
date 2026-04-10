@@ -106,7 +106,10 @@ func (s *Service) CreateTaskWithProgress(
 
 	var suggestion TaskSuggestion
 	if strings.TrimSpace(input.ConfirmedDisplayName) != "" {
-		suggestion = TaskSuggestion{Name: strings.TrimSpace(input.ConfirmedDisplayName), BranchType: input.ConfirmedBranchType}
+		suggestion = TaskSuggestion{
+			Name:       strings.TrimSpace(input.ConfirmedDisplayName),
+			BranchType: input.ConfirmedBranchType,
+		}
 	} else {
 		emitTaskProgress(progress, TaskProgress{
 			Step:    TaskProgressNaming,
@@ -136,13 +139,13 @@ func (s *Service) CreateTaskWithProgress(
 	now := time.Now().UTC()
 	taskSlug := slug.EnsureUnique(slug.FromDisplayName(suggestion.Name), existingSlugs)
 	task := &Task{
-		ID:          fmt.Sprintf("%d", now.UnixNano()),
-		Prompt:      input.Prompt,
-		DisplayName: suggestion.Name,
-		Slug:        taskSlug,
-		RepoRoot:    repoCtx.Root,
-		RepoName:    repoCtx.Name,
-		BaseBranch:  repoCtx.BaseBranch,
+		ID:               fmt.Sprintf("%d", now.UnixNano()),
+		Prompt:           input.Prompt,
+		DisplayName:      suggestion.Name,
+		Slug:             taskSlug,
+		RepoRoot:         repoCtx.Root,
+		RepoName:         repoCtx.Name,
+		BaseBranch:       repoCtx.BaseBranch,
 		BranchName:       suggestion.BranchTypeOrDefault() + "/" + taskSlug,
 		WorktreePath:     filepath.Join(filepath.Dir(repoCtx.Root), repoCtx.Name+"-"+taskSlug),
 		TmuxSession:      repoCtx.Name + "_" + taskSlug,
@@ -402,6 +405,12 @@ func (s *Service) OpenTask(ctx context.Context, idOrSlug string) error {
 		return ErrCleanedTask
 	}
 
+	if task.Status == TaskStatusBroken {
+		if err := s.restoreTaskSession(ctx, task); err != nil {
+			return err
+		}
+	}
+
 	if task.Status != TaskStatusRunning && task.Status != TaskStatusDegraded {
 		return ErrBrokenTask
 	}
@@ -411,6 +420,76 @@ func (s *Service) OpenTask(ctx context.Context, idOrSlug string) error {
 	}
 
 	return s.session.OpenTaskSession(ctx, task)
+}
+
+func (s *Service) restoreTaskSession(ctx context.Context, task *Task) error {
+	if task == nil {
+		return ErrBrokenTask
+	}
+	if !task.WorktreeExists || !task.BranchExists || task.SessionExists {
+		return ErrBrokenTask
+	}
+
+	providerRepo := s.resolveProvider(task.Provider)
+	if providerRepo == nil {
+		return ErrBrokenTask
+	}
+
+	hookSession := s.lookupHookSessionSummary(ctx, task.ID)
+	launch, err := restoreLaunchRequest(providerRepo, task, hookSession)
+	if err != nil {
+		_, markErr := s.markBroken(ctx, task, fmt.Errorf("build launch request: %w", err))
+		return markErr
+	}
+
+	if err := writeSetupFiles(task.WorktreePath, launch.SetupFiles); err != nil {
+		_, markErr := s.markBroken(ctx, task, fmt.Errorf("write setup files: %w", err))
+		return markErr
+	}
+
+	if err := s.session.StartTaskSession(ctx, task, launch); err != nil {
+		_, markErr := s.markBroken(ctx, task, fmt.Errorf("restore task session: %w", err))
+		return markErr
+	}
+
+	task.SessionExists = true
+	task.AgentWindowExists = true
+	task.EditorWindowExists = true
+	task.Status = TaskStatusRunning
+	task.LastError = ""
+	task.UpdatedAt = time.Now().UTC()
+	if err := s.tasks.UpdateTask(ctx, task); err != nil {
+		return err
+	}
+
+	_ = s.tasks.AppendEvent(ctx, task.ID, "session_restored", task.TmuxSession)
+
+	return nil
+}
+
+func restoreLaunchRequest(
+	providerRepo ProviderClient,
+	task *Task,
+	hookSession *HookSessionSummary,
+) (LaunchRequest, error) {
+	if restorer, ok := providerRepo.(RestoreLaunchProvider); ok {
+		return restorer.RestoreLaunchRequest(task, hookSession)
+	}
+
+	return providerRepo.LaunchRequest(task)
+}
+
+func (s *Service) lookupHookSessionSummary(ctx context.Context, taskID string) *HookSessionSummary {
+	if s.hooks == nil || strings.TrimSpace(taskID) == "" {
+		return nil
+	}
+
+	summaries, err := s.hooks.ListHookSessionSummaries(ctx, []string{taskID})
+	if err != nil {
+		return nil
+	}
+
+	return summaries[taskID]
 }
 
 func (s *Service) DeleteTaskResources(ctx context.Context, idOrSlug string) (*Task, error) {

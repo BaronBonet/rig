@@ -123,6 +123,21 @@ func (r *Repository) LaunchRequest(task *core.Task) (core.LaunchRequest, error) 
 	}, nil
 }
 
+func (r *Repository) RestoreLaunchRequest(
+	_ *core.Task,
+	hookSession *core.HookSessionSummary,
+) (core.LaunchRequest, error) {
+	command := []string{r.binary, "resume"}
+	if hookSession != nil && strings.TrimSpace(hookSession.SessionID) != "" {
+		command = append(command, strings.TrimSpace(hookSession.SessionID))
+	}
+
+	return core.LaunchRequest{
+		Command: command,
+		Prompt:  r.PromptMarker(),
+	}, nil
+}
+
 func (r *Repository) DetectRuntimeState(snapshot core.RuntimeSnapshot) core.RuntimeState {
 	return detectRuntimeState(snapshot)
 }

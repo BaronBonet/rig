@@ -122,6 +122,10 @@ type ProviderClient interface {
 	DetectRuntimeState(snapshot RuntimeSnapshot) RuntimeState
 }
 
+type RestoreLaunchProvider interface {
+	RestoreLaunchRequest(task *Task, hookSession *HookSessionSummary) (LaunchRequest, error)
+}
+
 type PRStatusChecker interface {
 	CheckPRStatus(ctx context.Context, repoRoot string, branchName string) (*PRStatus, error)
 }
