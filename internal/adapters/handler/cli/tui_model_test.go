@@ -496,6 +496,48 @@ func TestModelUpdate_ObserverTaskUpdatedDoesNotTriggerFullRefresh(t *testing.T) 
 	require.False(t, m.loading)
 }
 
+func TestModelUpdate_HookTaskUpdatedDoesNotTriggerFullRefresh(t *testing.T) {
+	service := NewMockTaskService(t)
+	task := tuiTask("billing-retry-flow")
+	m := newLoadedTUIModelWithViews(t, service, taskView(task, nil))
+	updates := make(chan core.HookSessionSummary)
+	m.hookUpdates = updates
+
+	m, cmd := updateTUIModel(t, m, hookTaskUpdatedMsg{update: core.HookSessionSummary{
+		TaskID:               task.ID,
+		RuntimePhase:         core.HookRuntimePhaseIdle,
+		LastPromptText:       "fix the billing retry flow",
+		LastAssistantMessage: "Updated the retry loop and tests",
+	}})
+	require.NotNil(t, cmd)
+	require.Equal(t, "fix the billing retry flow", m.selectedTaskView().HookSession.LastPromptText)
+	require.Equal(t, "Updated the retry loop and tests", m.selectedTaskView().HookSession.LastAssistantMessage)
+	require.False(t, m.loading)
+}
+
+func TestModelUpdate_ObserverTaskUpdatedPreservesHookSession(t *testing.T) {
+	service := NewMockTaskService(t)
+	task := tuiTask("billing-retry-flow")
+	m := newLoadedTUIModelWithViews(t, service, taskView(task, &core.HookSessionSummary{
+		TaskID:               task.ID,
+		LastPromptText:       "fix the billing retry flow",
+		LastAssistantMessage: "Updated the retry loop and tests",
+	}))
+	updates := make(chan core.ObserverTaskUpdate)
+	m.observerUpdates = updates
+
+	m, cmd := updateTUIModel(t, m, observerTaskUpdatedMsg{update: core.ObserverTaskUpdate{
+		TaskID:          task.ID,
+		DisplayStatus:   core.DisplayStatusNeedsInput,
+		DisplayActivity: core.DisplayActivityCommand,
+		LastActivityAt:  time.Date(2026, 4, 9, 17, 30, 0, 0, time.UTC),
+	}})
+	require.NotNil(t, cmd)
+	require.Equal(t, "fix the billing retry flow", m.selectedTaskView().HookSession.LastPromptText)
+	require.Equal(t, "Updated the retry loop and tests", m.selectedTaskView().HookSession.LastAssistantMessage)
+	require.Equal(t, core.DisplayStatusNeedsInput, m.selectedTaskView().Observer.DisplayStatus)
+}
+
 func TestModelUpdate_EnterDispatchesOpenAndKeepsTUIOpen(t *testing.T) {
 	service := NewMockTaskService(t)
 	tasks := []*core.Task{tuiTask("task-one"), tuiTask("task-two")}
@@ -997,6 +1039,32 @@ func TestModelUpdate_CleanupSuccessRefreshFailureRemovesTaskFromVisibleList(t *t
 func TestModelView_ShowsLoadingBeforeInitialLoadCompletes(t *testing.T) {
 	m := newTUIModel(NewMockTaskService(t), "/tmp/default", "codex", "", false, nil)
 	require.Contains(t, stripANSI(m.View().Content), "Loading tasks")
+}
+
+func TestModelInit_SubscribesToHookUpdates(t *testing.T) {
+	service := NewMockTaskService(t)
+	hookUpdates := make(chan core.HookSessionSummary)
+
+	service.EXPECT().
+		ListTaskViews(mock.Anything).
+		Return([]*core.TaskView{}, nil).
+		Maybe()
+	service.EXPECT().
+		SubscribeTaskHookUpdates(mock.Anything).
+		Return((<-chan core.HookSessionSummary)(hookUpdates), func() {}, nil).
+		Once()
+
+	cmd := newTUIModel(service, "/tmp/default", "codex", "", false, nil).Init()
+	require.NotNil(t, cmd)
+
+	msg := cmd()
+	batch, ok := msg.(tea.BatchMsg)
+	require.True(t, ok)
+	for _, sub := range batch {
+		if sub != nil {
+			_ = sub()
+		}
+	}
 }
 
 func TestModelView_PRStatusShownInDetailPanel(t *testing.T) {

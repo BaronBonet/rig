@@ -26,6 +26,7 @@ func TestNewService_AcceptsBusinessPorts(t *testing.T) {
 		map[string]ProviderClient{"codex": providerClient},
 		configRepo,
 		workspaceSeeder,
+		nil,
 		Config{Provider: "codex"},
 	)
 

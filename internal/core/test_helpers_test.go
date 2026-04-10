@@ -147,6 +147,7 @@ func newTestService(t *testing.T) *testServiceHarness {
 		},
 		h.configRepoMock,
 		h.workspaceSeederMock,
+		nil,
 		Config{Provider: "codex"},
 	)
 

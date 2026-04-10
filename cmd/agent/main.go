@@ -3,6 +3,8 @@ package main
 import (
 	"fmt"
 	"os"
+	"path/filepath"
+	"runtime"
 	"strconv"
 
 	claudeclient "agent/internal/adapters/client/claude"
@@ -11,6 +13,7 @@ import (
 	ghclient "agent/internal/adapters/client/github"
 	tmuxclient "agent/internal/adapters/client/tmux"
 	agentconfigfs "agent/internal/adapters/filesystem/agentconfig"
+	codexhooksfs "agent/internal/adapters/filesystem/codexhooks"
 	workspacefs "agent/internal/adapters/filesystem/workspace"
 	"agent/internal/adapters/handler/cli"
 	observer "agent/internal/adapters/observability/observer"
@@ -67,6 +70,12 @@ func buildDependencies() (cli.Dependencies, error) {
 		providers,
 		agentconfigfs.NewLoader(),
 		workspacefs.NewSeeder(),
+		codexhooksfs.NewBootstrapper(
+			cfg.SQLite.Path,
+			"http://"+cfg.Hooks.ListenAddr+"/hook",
+			agentExec,
+			detectAgentSourceRoot(),
+		),
 		cfg.Service,
 	)
 	service.SetPRStatusChecker(ghclient.NewPRStatusChecker(runner))
@@ -93,6 +102,15 @@ func buildDependencies() (cli.Dependencies, error) {
 		Stderr:              os.Stderr,
 		DefaultProvider:     cfg.Service.Provider,
 	}, nil
+}
+
+func detectAgentSourceRoot() string {
+	_, file, _, ok := runtime.Caller(0)
+	if !ok || file == "" {
+		return ""
+	}
+
+	return filepath.Clean(filepath.Join(filepath.Dir(file), "..", ".."))
 }
 
 func binaryFingerprint(path string) (string, error) {

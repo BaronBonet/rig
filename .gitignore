@@ -12,3 +12,5 @@ internal/adapters/client/tmux/mock_*.go
 mock_*
 docs/superpowers/*
 .superpowers/*
+.codex/
+.agent/observability/
