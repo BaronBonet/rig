@@ -10,6 +10,7 @@ import (
 	"sync"
 	"time"
 
+	"agent/internal/adapters/repository/sqlite/generated"
 	"agent/internal/core"
 
 	_ "modernc.org/sqlite"
@@ -17,6 +18,7 @@ import (
 
 type Repository struct {
 	db                       *sql.DB
+	queries                  *generated.Queries
 	path                     string
 	initErr                  error
 	mu                       sync.Mutex
@@ -55,17 +57,32 @@ func NewRepository(cfg Config) (*Repository, error) {
 	db.SetMaxOpenConns(1)
 	db.SetMaxIdleConns(1)
 
-	if err := configureSQLiteConnection(db); err != nil {
+	if err := applyBootstrapSQL(context.Background(), db, sqlFiles, "bootstrap/connection.sql"); err != nil {
 		repo.initErr = err
 		_ = db.Close()
 		return repo, nil
 	}
 
-	repo.db = db
-	if err := repo.initSchema(); err != nil {
+	if err := seedLegacyMigrationState(context.Background(), db); err != nil {
+		repo.initErr = err
+		_ = db.Close()
+		return repo, nil
+	}
+
+	if err := applyMigrations(context.Background(), db, sqlFiles, "migrations"); err != nil {
 		repo.initErr = err
 		_ = db.Close()
 		repo.db = nil
+		return repo, nil
+	}
+
+	repo.db = db
+	repo.queries = generated.New(db)
+	if err := repo.backfillLegacyTaskRows(); err != nil {
+		repo.initErr = err
+		_ = db.Close()
+		repo.db = nil
+		repo.queries = nil
 		return repo, nil
 	}
 
@@ -84,140 +101,12 @@ func ValidateConfig(cfg Config) error {
 	return nil
 }
 
-func configureSQLiteConnection(db *sql.DB) error {
-	if db == nil {
-		return fmt.Errorf("sqlite database is nil")
-	}
-
-	ctx := context.Background()
-	for _, pragma := range []string{
-		`pragma journal_mode = wal`,
-		`pragma busy_timeout = 5000`,
-		`pragma synchronous = normal`,
-		`pragma foreign_keys = on`,
-	} {
-		if _, err := db.ExecContext(ctx, pragma); err != nil {
-			return err
-		}
-	}
-
-	return nil
-}
-
 func (r *Repository) IsAvailable(ctx context.Context) error {
 	if err := r.unavailableErr(); err != nil {
 		return err
 	}
 
 	return r.db.PingContext(ctx)
-}
-
-func (r *Repository) initSchema() error {
-	ctx := context.Background()
-	if _, err := r.db.ExecContext(ctx, `
-create table if not exists tasks (
-  id text primary key,
-  prompt text not null,
-  display_name text not null,
-  slug text not null unique,
-  repo_root text not null,
-  repo_name text not null default '',
-  base_branch text not null,
-  branch_name text not null,
-  worktree_path text not null,
-  tmux_session text not null,
-  agent_window_name text not null default 'agent',
-  editor_window_name text not null default 'editor',
-  provider text not null,
-  status text not null,
-  worktree_exists integer not null,
-  branch_exists integer not null,
-  session_exists integer not null,
-  agent_window_exists integer not null default 0,
-  editor_window_exists integer not null default 0,
-  last_error text not null default '',
-  created_at text not null,
-  updated_at text not null,
-  last_reconciled_at text not null default ''
-);
-
-create table if not exists events (
-  id integer primary key autoincrement,
-  task_id text not null,
-  event_type text not null,
-  payload text not null,
-  created_at text not null
-);
-
-create table if not exists task_hook_events (
-  id integer primary key autoincrement,
-  task_id text not null,
-  session_id text not null default '',
-  turn_id text not null default '',
-  event_name text not null,
-  occurred_at text not null,
-  raw_payload_json text not null default '',
-  last_assistant_message text not null default '',
-  prompt_preview text not null default '',
-  command_preview text not null default '',
-  command_result_preview text not null default '',
-  tool_use_id text not null default ''
-);
-
-create table if not exists task_hook_sessions (
-  task_id text primary key,
-  session_id text not null default '',
-  model text not null default '',
-  cwd text not null default '',
-  transcript_path text not null default '',
-  start_source text not null default '',
-  current_turn_id text not null default '',
-  last_event_name text not null default '',
-  runtime_phase text not null default '',
-  started_at text not null default '',
-  last_activity_at text not null default '',
-  last_stop_at text not null default '',
-  last_prompt_preview text not null default '',
-  last_command_preview text not null default '',
-  last_command_result_preview text not null default '',
-  last_assistant_message text not null default '',
-  command_count integer not null default 0,
-  updated_at text not null default ''
-);
-
-create table if not exists task_observer_summaries (
-  task_id text primary key,
-  display_status text not null default '',
-  display_activity text not null default '',
-  process_alive integer not null default 0,
-  last_runtime_observed_at text not null default '',
-  updated_at text not null default ''
-);
-
-create index if not exists idx_task_hook_events_task_occurred_at on task_hook_events(task_id, occurred_at desc, id desc);
-create index if not exists idx_task_hook_sessions_session_id on task_hook_sessions(session_id);
-`); err != nil {
-		return err
-	}
-
-	for _, stmt := range []string{
-		`alter table tasks add column repo_name text not null default ''`,
-		`alter table tasks add column agent_window_name text not null default 'agent'`,
-		`alter table tasks add column editor_window_name text not null default 'editor'`,
-		`alter table tasks add column agent_window_exists integer not null default 0`,
-		`alter table tasks add column editor_window_exists integer not null default 0`,
-	} {
-		column := columnNameFromAlter(stmt)
-		if err := addColumnIfMissing(r.db, "tasks", column, stmt); err != nil {
-			return err
-		}
-	}
-
-	if err := r.backfillLegacyTaskRows(); err != nil {
-		return err
-	}
-
-	return nil
 }
 
 func (r *Repository) CreateTask(ctx context.Context, task *core.Task) error {
@@ -595,65 +484,6 @@ func parseTime(raw string) time.Time {
 	}
 
 	return parsed
-}
-
-func addColumnIfMissing(db *sql.DB, table, column, statement string) error {
-	exists, err := hasColumn(db, table, column)
-	if err != nil {
-		return err
-	}
-	if exists {
-		return nil
-	}
-
-	_, err = db.ExecContext(context.Background(), statement)
-	return err
-}
-
-func columnNameFromAlter(statement string) string {
-	const prefix = `alter table tasks add column `
-	if len(statement) <= len(prefix) || statement[:len(prefix)] != prefix {
-		return ""
-	}
-
-	rest := statement[len(prefix):]
-	for i, r := range rest {
-		if r == ' ' {
-			return rest[:i]
-		}
-	}
-
-	return rest
-}
-
-func hasColumn(db *sql.DB, table, column string) (bool, error) {
-	rows, err := db.QueryContext(
-		context.Background(),
-		`pragma table_info(`+table+`)`,
-	)
-	if err != nil {
-		return false, err
-	}
-	defer rows.Close()
-
-	for rows.Next() {
-		var (
-			cid          int
-			name         string
-			colType      string
-			notNull      int
-			defaultValue sql.NullString
-			pk           int
-		)
-		if err := rows.Scan(&cid, &name, &colType, &notNull, &defaultValue, &pk); err != nil {
-			return false, err
-		}
-		if name == column {
-			return true, nil
-		}
-	}
-
-	return false, rows.Err()
 }
 
 func (r *Repository) backfillLegacyTaskRows() error {

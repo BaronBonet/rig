@@ -21,6 +21,98 @@ func applyBootstrapSQL(ctx context.Context, db *sql.DB, files fs.FS, path string
 	return nil
 }
 
+func tableExists(ctx context.Context, db *sql.DB, table string) (bool, error) {
+	var count int
+	err := db.QueryRowContext(
+		ctx,
+		`select count(*) from sqlite_master where type = 'table' and name = ?`,
+		table,
+	).Scan(&count)
+	return count > 0, err
+}
+
+func columnExists(ctx context.Context, db *sql.DB, table, column string) (bool, error) {
+	rows, err := db.QueryContext(ctx, `pragma table_info(`+table+`)`)
+	if err != nil {
+		return false, err
+	}
+	defer rows.Close()
+
+	for rows.Next() {
+		var (
+			cid          int
+			name         string
+			colType      string
+			notNull      int
+			defaultValue sql.NullString
+			pk           int
+		)
+		if err := rows.Scan(&cid, &name, &colType, &notNull, &defaultValue, &pk); err != nil {
+			return false, err
+		}
+		if name == column {
+			return true, nil
+		}
+	}
+
+	return false, rows.Err()
+}
+
+func seedLegacyMigrationState(ctx context.Context, db *sql.DB) error {
+	if _, err := db.ExecContext(ctx, `
+create table if not exists schema_migrations (
+  version text primary key,
+  applied_at text not null
+)`); err != nil {
+		return fmt.Errorf("create schema_migrations table: %w", err)
+	}
+
+	var total int
+	if err := db.QueryRowContext(ctx, `select count(*) from schema_migrations`).Scan(&total); err != nil {
+		return fmt.Errorf("count schema_migrations rows: %w", err)
+	}
+	if total > 0 {
+		return nil
+	}
+
+	tasksExists, err := tableExists(ctx, db, "tasks")
+	if err != nil {
+		return fmt.Errorf("check tasks table: %w", err)
+	}
+	if !tasksExists {
+		return nil
+	}
+
+	versions := []string{"000001_initial_tasks_and_events"}
+
+	hasRepoName, err := columnExists(ctx, db, "tasks", "repo_name")
+	if err != nil {
+		return fmt.Errorf("check tasks.repo_name column: %w", err)
+	}
+	if hasRepoName {
+		versions = append(versions, "000002_add_task_metadata_columns")
+	}
+
+	hookTablesExist, err := tableExists(ctx, db, "task_hook_events")
+	if err != nil {
+		return fmt.Errorf("check task_hook_events table: %w", err)
+	}
+	if hookTablesExist {
+		versions = append(versions, "000003_add_hook_observability_tables")
+	}
+
+	for _, version := range versions {
+		if _, err := db.ExecContext(ctx, `
+insert into schema_migrations(version, applied_at)
+values (?, strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
+on conflict(version) do nothing`, version); err != nil {
+			return fmt.Errorf("seed migration %s: %w", version, err)
+		}
+	}
+
+	return nil
+}
+
 func applyMigrations(ctx context.Context, db *sql.DB, files fs.FS, dir string) error {
 	if _, err := db.ExecContext(ctx, `
 create table if not exists schema_migrations (
