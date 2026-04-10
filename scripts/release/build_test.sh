@@ -30,6 +30,19 @@ chmod +x "$out"
 EOF
 chmod +x "$tmpdir/bin/go"
 
+cat >"$tmpdir/bin/make" <<'EOF'
+#!/bin/sh
+set -eu
+
+if [ "$#" -eq 1 ] && [ "$1" = "generate" ]; then
+    exit 0
+fi
+
+echo "unexpected make invocation: $*" >&2
+exit 1
+EOF
+chmod +x "$tmpdir/bin/make"
+
 PATH="$tmpdir/bin:$PATH" VERSION="v0.1.0" DIST_DIR="$tmpdir/dist" sh ./scripts/release/build.sh
 
 [ -f "$tmpdir/dist/agent_v0.1.0_darwin_arm64.tar.gz" ]
