@@ -1,3 +1,2 @@
 -- name: ListSQLCBootstrap :many
-SELECT id
-FROM sqlc_bootstrap;
+SELECT 1 AS id;
