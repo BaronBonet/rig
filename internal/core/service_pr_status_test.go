@@ -9,6 +9,12 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+type stubPRStatusChecker func(context.Context, string, string) (*PRStatus, error)
+
+func (s stubPRStatusChecker) CheckPRStatus(ctx context.Context, repoRoot string, branchName string) (*PRStatus, error) {
+	return s(ctx, repoRoot, branchName)
+}
+
 func TestService_GetPRStatus_FetchesAndCaches(t *testing.T) {
 	h := newTestService(t)
 	prChecker := NewMockPRStatusChecker(t)
@@ -62,4 +68,19 @@ func TestService_GetPRStatus_ReturnsNoneWhenNoChecker(t *testing.T) {
 	status, err := h.service.GetPRStatus(context.Background(), "/tmp/repo", "feat/auth")
 	require.NoError(t, err)
 	require.Equal(t, PRStateNone, status.State)
+}
+
+func TestService_GetPRStatus_DoesNotPanicWhenCacheInvalidatedDuringFetch(t *testing.T) {
+	h := newTestService(t)
+	h.service.SetPRStatusChecker(stubPRStatusChecker(func(context.Context, string, string) (*PRStatus, error) {
+		h.service.InvalidatePRCache()
+		return &PRStatus{State: PRStateOpen, Number: 42}, nil
+	}))
+
+	require.NotPanics(t, func() {
+		status, err := h.service.GetPRStatus(context.Background(), "/tmp/repo", "feat/auth")
+		require.NoError(t, err)
+		require.Equal(t, PRStateOpen, status.State)
+		require.Equal(t, 42, status.Number)
+	})
 }

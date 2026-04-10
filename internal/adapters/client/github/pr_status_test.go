@@ -14,7 +14,7 @@ import (
 func TestGHPRChecker_ReturnsPROpen(t *testing.T) {
 	runner := execx.NewMockRunner(t)
 	runner.EXPECT().
-		Run(mock.Anything, "/tmp/repo", "gh", "pr", "view", "--head", "feat/auth", "--json", "number,state", "--jq", ".number,.state").
+		Run(mock.Anything, "/tmp/repo", "gh", "pr", "view", "feat/auth", "--json", "number,state", "--jq", ".number,.state").
 		Return(execx.Result{Stdout: "42\nOPEN\n"}, nil).
 		Once()
 
@@ -29,7 +29,7 @@ func TestGHPRChecker_ReturnsPROpen(t *testing.T) {
 func TestGHPRChecker_ReturnsPRMerged(t *testing.T) {
 	runner := execx.NewMockRunner(t)
 	runner.EXPECT().
-		Run(mock.Anything, "/tmp/repo", "gh", "pr", "view", "--head", "feat/auth", "--json", "number,state", "--jq", ".number,.state").
+		Run(mock.Anything, "/tmp/repo", "gh", "pr", "view", "feat/auth", "--json", "number,state", "--jq", ".number,.state").
 		Return(execx.Result{Stdout: "42\nMERGED\n"}, nil).
 		Once()
 
@@ -44,7 +44,7 @@ func TestGHPRChecker_ReturnsPRMerged(t *testing.T) {
 func TestGHPRChecker_ReturnsNoneWhenNoPR(t *testing.T) {
 	runner := execx.NewMockRunner(t)
 	runner.EXPECT().
-		Run(mock.Anything, "/tmp/repo", "gh", "pr", "view", "--head", "feat/auth", "--json", "number,state", "--jq", ".number,.state").
+		Run(mock.Anything, "/tmp/repo", "gh", "pr", "view", "feat/auth", "--json", "number,state", "--jq", ".number,.state").
 		Return(execx.Result{Stderr: "no pull requests found"}, &execx.CommandError{Err: context.Canceled}).
 		Once()
 

@@ -25,7 +25,7 @@ func (c *PRStatusChecker) CheckPRStatus(
 	result, err := c.runner.Run(
 		ctx, repoRoot,
 		"gh", "pr", "view",
-		"--head", branchName,
+		branchName,
 		"--json", "number,state",
 		"--jq", ".number,.state",
 	)

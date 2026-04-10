@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"context"
 	"errors"
 	"regexp"
 	"strings"
@@ -994,6 +995,46 @@ func TestModelView_PRStatusShownInDetailPanel(t *testing.T) {
 	require.Contains(t, rendered, "#42 open")
 }
 
+func TestModelView_PRStatusShownInOverviewRows(t *testing.T) {
+	service := NewMockTaskService(t)
+
+	openTask := tuiTask("auth-rewrite")
+	openTask.DisplayName = "auth rewrite"
+	openTask.Provider = "codex"
+
+	mergedTask := tuiTask("billing-retry")
+	mergedTask.DisplayName = "billing retry"
+	mergedTask.Provider = "claude"
+
+	m := newLoadedTUIModelWithViews(t, service,
+		&core.TaskView{
+			Task: openTask,
+			PR:   &core.PRStatus{State: core.PRStateOpen, Number: 42},
+		},
+		&core.TaskView{
+			Task: mergedTask,
+			PR:   &core.PRStatus{State: core.PRStateMerged, Number: 43},
+		},
+	)
+
+	view := stripANSI(m.View().Content)
+	rows := strings.Split(view, "\n")
+
+	requireLineContains := func(name, want string) {
+		t.Helper()
+		for _, row := range rows {
+			if strings.Contains(row, name) {
+				require.Contains(t, row, want)
+				return
+			}
+		}
+		t.Fatalf("did not find row for %q in view:\n%s", name, view)
+	}
+
+	requireLineContains("auth rewrite", "◉")
+	requireLineContains("billing retry", "✔")
+}
+
 func TestModelUpdate_RefreshInvalidatesPRCache(t *testing.T) {
 	service := NewMockTaskService(t)
 	task := tuiTask("auth-rewrite")
@@ -1005,6 +1046,25 @@ func TestModelUpdate_RefreshInvalidatesPRCache(t *testing.T) {
 	m, cmd := updateTUIModel(t, m, keyRunes("r"))
 	require.NotNil(t, cmd)
 	require.True(t, m.busy)
+}
+
+func TestRefreshTasksCmd_ConvertsPanicsToErrorMessage(t *testing.T) {
+	service := NewMockTaskService(t)
+	service.EXPECT().
+		ListTaskViews(mock.Anything).
+		RunAndReturn(func(context.Context) ([]*core.TaskView, error) {
+			panic("refresh exploded")
+		}).
+		Once()
+
+	cmd := refreshTasksCmd(service, 7)
+
+	require.NotPanics(t, func() {
+		msg := cmd()
+		asyncErr, ok := msg.(asyncErrMsg)
+		require.True(t, ok)
+		require.ErrorContains(t, asyncErr.err, "refreshTasksCmd panicked: refresh exploded")
+	})
 }
 
 func TestModelUpdate_ShimmerTickIncrementsCounter(t *testing.T) {

@@ -482,6 +482,9 @@ func (s *Service) GetPRStatus(ctx context.Context, repoRoot string, branchName s
 	}
 
 	s.prCacheMu.Lock()
+	if s.prCache == nil {
+		s.prCache = make(map[string]prCacheEntry)
+	}
 	s.prCache[key] = prCacheEntry{status: status, fetchedAt: time.Now()}
 	s.prCacheMu.Unlock()
 
