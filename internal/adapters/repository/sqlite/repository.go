@@ -10,6 +10,7 @@ import (
 	"sync"
 	"time"
 
+	"agent/internal/adapters/repository/sqlite/generated"
 	"agent/internal/core"
 
 	_ "modernc.org/sqlite"
@@ -17,6 +18,7 @@ import (
 
 type Repository struct {
 	db                       *sql.DB
+	queries                  *generated.Queries
 	path                     string
 	initErr                  error
 	mu                       sync.Mutex
@@ -75,10 +77,12 @@ func NewRepository(cfg Config) (*Repository, error) {
 	}
 
 	repo.db = db
+	repo.queries = generated.New(db)
 	if err := repo.backfillLegacyTaskRows(); err != nil {
 		repo.initErr = err
 		_ = db.Close()
 		repo.db = nil
+		repo.queries = nil
 		return repo, nil
 	}
 
@@ -110,40 +114,7 @@ func (r *Repository) CreateTask(ctx context.Context, task *core.Task) error {
 		return err
 	}
 
-	_, err := r.db.ExecContext(
-		ctx,
-		`insert into tasks (
-			id, prompt, display_name, slug, repo_root, repo_name, base_branch, branch_name,
-			worktree_path, tmux_session, agent_window_name, editor_window_name,
-			provider, status, worktree_exists, branch_exists, session_exists,
-			agent_window_exists, editor_window_exists, last_error,
-			created_at, updated_at, last_reconciled_at
-		) values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-		task.ID,
-		task.Prompt,
-		task.DisplayName,
-		task.Slug,
-		task.RepoRoot,
-		task.RepoName,
-		task.BaseBranch,
-		task.BranchName,
-		task.WorktreePath,
-		task.TmuxSession,
-		task.AgentWindowName,
-		task.EditorWindowName,
-		task.Provider,
-		string(task.Status),
-		boolToInt(task.WorktreeExists),
-		boolToInt(task.BranchExists),
-		boolToInt(task.SessionExists),
-		boolToInt(task.AgentWindowExists),
-		boolToInt(task.EditorWindowExists),
-		task.LastError,
-		formatTime(task.CreatedAt),
-		formatTime(task.UpdatedAt),
-		formatTime(task.LastReconciledAt),
-	)
-	return err
+	return r.queries.CreateTask(ctx, createTaskParams(task))
 }
 
 func (r *Repository) UpdateTask(ctx context.Context, task *core.Task) error {
@@ -151,57 +122,7 @@ func (r *Repository) UpdateTask(ctx context.Context, task *core.Task) error {
 		return err
 	}
 
-	_, err := r.db.ExecContext(
-		ctx,
-		`update tasks set
-			prompt = ?,
-			display_name = ?,
-			slug = ?,
-			repo_root = ?,
-			repo_name = ?,
-			base_branch = ?,
-			branch_name = ?,
-			worktree_path = ?,
-			tmux_session = ?,
-			agent_window_name = ?,
-			editor_window_name = ?,
-			provider = ?,
-			status = ?,
-			worktree_exists = ?,
-			branch_exists = ?,
-			session_exists = ?,
-			agent_window_exists = ?,
-			editor_window_exists = ?,
-			last_error = ?,
-			created_at = ?,
-			updated_at = ?,
-			last_reconciled_at = ?
-		where id = ?`,
-		task.Prompt,
-		task.DisplayName,
-		task.Slug,
-		task.RepoRoot,
-		task.RepoName,
-		task.BaseBranch,
-		task.BranchName,
-		task.WorktreePath,
-		task.TmuxSession,
-		task.AgentWindowName,
-		task.EditorWindowName,
-		task.Provider,
-		string(task.Status),
-		boolToInt(task.WorktreeExists),
-		boolToInt(task.BranchExists),
-		boolToInt(task.SessionExists),
-		boolToInt(task.AgentWindowExists),
-		boolToInt(task.EditorWindowExists),
-		task.LastError,
-		formatTime(task.CreatedAt),
-		formatTime(task.UpdatedAt),
-		formatTime(task.LastReconciledAt),
-		task.ID,
-	)
-	return err
+	return r.queries.UpdateTask(ctx, updateTaskParams(task))
 }
 
 func (r *Repository) GetTask(ctx context.Context, idOrSlug string) (*core.Task, error) {
@@ -209,26 +130,16 @@ func (r *Repository) GetTask(ctx context.Context, idOrSlug string) (*core.Task, 
 		return nil, err
 	}
 
-	row := r.db.QueryRowContext(
-		ctx,
-		`select
-			id, prompt, display_name, slug, repo_root, repo_name,
-			base_branch, branch_name, worktree_path, tmux_session,
-			agent_window_name, editor_window_name, provider, status,
-			worktree_exists, branch_exists, session_exists,
-			agent_window_exists, editor_window_exists, last_error,
-			created_at, updated_at, last_reconciled_at
-		from tasks where id = ? or slug = ? limit 1`,
-		idOrSlug,
-		idOrSlug,
-	)
-
-	task, err := scanTask(row)
+	row, err := r.queries.GetTaskByIDOrSlug(ctx, idOrSlug)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, core.ErrTaskNotFound
 	}
 
-	return task, err
+	if err != nil {
+		return nil, err
+	}
+
+	return taskFromRow(row), nil
 }
 
 func (r *Repository) ListTasks(ctx context.Context) ([]*core.Task, error) {
@@ -236,34 +147,12 @@ func (r *Repository) ListTasks(ctx context.Context) ([]*core.Task, error) {
 		return nil, err
 	}
 
-	rows, err := r.db.QueryContext(
-		ctx,
-		`select
-			id, prompt, display_name, slug, repo_root, repo_name,
-			base_branch, branch_name, worktree_path, tmux_session,
-			agent_window_name, editor_window_name, provider, status,
-			worktree_exists, branch_exists, session_exists,
-			agent_window_exists, editor_window_exists, last_error,
-			created_at, updated_at, last_reconciled_at
-		from tasks
-		order by created_at asc`,
-	)
+	rows, err := r.queries.ListTasks(ctx)
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
 
-	var tasks []*core.Task
-	for rows.Next() {
-		task, scanErr := scanTask(rows)
-		if scanErr != nil {
-			return nil, scanErr
-		}
-
-		tasks = append(tasks, task)
-	}
-
-	return tasks, rows.Err()
+	return tasksFromRows(rows), nil
 }
 
 func (r *Repository) ListObserverSummaries(
@@ -343,15 +232,7 @@ func (r *Repository) AppendEvent(ctx context.Context, taskID, eventType, payload
 		return err
 	}
 
-	_, err := r.db.ExecContext(
-		ctx,
-		`insert into events (task_id, event_type, payload, created_at) values (?, ?, ?, ?)`,
-		taskID,
-		eventType,
-		payload,
-		time.Now().UTC().Format(time.RFC3339Nano),
-	)
-	return err
+	return r.queries.AppendEvent(ctx, appendEventParams(taskID, eventType, payload))
 }
 
 func (r *Repository) unavailableErr() error {
@@ -367,62 +248,6 @@ func (r *Repository) unavailableErr() error {
 
 type rowScanner interface {
 	Scan(dest ...any) error
-}
-
-func scanTask(scanner rowScanner) (*core.Task, error) {
-	var (
-		task               core.Task
-		status             string
-		worktreeExists     int
-		branchExists       int
-		sessionExists      int
-		agentWindowExists  int
-		editorWindowExists int
-		createdAt          string
-		updatedAt          string
-		lastReconciledAt   string
-	)
-
-	err := scanner.Scan(
-		&task.ID,
-		&task.Prompt,
-		&task.DisplayName,
-		&task.Slug,
-		&task.RepoRoot,
-		&task.RepoName,
-		&task.BaseBranch,
-		&task.BranchName,
-		&task.WorktreePath,
-		&task.TmuxSession,
-		&task.AgentWindowName,
-		&task.EditorWindowName,
-		&task.Provider,
-		&status,
-		&worktreeExists,
-		&branchExists,
-		&sessionExists,
-		&agentWindowExists,
-		&editorWindowExists,
-		&task.LastError,
-		&createdAt,
-		&updatedAt,
-		&lastReconciledAt,
-	)
-	if err != nil {
-		return nil, err
-	}
-
-	task.Status = core.TaskStatus(status)
-	task.WorktreeExists = worktreeExists == 1
-	task.BranchExists = branchExists == 1
-	task.SessionExists = sessionExists == 1
-	task.AgentWindowExists = agentWindowExists == 1
-	task.EditorWindowExists = editorWindowExists == 1
-	task.CreatedAt = parseTime(createdAt)
-	task.UpdatedAt = parseTime(updatedAt)
-	task.LastReconciledAt = parseTime(lastReconciledAt)
-
-	return &task, nil
 }
 
 func scanObserverSummary(scanner rowScanner) (*core.ObserverSummary, error) {

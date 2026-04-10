@@ -213,6 +213,25 @@ func TestRepositoryListTasks_OrdersByCreatedAtAscending(t *testing.T) {
 	require.Equal(t, "repo", tasks[1].RepoName)
 }
 
+func TestRepositoryAppendEvent_PersistsEvent(t *testing.T) {
+	repo := newTestRepository(t)
+	task := seedTask(t, repo, core.Task{ID: "task-1", Slug: "task-1"})
+
+	require.NoError(t, repo.AppendEvent(context.Background(), task.ID, "workspace.created", `{"ok":true}`))
+
+	var (
+		eventType string
+		payload   string
+	)
+	require.NoError(t, repo.db.QueryRowContext(
+		context.Background(),
+		`select event_type, payload from events where task_id = ? order by id desc limit 1`,
+		task.ID,
+	).Scan(&eventType, &payload))
+	require.Equal(t, "workspace.created", eventType)
+	require.Equal(t, `{"ok":true}`, payload)
+}
+
 func TestNewRepository_CreatesParentDirectory(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "nested", "state.db")
 
