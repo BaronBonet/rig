@@ -8,6 +8,8 @@ APP_NAME="${APP_NAME:-agent}"
 mkdir -p "$DIST_DIR"
 rm -f "$DIST_DIR"/"${APP_NAME}"_*.tar.gz "$DIST_DIR/checksums.txt"
 
+make generate
+
 build_archive() {
     (
         goos="$1"
