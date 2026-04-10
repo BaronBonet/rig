@@ -3,6 +3,7 @@ package sqlite
 import (
 	"context"
 	"database/sql"
+	"path/filepath"
 	"testing"
 	"testing/fstest"
 
@@ -48,18 +49,29 @@ func TestApplyMigrations_FailsOnInvalidSQL(t *testing.T) {
 	require.Contains(t, err.Error(), "000001_bad.sql")
 }
 
-func TestApplyBootstrapSQL_ExecutesStatements(t *testing.T) {
-	db, err := sql.Open("sqlite", ":memory:")
+func TestApplyBootstrapSQL_UsesEmbeddedBootstrapAssetPragmas(t *testing.T) {
+	dbPath := filepath.Join(t.TempDir(), "bootstrap.db")
+	db, err := sql.Open("sqlite", dbPath)
 	require.NoError(t, err)
+	db.SetMaxOpenConns(1)
+	db.SetMaxIdleConns(1)
 	t.Cleanup(func() { require.NoError(t, db.Close()) })
 
-	files := fstest.MapFS{
-		"bootstrap/connection.sql": {Data: []byte(`pragma foreign_keys = on;`)},
-	}
+	require.NoError(t, applyBootstrapSQL(context.Background(), db, sqlFiles, "bootstrap/connection.sql"))
 
-	require.NoError(t, applyBootstrapSQL(context.Background(), db, files, "bootstrap/connection.sql"))
+	var journalMode string
+	require.NoError(t, db.QueryRowContext(context.Background(), `pragma journal_mode`).Scan(&journalMode))
+	require.Equal(t, "wal", journalMode)
 
-	var enabled int
-	require.NoError(t, db.QueryRowContext(context.Background(), `pragma foreign_keys`).Scan(&enabled))
-	require.Equal(t, 1, enabled)
+	var busyTimeout int
+	require.NoError(t, db.QueryRowContext(context.Background(), `pragma busy_timeout`).Scan(&busyTimeout))
+	require.Equal(t, 5000, busyTimeout)
+
+	var synchronous int
+	require.NoError(t, db.QueryRowContext(context.Background(), `pragma synchronous`).Scan(&synchronous))
+	require.Equal(t, 1, synchronous)
+
+	var foreignKeys int
+	require.NoError(t, db.QueryRowContext(context.Background(), `pragma foreign_keys`).Scan(&foreignKeys))
+	require.Equal(t, 1, foreignKeys)
 }
