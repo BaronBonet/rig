@@ -14,5 +14,6 @@ mock_*
 docs/superpowers/*
 .superpowers/*
 .codex/
+.claude/
 .agent/observability/
 .claude/
