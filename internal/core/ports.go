@@ -117,7 +117,7 @@ type RuntimeMonitor interface {
 
 type ProviderClient interface {
 	IsAvailable(ctx context.Context) error
-	SuggestTaskName(ctx context.Context, prompt string) (string, error)
+	SuggestTaskName(ctx context.Context, prompt string) (TaskSuggestion, error)
 	LaunchRequest(task *Task) (LaunchRequest, error)
 	DetectRuntimeState(snapshot RuntimeSnapshot) RuntimeState
 }

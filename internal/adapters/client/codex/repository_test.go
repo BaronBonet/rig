@@ -37,14 +37,15 @@ func TestRepositoryLaunchRequest_UsesBinaryPromptAndTaskPrompt(t *testing.T) {
 func TestRepositorySuggestTaskName_DelegatesToCodexProposal(t *testing.T) {
 	runner := execx.NewMockRunner(t)
 	runner.EXPECT().
-		Run(mock.Anything, "", "codex", "exec", "--skip-git-repo-check", "--output-last-message", mock.Anything, "Reply with only a short task title (3-5 words, no quotes): add billing retry flow").
+		Run(mock.Anything, "", "codex", "exec", "--skip-git-repo-check", "--output-last-message", mock.Anything, mock.Anything).
 		Return(execx.Result{Stdout: "billing retry flow\n"}, nil).
 		Once()
 	repo := NewRepository(runner, Config{Binary: "codex"})
 
-	name, err := repo.SuggestTaskName(t.Context(), "add billing retry flow")
+	suggestion, err := repo.SuggestTaskName(t.Context(), "add billing retry flow")
 	require.NoError(t, err)
-	require.Equal(t, "billing retry flow", name)
+	require.Equal(t, "billing retry flow", suggestion.Name)
+	require.Equal(t, "feat", suggestion.BranchType)
 }
 
 func TestRepositoryDetectRuntimeState_ReturnsNeedsInputForPrompt(t *testing.T) {
@@ -62,20 +63,21 @@ func TestRepositoryDetectRuntimeState_ReturnsNeedsInputForPrompt(t *testing.T) {
 func TestRepositoryProposeTaskName_TrimsRunnerOutput(t *testing.T) {
 	runner := execx.NewMockRunner(t)
 	runner.EXPECT().
-		Run(mock.Anything, "", "codex", "exec", "--skip-git-repo-check", "--output-last-message", mock.Anything, "Reply with only a short task title (3-5 words, no quotes): add billing retry flow").
+		Run(mock.Anything, "", "codex", "exec", "--skip-git-repo-check", "--output-last-message", mock.Anything, mock.Anything).
 		Return(execx.Result{Stdout: "billing retry flow\n"}, nil).
 		Once()
 	repo := NewRepository(runner, Config{Binary: "codex"})
 
-	name, err := repo.ProposeTaskName(t.Context(), "add billing retry flow")
+	suggestion, err := repo.ProposeTaskName(t.Context(), "add billing retry flow")
 	require.NoError(t, err)
-	require.Equal(t, "billing retry flow", name)
+	require.Equal(t, "billing retry flow", suggestion.Name)
+	require.Equal(t, "feat", suggestion.BranchType)
 }
 
 func TestRepositoryProposeTaskName_ExtractsFinalTitleFromTranscriptOutput(t *testing.T) {
 	runner := execx.NewMockRunner(t)
 	runner.EXPECT().
-		Run(mock.Anything, "", "codex", "exec", "--skip-git-repo-check", "--output-last-message", mock.Anything, "Reply with only a short task title (3-5 words, no quotes): i want you to switch the sqlite repo to use sqlc").
+		Run(mock.Anything, "", "codex", "exec", "--skip-git-repo-check", "--output-last-message", mock.Anything, mock.Anything).
 		Return(execx.Result{Stdout: `OpenAI Codex v0.118.0 (research preview)
 --------
 workdir: /Users/ebon/personal_software/tmux-llm-session
@@ -93,22 +95,24 @@ tokens used
 		Once()
 	repo := NewRepository(runner, Config{Binary: "codex"})
 
-	name, err := repo.ProposeTaskName(t.Context(), "i want you to switch the sqlite repo to use sqlc")
+	suggestion, err := repo.ProposeTaskName(t.Context(), "i want you to switch the sqlite repo to use sqlc")
 	require.NoError(t, err)
-	require.Equal(t, "Migrate SQLite Repo to sqlc", name)
+	require.Equal(t, "Migrate SQLite Repo to sqlc", suggestion.Name)
+	require.Equal(t, "feat", suggestion.BranchType)
 }
 
 func TestRepositoryProposeTaskName_StripsMarkdownTicksFromTitle(t *testing.T) {
 	runner := execx.NewMockRunner(t)
 	runner.EXPECT().
-		Run(mock.Anything, "", "codex", "exec", "--skip-git-repo-check", "--output-last-message", mock.Anything, "Reply with only a short task title (3-5 words, no quotes): switch the sqlite repo to use sqlc").
+		Run(mock.Anything, "", "codex", "exec", "--skip-git-repo-check", "--output-last-message", mock.Anything, mock.Anything).
 		Return(execx.Result{Stdout: "Migrate SQLite Repo to `sqlc`\n"}, nil).
 		Once()
 	repo := NewRepository(runner, Config{Binary: "codex"})
 
-	name, err := repo.ProposeTaskName(t.Context(), "switch the sqlite repo to use sqlc")
+	suggestion, err := repo.ProposeTaskName(t.Context(), "switch the sqlite repo to use sqlc")
 	require.NoError(t, err)
-	require.Equal(t, "Migrate SQLite Repo to sqlc", name)
+	require.Equal(t, "Migrate SQLite Repo to sqlc", suggestion.Name)
+	require.Equal(t, "feat", suggestion.BranchType)
 }
 
 func TestExtractCodexTitle_ReturnsLastUsefulLine(t *testing.T) {

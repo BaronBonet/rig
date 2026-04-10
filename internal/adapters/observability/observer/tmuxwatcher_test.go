@@ -212,8 +212,8 @@ func (s stubTMuxWatcherProvider) IsAvailable(context.Context) error {
 	return nil
 }
 
-func (s stubTMuxWatcherProvider) SuggestTaskName(context.Context, string) (string, error) {
-	return "", nil
+func (s stubTMuxWatcherProvider) SuggestTaskName(context.Context, string) (core.TaskSuggestion, error) {
+	return core.TaskSuggestion{}, nil
 }
 
 func (s stubTMuxWatcherProvider) LaunchRequest(*core.Task) (core.LaunchRequest, error) {

@@ -2,6 +2,7 @@ package codex
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"os"
 	"strings"
@@ -9,6 +10,7 @@ import (
 
 	"agent/internal/core"
 	"agent/internal/pkg/execx"
+	"agent/internal/pkg/prompts"
 )
 
 type Repository struct {
@@ -36,14 +38,16 @@ func (r *Repository) IsAvailable(ctx context.Context) error {
 	return err
 }
 
-func (r *Repository) ProposeTaskName(ctx context.Context, prompt string) (string, error) {
+func (r *Repository) ProposeTaskName(ctx context.Context, prompt string) (core.TaskSuggestion, error) {
 	tmpFile, err := os.CreateTemp("", "agent-codex-name-*.txt")
 	if err != nil {
-		return "", err
+		return core.TaskSuggestion{}, err
 	}
 	tmpPath := tmpFile.Name()
 	_ = tmpFile.Close()
 	defer func() { _ = os.Remove(tmpPath) }()
+
+	fullPrompt := prompts.SuggestTaskPrompt + "\n\nTask description: " + prompt
 
 	result, err := r.runner.Run(
 		ctx,
@@ -53,27 +57,58 @@ func (r *Repository) ProposeTaskName(ctx context.Context, prompt string) (string
 		"--skip-git-repo-check",
 		"--output-last-message",
 		tmpPath,
-		"Reply with only a short task title (3-5 words, no quotes): "+prompt,
+		fullPrompt,
 	)
+
+	// Try to parse structured JSON from the output file first
 	if fileBytes, readErr := os.ReadFile(tmpPath); readErr == nil {
-		if title := extractCodexTitle(string(fileBytes)); title != "" {
-			return title, nil
+		if suggestion, ok := parseCodexSuggestion(string(fileBytes)); ok {
+			return suggestion, nil
 		}
 	}
 
+	// Fall back to stdout
+	if suggestion, ok := parseCodexSuggestion(result.Stdout); ok {
+		return suggestion, nil
+	}
+
+	// Fall back to extracting a plain title
+	if fileBytes, readErr := os.ReadFile(tmpPath); readErr == nil {
+		if title := extractCodexTitle(string(fileBytes)); title != "" {
+			return core.TaskSuggestion{Name: title, BranchType: "feat"}, nil
+		}
+	}
 	if title := extractCodexTitle(result.Stdout); title != "" {
-		return title, nil
+		return core.TaskSuggestion{Name: title, BranchType: "feat"}, nil
 	}
 
 	if err != nil {
-		return "", fmt.Errorf("codex exec failed: %w", err)
+		return core.TaskSuggestion{}, fmt.Errorf("codex exec failed: %w", err)
 	}
 
-	return "", fmt.Errorf("codex did not return a usable task title")
+	return core.TaskSuggestion{}, fmt.Errorf("codex did not return a usable task title")
 }
 
-func (r *Repository) SuggestTaskName(ctx context.Context, prompt string) (string, error) {
+func (r *Repository) SuggestTaskName(ctx context.Context, prompt string) (core.TaskSuggestion, error) {
 	return r.ProposeTaskName(ctx, prompt)
+}
+
+func parseCodexSuggestion(raw string) (core.TaskSuggestion, bool) {
+	lines := strings.Split(raw, "\n")
+	for i := len(lines) - 1; i >= 0; i-- {
+		line := strings.TrimSpace(lines[i])
+		if line == "" {
+			continue
+		}
+		var suggestion core.TaskSuggestion
+		if err := json.Unmarshal([]byte(line), &suggestion); err == nil && suggestion.Name != "" {
+			suggestion.Name = normalizeCodexTitle(suggestion.Name)
+			if suggestion.Name != "" {
+				return suggestion, true
+			}
+		}
+	}
+	return core.TaskSuggestion{}, false
 }
 
 func (r *Repository) BuildLaunchCommand(task *core.Task) ([]string, error) {

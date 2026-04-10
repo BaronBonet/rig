@@ -65,7 +65,7 @@ func TestModelUpdate_CreateFlowSuggestsNameThenCreatesTask(t *testing.T) {
 
 	service.EXPECT().
 		SuggestTaskName(mock.Anything, "add billing retry flow", "codex").
-		Return("billing retry flow", nil).
+		Return(core.TaskSuggestion{Name: "billing retry flow", BranchType: "feat"}, nil).
 		Once()
 	m, suggestCmd := updateTUIModel(t, m, tea.KeyPressMsg{Code: tea.KeyEnter})
 	require.NotNil(t, suggestCmd)
@@ -126,7 +126,7 @@ func TestModelUpdate_CreateFlowWithoutTasksUsesModelCwdFallback(t *testing.T) {
 
 	service.EXPECT().
 		SuggestTaskName(mock.Anything, "add billing retry flow", "codex").
-		Return("billing retry flow", nil).
+		Return(core.TaskSuggestion{Name: "billing retry flow", BranchType: "feat"}, nil).
 		Once()
 	m, suggestCmd := updateTUIModel(t, m, tea.KeyPressMsg{Code: tea.KeyEnter})
 	require.NotNil(t, suggestCmd)
@@ -185,7 +185,7 @@ func TestModelUpdate_CreateFlowUsesConfiguredDefaultProvider(t *testing.T) {
 
 	service.EXPECT().
 		SuggestTaskName(mock.Anything, "add billing retry flow", "claude").
-		Return("billing retry flow", nil).
+		Return(core.TaskSuggestion{Name: "billing retry flow", BranchType: "feat"}, nil).
 		Once()
 	m, suggestCmd := updateTUIModel(t, m, tea.KeyPressMsg{Code: tea.KeyEnter})
 	require.NotNil(t, suggestCmd)
@@ -235,7 +235,7 @@ func TestModelUpdate_SuggestNameFailureReturnsToPromptModeAndRendersError(t *tes
 	service := NewMockTaskService(t)
 	service.EXPECT().
 		SuggestTaskName(mock.Anything, "add billing retry flow", "codex").
-		Return("", errors.New("suggest failed")).
+		Return(core.TaskSuggestion{}, errors.New("suggest failed")).
 		Once()
 	m := newLoadedTUIModel(t, service, tuiTask("existing-task"))
 
@@ -265,7 +265,7 @@ func TestModelUpdate_CreateFailureReturnsToNameConfirmModeAndRendersError(t *tes
 
 	service.EXPECT().
 		SuggestTaskName(mock.Anything, "add billing retry flow", "codex").
-		Return("billing retry flow", nil).
+		Return(core.TaskSuggestion{Name: "billing retry flow", BranchType: "feat"}, nil).
 		Once()
 	m, suggestCmd := updateTUIModel(t, m, tea.KeyPressMsg{Code: tea.KeyEnter})
 	msg := executeBatchUntil[suggestNameFinishedMsg](t, suggestCmd)
@@ -309,7 +309,7 @@ func TestModelUpdate_CreateFailureWithPersistedTaskReturnsToListModeAndPreserves
 
 	service.EXPECT().
 		SuggestTaskName(mock.Anything, "add billing retry flow", "codex").
-		Return("billing retry flow", nil).
+		Return(core.TaskSuggestion{Name: "billing retry flow", BranchType: "feat"}, nil).
 		Once()
 	m, suggestCmd := updateTUIModel(t, m, tea.KeyPressMsg{Code: tea.KeyEnter})
 	msg := executeBatchUntil[suggestNameFinishedMsg](t, suggestCmd)
@@ -366,7 +366,7 @@ func TestModelUpdate_NameConfirmModeEscapeReturnsToListMode(t *testing.T) {
 	m.promptInput.SetValue("add billing retry flow")
 	service.EXPECT().
 		SuggestTaskName(mock.Anything, "add billing retry flow", "codex").
-		Return("billing retry flow", nil).
+		Return(core.TaskSuggestion{Name: "billing retry flow", BranchType: "feat"}, nil).
 		Once()
 	m, suggestCmd := updateTUIModel(t, m, tea.KeyPressMsg{Code: tea.KeyEnter})
 	msg := executeBatchUntil[suggestNameFinishedMsg](t, suggestCmd)

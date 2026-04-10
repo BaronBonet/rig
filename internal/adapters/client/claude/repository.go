@@ -9,6 +9,7 @@ import (
 
 	"agent/internal/core"
 	"agent/internal/pkg/execx"
+	"agent/internal/pkg/prompts"
 )
 
 type Repository struct {
@@ -44,7 +45,7 @@ type claudeResult struct {
 	IsError bool   `json:"is_error"`
 }
 
-func (r *Repository) ProposeTaskName(ctx context.Context, prompt string) (string, error) {
+func (r *Repository) ProposeTaskName(ctx context.Context, prompt string) (core.TaskSuggestion, error) {
 	result, err := r.runner.RunWithStdin(ctx, execx.RunWithStdinOptions{
 		Name:  r.binary,
 		Stdin: prompt,
@@ -52,31 +53,40 @@ func (r *Repository) ProposeTaskName(ctx context.Context, prompt string) (string
 			"-p",
 			"--output-format", "json",
 			"--tools", "",
-			"--system-prompt", "You are a task naming assistant. Reply with ONLY a short title (3-5 words, no quotes). No explanations, no other text.",
+			"--system-prompt", prompts.SuggestTaskPrompt,
 		},
 	})
 	if err != nil {
-		return "", fmt.Errorf("claude exec failed: %w", err)
+		return core.TaskSuggestion{}, fmt.Errorf("claude exec failed: %w", err)
 	}
 
 	var parsed claudeResult
 	if err := json.Unmarshal([]byte(strings.TrimSpace(result.Stdout)), &parsed); err != nil {
-		return "", fmt.Errorf("claude: failed to parse JSON output: %w", err)
+		return core.TaskSuggestion{}, fmt.Errorf("claude: failed to parse JSON output: %w", err)
 	}
 
 	if parsed.IsError {
-		return "", fmt.Errorf("claude returned error: %s", parsed.Result)
+		return core.TaskSuggestion{}, fmt.Errorf("claude returned error: %s", parsed.Result)
 	}
 
-	title := normalizeTitle(parsed.Result)
-	if title == "" {
-		return "", fmt.Errorf("claude did not return a usable task title")
+	var suggestion core.TaskSuggestion
+	if err := json.Unmarshal([]byte(parsed.Result), &suggestion); err != nil {
+		title := normalizeTitle(parsed.Result)
+		if title == "" {
+			return core.TaskSuggestion{}, fmt.Errorf("claude did not return a usable task title")
+		}
+		return core.TaskSuggestion{Name: title, BranchType: "feat"}, nil
 	}
 
-	return title, nil
+	suggestion.Name = normalizeTitle(suggestion.Name)
+	if suggestion.Name == "" {
+		return core.TaskSuggestion{}, fmt.Errorf("claude did not return a usable task title")
+	}
+
+	return suggestion, nil
 }
 
-func (r *Repository) SuggestTaskName(ctx context.Context, prompt string) (string, error) {
+func (r *Repository) SuggestTaskName(ctx context.Context, prompt string) (core.TaskSuggestion, error) {
 	return r.ProposeTaskName(ctx, prompt)
 }
 

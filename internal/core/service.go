@@ -53,17 +53,18 @@ type prCacheEntry struct {
 	fetchedAt time.Time
 }
 
-func (s *Service) SuggestTaskName(ctx context.Context, prompt string, provider string) (string, error) {
+func (s *Service) SuggestTaskName(ctx context.Context, prompt string, provider string) (TaskSuggestion, error) {
 	repo := s.resolveProvider(provider)
 	if repo == nil {
-		return fallbackDisplayName(prompt), nil
+		return TaskSuggestion{Name: fallbackDisplayName(prompt), BranchType: "feat"}, nil
 	}
-	name, err := repo.SuggestTaskName(ctx, prompt)
-	if err == nil && strings.TrimSpace(name) != "" {
-		return strings.TrimSpace(name), nil
+	suggestion, err := repo.SuggestTaskName(ctx, prompt)
+	if err == nil && strings.TrimSpace(suggestion.Name) != "" {
+		suggestion.Name = strings.TrimSpace(suggestion.Name)
+		return suggestion, nil
 	}
 
-	return fallbackDisplayName(prompt), nil
+	return TaskSuggestion{Name: fallbackDisplayName(prompt), BranchType: "feat"}, nil
 }
 
 func (s *Service) resolveProvider(name string) ProviderClient {
@@ -102,13 +103,15 @@ func (s *Service) CreateTaskWithProgress(
 		}
 	}
 
-	displayName := strings.TrimSpace(input.ConfirmedDisplayName)
-	if displayName == "" {
+	var suggestion TaskSuggestion
+	if strings.TrimSpace(input.ConfirmedDisplayName) != "" {
+		suggestion = TaskSuggestion{Name: strings.TrimSpace(input.ConfirmedDisplayName), BranchType: "feat"}
+	} else {
 		emitTaskProgress(progress, TaskProgress{
 			Step:    TaskProgressNaming,
 			Message: "Naming task...",
 		})
-		displayName, err = s.SuggestTaskName(ctx, input.Prompt, input.Provider)
+		suggestion, err = s.SuggestTaskName(ctx, input.Prompt, input.Provider)
 		if err != nil {
 			return nil, err
 		}
@@ -130,17 +133,16 @@ func (s *Service) CreateTaskWithProgress(
 	}
 
 	now := time.Now().UTC()
-	taskSlug := slug.EnsureUnique(slug.FromDisplayName(displayName), existingSlugs)
+	taskSlug := slug.EnsureUnique(slug.FromDisplayName(suggestion.Name), existingSlugs)
 	task := &Task{
 		ID:          fmt.Sprintf("%d", now.UnixNano()),
 		Prompt:      input.Prompt,
-		DisplayName: displayName,
+		DisplayName: suggestion.Name,
 		Slug:        taskSlug,
 		RepoRoot:    repoCtx.Root,
 		RepoName:    repoCtx.Name,
 		BaseBranch:  repoCtx.BaseBranch,
-		// TODO: don't assume its a feat, the llm should figure that out
-		BranchName:       "feat/" + taskSlug,
+		BranchName:       suggestion.BranchTypeOrDefault() + "/" + taskSlug,
 		WorktreePath:     filepath.Join(filepath.Dir(repoCtx.Root), repoCtx.Name+"-"+taskSlug),
 		TmuxSession:      repoCtx.Name + "_" + taskSlug,
 		AgentWindowName:  "agent",

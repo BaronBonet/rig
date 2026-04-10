@@ -6,6 +6,7 @@ import (
 
 	"agent/internal/core"
 	"agent/internal/pkg/execx"
+	"agent/internal/pkg/prompts"
 
 	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
@@ -44,18 +45,19 @@ func TestRepositorySuggestTaskName_DelegatesToClaudeProposal(t *testing.T) {
 				"-p",
 				"--output-format", "json",
 				"--tools", "",
-				"--system-prompt", "You are a task naming assistant. Reply with ONLY a short title (3-5 words, no quotes). No explanations, no other text.",
+				"--system-prompt", prompts.SuggestTaskPrompt,
 			},
 		}).
 		Return(execx.Result{
-			Stdout: `{"type":"result","subtype":"success","result":"Billing Retry Flow","is_error":false}` + "\n",
+			Stdout: `{"type":"result","subtype":"success","result":"{\"branch_type\":\"feat\",\"name\":\"Billing Retry Flow\"}","is_error":false}` + "\n",
 		}, nil).
 		Once()
 	repo := NewRepository(runner, Config{Binary: "claude"})
 
-	name, err := repo.SuggestTaskName(t.Context(), "add billing retry flow")
+	suggestion, err := repo.SuggestTaskName(t.Context(), "add billing retry flow")
 	require.NoError(t, err)
-	require.Equal(t, "Billing Retry Flow", name)
+	require.Equal(t, "Billing Retry Flow", suggestion.Name)
+	require.Equal(t, "feat", suggestion.BranchType)
 }
 
 func TestRepositoryDetectRuntimeState_ReturnsNeedsInputForPrompt(t *testing.T) {
@@ -80,21 +82,22 @@ func TestRepositoryProposeTaskName_ParsesJSONOutput(t *testing.T) {
 				"-p",
 				"--output-format", "json",
 				"--tools", "",
-				"--system-prompt", "You are a task naming assistant. Reply with ONLY a short title (3-5 words, no quotes). No explanations, no other text.",
+				"--system-prompt", prompts.SuggestTaskPrompt,
 			},
 		}).
 		Return(execx.Result{
-			Stdout: `{"type":"result","subtype":"success","cost_usd":0.002,"duration_ms":1500,"duration_api_ms":1200,"is_error":false,"num_turns":1,"result":"Billing Retry Flow","session_id":"abc123","total_cost_usd":0.002}` + "\n",
+			Stdout: `{"type":"result","subtype":"success","cost_usd":0.002,"duration_ms":1500,"duration_api_ms":1200,"is_error":false,"num_turns":1,"result":"{\"branch_type\":\"feat\",\"name\":\"Billing Retry Flow\"}","session_id":"abc123","total_cost_usd":0.002}` + "\n",
 		}, nil).
 		Once()
 	repo := NewRepository(runner, Config{Binary: "claude"})
 
-	name, err := repo.ProposeTaskName(t.Context(), "add billing retry flow")
+	suggestion, err := repo.ProposeTaskName(t.Context(), "add billing retry flow")
 	require.NoError(t, err)
-	require.Equal(t, "Billing Retry Flow", name)
+	require.Equal(t, "Billing Retry Flow", suggestion.Name)
+	require.Equal(t, "feat", suggestion.BranchType)
 }
 
-func TestRepositoryProposeTaskName_StripsMarkdownTicks(t *testing.T) {
+func TestRepositoryProposeTaskName_FallsBackToPlainStringResult(t *testing.T) {
 	runner := execx.NewMockRunner(t)
 	runner.EXPECT().
 		RunWithStdin(mock.Anything, execx.RunWithStdinOptions{
@@ -104,7 +107,7 @@ func TestRepositoryProposeTaskName_StripsMarkdownTicks(t *testing.T) {
 				"-p",
 				"--output-format", "json",
 				"--tools", "",
-				"--system-prompt", "You are a task naming assistant. Reply with ONLY a short title (3-5 words, no quotes). No explanations, no other text.",
+				"--system-prompt", prompts.SuggestTaskPrompt,
 			},
 		}).
 		Return(execx.Result{
@@ -113,9 +116,10 @@ func TestRepositoryProposeTaskName_StripsMarkdownTicks(t *testing.T) {
 		Once()
 	repo := NewRepository(runner, Config{Binary: "claude"})
 
-	name, err := repo.ProposeTaskName(t.Context(), "switch sqlite to sqlc")
+	suggestion, err := repo.ProposeTaskName(t.Context(), "switch sqlite to sqlc")
 	require.NoError(t, err)
-	require.Equal(t, "Migrate to sqlc", name)
+	require.Equal(t, "Migrate to sqlc", suggestion.Name)
+	require.Equal(t, "feat", suggestion.BranchType)
 }
 
 func TestRepositoryProposeTaskName_ReturnsErrorOnEmptyResult(t *testing.T) {
@@ -128,7 +132,7 @@ func TestRepositoryProposeTaskName_ReturnsErrorOnEmptyResult(t *testing.T) {
 				"-p",
 				"--output-format", "json",
 				"--tools", "",
-				"--system-prompt", "You are a task naming assistant. Reply with ONLY a short title (3-5 words, no quotes). No explanations, no other text.",
+				"--system-prompt", prompts.SuggestTaskPrompt,
 			},
 		}).
 		Return(execx.Result{Stdout: `{"type":"result","subtype":"success","result":"","is_error":false}` + "\n"}, nil).
@@ -149,7 +153,7 @@ func TestRepositoryProposeTaskName_ReturnsErrorOnAPIError(t *testing.T) {
 				"-p",
 				"--output-format", "json",
 				"--tools", "",
-				"--system-prompt", "You are a task naming assistant. Reply with ONLY a short title (3-5 words, no quotes). No explanations, no other text.",
+				"--system-prompt", prompts.SuggestTaskPrompt,
 			},
 		}).
 		Return(execx.Result{Stdout: `{"type":"result","subtype":"error","result":"API error","is_error":true}` + "\n"}, nil).
