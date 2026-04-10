@@ -43,7 +43,8 @@
       "Bash(go vet:*)",
       "Bash(/Users/ericbonet/.claude/plugins/cache/claude-plugins-official/superpowers/5.0.7/skills/brainstorming/scripts/start-server.sh:*)",
       "Bash(make generate:*)",
-      "Bash(go doc:*)"
+      "Bash(go doc:*)",
+      "Bash(find:*)"
     ]
   }
 }

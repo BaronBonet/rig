@@ -81,6 +81,7 @@ func buildDependencies() (cli.Dependencies, error) {
 		Tasks:     taskRepo,
 		Monitor:   tmuxclient.NewRuntimeMonitor(),
 		Repo:      taskRepo,
+		Hooks:     taskRepo,
 		Providers: providers,
 	})
 

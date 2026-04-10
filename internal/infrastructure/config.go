@@ -68,7 +68,8 @@ func LoadConfig() (*Config, error) {
 			Binary: raw.CodexBinary,
 		},
 		Claude: claudeclient.Config{
-			Binary: raw.ClaudeBinary,
+			Binary:         raw.ClaudeBinary,
+			HookListenAddr: raw.HookListen,
 		},
 		Hooks: HookConfig{
 			ListenAddr: raw.HookListen,

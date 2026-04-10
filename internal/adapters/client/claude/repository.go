@@ -12,12 +12,14 @@ import (
 )
 
 type Repository struct {
-	runner execx.Runner
-	binary string
+	runner         execx.Runner
+	binary         string
+	hookListenAddr string
 }
 
 type Config struct {
-	Binary string
+	Binary         string
+	HookListenAddr string
 }
 
 func NewRepository(runner execx.Runner, cfg Config) *Repository {
@@ -26,8 +28,9 @@ func NewRepository(runner execx.Runner, cfg Config) *Repository {
 	}
 
 	return &Repository{
-		runner: runner,
-		binary: cfg.Binary,
+		runner:         runner,
+		binary:         cfg.Binary,
+		hookListenAddr: cfg.HookListenAddr,
 	}
 }
 
@@ -82,11 +85,23 @@ func (r *Repository) BuildLaunchCommand(task *core.Task) ([]string, error) {
 }
 
 func (r *Repository) LaunchRequest(task *core.Task) (core.LaunchRequest, error) {
-	return core.LaunchRequest{
+	req := core.LaunchRequest{
 		Command:      []string{r.binary},
 		Prompt:       "❯",
 		InitialInput: []string{task.Prompt},
-	}, nil
+	}
+
+	if r.hookListenAddr != "" {
+		settings, err := buildHookSettings(r.hookListenAddr)
+		if err != nil {
+			return req, fmt.Errorf("build hook settings: %w", err)
+		}
+		req.SetupFiles = map[string][]byte{
+			".claude/settings.local.json": settings,
+		}
+	}
+
+	return req, nil
 }
 
 func (r *Repository) DetectRuntimeState(snapshot core.RuntimeSnapshot) core.RuntimeState {
@@ -95,6 +110,31 @@ func (r *Repository) DetectRuntimeState(snapshot core.RuntimeSnapshot) core.Runt
 
 func (r *Repository) PromptMarker() string {
 	return "❯"
+}
+
+func buildHookSettings(listenAddr string) ([]byte, error) {
+	hookURL := "http://" + listenAddr + "/claude-hook"
+
+	hook := map[string]any{
+		"type":    "http",
+		"url":     hookURL,
+		"timeout": 5,
+	}
+	matchAll := []map[string]any{
+		{"matcher": "", "hooks": []any{hook}},
+	}
+
+	settings := map[string]any{
+		"hooks": map[string]any{
+			"SessionStart":     matchAll,
+			"UserPromptSubmit": matchAll,
+			"PreToolUse":       matchAll,
+			"PostToolUse":      matchAll,
+			"Stop":             matchAll,
+		},
+	}
+
+	return json.MarshalIndent(settings, "", "  ")
 }
 
 func normalizeTitle(raw string) string {

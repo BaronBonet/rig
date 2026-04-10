@@ -706,6 +706,9 @@ func (m model) selectedTaskDetailView() string {
 		llmLatest := isLLMOutputLatest(hook)
 		promptText := truncateStr(strings.TrimSpace(hook.LastPromptText), 40)
 		outputText := truncateStr(strings.TrimSpace(hook.LastAssistantMessage), 40)
+		if outputText == "" {
+			outputText = truncateStr(strings.TrimSpace(hookActivityFallback(hook)), 40)
+		}
 
 		if promptText != "" {
 			icon := dimStyle.Render(m.icons.Prompt)
@@ -847,6 +850,19 @@ func isLLMOutputLatest(hook *core.HookSessionSummary) bool {
 		return false
 	}
 	return hook.LastEventName != "UserPromptSubmit"
+}
+
+func hookActivityFallback(hook *core.HookSessionSummary) string {
+	if hook == nil {
+		return ""
+	}
+	if hook.LastCommandResultText != "" {
+		return hook.LastCommandResultText
+	}
+	if hook.LastCommandText != "" {
+		return hook.LastCommandText
+	}
+	return ""
 }
 
 func (m model) prStatusDisplay(pr *core.PRStatus) (string, lipgloss.Style) {

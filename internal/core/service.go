@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"os"
 	"path/filepath"
 	"slices"
 	"strings"
@@ -218,6 +219,10 @@ func (s *Service) CreateTaskWithProgress(
 	launch, err := providerRepo.LaunchRequest(task)
 	if err != nil {
 		return s.markBroken(ctx, task, fmt.Errorf("build launch request: %w", err))
+	}
+
+	if err := writeSetupFiles(task.WorktreePath, launch.SetupFiles); err != nil {
+		return s.markBroken(ctx, task, fmt.Errorf("write setup files: %w", err))
 	}
 
 	emitTaskProgress(progress, TaskProgress{
@@ -770,4 +775,17 @@ func cloneTask(task *Task) *Task {
 
 func isCleanupFailure(message string) bool {
 	return strings.HasPrefix(message, "cleanup failed: ")
+}
+
+func writeSetupFiles(worktreePath string, files map[string][]byte) error {
+	for relPath, content := range files {
+		absPath := filepath.Join(worktreePath, relPath)
+		if err := os.MkdirAll(filepath.Dir(absPath), 0o755); err != nil {
+			return fmt.Errorf("mkdir %s: %w", filepath.Dir(absPath), err)
+		}
+		if err := os.WriteFile(absPath, content, 0o644); err != nil {
+			return fmt.Errorf("write %s: %w", relPath, err)
+		}
+	}
+	return nil
 }
