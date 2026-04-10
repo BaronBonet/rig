@@ -103,6 +103,10 @@ type taskProgressMsg struct {
 
 type shimmerTickMsg struct{}
 
+type asyncErrMsg struct {
+	err error
+}
+
 const shimmerTickInterval = 60 * time.Millisecond
 
 func newTUIModel(
@@ -301,6 +305,14 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		m.shimmerTick++
 		return m, tea.Tick(shimmerTickInterval, func(time.Time) tea.Msg { return shimmerTickMsg{} })
+	case asyncErrMsg:
+		m.err = msg.err
+		m.loading = false
+		m.busy = false
+		m.creationProgress = ""
+		m.shimmerTick = 0
+		m.progressCh = nil
+		return m, nil
 	default:
 		return m, nil
 	}
@@ -1082,20 +1094,20 @@ func (m *model) nextRefreshTasksCmd() tea.Cmd {
 }
 
 func fetchPRStatusCmd(service TaskService, taskID, repoRoot, branch string) tea.Cmd {
-	return func() tea.Msg {
+	return safeCmd("fetchPRStatusCmd", func() tea.Msg {
 		status, err := service.GetPRStatus(context.Background(), repoRoot, branch)
 		if err != nil {
 			return prStatusLoadedMsg{taskID: taskID, status: &core.PRStatus{State: core.PRStateNone}}
 		}
 		return prStatusLoadedMsg{taskID: taskID, status: status}
-	}
+	})
 }
 
 func refreshTasksCmd(service TaskService, requestID int) tea.Cmd {
-	return func() tea.Msg {
+	return safeCmd("refreshTasksCmd", func() tea.Msg {
 		views, err := service.ListTaskViews(context.Background())
 		return tasksLoadedMsg{requestID: requestID, views: views, err: err}
-	}
+	})
 }
 
 func filterVisibleTaskViews(views []*core.TaskView) []*core.TaskView {
@@ -1121,27 +1133,27 @@ func taskViewsToTasks(views []*core.TaskView) []*core.Task {
 }
 
 func cleanupTaskCmd(service TaskService, idOrSlug string) tea.Cmd {
-	return func() tea.Msg {
+	return safeCmd("cleanupTaskCmd", func() tea.Msg {
 		task, err := service.DeleteTaskResources(context.Background(), idOrSlug)
 		return cleanupFinishedMsg{task: task, err: err}
-	}
+	})
 }
 
 func openTaskCmd(service TaskService, idOrSlug string) tea.Cmd {
-	return func() tea.Msg {
+	return safeCmd("openTaskCmd", func() tea.Msg {
 		return openFinishedMsg{err: service.OpenTask(context.Background(), idOrSlug)}
-	}
+	})
 }
 
 func subscribeObserverUpdatesCmd(socketPath string) tea.Cmd {
-	return func() tea.Msg {
+	return safeCmd("subscribeObserverUpdatesCmd", func() tea.Msg {
 		if strings.TrimSpace(socketPath) == "" {
 			return observerSubscriptionReadyMsg{}
 		}
 
 		updates, cleanup, err := observer.Subscribe(context.Background(), socketPath)
 		return observerSubscriptionReadyMsg{updates: updates, cleanup: cleanup, err: err}
-	}
+	})
 }
 
 func waitForObserverUpdateCmd(updates <-chan core.ObserverTaskUpdate) tea.Cmd {
@@ -1149,26 +1161,33 @@ func waitForObserverUpdateCmd(updates <-chan core.ObserverTaskUpdate) tea.Cmd {
 		return nil
 	}
 
-	return func() tea.Msg {
+	return safeCmd("waitForObserverUpdateCmd", func() tea.Msg {
 		update, ok := <-updates
 		if !ok {
 			return observerSubscriptionClosedMsg{}
 		}
 		return observerTaskUpdatedMsg{update: update}
-	}
+	})
 }
 
 func suggestTaskNameCmd(service TaskService, prompt string, provider string) tea.Cmd {
-	return func() tea.Msg {
+	return safeCmd("suggestTaskNameCmd", func() tea.Msg {
 		name, err := service.SuggestTaskName(context.Background(), prompt, provider)
 		return suggestNameFinishedMsg{prompt: prompt, name: name, err: err}
-	}
+	})
 }
 
 func createTaskCmd(service TaskService, input core.NewTaskInput) (<-chan taskProgressMsg, tea.Cmd) {
 	progressCh := make(chan taskProgressMsg, 8)
 
-	cmd := func() tea.Msg {
+	cmd := func() (msg tea.Msg) {
+		defer close(progressCh)
+		defer func() {
+			if r := recover(); r != nil {
+				msg = asyncErrMsg{err: fmt.Errorf("createTaskCmd panicked: %v", r)}
+			}
+		}()
+
 		task, err := service.CreateTaskWithProgress(
 			context.Background(),
 			input,
@@ -1177,7 +1196,6 @@ func createTaskCmd(service TaskService, input core.NewTaskInput) (<-chan taskPro
 				progressCh <- taskProgressMsg{step: p.Step, message: p.Message}
 			},
 		)
-		close(progressCh)
 		return createFinishedMsg{task: task, err: err}
 	}
 
@@ -1188,12 +1206,23 @@ func waitForProgressCmd(ch <-chan taskProgressMsg) tea.Cmd {
 	if ch == nil {
 		return nil
 	}
-	return func() tea.Msg {
+	return safeCmd("waitForProgressCmd", func() tea.Msg {
 		msg, ok := <-ch
 		if !ok {
 			return nil
 		}
 		return msg
+	})
+}
+
+func safeCmd(name string, fn func() tea.Msg) tea.Cmd {
+	return func() (msg tea.Msg) {
+		defer func() {
+			if r := recover(); r != nil {
+				msg = asyncErrMsg{err: fmt.Errorf("%s panicked: %v", name, r)}
+			}
+		}()
+		return fn()
 	}
 }
 
