@@ -102,6 +102,31 @@ type Task struct {
 	EditorWindowExists    bool         `json:"editor_window_exists"`
 }
 
+var validBranchTypes = map[string]bool{
+	"feat":     true,
+	"fix":      true,
+	"chore":    true,
+	"refactor": true,
+	"docs":     true,
+	"test":     true,
+	"style":    true,
+	"perf":     true,
+	"ci":       true,
+	"build":    true,
+}
+
+type TaskSuggestion struct {
+	Name       string `json:"name"`
+	BranchType string `json:"branch_type"`
+}
+
+func (s TaskSuggestion) BranchTypeOrDefault() string {
+	if s.BranchType != "" && validBranchTypes[s.BranchType] {
+		return s.BranchType
+	}
+	return "feat"
+}
+
 type HookSessionSummary struct {
 	StartedAt             time.Time
 	LastActivityAt        time.Time
