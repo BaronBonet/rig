@@ -67,13 +67,15 @@ func columnExists(ctx context.Context, db *sql.DB, table, column string) (bool, 
 	return false, rows.Err()
 }
 
-func columnHasPrimaryKeyOrUniqueConstraint(ctx context.Context, db *sql.DB, table, column string) (bool, error) {
+func columnSupportsConflictTarget(ctx context.Context, db *sql.DB, table, column string) (bool, error) {
 	rows, err := db.QueryContext(ctx, `pragma table_info(`+table+`)`)
 	if err != nil {
 		return false, err
 	}
 	defer rows.Close()
 
+	primaryKeyCount := 0
+	targetPrimaryKeyOrder := 0
 	for rows.Next() {
 		var (
 			cid          int
@@ -86,12 +88,21 @@ func columnHasPrimaryKeyOrUniqueConstraint(ctx context.Context, db *sql.DB, tabl
 		if err := rows.Scan(&cid, &name, &colType, &notNull, &defaultValue, &pk); err != nil {
 			return false, err
 		}
-		if name == column && pk > 0 {
-			return true, nil
+		if pk > 0 {
+			primaryKeyCount++
+		}
+		if name == column {
+			targetPrimaryKeyOrder = pk
 		}
 	}
 	if err := rows.Err(); err != nil {
 		return false, err
+	}
+	if err := rows.Close(); err != nil {
+		return false, err
+	}
+	if targetPrimaryKeyOrder == 1 && primaryKeyCount == 1 {
+		return true, nil
 	}
 
 	indexRows, err := db.QueryContext(ctx, `pragma index_list(`+table+`)`)
@@ -100,6 +111,12 @@ func columnHasPrimaryKeyOrUniqueConstraint(ctx context.Context, db *sql.DB, tabl
 	}
 	defer indexRows.Close()
 
+	type indexInfo struct {
+		name    string
+		unique  int
+		partial int
+	}
+	indexes := make([]indexInfo, 0)
 	for indexRows.Next() {
 		var (
 			seq     int
@@ -111,11 +128,21 @@ func columnHasPrimaryKeyOrUniqueConstraint(ctx context.Context, db *sql.DB, tabl
 		if err := indexRows.Scan(&seq, &name, &unique, &origin, &partial); err != nil {
 			return false, err
 		}
-		if unique != 1 {
+		indexes = append(indexes, indexInfo{name: name, unique: unique, partial: partial})
+	}
+	if err := indexRows.Err(); err != nil {
+		return false, err
+	}
+	if err := indexRows.Close(); err != nil {
+		return false, err
+	}
+
+	for _, index := range indexes {
+		if index.unique != 1 || index.partial != 0 {
 			continue
 		}
 
-		columnName, singleColumn, err := uniqueIndexColumn(ctx, db, name)
+		columnName, singleColumn, err := uniqueIndexColumn(ctx, db, index.name)
 		if err != nil {
 			return false, err
 		}
@@ -124,7 +151,42 @@ func columnHasPrimaryKeyOrUniqueConstraint(ctx context.Context, db *sql.DB, tabl
 		}
 	}
 
-	return false, indexRows.Err()
+	return false, nil
+}
+
+func columnIsExactIntegerPrimaryKey(ctx context.Context, db *sql.DB, table, column string) (bool, error) {
+	rows, err := db.QueryContext(ctx, `pragma table_info(`+table+`)`)
+	if err != nil {
+		return false, err
+	}
+	defer rows.Close()
+
+	primaryKeyCount := 0
+	targetIsIntegerPrimaryKey := false
+	for rows.Next() {
+		var (
+			cid          int
+			name         string
+			colType      string
+			notNull      int
+			defaultValue sql.NullString
+			pk           int
+		)
+		if err := rows.Scan(&cid, &name, &colType, &notNull, &defaultValue, &pk); err != nil {
+			return false, err
+		}
+		if pk > 0 {
+			primaryKeyCount++
+		}
+		if name == column && pk == 1 && strings.EqualFold(strings.TrimSpace(colType), "integer") {
+			targetIsIntegerPrimaryKey = true
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return false, err
+	}
+
+	return targetIsIntegerPrimaryKey && primaryKeyCount == 1, nil
 }
 
 func uniqueIndexColumn(ctx context.Context, db *sql.DB, index string) (string, bool, error) {
@@ -197,18 +259,30 @@ func allColumnsExist(ctx context.Context, db *sql.DB, table string, columns ...s
 	return true, nil
 }
 
-func anyColumnsExist(ctx context.Context, db *sql.DB, table string, columns ...string) (bool, error) {
-	for _, column := range columns {
-		exists, err := columnExists(ctx, db, table, column)
+func ensureTaskMetadataColumns(ctx context.Context, db *sql.DB) error {
+	for _, column := range []struct {
+		name string
+		stmt string
+	}{
+		{name: "repo_name", stmt: `alter table tasks add column repo_name text not null default ''`},
+		{name: "agent_window_name", stmt: `alter table tasks add column agent_window_name text not null default 'agent'`},
+		{name: "editor_window_name", stmt: `alter table tasks add column editor_window_name text not null default 'editor'`},
+		{name: "agent_window_exists", stmt: `alter table tasks add column agent_window_exists integer not null default 0`},
+		{name: "editor_window_exists", stmt: `alter table tasks add column editor_window_exists integer not null default 0`},
+	} {
+		exists, err := columnExists(ctx, db, "tasks", column.name)
 		if err != nil {
-			return false, err
+			return err
 		}
 		if exists {
-			return true, nil
+			continue
+		}
+		if _, err := db.ExecContext(ctx, column.stmt); err != nil {
+			return err
 		}
 	}
 
-	return false, nil
+	return nil
 }
 
 func tableColumnState(ctx context.Context, db *sql.DB, table string, columns ...string) (bool, bool, error) {
@@ -283,8 +357,23 @@ create table if not exists schema_migrations (
 	if eventsExists && !eventsComplete {
 		return fmt.Errorf("incomplete managed schema for events table")
 	}
+	eventIDPrimaryKey := false
+	if eventsExists && eventsComplete {
+		eventIDPrimaryKey, err = columnIsExactIntegerPrimaryKey(ctx, db, "events", "id")
+		if err != nil {
+			return fmt.Errorf("check events.id primary key: %w", err)
+		}
+		if !eventIDPrimaryKey {
+			return fmt.Errorf("incomplete managed schema for events.id primary key")
+		}
+	}
 	initialTasksAndEventsComplete := tasksComplete && eventsComplete
 
+	if tasksExists {
+		if err := ensureTaskMetadataColumns(ctx, db); err != nil {
+			return fmt.Errorf("repair task metadata columns: %w", err)
+		}
+	}
 	taskMetadataColumnsComplete, err := allColumnsExist(
 		ctx,
 		db,
@@ -298,20 +387,7 @@ create table if not exists schema_migrations (
 	if err != nil {
 		return fmt.Errorf("check task metadata columns: %w", err)
 	}
-	taskMetadataColumnsPresent, err := anyColumnsExist(
-		ctx,
-		db,
-		"tasks",
-		"repo_name",
-		"agent_window_name",
-		"editor_window_name",
-		"agent_window_exists",
-		"editor_window_exists",
-	)
-	if err != nil {
-		return fmt.Errorf("check task metadata column presence: %w", err)
-	}
-	if taskMetadataColumnsPresent && !taskMetadataColumnsComplete {
+	if tasksExists && !taskMetadataColumnsComplete {
 		return fmt.Errorf("incomplete managed schema for task metadata columns")
 	}
 
@@ -337,6 +413,16 @@ create table if not exists schema_migrations (
 	}
 	if hookEventsExists && !hookEventColumnsComplete {
 		return fmt.Errorf("incomplete managed schema for task_hook_events table")
+	}
+	hookEventIDPrimaryKey := false
+	if hookEventsExists && hookEventColumnsComplete {
+		hookEventIDPrimaryKey, err = columnIsExactIntegerPrimaryKey(ctx, db, "task_hook_events", "id")
+		if err != nil {
+			return fmt.Errorf("check task_hook_events.id primary key: %w", err)
+		}
+		if !hookEventIDPrimaryKey {
+			return fmt.Errorf("incomplete managed schema for task_hook_events.id primary key")
+		}
 	}
 
 	hookSessionsExists, hookSessionColumnsComplete, err := tableColumnState(
@@ -368,12 +454,13 @@ create table if not exists schema_migrations (
 	if hookSessionsExists && !hookSessionColumnsComplete {
 		return fmt.Errorf("incomplete managed schema for task_hook_sessions table")
 	}
+	hookSessionTaskIDConflictTarget := false
 	if hookSessionsExists && hookSessionColumnsComplete {
-		hookSessionTaskIDUnique, err := columnHasPrimaryKeyOrUniqueConstraint(ctx, db, "task_hook_sessions", "task_id")
+		hookSessionTaskIDConflictTarget, err = columnSupportsConflictTarget(ctx, db, "task_hook_sessions", "task_id")
 		if err != nil {
 			return fmt.Errorf("check task_hook_sessions.task_id uniqueness: %w", err)
 		}
-		if !hookSessionTaskIDUnique {
+		if !hookSessionTaskIDConflictTarget {
 			return fmt.Errorf("incomplete managed schema for task_hook_sessions.task_id uniqueness")
 		}
 	}
@@ -395,8 +482,9 @@ create table if not exists schema_migrations (
 	if observerSummariesExists && !observerSummaryColumnsComplete {
 		return fmt.Errorf("incomplete managed schema for task_observer_summaries table")
 	}
+	observerTaskIDConflictTarget := false
 	if observerSummariesExists && observerSummaryColumnsComplete {
-		observerTaskIDUnique, err := columnHasPrimaryKeyOrUniqueConstraint(
+		observerTaskIDConflictTarget, err = columnSupportsConflictTarget(
 			ctx,
 			db,
 			"task_observer_summaries",
@@ -405,7 +493,7 @@ create table if not exists schema_migrations (
 		if err != nil {
 			return fmt.Errorf("check task_observer_summaries.task_id uniqueness: %w", err)
 		}
-		if !observerTaskIDUnique {
+		if !observerTaskIDConflictTarget {
 			return fmt.Errorf("incomplete managed schema for task_observer_summaries.task_id uniqueness")
 		}
 	}
@@ -420,8 +508,11 @@ create table if not exists schema_migrations (
 		return fmt.Errorf("check hook observability indexes: %w", err)
 	}
 	hookObservabilityComplete := hookEventColumnsComplete &&
+		hookEventIDPrimaryKey &&
 		hookSessionColumnsComplete &&
+		hookSessionTaskIDConflictTarget &&
 		observerSummaryColumnsComplete &&
+		observerTaskIDConflictTarget &&
 		hookObservabilityIndexesComplete
 
 	managedMigrations := []struct {
