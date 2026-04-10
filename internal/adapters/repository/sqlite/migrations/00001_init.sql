@@ -1,4 +1,4 @@
--- Baseline SQLite schema for goose and sqlc.
+-- +goose Up
 
 create table if not exists tasks (
   id text primary key,
@@ -88,9 +88,6 @@ create table if not exists task_observer_summaries (
   updated_at text not null default ''
 );
 
-create trigger if not exists trg_schema_migrations_ignore_00001_init
-after insert on schema_migrations
-when new.version = '00001_init'
-begin
-  delete from schema_migrations where version = new.version;
-end;
+-- +goose Down
+
+-- Intentionally left blank for the goose baseline.
