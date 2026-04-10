@@ -163,33 +163,34 @@ func (r *Repository) ListObserverSummaries(
 		return nil, err
 	}
 
-	query := `select task_id, display_status, display_activity, process_alive, last_runtime_observed_at
-from task_observer_summaries`
-	args := make([]any, 0, len(taskIDs))
-	if len(taskIDs) > 0 {
-		query += ` where task_id in (` + placeholders(len(taskIDs)) + `)`
-		for _, taskID := range taskIDs {
-			args = append(args, taskID)
-		}
-	}
-	query += ` order by task_id asc`
-
-	rows, err := r.db.QueryContext(ctx, query, args...)
+	rows, err := r.queries.ListObserverSummaries(ctx)
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
 
 	summaries := make(map[string]*core.ObserverSummary)
-	for rows.Next() {
-		summary, scanErr := scanObserverSummary(rows)
-		if scanErr != nil {
-			return nil, scanErr
+	if len(taskIDs) == 0 {
+		for _, row := range rows {
+			summary := observerSummaryFromListRow(row)
+			summaries[summary.TaskID] = summary
 		}
+		return summaries, nil
+	}
+
+	requested := make(map[string]struct{}, len(taskIDs))
+	for _, taskID := range taskIDs {
+		requested[taskID] = struct{}{}
+	}
+
+	for _, row := range rows {
+		if _, ok := requested[row.TaskID]; !ok {
+			continue
+		}
+		summary := observerSummaryFromListRow(row)
 		summaries[summary.TaskID] = summary
 	}
 
-	return summaries, rows.Err()
+	return summaries, nil
 }
 
 func (r *Repository) UpsertObserverSummary(ctx context.Context, summary *core.ObserverSummary) error {
@@ -200,25 +201,7 @@ func (r *Repository) UpsertObserverSummary(ctx context.Context, summary *core.Ob
 		return nil
 	}
 
-	_, err := r.db.ExecContext(
-		ctx,
-		`insert into task_observer_summaries (
-			task_id, display_status, display_activity, process_alive,
-			last_runtime_observed_at, updated_at
-		) values (?, ?, ?, ?, ?, ?)
-		on conflict(task_id) do update set
-			display_status = excluded.display_status,
-			display_activity = excluded.display_activity,
-			process_alive = excluded.process_alive,
-			last_runtime_observed_at = excluded.last_runtime_observed_at,
-			updated_at = excluded.updated_at`,
-		summary.TaskID,
-		string(summary.DisplayStatus),
-		string(summary.DisplayActivity),
-		boolToInt(summary.ProcessAlive),
-		formatTime(summary.LastRuntimeObservedAt),
-		formatTime(time.Now().UTC()),
-	)
+	err := r.queries.UpsertObserverSummary(ctx, observerSummaryParams(summary, time.Now().UTC()))
 	if err != nil {
 		return err
 	}
@@ -244,38 +227,6 @@ func (r *Repository) unavailableErr() error {
 	}
 
 	return nil
-}
-
-type rowScanner interface {
-	Scan(dest ...any) error
-}
-
-func scanObserverSummary(scanner rowScanner) (*core.ObserverSummary, error) {
-	var (
-		summary               core.ObserverSummary
-		displayStatus         string
-		displayActivity       string
-		processAlive          int
-		lastRuntimeObservedAt string
-	)
-
-	err := scanner.Scan(
-		&summary.TaskID,
-		&displayStatus,
-		&displayActivity,
-		&processAlive,
-		&lastRuntimeObservedAt,
-	)
-	if err != nil {
-		return nil, err
-	}
-
-	summary.DisplayStatus = core.DisplayStatus(displayStatus)
-	summary.DisplayActivity = core.DisplayActivity(displayActivity)
-	summary.ProcessAlive = processAlive == 1
-	summary.LastRuntimeObservedAt = parseTime(lastRuntimeObservedAt)
-
-	return &summary, nil
 }
 
 func boolToInt(v bool) int {
