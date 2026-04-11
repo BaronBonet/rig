@@ -55,3 +55,29 @@ func TestGHPRChecker_ReturnsNoneWhenNoPR(t *testing.T) {
 	require.Equal(t, core.PRStateNone, status.State)
 	require.Equal(t, 0, status.Number)
 }
+
+func TestGHPRChecker_IsAvailable_Succeeds(t *testing.T) {
+	runner := execx.NewMockRunner(t)
+	runner.EXPECT().
+		Run(mock.Anything, "", "gh", "--version").
+		Return(execx.Result{Stdout: "gh version 2.50.0\n"}, nil).
+		Once()
+
+	checker := NewPRStatusChecker(runner)
+	err := checker.IsAvailable(context.Background())
+
+	require.NoError(t, err)
+}
+
+func TestGHPRChecker_IsAvailable_ReturnsError(t *testing.T) {
+	runner := execx.NewMockRunner(t)
+	runner.EXPECT().
+		Run(mock.Anything, "", "gh", "--version").
+		Return(execx.Result{}, &execx.CommandError{Err: context.Canceled}).
+		Once()
+
+	checker := NewPRStatusChecker(runner)
+	err := checker.IsAvailable(context.Background())
+
+	require.Error(t, err)
+}
