@@ -36,46 +36,63 @@ func (l *Loader) LoadRepoConfig(_ context.Context, repoRoot string) (core.RepoCo
 		return core.RepoConfig{}, err
 	}
 
-	copyPaths, err := parseSeedCopy(&doc)
+	seed, err := parseSeed(&doc)
 	if err != nil {
 		return core.RepoConfig{}, err
 	}
 
 	return core.RepoConfig{
 		Exists: true,
-		Seed:   core.SeedConfig{Copy: copyPaths},
+		Seed:   seed,
 	}, nil
 }
 
-func parseSeedCopy(doc *yaml.Node) ([]string, error) {
+func parseSeed(doc *yaml.Node) (core.SeedConfig, error) {
 	root, err := documentRoot(doc)
 	if err != nil {
-		return nil, err
+		return core.SeedConfig{}, err
 	}
 	if root == nil {
-		return nil, nil
+		return core.SeedConfig{}, nil
 	}
 	if root.Kind != yaml.MappingNode {
-		return nil, fmt.Errorf("invalid agent.yaml: root must be a mapping")
+		return core.SeedConfig{}, fmt.Errorf("invalid agent.yaml: root must be a mapping")
 	}
 	if err := validateAllowedKeys(root, "agent.yaml", "seed"); err != nil {
-		return nil, err
+		return core.SeedConfig{}, err
 	}
 
 	seedNode, ok, err := lookupMapping(root, "seed")
 	if err != nil {
-		return nil, err
+		return core.SeedConfig{}, err
 	}
 	if !ok {
-		return nil, nil
+		return core.SeedConfig{}, nil
 	}
 	if seedNode.Kind != yaml.MappingNode {
-		return nil, fmt.Errorf("invalid agent.yaml: seed must be a mapping")
+		return core.SeedConfig{}, fmt.Errorf("invalid agent.yaml: seed must be a mapping")
 	}
-	if err := validateAllowedKeys(seedNode, "seed", "copy"); err != nil {
-		return nil, err
+	if err := validateAllowedKeys(seedNode, "seed", "copy", "setup_script"); err != nil {
+		return core.SeedConfig{}, err
 	}
 
+	copyPaths, err := parseSeedCopy(seedNode)
+	if err != nil {
+		return core.SeedConfig{}, err
+	}
+
+	setupScript, err := parseSeedSetupScript(seedNode)
+	if err != nil {
+		return core.SeedConfig{}, err
+	}
+
+	return core.SeedConfig{
+		Copy:        copyPaths,
+		SetupScript: setupScript,
+	}, nil
+}
+
+func parseSeedCopy(seedNode *yaml.Node) ([]string, error) {
 	copyNode, ok, err := lookupMapping(seedNode, "copy")
 	if err != nil {
 		return nil, err
@@ -105,6 +122,26 @@ func parseSeedCopy(doc *yaml.Node) ([]string, error) {
 	}
 
 	return paths, nil
+}
+
+func parseSeedSetupScript(seedNode *yaml.Node) (string, error) {
+	setupScriptNode, ok, err := lookupMapping(seedNode, "setup_script")
+	if err != nil {
+		return "", err
+	}
+	if !ok {
+		return "", nil
+	}
+	if setupScriptNode.Kind != yaml.ScalarNode || setupScriptNode.Tag != "!!str" {
+		return "", fmt.Errorf("invalid agent.yaml: seed.setup_script must be a string")
+	}
+	setupScript := setupScriptNode.Value
+	if setupScript != "" {
+		if err := validateSeedPath(setupScript); err != nil {
+			return "", fmt.Errorf("invalid agent.yaml: seed.setup_script %w", err)
+		}
+	}
+	return setupScript, nil
 }
 
 func documentRoot(doc *yaml.Node) (*yaml.Node, error) {

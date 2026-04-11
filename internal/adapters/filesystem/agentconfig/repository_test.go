@@ -184,6 +184,17 @@ seed:
 		}
 	})
 
+	t.Run("setup_script with unknown nested key still errors", func(t *testing.T) {
+		repoRoot := t.TempDir()
+		require.NoError(t, os.WriteFile(filepath.Join(repoRoot, "agent.yaml"), []byte("seed:\n  copies:\n    - .env\n"), 0o644))
+
+		repo := NewLoader()
+
+		_, err := repo.LoadRepoConfig(t.Context(), repoRoot)
+		require.Error(t, err)
+		require.ErrorContains(t, err, "unknown key \"copies\"")
+	})
+
 	t.Run("duplicate keys return an error", func(t *testing.T) {
 		tests := []struct {
 			name    string
@@ -229,5 +240,117 @@ seed:
 				require.ErrorContains(t, err, tc.wantErr)
 			})
 		}
+	})
+}
+
+func TestRepositoryLoadRepoConfig_ParsesSetupScript(t *testing.T) {
+	t.Run("valid setup_script is returned in config", func(t *testing.T) {
+		repoRoot := t.TempDir()
+		require.NoError(t, os.WriteFile(filepath.Join(repoRoot, "agent.yaml"), []byte(`
+seed:
+  setup_script: scripts/setup.sh
+`), 0o644))
+
+		repo := NewLoader()
+		cfg, err := repo.LoadRepoConfig(t.Context(), repoRoot)
+		require.NoError(t, err)
+		require.True(t, cfg.Exists)
+		require.Equal(t, "scripts/setup.sh", cfg.Seed.SetupScript)
+	})
+
+	t.Run("setup_script with copy paths", func(t *testing.T) {
+		repoRoot := t.TempDir()
+		require.NoError(t, os.WriteFile(filepath.Join(repoRoot, "agent.yaml"), []byte(`
+seed:
+  copy:
+    - .env
+  setup_script: scripts/setup.sh
+`), 0o644))
+
+		repo := NewLoader()
+		cfg, err := repo.LoadRepoConfig(t.Context(), repoRoot)
+		require.NoError(t, err)
+		require.True(t, cfg.Exists)
+		require.Equal(t, []string{".env"}, cfg.Seed.Copy)
+		require.Equal(t, "scripts/setup.sh", cfg.Seed.SetupScript)
+	})
+
+	t.Run("empty setup_script is treated as absent", func(t *testing.T) {
+		repoRoot := t.TempDir()
+		require.NoError(t, os.WriteFile(filepath.Join(repoRoot, "agent.yaml"), []byte(`
+seed:
+  setup_script: ""
+`), 0o644))
+
+		repo := NewLoader()
+		cfg, err := repo.LoadRepoConfig(t.Context(), repoRoot)
+		require.NoError(t, err)
+		require.True(t, cfg.Exists)
+		require.Empty(t, cfg.Seed.SetupScript)
+	})
+
+	t.Run("non-string setup_script returns an error", func(t *testing.T) {
+		repoRoot := t.TempDir()
+		require.NoError(t, os.WriteFile(filepath.Join(repoRoot, "agent.yaml"), []byte(`
+seed:
+  setup_script: [a, b]
+`), 0o644))
+
+		repo := NewLoader()
+		_, err := repo.LoadRepoConfig(t.Context(), repoRoot)
+		require.Error(t, err)
+		require.ErrorContains(t, err, "setup_script must be a string")
+	})
+
+	t.Run("null setup_script returns an error", func(t *testing.T) {
+		repoRoot := t.TempDir()
+		require.NoError(t, os.WriteFile(filepath.Join(repoRoot, "agent.yaml"), []byte(`
+seed:
+  setup_script: null
+`), 0o644))
+
+		repo := NewLoader()
+		_, err := repo.LoadRepoConfig(t.Context(), repoRoot)
+		require.Error(t, err)
+		require.ErrorContains(t, err, "setup_script must be a string")
+	})
+
+	t.Run("setup_script with path traversal returns an error", func(t *testing.T) {
+		repoRoot := t.TempDir()
+		require.NoError(t, os.WriteFile(filepath.Join(repoRoot, "agent.yaml"), []byte(`
+seed:
+  setup_script: ../evil.sh
+`), 0o644))
+
+		repo := NewLoader()
+		_, err := repo.LoadRepoConfig(t.Context(), repoRoot)
+		require.Error(t, err)
+		require.ErrorContains(t, err, "must not contain path traversal")
+	})
+
+	t.Run("setup_script with absolute path returns an error", func(t *testing.T) {
+		repoRoot := t.TempDir()
+		require.NoError(t, os.WriteFile(filepath.Join(repoRoot, "agent.yaml"), []byte(`
+seed:
+  setup_script: /tmp/evil.sh
+`), 0o644))
+
+		repo := NewLoader()
+		_, err := repo.LoadRepoConfig(t.Context(), repoRoot)
+		require.Error(t, err)
+		require.ErrorContains(t, err, "must be repo-relative")
+	})
+
+	t.Run("setup_script with glob pattern returns an error", func(t *testing.T) {
+		repoRoot := t.TempDir()
+		require.NoError(t, os.WriteFile(filepath.Join(repoRoot, "agent.yaml"), []byte(`
+seed:
+  setup_script: "scripts/*.sh"
+`), 0o644))
+
+		repo := NewLoader()
+		_, err := repo.LoadRepoConfig(t.Context(), repoRoot)
+		require.Error(t, err)
+		require.ErrorContains(t, err, "must not contain glob characters")
 	})
 }
