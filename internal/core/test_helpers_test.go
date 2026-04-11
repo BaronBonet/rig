@@ -29,6 +29,9 @@ type testServiceHarness struct {
 
 	workspaceSeederMock *MockWorkspaceSeeder
 	workspaceSeeder     workspaceSeederState
+
+	setupRunnerMock *MockSetupScriptRunner
+	setupRunner     setupScriptRunnerState
 }
 
 type taskRepositoryState struct {
@@ -100,6 +103,19 @@ type workspaceSeederState struct {
 	seededBeforeSession bool
 }
 
+type setupScriptRunnerState struct {
+	validateErr      error
+	runErr           error
+	validateRepoRoot string
+	validateScript   string
+	runCalled        bool
+	runRepoRoot      string
+	runWorktreePath  string
+	runScriptPath    string
+	ranAfterSeed     bool
+	ranBeforeSession bool
+}
+
 func newTestService(t *testing.T) *testServiceHarness {
 	t.Helper()
 
@@ -110,6 +126,7 @@ func newTestService(t *testing.T) *testServiceHarness {
 		providerRepoMock:    NewMockProviderClient(t),
 		configRepoMock:      NewMockRepoConfigLoader(t),
 		workspaceSeederMock: NewMockWorkspaceSeeder(t),
+		setupRunnerMock:     NewMockSetupScriptRunner(t),
 		repoClient: repoClientState{
 			repoContext: RepoContext{
 				Root:       "/tmp/repo",
@@ -121,6 +138,7 @@ func newTestService(t *testing.T) *testServiceHarness {
 
 	h.sessionClient.startHook = func() {
 		h.workspaceSeeder.seededBeforeSession = h.workspaceSeeder.seedCalled
+		h.setupRunner.ranBeforeSession = h.setupRunner.runCalled
 	}
 
 	wireTaskRepositoryMock(h)
@@ -129,6 +147,7 @@ func newTestService(t *testing.T) *testServiceHarness {
 	wireProviderClientMock(h)
 	wireRepoConfigLoaderMock(h)
 	wireWorkspaceSeederMock(h)
+	wireSetupScriptRunnerMock(h)
 
 	h.service = NewService(
 		h.taskRepoMock,
@@ -142,6 +161,7 @@ func newTestService(t *testing.T) *testServiceHarness {
 		h.configRepoMock,
 		h.workspaceSeederMock,
 		nil,
+		h.setupRunnerMock,
 		Config{Provider: "codex"},
 	)
 
@@ -352,6 +372,27 @@ func wireWorkspaceSeederMock(h *testServiceHarness) {
 			h.workspaceSeeder.validateRepoRoot = repoRoot
 			h.workspaceSeeder.validatePaths = append([]string(nil), relativePaths...)
 			return h.workspaceSeeder.validateErr
+		}).Maybe()
+}
+
+func wireSetupScriptRunnerMock(h *testServiceHarness) {
+	h.setupRunnerMock.EXPECT().RunSetupScript(mock.Anything, mock.Anything, mock.Anything).
+		RunAndReturn(func(_ context.Context, in RunSetupScriptInput, output func(string)) error {
+			h.setupRunner.runCalled = true
+			h.setupRunner.runRepoRoot = in.RepoRoot
+			h.setupRunner.runWorktreePath = in.WorktreePath
+			h.setupRunner.runScriptPath = in.ScriptPath
+			h.setupRunner.ranAfterSeed = h.workspaceSeeder.seedCalled
+			if h.setupRunner.runErr != nil {
+				return h.setupRunner.runErr
+			}
+			return nil
+		}).Maybe()
+	h.setupRunnerMock.EXPECT().ValidateSetupScript(mock.Anything, mock.Anything, mock.Anything).
+		RunAndReturn(func(_ context.Context, repoRoot string, scriptPath string) error {
+			h.setupRunner.validateRepoRoot = repoRoot
+			h.setupRunner.validateScript = scriptPath
+			return h.setupRunner.validateErr
 		}).Maybe()
 }
 

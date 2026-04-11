@@ -75,6 +75,7 @@ func buildDependencies() (cli.Dependencies, error) {
 			agentExec,
 			detectAgentSourceRoot(),
 		),
+		nil,
 		cfg.Service,
 	)
 	service.SetSessionUsageReader(sessionusagefs.NewRepository())
