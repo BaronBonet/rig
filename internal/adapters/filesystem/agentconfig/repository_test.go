@@ -186,7 +186,10 @@ seed:
 
 	t.Run("setup_script with unknown nested key still errors", func(t *testing.T) {
 		repoRoot := t.TempDir()
-		require.NoError(t, os.WriteFile(filepath.Join(repoRoot, "agent.yaml"), []byte("seed:\n  copies:\n    - .env\n"), 0o644))
+		require.NoError(
+			t,
+			os.WriteFile(filepath.Join(repoRoot, "agent.yaml"), []byte("seed:\n  copies:\n    - .env\n"), 0o644),
+		)
 
 		repo := NewLoader()
 

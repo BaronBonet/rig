@@ -1,0 +1,2 @@
+seed:
+  setup_script: scripts/worktree-setup.sh
