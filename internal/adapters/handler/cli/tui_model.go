@@ -1395,6 +1395,8 @@ func progressStepLabel(step core.TaskProgressStep) string {
 		return "Creating worktree..."
 	case core.TaskProgressWorkspaceSeeding:
 		return "Seeding workspace..."
+	case core.TaskProgressSetupScriptRunning:
+		return "Running setup script..."
 	case core.TaskProgressTmuxStarting:
 		return "Starting session..."
 	case core.TaskProgressAgentLaunching:
