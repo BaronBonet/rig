@@ -32,20 +32,21 @@ type CreateTaskOptions struct {
 }
 
 type Service struct {
-	tasks      TaskRepository
-	hooks      HookObservabilityRepository
-	observers  ObserverRuntimeRepository
-	repo       RepoClient
-	session    SessionClient
-	providers  map[string]ProviderClient
-	repoConfig RepoConfigLoader
-	workspace  WorkspaceSeeder
-	bootstrap  TaskWorkspaceBootstrapper
-	cfg        Config
+	tasks       TaskRepository
+	hooks       HookObservabilityRepository
+	observers   ObserverRuntimeRepository
+	repo        RepoClient
+	session     SessionClient
+	providers   map[string]ProviderClient
+	repoConfig  RepoConfigLoader
+	workspace   WorkspaceSeeder
+	bootstrap   TaskWorkspaceBootstrapper
+	setupRunner SetupScriptRunner
+	cfg         Config
 
 	usageReader SessionUsageReader
 
-	prChecker PRStatusChecker
+	prChecker  PRStatusChecker
 	prCacheTTL time.Duration
 	prCache    map[string]prCacheEntry
 	prCacheMu  sync.Mutex
@@ -103,6 +104,12 @@ func (s *Service) CreateTaskWithProgress(
 	if len(repoConfig.Seed.Copy) > 0 {
 		if err := s.workspace.ValidateSeedPaths(ctx, repoCtx.Root, repoConfig.Seed.Copy); err != nil {
 			return nil, fmt.Errorf("seed workspace: %w", err)
+		}
+	}
+
+	if repoConfig.Seed.SetupScript != "" {
+		if err := s.setupRunner.ValidateSetupScript(ctx, repoCtx.Root, repoConfig.Seed.SetupScript); err != nil {
+			return nil, fmt.Errorf("setup script: %w", err)
 		}
 	}
 
@@ -205,6 +212,29 @@ func (s *Service) CreateTaskWithProgress(
 		})
 		if err != nil {
 			return s.markBroken(ctx, task, fmt.Errorf("seed workspace: %w", err))
+		}
+	}
+
+	if repoConfig.Seed.SetupScript != "" {
+		emitTaskProgress(progress, TaskProgress{
+			Step:    TaskProgressSetupScriptRunning,
+			Message: "Running setup script...",
+			Task:    cloneTask(task),
+		})
+
+		err := s.setupRunner.RunSetupScript(ctx, RunSetupScriptInput{
+			RepoRoot:     task.RepoRoot,
+			WorktreePath: task.WorktreePath,
+			ScriptPath:   repoConfig.Seed.SetupScript,
+		}, func(line string) {
+			emitTaskProgress(progress, TaskProgress{
+				Step:    TaskProgressSetupScriptRunning,
+				Message: line,
+				Task:    cloneTask(task),
+			})
+		})
+		if err != nil {
+			return s.markBroken(ctx, task, fmt.Errorf("setup script: %w", err))
 		}
 	}
 
@@ -614,19 +644,21 @@ func NewService(
 	repoConfig RepoConfigLoader,
 	workspace WorkspaceSeeder,
 	bootstrap TaskWorkspaceBootstrapper,
+	setupRunner SetupScriptRunner,
 	cfg Config,
 ) *Service {
 	return &Service{
-		tasks:      tasks,
-		hooks:      hooks,
-		observers:  observers,
-		repo:       repo,
-		session:    session,
-		providers:  providers,
-		repoConfig: repoConfig,
-		workspace:  workspace,
-		bootstrap:  bootstrap,
-		cfg:        cfg,
+		tasks:       tasks,
+		hooks:       hooks,
+		observers:   observers,
+		repo:        repo,
+		session:     session,
+		providers:   providers,
+		repoConfig:  repoConfig,
+		workspace:   workspace,
+		bootstrap:   bootstrap,
+		setupRunner: setupRunner,
+		cfg:         cfg,
 	}
 }
 
@@ -669,6 +701,13 @@ func (s *Service) Doctor(ctx context.Context, cwd string) (DoctorResult, error) 
 				} else {
 					for _, path := range repoConfig.Seed.Copy {
 						result.Notes = append(result.Notes, "config: seed path ok: "+path)
+					}
+				}
+				if repoConfig.Seed.SetupScript != "" && s.setupRunner != nil {
+					if err := s.setupRunner.ValidateSetupScript(ctx, repoCtx.Root, repoConfig.Seed.SetupScript); err != nil {
+						result.Failures = append(result.Failures, "config: "+err.Error())
+					} else {
+						result.Notes = append(result.Notes, "config: setup script ok: "+repoConfig.Seed.SetupScript)
 					}
 				}
 			}

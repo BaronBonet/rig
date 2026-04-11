@@ -15,6 +15,7 @@ packages:
       TaskRepository:
       RepoConfigLoader:
       WorkspaceSeeder:
+      SetupScriptRunner:
       RepoClient:
       SessionClient:
       RuntimeMonitor:

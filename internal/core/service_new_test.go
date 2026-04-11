@@ -27,6 +27,7 @@ func TestNewService_AcceptsBusinessPorts(t *testing.T) {
 		configRepo,
 		workspaceSeeder,
 		nil,
+		nil,
 		Config{Provider: "codex"},
 	)
 
@@ -258,4 +259,43 @@ func TestServiceCreateTaskWithProgress_UsesLLMSuggestedBranchType(t *testing.T) 
 	require.NoError(t, err)
 	require.Equal(t, "fix/billing-retry-flow", task.BranchName)
 	require.Equal(t, "billing retry flow", task.DisplayName)
+}
+
+func TestServiceCreateTaskWithProgress_RunsSetupScriptAfterSeedingBeforeTmux(t *testing.T) {
+	svc := newTestService(t)
+	svc.configRepo.repoConfig = RepoConfig{
+		Seed: SeedConfig{
+			Copy:        []string{".env"},
+			SetupScript: "scripts/setup.sh",
+		},
+	}
+
+	var events []TaskProgress
+	task, err := svc.service.CreateTaskWithProgress(t.Context(), NewTaskInput{
+		Cwd:                  "/tmp/repo",
+		Prompt:               "run setup script",
+		ConfirmedDisplayName: "run setup script",
+	}, CreateTaskOptions{}, func(event TaskProgress) {
+		events = append(events, event)
+	})
+
+	require.NoError(t, err)
+	require.Equal(t, TaskStatusRunning, task.Status)
+	require.True(t, svc.setupRunner.runCalled)
+	require.Equal(t, "/tmp/repo", svc.setupRunner.runRepoRoot)
+	require.Equal(t, "/tmp/repo-run-setup-script", svc.setupRunner.runWorktreePath)
+	require.Equal(t, "scripts/setup.sh", svc.setupRunner.runScriptPath)
+	require.True(t, svc.setupRunner.ranAfterSeed)
+	require.True(t, svc.setupRunner.ranBeforeSession)
+	require.Equal(t, []TaskProgressStep{
+		TaskProgressNameSelected,
+		TaskProgressWorktreeCreating,
+		TaskProgressWorkspaceSeeding,
+		TaskProgressWorkspaceSeeded,
+		TaskProgressSetupScriptRunning,
+		TaskProgressTmuxStarting,
+		TaskProgressAgentLaunching,
+		TaskProgressTaskCreated,
+	}, progressSteps(events))
+	require.Equal(t, "Running setup script...", events[4].Message)
 }
