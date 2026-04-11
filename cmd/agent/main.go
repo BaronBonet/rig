@@ -15,6 +15,7 @@ import (
 	agentconfigfs "agent/internal/adapters/filesystem/agentconfig"
 	codexhooksfs "agent/internal/adapters/filesystem/codexhooks"
 	sessionusagefs "agent/internal/adapters/filesystem/sessionusage"
+	setupscriptfs "agent/internal/adapters/filesystem/setupscript"
 	workspacefs "agent/internal/adapters/filesystem/workspace"
 	"agent/internal/adapters/handler/cli"
 	observer "agent/internal/adapters/observability/observer"
@@ -75,7 +76,7 @@ func buildDependencies() (cli.Dependencies, error) {
 			agentExec,
 			detectAgentSourceRoot(),
 		),
-		nil,
+		setupscriptfs.NewRunner(),
 		cfg.Service,
 	)
 	service.SetSessionUsageReader(sessionusagefs.NewRepository())
