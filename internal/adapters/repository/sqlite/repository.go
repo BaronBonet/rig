@@ -72,14 +72,6 @@ func NewRepository(cfg Config) (*Repository, error) {
 
 	repo.db = db
 	repo.queries = generated.New(db)
-	if err := repo.backfillLegacyTaskRows(); err != nil {
-		repo.initErr = err
-		_ = db.Close()
-		repo.db = nil
-		repo.queries = nil
-		return repo, nil
-	}
-
 	return repo, nil
 }
 
@@ -157,30 +149,26 @@ func (r *Repository) ListObserverSummaries(
 		return nil, err
 	}
 
-	rows, err := r.queries.ListObserverSummaries(ctx)
-	if err != nil {
-		return nil, err
-	}
-
 	summaries := make(map[string]*core.ObserverSummary)
 	if len(taskIDs) == 0 {
+		rows, err := r.queries.ListAllObserverSummaries(ctx)
+		if err != nil {
+			return nil, err
+		}
 		for _, row := range rows {
-			summary := observerSummaryFromListRow(row)
+			summary := observerSummaryFromListAllRow(row)
 			summaries[summary.TaskID] = summary
 		}
 		return summaries, nil
 	}
 
-	requested := make(map[string]struct{}, len(taskIDs))
-	for _, taskID := range taskIDs {
-		requested[taskID] = struct{}{}
+	rows, err := r.queries.ListObserverSummariesByTaskIDs(ctx, taskIDs)
+	if err != nil {
+		return nil, err
 	}
 
 	for _, row := range rows {
-		if _, ok := requested[row.TaskID]; !ok {
-			continue
-		}
-		summary := observerSummaryFromListRow(row)
+		summary := observerSummaryFromListByTaskIDsRow(row)
 		summaries[summary.TaskID] = summary
 	}
 
@@ -202,14 +190,6 @@ func (r *Repository) UpsertObserverSummary(ctx context.Context, summary *core.Ob
 
 	r.publishObserverTaskUpdate(observerTaskUpdateFromSummary(summary))
 	return nil
-}
-
-func (r *Repository) AppendEvent(ctx context.Context, taskID, eventType, payload string) error {
-	if err := r.unavailableErr(); err != nil {
-		return err
-	}
-
-	return r.queries.AppendEvent(ctx, appendEventParams(taskID, eventType, payload))
 }
 
 func (r *Repository) unavailableErr() error {
@@ -250,82 +230,4 @@ func parseTime(raw string) time.Time {
 	}
 
 	return parsed
-}
-
-func (r *Repository) backfillLegacyTaskRows() error {
-	ctx := context.Background()
-	rows, err := r.db.QueryContext(
-		ctx,
-		`select id, repo_root, repo_name, agent_window_name, editor_window_name from tasks`,
-	)
-	if err != nil {
-		return err
-	}
-	defer rows.Close()
-
-	type legacyTaskRow struct {
-		id               string
-		repoRoot         string
-		repoName         string
-		agentWindowName  string
-		editorWindowName string
-	}
-
-	var legacyRows []legacyTaskRow
-	for rows.Next() {
-		var row legacyTaskRow
-		if err := rows.Scan(
-			&row.id, &row.repoRoot, &row.repoName,
-			&row.agentWindowName, &row.editorWindowName,
-		); err != nil {
-			return err
-		}
-		legacyRows = append(legacyRows, row)
-	}
-
-	if err := rows.Err(); err != nil {
-		return err
-	}
-
-	for _, row := range legacyRows {
-		desiredRepoName := row.repoName
-		if desiredRepoName == "" {
-			desiredRepoName = defaultRepoName(row.repoRoot)
-		}
-		desiredAgentWindowName := row.agentWindowName
-		if desiredAgentWindowName == "" {
-			desiredAgentWindowName = defaultAgentWindowName
-		}
-		desiredEditorWindowName := row.editorWindowName
-		if desiredEditorWindowName == "" {
-			desiredEditorWindowName = defaultEditorWindowName
-		}
-
-		if desiredRepoName == row.repoName && desiredAgentWindowName == row.agentWindowName &&
-			desiredEditorWindowName == row.editorWindowName {
-			continue
-		}
-
-		if _, err := r.db.ExecContext(
-			ctx,
-			`update tasks set repo_name = ?, agent_window_name = ?, editor_window_name = ? where id = ?`,
-			desiredRepoName,
-			desiredAgentWindowName,
-			desiredEditorWindowName,
-			row.id,
-		); err != nil {
-			return err
-		}
-	}
-
-	return nil
-}
-
-func defaultRepoName(repoRoot string) string {
-	name := filepath.Base(repoRoot)
-	if name == "." || name == string(filepath.Separator) || name == "" {
-		return ""
-	}
-
-	return name
 }

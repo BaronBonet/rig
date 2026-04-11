@@ -29,14 +29,6 @@ create table if not exists tasks (
 create index if not exists idx_tasks_worktree_path_created_at
   on tasks(worktree_path, created_at desc);
 
-create table if not exists events (
-  id integer primary key autoincrement,
-  task_id text not null,
-  event_type text not null,
-  payload text not null,
-  created_at text not null
-);
-
 create table if not exists task_hook_events (
   id integer primary key autoincrement,
   task_id text not null,

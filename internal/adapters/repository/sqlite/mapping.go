@@ -89,7 +89,31 @@ func hookSessionSummaryFromGetRow(row generated.GetHookSessionSummaryByTaskIDRow
 	)
 }
 
-func hookSessionSummaryFromListRow(row generated.ListHookSessionSummariesRow) *core.HookSessionSummary {
+func hookSessionSummaryFromListAllRow(row generated.ListAllHookSessionSummariesRow) *core.HookSessionSummary {
+	return hookSessionSummaryFromValues(
+		row.TaskID,
+		row.SessionID,
+		row.Model,
+		row.Cwd,
+		row.TranscriptPath,
+		row.StartSource,
+		row.CurrentTurnID,
+		row.LastEventName,
+		row.RuntimePhase,
+		row.StartedAt,
+		row.LastActivityAt,
+		row.LastStopAt,
+		row.LastPromptPreview,
+		row.LastCommandPreview,
+		row.LastCommandResultPreview,
+		row.LastAssistantMessage,
+		row.CommandCount,
+	)
+}
+
+func hookSessionSummaryFromListByTaskIDsRow(
+	row generated.ListHookSessionSummariesByTaskIDsRow,
+) *core.HookSessionSummary {
 	return hookSessionSummaryFromValues(
 		row.TaskID,
 		row.SessionID,
@@ -178,7 +202,17 @@ func observerSummaryFromGetRow(row generated.GetObserverSummaryByTaskIDRow) *cor
 	)
 }
 
-func observerSummaryFromListRow(row generated.ListObserverSummariesRow) *core.ObserverSummary {
+func observerSummaryFromListAllRow(row generated.ListAllObserverSummariesRow) *core.ObserverSummary {
+	return observerSummaryFromValues(
+		row.TaskID,
+		row.DisplayStatus,
+		row.DisplayActivity,
+		row.ProcessAlive,
+		row.LastRuntimeObservedAt,
+	)
+}
+
+func observerSummaryFromListByTaskIDsRow(row generated.ListObserverSummariesByTaskIDsRow) *core.ObserverSummary {
 	return observerSummaryFromValues(
 		row.TaskID,
 		row.DisplayStatus,
@@ -309,17 +343,4 @@ func updateTaskParams(task *core.Task) generated.UpdateTaskParams {
 		LastReconciledAt:   params.LastReconciledAt,
 		ID:                 task.ID,
 	}
-}
-
-func appendEventParams(taskID, eventType, payload string) generated.AppendEventParams {
-	return generated.AppendEventParams{
-		TaskID:    taskID,
-		EventType: eventType,
-		Payload:   payload,
-		CreatedAt: nowRFC3339Nano(time.Now()),
-	}
-}
-
-func nowRFC3339Nano(ts time.Time) string {
-	return ts.UTC().Format(time.RFC3339Nano)
 }

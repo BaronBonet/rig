@@ -41,13 +41,6 @@ type taskRepositoryState struct {
 	getTask        *Task
 	createdTask    *Task
 	updatedTask    *Task
-	appendedEvents []testTaskEvent
-}
-
-type testTaskEvent struct {
-	taskID    string
-	eventType string
-	payload   string
 }
 
 type repoClientState struct {
@@ -197,15 +190,6 @@ func wireTaskRepositoryMock(h *testServiceHarness) {
 
 		return tasks, nil
 	}).Maybe()
-	h.taskRepoMock.EXPECT().AppendEvent(mock.Anything, mock.Anything, mock.Anything, mock.Anything).
-		RunAndReturn(func(_ context.Context, taskID, eventType, payload string) error {
-			h.taskRepo.appendedEvents = append(h.taskRepo.appendedEvents, testTaskEvent{
-				taskID:    taskID,
-				eventType: eventType,
-				payload:   payload,
-			})
-			return nil
-		}).Maybe()
 }
 
 func wireRepoClientMock(h *testServiceHarness) {

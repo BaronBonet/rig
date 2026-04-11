@@ -170,7 +170,7 @@ func TestServiceDeleteTaskResources_MarksTaskBrokenWhenWorktreeRemovalFailsAfter
 	require.Contains(t, task.LastError, "permission denied")
 }
 
-func TestServiceDeleteTaskResources_AppendsCleanupLifecycleEvents(t *testing.T) {
+func TestServiceDeleteTaskResources_DoesNotPersistLegacyCleanupEvents(t *testing.T) {
 	worktree := t.TempDir()
 	svc := newTestService(t)
 	svc.taskRepo.getTask = cleanupTestTask(worktree)
@@ -184,10 +184,8 @@ func TestServiceDeleteTaskResources_AppendsCleanupLifecycleEvents(t *testing.T) 
 	_, err := svc.service.DeleteTaskResources(t.Context(), "billing-retry-flow")
 
 	require.NoError(t, err)
-	require.Len(t, svc.taskRepo.appendedEvents, 2)
-	require.Equal(t, "cleanup_requested", svc.taskRepo.appendedEvents[0].eventType)
-	require.Equal(t, "cleanup_completed", svc.taskRepo.appendedEvents[1].eventType)
-	require.Equal(t, "cleaned", svc.taskRepo.appendedEvents[1].payload)
+	require.NotNil(t, svc.taskRepo.updatedTask)
+	require.Equal(t, TaskStatusCleaned, svc.taskRepo.updatedTask.Status)
 }
 
 func TestServiceDeleteTaskResources_ReturnsIntermediateUpdateFailure(t *testing.T) {

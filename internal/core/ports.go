@@ -61,7 +61,6 @@ type TaskRepository interface {
 	UpdateTask(ctx context.Context, task *Task) error
 	GetTask(ctx context.Context, idOrSlug string) (*Task, error)
 	ListTasks(ctx context.Context) ([]*Task, error)
-	AppendEvent(ctx context.Context, taskID, eventType, payload string) error
 }
 
 type HookEventIngestor interface {
