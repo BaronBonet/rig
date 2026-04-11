@@ -2,7 +2,7 @@ version: "2"
 sql:
   - engine: "sqlite"
     schema:
-      - "./migrations/00001_init.sql"
+      - "./migrations"
     queries:
       - "./queries"
     gen:

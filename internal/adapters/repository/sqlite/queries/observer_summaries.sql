@@ -6,12 +6,19 @@ from task_observer_summaries
 where task_id = sqlc.arg(task_id)
 limit 1;
 
--- name: ListObserverSummaries :many
+-- name: ListAllObserverSummaries :many
 select
   task_id, display_status, display_activity, process_alive,
   last_runtime_observed_at
 from task_observer_summaries
-order by task_id asc;
+;
+
+-- name: ListObserverSummariesByTaskIDs :many
+select
+  task_id, display_status, display_activity, process_alive,
+  last_runtime_observed_at
+from task_observer_summaries
+where task_id in (sqlc.slice(task_ids));
 
 -- name: UpsertObserverSummary :exec
 insert into task_observer_summaries (

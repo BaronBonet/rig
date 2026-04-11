@@ -203,31 +203,27 @@ func (r *Repository) ListHookSessionSummaries(
 		return nil, err
 	}
 
-	rows, err := r.queries.ListHookSessionSummaries(ctx)
-	if err != nil {
-		return nil, err
-	}
-
 	summaries := make(map[string]*core.HookSessionSummary)
 
 	if len(taskIDs) == 0 {
+		rows, err := r.queries.ListAllHookSessionSummaries(ctx)
+		if err != nil {
+			return nil, err
+		}
 		for _, row := range rows {
-			summary := hookSessionSummaryFromListRow(row)
+			summary := hookSessionSummaryFromListAllRow(row)
 			summaries[summary.TaskID] = summary
 		}
 		return summaries, nil
 	}
 
-	requested := make(map[string]struct{}, len(taskIDs))
-	for _, taskID := range taskIDs {
-		requested[taskID] = struct{}{}
+	rows, err := r.queries.ListHookSessionSummariesByTaskIDs(ctx, taskIDs)
+	if err != nil {
+		return nil, err
 	}
 
 	for _, row := range rows {
-		if _, ok := requested[row.TaskID]; !ok {
-			continue
-		}
-		summary := hookSessionSummaryFromListRow(row)
+		summary := hookSessionSummaryFromListByTaskIDsRow(row)
 		summaries[summary.TaskID] = summary
 	}
 
@@ -378,14 +374,21 @@ func (r *Repository) resolveHookTaskID(ctx context.Context, raw core.HookEventIn
 }
 
 type hookSessionSummaryGetter interface {
-	GetHookSessionSummaryByTaskID(ctx context.Context, taskID string) (generated.GetHookSessionSummaryByTaskIDRow, error)
+	GetHookSessionSummaryByTaskID(
+		ctx context.Context,
+		taskID string,
+	) (generated.GetHookSessionSummaryByTaskIDRow, error)
 }
 
 type observerSummaryGetter interface {
 	GetObserverSummaryByTaskID(ctx context.Context, taskID string) (generated.GetObserverSummaryByTaskIDRow, error)
 }
 
-func loadHookSessionSummary(ctx context.Context, q hookSessionSummaryGetter, taskID string) (*core.HookSessionSummary, error) {
+func loadHookSessionSummary(
+	ctx context.Context,
+	q hookSessionSummaryGetter,
+	taskID string,
+) (*core.HookSessionSummary, error) {
 	row, err := q.GetHookSessionSummaryByTaskID(ctx, taskID)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, nil

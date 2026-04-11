@@ -166,7 +166,6 @@ func (s *Service) CreateTaskWithProgress(
 	if err := s.tasks.CreateTask(ctx, task); err != nil {
 		return nil, err
 	}
-	_ = s.tasks.AppendEvent(ctx, task.ID, "task_created", task.DisplayName)
 
 	emitTaskProgress(progress, TaskProgress{
 		Step:    TaskProgressWorktreeCreating,
@@ -249,8 +248,6 @@ func (s *Service) CreateTaskWithProgress(
 	if err := s.tasks.UpdateTask(ctx, task); err != nil {
 		return task, err
 	}
-
-	_ = s.tasks.AppendEvent(ctx, task.ID, "agent_launch_requested", strings.Join(launch.Command, " "))
 
 	emitTaskProgress(progress, TaskProgress{
 		Step:    TaskProgressTaskCreated,
@@ -462,8 +459,6 @@ func (s *Service) restoreTaskSession(ctx context.Context, task *Task) error {
 		return err
 	}
 
-	_ = s.tasks.AppendEvent(ctx, task.ID, "session_restored", task.TmuxSession)
-
 	return nil
 }
 
@@ -503,8 +498,6 @@ func (s *Service) DeleteTaskResources(ctx context.Context, idOrSlug string) (*Ta
 		return nil, err
 	}
 
-	_ = s.tasks.AppendEvent(ctx, task.ID, "cleanup_requested", string(task.Status))
-
 	if task.SessionExists {
 		if err := s.session.DeleteTaskSession(ctx, task); err != nil {
 			sessionResources, checkErr := s.session.InspectTaskSession(ctx, task)
@@ -543,8 +536,6 @@ func (s *Service) DeleteTaskResources(ctx context.Context, idOrSlug string) (*Ta
 	if err := s.tasks.UpdateTask(ctx, task); err != nil {
 		return task, err
 	}
-
-	_ = s.tasks.AppendEvent(ctx, task.ID, "cleanup_completed", string(task.Status))
 
 	return task, nil
 }
@@ -793,8 +784,6 @@ func (s *Service) markBroken(ctx context.Context, task *Task, failure error) (*T
 		return task, err
 	}
 
-	_ = s.tasks.AppendEvent(ctx, task.ID, "error_recorded", task.LastError)
-
 	return task, failure
 }
 
@@ -806,8 +795,6 @@ func (s *Service) markCleanupBroken(ctx context.Context, task *Task, failure err
 	if err := s.tasks.UpdateTask(ctx, task); err != nil {
 		return task, err
 	}
-
-	_ = s.tasks.AppendEvent(ctx, task.ID, "cleanup_failed", task.LastError)
 
 	return task, failure
 }

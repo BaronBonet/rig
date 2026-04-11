@@ -213,25 +213,6 @@ func TestRepositoryListTasks_OrdersByCreatedAtAscending(t *testing.T) {
 	require.Equal(t, "repo", tasks[1].RepoName)
 }
 
-func TestRepositoryAppendEvent_PersistsEvent(t *testing.T) {
-	repo := newTestRepository(t)
-	task := seedTask(t, repo, core.Task{ID: "task-1", Slug: "task-1"})
-
-	require.NoError(t, repo.AppendEvent(context.Background(), task.ID, "workspace.created", `{"ok":true}`))
-
-	var (
-		eventType string
-		payload   string
-	)
-	require.NoError(t, repo.db.QueryRowContext(
-		context.Background(),
-		`select event_type, payload from events where task_id = ? order by id desc limit 1`,
-		task.ID,
-	).Scan(&eventType, &payload))
-	require.Equal(t, "workspace.created", eventType)
-	require.Equal(t, `{"ok":true}`, payload)
-}
-
 func TestNewRepository_CreatesParentDirectory(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "nested", "state.db")
 
@@ -287,7 +268,6 @@ func TestNewRepository_CreatesFreshDatabaseWithGooseMigrations(t *testing.T) {
 
 	for _, table := range []string{
 		"tasks",
-		"events",
 		"task_hook_events",
 		"task_hook_sessions",
 		"task_observer_summaries",
@@ -297,6 +277,10 @@ func TestNewRepository_CreatesFreshDatabaseWithGooseMigrations(t *testing.T) {
 		require.NoError(t, tableErr)
 		require.True(t, exists, table)
 	}
+
+	exists, tableErr := testSchemaObjectExists(t, repo.db, "table", "events")
+	require.NoError(t, tableErr)
+	require.False(t, exists)
 
 	var versionID int64
 	var isApplied bool
@@ -563,6 +547,49 @@ func TestRepositorySubscribeHookSessionUpdates_NotifiesOnIngest(t *testing.T) {
 	case <-time.After(time.Second):
 		t.Fatal("timed out waiting for hook session update")
 	}
+}
+
+func TestRepositoryListHookSessionSummaries_FiltersRequestedTaskIDs(t *testing.T) {
+	repo := newTestRepository(t)
+	taskOne := seedTask(t, repo, core.Task{
+		ID:           "task-1",
+		Slug:         "task-1",
+		DisplayName:  "task 1",
+		WorktreePath: "/tmp/repo-task-1",
+	})
+	taskTwo := seedTask(t, repo, core.Task{
+		ID:           "task-2",
+		Slug:         "task-2",
+		DisplayName:  "task 2",
+		WorktreePath: "/tmp/repo-task-2",
+	})
+
+	_, err := repo.IngestHookEvent(context.Background(), core.HookEventInput{
+		Cwd:        taskOne.WorktreePath,
+		EventName:  "UserPromptSubmit",
+		SessionID:  "sess-1",
+		TurnID:     "turn-1",
+		PromptText: "fix test A",
+		OccurredAt: time.Date(2026, 4, 8, 10, 0, 0, 0, time.UTC),
+	})
+	require.NoError(t, err)
+
+	_, err = repo.IngestHookEvent(context.Background(), core.HookEventInput{
+		Cwd:        taskTwo.WorktreePath,
+		EventName:  "UserPromptSubmit",
+		SessionID:  "sess-2",
+		TurnID:     "turn-2",
+		PromptText: "fix test B",
+		OccurredAt: time.Date(2026, 4, 8, 10, 1, 0, 0, time.UTC),
+	})
+	require.NoError(t, err)
+
+	summaries, err := repo.ListHookSessionSummaries(context.Background(), []string{taskOne.ID})
+	require.NoError(t, err)
+	require.Len(t, summaries, 1)
+	require.Contains(t, summaries, taskOne.ID)
+	require.NotContains(t, summaries, taskTwo.ID)
+	require.Equal(t, "fix test A", summaries[taskOne.ID].LastPromptText)
 }
 
 func TestRepositoryListObserverSummaries_FiltersRequestedTaskIDs(t *testing.T) {
