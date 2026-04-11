@@ -234,7 +234,8 @@ const (
 	TaskProgressTmuxStarting     TaskProgressStep = "tmux_starting"
 	TaskProgressAgentLaunching   TaskProgressStep = "agent_launching"
 	TaskProgressTaskCreated      TaskProgressStep = "task_created"
-	TaskProgressSessionOpening   TaskProgressStep = "session_opening"
+	TaskProgressSetupScriptRunning TaskProgressStep = "setup_script_running"
+	TaskProgressSessionOpening     TaskProgressStep = "session_opening"
 )
 
 type TaskProgress struct {

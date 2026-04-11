@@ -14,7 +14,8 @@ type RepoConfig struct {
 }
 
 type SeedConfig struct {
-	Copy []string
+	Copy        []string
+	SetupScript string
 }
 
 type LaunchRequest struct {
@@ -86,6 +87,17 @@ type RepoConfigLoader interface {
 type WorkspaceSeeder interface {
 	SeedWorkspace(ctx context.Context, in SeedWorkspaceInput, progress func(string)) error
 	ValidateSeedPaths(ctx context.Context, repoRoot string, relativePaths []string) error
+}
+
+type RunSetupScriptInput struct {
+	RepoRoot     string
+	WorktreePath string
+	ScriptPath   string
+}
+
+type SetupScriptRunner interface {
+	RunSetupScript(ctx context.Context, in RunSetupScriptInput, output func(string)) error
+	ValidateSetupScript(ctx context.Context, repoRoot string, scriptPath string) error
 }
 
 type TaskWorkspaceBootstrapper interface {
