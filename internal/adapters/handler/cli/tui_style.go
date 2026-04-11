@@ -19,6 +19,7 @@ type IconSet struct {
 	Process   string
 	Prompt    string
 	LLMOutput string
+	Token     string
 }
 
 func nerdFontIcons() IconSet {
@@ -31,6 +32,7 @@ func nerdFontIcons() IconSet {
 		Process:   "\uF1E6",     // nf-fa-plug
 		Prompt:    "\uF007",     // nf-fa-user
 		LLMOutput: "\U000F06A9", // nf-md-robot
+		Token:     "\U000F0426", // nf-md-counter
 	}
 }
 
@@ -44,6 +46,7 @@ func unicodeFallbackIcons() IconSet {
 		Process:   "🔌",
 		Prompt:    "👤",
 		LLMOutput: "🤖",
+		Token:     "🔢",
 	}
 }
 

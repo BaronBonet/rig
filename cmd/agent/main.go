@@ -14,6 +14,7 @@ import (
 	tmuxclient "agent/internal/adapters/client/tmux"
 	agentconfigfs "agent/internal/adapters/filesystem/agentconfig"
 	codexhooksfs "agent/internal/adapters/filesystem/codexhooks"
+	sessionusagefs "agent/internal/adapters/filesystem/sessionusage"
 	workspacefs "agent/internal/adapters/filesystem/workspace"
 	"agent/internal/adapters/handler/cli"
 	observer "agent/internal/adapters/observability/observer"
@@ -76,6 +77,7 @@ func buildDependencies() (cli.Dependencies, error) {
 		),
 		cfg.Service,
 	)
+	service.SetSessionUsageReader(sessionusagefs.NewRepository())
 	service.SetPRStatusChecker(ghclient.NewPRStatusChecker(runner))
 	observerWatcher := observer.NewTMuxWatcher(observer.TMuxWatcherConfig{
 		Tasks:     taskRepo,

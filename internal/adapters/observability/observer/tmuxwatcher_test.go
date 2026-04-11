@@ -248,10 +248,10 @@ func TestTMuxWatcher_OverrideWithHookPhase_CodexPostToolUseContinuePromptYieldsN
 
 	repo := &stubWatcherObserverRepository{}
 	watcher := NewTMuxWatcher(TMuxWatcherConfig{
-		Tasks:     stubObserverTaskLister{tasks: []*core.Task{task}},
-		Monitor:   monitor,
-		Repo:      repo,
-		Hooks:     hooks,
+		Tasks:   stubObserverTaskLister{tasks: []*core.Task{task}},
+		Monitor: monitor,
+		Repo:    repo,
+		Hooks:   hooks,
 		Providers: map[string]core.ProviderClient{"codex": detectingTMuxWatcherProvider{
 			detect: codex.NewRuntimeDetector(2 * time.Second).Detect,
 		}},
@@ -293,10 +293,10 @@ func TestTMuxWatcher_OverrideWithHookPhase_CodexStopUsesPromptFallbackForNeedsIn
 
 	repo := &stubWatcherObserverRepository{}
 	watcher := NewTMuxWatcher(TMuxWatcherConfig{
-		Tasks:     stubObserverTaskLister{tasks: []*core.Task{task}},
-		Monitor:   monitor,
-		Repo:      repo,
-		Hooks:     hooks,
+		Tasks:   stubObserverTaskLister{tasks: []*core.Task{task}},
+		Monitor: monitor,
+		Repo:    repo,
+		Hooks:   hooks,
 		Providers: map[string]core.ProviderClient{"codex": detectingTMuxWatcherProvider{
 			detect: codex.NewRuntimeDetector(2 * time.Second).Detect,
 		}},

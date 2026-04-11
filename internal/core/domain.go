@@ -197,11 +197,32 @@ type HookEventInput struct {
 	StartSource          string
 }
 
+type SessionTokenUsage struct {
+	InputTokens              int
+	OutputTokens             int
+	CachedInputTokens        int
+	CacheCreationInputTokens int
+	CacheReadInputTokens     int
+	ReasoningOutputTokens    int
+	TotalTokens              int
+}
+
+func (u SessionTokenUsage) IsZero() bool {
+	return u.InputTokens == 0 &&
+		u.OutputTokens == 0 &&
+		u.CachedInputTokens == 0 &&
+		u.CacheCreationInputTokens == 0 &&
+		u.CacheReadInputTokens == 0 &&
+		u.ReasoningOutputTokens == 0 &&
+		u.TotalTokens == 0
+}
+
 type TaskView struct {
 	Task        *Task
 	HookSession *HookSessionSummary
 	Observer    *ObserverSummary
 	PR          *PRStatus
+	TokenUsage  *SessionTokenUsage
 }
 
 type TaskProgressStep string

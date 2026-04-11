@@ -43,6 +43,8 @@ type Service struct {
 	bootstrap  TaskWorkspaceBootstrapper
 	cfg        Config
 
+	usageReader SessionUsageReader
+
 	prChecker  PRStatusChecker
 	prCacheTTL time.Duration
 	prCache    map[string]prCacheEntry
@@ -341,6 +343,18 @@ func (s *Service) ListTaskViews(ctx context.Context) ([]*TaskView, error) {
 		if observerSummaries != nil && task != nil {
 			view.Observer = observerSummaries[task.ID]
 		}
+		if s.usageReader != nil && task != nil && view.HookSession != nil {
+			transcriptPath := strings.TrimSpace(view.HookSession.TranscriptPath)
+			if transcriptPath != "" {
+				usage, usageErr := s.usageReader.ReadSessionTokenUsage(ctx, task.Provider, transcriptPath)
+				if usageErr != nil {
+					return nil, usageErr
+				}
+				if usage != nil && !usage.IsZero() {
+					view.TokenUsage = usage
+				}
+			}
+		}
 		views = append(views, view)
 	}
 
@@ -610,6 +624,10 @@ func NewService(
 		bootstrap:  bootstrap,
 		cfg:        cfg,
 	}
+}
+
+func (s *Service) SetSessionUsageReader(reader SessionUsageReader) {
+	s.usageReader = reader
 }
 
 func (s *Service) Doctor(ctx context.Context, cwd string) (DoctorResult, error) {
