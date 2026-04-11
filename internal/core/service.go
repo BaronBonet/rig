@@ -107,7 +107,7 @@ func (s *Service) CreateTaskWithProgress(
 		}
 	}
 
-	if repoConfig.Seed.SetupScript != "" {
+	if repoConfig.Seed.SetupScript != "" && s.setupRunner != nil {
 		if err := s.setupRunner.ValidateSetupScript(ctx, repoCtx.Root, repoConfig.Seed.SetupScript); err != nil {
 			return nil, fmt.Errorf("setup script: %w", err)
 		}
@@ -215,7 +215,7 @@ func (s *Service) CreateTaskWithProgress(
 		}
 	}
 
-	if repoConfig.Seed.SetupScript != "" {
+	if repoConfig.Seed.SetupScript != "" && s.setupRunner != nil {
 		emitTaskProgress(progress, TaskProgress{
 			Step:    TaskProgressSetupScriptRunning,
 			Message: "Running setup script...",
