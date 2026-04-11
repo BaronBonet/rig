@@ -1520,7 +1520,6 @@ func TestModelView_DetailPanelShowsTokenUsageSubSection(t *testing.T) {
 		TokenUsage: &core.SessionTokenUsage{
 			InputTokens:              24000,
 			CacheCreationInputTokens: 8000,
-			CacheReadInputTokens:     5900000,
 			CachedInputTokens:        5900000,
 			OutputTokens:             1200,
 			TotalTokens:              5925200,
@@ -1548,10 +1547,11 @@ func TestModelView_DetailPanelShowsTokenUsageWithoutCacheSplit(t *testing.T) {
 			StartedAt: time.Now().Add(-10 * time.Minute),
 		},
 		TokenUsage: &core.SessionTokenUsage{
-			InputTokens:       240,
-			CachedInputTokens: 80,
-			OutputTokens:      25,
-			TotalTokens:       345,
+			InputTokens:           240,
+			CachedInputTokens:     80,
+			OutputTokens:          25,
+			ReasoningOutputTokens: 9,
+			TotalTokens:           345,
 		},
 	})
 
@@ -1559,6 +1559,7 @@ func TestModelView_DetailPanelShowsTokenUsageWithoutCacheSplit(t *testing.T) {
 	require.Contains(t, rendered, "Token Usage")
 	require.Contains(t, rendered, "input  240")
 	require.Contains(t, rendered, "output 25")
+	require.Contains(t, rendered, "reasoning 9")
 	require.Contains(t, rendered, "cached 80")
 	// No cache split for Codex
 	require.NotContains(t, rendered, "uncached")

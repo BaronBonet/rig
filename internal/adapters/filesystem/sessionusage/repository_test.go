@@ -79,13 +79,11 @@ func TestRepositoryReadSessionTokenUsage_ClaudeDeduplicatesAndSumsAcrossMessages
 	// InputTokens = (10+50) + (5+0) = 65  (raw input + cache creation = full-rate input)
 	// OutputTokens = 200 + 100 = 300
 	// CacheCreationInputTokens = 50 + 0 = 50
-	// CacheReadInputTokens = 100 + 200 = 300
-	// CachedInputTokens = CacheReadInputTokens = 300
+	// CachedInputTokens = 100 + 200 = 300
 	// TotalTokens = 65 + 300 + 300 = 665
 	require.Equal(t, 65, usage.InputTokens)
 	require.Equal(t, 300, usage.OutputTokens)
 	require.Equal(t, 50, usage.CacheCreationInputTokens)
-	require.Equal(t, 300, usage.CacheReadInputTokens)
 	require.Equal(t, 300, usage.CachedInputTokens)
 	require.Equal(t, 665, usage.TotalTokens)
 }

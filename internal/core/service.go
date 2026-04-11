@@ -45,7 +45,7 @@ type Service struct {
 
 	usageReader SessionUsageReader
 
-	prChecker  PRStatusChecker
+	prChecker PRStatusChecker
 	prCacheTTL time.Duration
 	prCache    map[string]prCacheEntry
 	prCacheMu  sync.Mutex
@@ -596,6 +596,10 @@ func (s *Service) InvalidatePRCache() {
 	s.prCacheMu.Unlock()
 }
 
+func (s *Service) SetSessionUsageReader(reader SessionUsageReader) {
+	s.usageReader = reader
+}
+
 func (s *Service) SetPRStatusChecker(checker PRStatusChecker) {
 	s.prChecker = checker
 }
@@ -626,9 +630,6 @@ func NewService(
 	}
 }
 
-func (s *Service) SetSessionUsageReader(reader SessionUsageReader) {
-	s.usageReader = reader
-}
 
 func (s *Service) Doctor(ctx context.Context, cwd string) (DoctorResult, error) {
 	result := DoctorResult{}

@@ -696,7 +696,7 @@ func (m model) selectedTaskDetailView() string {
 	if elapsed != "" {
 		sessCol.WriteString(dimStyle.Render(m.icons.Time) + " " + elapsed + "\n")
 	}
-	if view.TokenUsage != nil && !view.TokenUsage.IsZero() {
+	if view.TokenUsage != nil {
 		u := view.TokenUsage
 		sessCol.WriteString(dimStyle.Render(m.icons.Token) + " Token Usage\n")
 		inputDetail := compactCount(u.InputTokens)
@@ -707,7 +707,11 @@ func (m model) selectedTaskDetailView() string {
 				dimStyle.Render(")")
 		}
 		sessCol.WriteString("    input  " + inputDetail + "\n")
-		sessCol.WriteString("    output " + compactCount(u.OutputTokens) + "\n")
+		outputDetail := compactCount(u.OutputTokens)
+		if u.ReasoningOutputTokens > 0 {
+			outputDetail += dimStyle.Render(" (reasoning ") + compactCount(u.ReasoningOutputTokens) + dimStyle.Render(")")
+		}
+		sessCol.WriteString("    output " + outputDetail + "\n")
 		sessCol.WriteString("    cached " + compactCount(u.CachedInputTokens) + "\n")
 	}
 	if view != nil && view.Observer != nil {
