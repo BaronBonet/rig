@@ -69,7 +69,14 @@ func TestRunner_RunSetupScript(t *testing.T) {
 
 		scriptDir := filepath.Join(repoRoot, "scripts")
 		require.NoError(t, os.MkdirAll(scriptDir, 0o755))
-		require.NoError(t, os.WriteFile(filepath.Join(scriptDir, "setup.sh"), []byte("#!/bin/bash\necho \"line one\"\necho \"line two\"\npwd\n"), 0o755))
+		require.NoError(
+			t,
+			os.WriteFile(
+				filepath.Join(scriptDir, "setup.sh"),
+				[]byte("#!/bin/bash\necho \"line one\"\necho \"line two\"\npwd\n"),
+				0o755,
+			),
+		)
 
 		runner := NewRunner()
 		var lines []string
@@ -93,7 +100,14 @@ func TestRunner_RunSetupScript(t *testing.T) {
 
 		scriptDir := filepath.Join(repoRoot, "scripts")
 		require.NoError(t, os.MkdirAll(scriptDir, 0o755))
-		require.NoError(t, os.WriteFile(filepath.Join(scriptDir, "setup.sh"), []byte("#!/bin/bash\necho \"about to fail\"\nexit 1\n"), 0o755))
+		require.NoError(
+			t,
+			os.WriteFile(
+				filepath.Join(scriptDir, "setup.sh"),
+				[]byte("#!/bin/bash\necho \"about to fail\"\nexit 1\n"),
+				0o755,
+			),
+		)
 
 		runner := NewRunner()
 		var lines []string
@@ -115,7 +129,10 @@ func TestRunner_RunSetupScript(t *testing.T) {
 
 		scriptDir := filepath.Join(repoRoot, "scripts")
 		require.NoError(t, os.MkdirAll(scriptDir, 0o755))
-		require.NoError(t, os.WriteFile(filepath.Join(scriptDir, "setup.sh"), []byte("#!/bin/bash\ntouch marker.txt\n"), 0o755))
+		require.NoError(
+			t,
+			os.WriteFile(filepath.Join(scriptDir, "setup.sh"), []byte("#!/bin/bash\ntouch marker.txt\n"), 0o755),
+		)
 
 		runner := NewRunner()
 		err := runner.RunSetupScript(t.Context(), core.RunSetupScriptInput{
