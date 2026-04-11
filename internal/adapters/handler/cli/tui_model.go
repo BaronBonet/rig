@@ -709,7 +709,13 @@ func (m model) selectedTaskDetailView() string {
 		sessCol.WriteString("    input  " + inputDetail + "\n")
 		outputDetail := compactCount(u.OutputTokens)
 		if u.ReasoningOutputTokens > 0 {
-			outputDetail += dimStyle.Render(" (reasoning ") + compactCount(u.ReasoningOutputTokens) + dimStyle.Render(")")
+			outputDetail += dimStyle.Render(
+				" (reasoning ",
+			) + compactCount(
+				u.ReasoningOutputTokens,
+			) + dimStyle.Render(
+				")",
+			)
 		}
 		sessCol.WriteString("    output " + outputDetail + "\n")
 		sessCol.WriteString("    cached " + compactCount(u.CachedInputTokens) + "\n")
@@ -839,8 +845,13 @@ func taskElapsed(view *core.TaskView) string {
 		return ""
 	}
 	var started time.Time
+	if view.Task != nil && view.Task.Provider == "codex" && !view.Task.CreatedAt.IsZero() {
+		started = view.Task.CreatedAt
+	}
 	if view.HookSession != nil && !view.HookSession.StartedAt.IsZero() {
-		started = view.HookSession.StartedAt
+		if started.IsZero() {
+			started = view.HookSession.StartedAt
+		}
 	}
 	if started.IsZero() && view.Task != nil {
 		started = view.Task.CreatedAt
