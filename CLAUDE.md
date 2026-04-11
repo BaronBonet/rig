@@ -1,0 +1,70 @@
+# CLAUDE.md
+
+This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
+
+## Project
+
+**agent** is a macOS CLI tool (Go) that creates isolated development environments for AI-assisted coding tasks. It manages git worktrees, tmux sessions, and LLM provider integrations (Codex and Claude) to run parallel coding tasks with observability.
+
+## Commands
+
+```bash
+make build              # Build binary to ./local/bin/agent (runs generate first)
+make test               # Run all tests (runs generate first)
+make generate           # Regenerate sqlc + mockery mocks
+make format             # gofmt + goimports + golines (120 char line length)
+make lint-go            # golangci-lint (runs generate first)
+make lint-all           # All linters
+
+# Single package/test
+go test ./internal/core/...
+go test -run TestNewService_CreateTask ./internal/core
+```
+
+`make generate` must run before build/test/lint — it regenerates `internal/adapters/repository/sqlite/generated/` and mock files. The Makefile handles this automatically via target dependencies.
+
+## Architecture
+
+Hexagonal architecture (Ports & Adapters) with dependency injection.
+
+### Core (`internal/core/`)
+- `domain.go` — Central types: `Task`, `TaskStatus` (creating→ready→running→degraded/broken/cleaned), `RuntimeState`, `HookEvent`, `ObserverSummary`
+- `ports.go` — All adapter interfaces: `TaskRepository`, `RepoClient`, `SessionClient`, `ProviderClient`, `PRStatusChecker`, etc.
+- `service.go` — Business logic orchestration. All task lifecycle methods live here.
+- `errors.go` — Domain-specific errors
+
+### Adapters (`internal/adapters/`)
+- `handler/cli/` — Cobra commands + Bubbletea TUI (root command launches interactive task list)
+- `client/tmux/` — Tmux session management
+- `client/git/` — Git worktree operations
+- `client/codex/`, `client/claude/` — LLM provider implementations of `ProviderClient`
+- `client/github/` — PR status checks
+- `repository/sqlite/` — SQLite persistence (goose migrations, sqlc-generated queries)
+- `filesystem/` — Config loading, workspace seeding, session usage reading
+- `observability/` — Hook HTTP server (claude hooks), observer daemon (tmux monitoring)
+
+### Infrastructure (`internal/infrastructure/`)
+- `config.go` — Env var parsing (`AGENT_PROVIDER`, `AGENT_SQLITE_PATH`, `AGENT_HOOK_LISTEN_ADDR`, etc.)
+
+### Entry point (`cmd/agent/main.go`)
+- Wires all adapters into `core.Service` via constructor injection
+
+## Code Generation
+
+- **sqlc**: SQL queries in `internal/adapters/repository/sqlite/queries/` → generated Go in `sqlite/generated/`
+- **mockery**: Generates mocks for interfaces listed in `.mockery.yaml` (in-package, `Mock` prefix, `mock_*.go` files)
+
+Do not manually edit files in `sqlite/generated/` or `mock_*.go` files.
+
+## Testing
+
+Uses `testing` + `testify` (require/assert/mock). Core tests use a `testServiceHarness` pattern (see `internal/core/test_helpers_test.go`) with stub repositories that capture calls for assertion.
+
+Mocked interfaces: `TaskRepository`, `RepoClient`, `SessionClient`, `ProviderClient`, `TaskService` (CLI), `Runner` (exec).
+
+## Linting
+
+- Max line length: 120 characters
+- golangci-lint v2 with extensive linter set (see `.golangci.yaml`)
+- Imports: grouped with `agent/` local module prefix (handled by `goimports -local agent/`)
+- Formatting: gofmt → goimports → golines (120 chars)
