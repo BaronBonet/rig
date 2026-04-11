@@ -903,6 +903,19 @@ func TestModelView_OverviewRowsShowElapsedTimeWithoutClockIcon(t *testing.T) {
 	t.Fatalf("did not find row for %q in view:\n%s", "auth rewrite", view)
 }
 
+func TestTaskElapsed_PrefersCodexTaskCreatedAtOverHookSessionStart(t *testing.T) {
+	task := tuiTask("codex-task")
+	task.Provider = "codex"
+	task.CreatedAt = time.Now().Add(-45 * time.Minute)
+
+	view := taskView(task, &core.HookSessionSummary{
+		TaskID:    task.ID,
+		StartedAt: time.Now().Add(-15 * time.Minute),
+	})
+
+	require.Equal(t, "45m", taskElapsed(view))
+}
+
 func TestModelView_DetailPanelShowsGitAndSessionColumns(t *testing.T) {
 	service := NewMockTaskService(t)
 	task := tuiTask("auth-rewrite")
