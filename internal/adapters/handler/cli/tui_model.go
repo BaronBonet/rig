@@ -1166,10 +1166,11 @@ func providerToggle(selected string) string {
 	var parts []string
 	for _, p := range availableProviders {
 		label := providerIcon(p) + " " + p
+		style := providerStyle(p)
 		if p == selected {
-			parts = append(parts, primaryStyle.Render(label))
+			parts = append(parts, style.Bold(true).Underline(true).Render(label))
 		} else {
-			parts = append(parts, dimStyle.Render(label))
+			parts = append(parts, style.Faint(true).Render(label))
 		}
 	}
 
