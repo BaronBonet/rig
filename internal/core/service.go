@@ -683,6 +683,12 @@ func (s *Service) Doctor(ctx context.Context, cwd string) (DoctorResult, error) 
 		}
 	}
 
+	if s.prChecker != nil {
+		if err := s.prChecker.IsAvailable(ctx); err != nil {
+			result.Notes = append(result.Notes, "gh: gh CLI not found, PR status checks will be unavailable")
+		}
+	}
+
 	if strings.TrimSpace(cwd) != "" {
 		repoCtx, err := s.repo.DetectRepo(ctx, cwd)
 		if err != nil {

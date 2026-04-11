@@ -4,6 +4,7 @@ import (
 	"errors"
 	"testing"
 
+	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
 )
 
@@ -122,4 +123,39 @@ func TestServiceDoctor_ReportsInvalidSeedPathsAsFailure(t *testing.T) {
 	require.NoError(t, err)
 	require.Contains(t, result.Notes, "config: loaded agent.yaml")
 	require.Contains(t, result.Failures, "config: invalid seed path \".env\": not found")
+}
+
+func TestServiceDoctor_NotesGHUnavailable(t *testing.T) {
+	svc := newTestService(t)
+	prChecker := NewMockPRStatusChecker(t)
+	prChecker.EXPECT().IsAvailable(mock.Anything).Return(errors.New("gh not found")).Once()
+	svc.service.SetPRStatusChecker(prChecker)
+
+	result, err := svc.service.Doctor(t.Context(), "/tmp/repo")
+	require.NoError(t, err)
+	require.Contains(t, result.Notes, "gh: gh CLI not found, PR status checks will be unavailable")
+	require.Empty(t, result.Failures)
+}
+
+func TestServiceDoctor_NoNoteWhenGHAvailable(t *testing.T) {
+	svc := newTestService(t)
+	prChecker := NewMockPRStatusChecker(t)
+	prChecker.EXPECT().IsAvailable(mock.Anything).Return(nil).Once()
+	svc.service.SetPRStatusChecker(prChecker)
+
+	result, err := svc.service.Doctor(t.Context(), "/tmp/repo")
+	require.NoError(t, err)
+	for _, note := range result.Notes {
+		require.NotContains(t, note, "gh:")
+	}
+}
+
+func TestServiceDoctor_NoNoteWhenPRCheckerNotSet(t *testing.T) {
+	svc := newTestService(t)
+
+	result, err := svc.service.Doctor(t.Context(), "/tmp/repo")
+	require.NoError(t, err)
+	for _, note := range result.Notes {
+		require.NotContains(t, note, "gh:")
+	}
 }
