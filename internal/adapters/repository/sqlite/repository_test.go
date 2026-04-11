@@ -293,7 +293,7 @@ func TestNewRepository_CreatesFreshDatabaseWithGooseMigrations(t *testing.T) {
 		"task_observer_summaries",
 		"goose_db_version",
 	} {
-		exists, tableErr := tableExists(context.Background(), repo.db, table)
+		exists, tableErr := testSchemaObjectExists(t, repo.db, "table", table)
 		require.NoError(t, tableErr)
 		require.True(t, exists, table)
 	}
@@ -306,6 +306,51 @@ func TestNewRepository_CreatesFreshDatabaseWithGooseMigrations(t *testing.T) {
 	).Scan(&versionID, &isApplied))
 	require.EqualValues(t, 1, versionID)
 	require.True(t, isApplied)
+}
+
+func TestNewRepository_ReopensInitializedDatabaseWithoutReapplyingMigrations(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "state.db")
+
+	firstRepo, err := NewRepository(Config{Path: path})
+	require.NoError(t, err)
+	require.NotNil(t, firstRepo)
+	require.NoError(t, firstRepo.IsAvailable(context.Background()))
+
+	require.NoError(t, firstRepo.CreateTask(context.Background(), &core.Task{
+		ID:               "task-1",
+		Prompt:           "keep existing rows",
+		DisplayName:      "task 1",
+		Slug:             "task-1",
+		RepoRoot:         "/tmp/repo",
+		RepoName:         "repo",
+		BaseBranch:       "main",
+		BranchName:       "feat/task-1",
+		WorktreePath:     "/tmp/repo-task-1",
+		TmuxSession:      "repo-task-1",
+		AgentWindowName:  defaultAgentWindowName,
+		EditorWindowName: defaultEditorWindowName,
+		Provider:         "codex",
+		Status:           core.TaskStatusReady,
+		CreatedAt:        time.Now().UTC(),
+		UpdatedAt:        time.Now().UTC(),
+	}))
+	require.NoError(t, firstRepo.db.Close())
+
+	reopenedRepo, err := NewRepository(Config{Path: path})
+	require.NoError(t, err)
+	require.NotNil(t, reopenedRepo)
+	require.NoError(t, reopenedRepo.IsAvailable(context.Background()))
+
+	got, err := reopenedRepo.GetTask(context.Background(), "task-1")
+	require.NoError(t, err)
+	require.Equal(t, "task-1", got.ID)
+
+	var versionCount int
+	require.NoError(t, reopenedRepo.db.QueryRowContext(
+		context.Background(),
+		`select count(*) from goose_db_version where version_id = 1 and is_applied = 1`,
+	).Scan(&versionCount))
+	require.Equal(t, 1, versionCount)
 }
 
 func TestNewRepository_ReturnsUnavailableRepositoryForInvalidConfig(t *testing.T) {
@@ -588,4 +633,17 @@ func tableColumns(t *testing.T, db *sql.DB, table string) map[string]struct{} {
 	require.NoError(t, rows.Err())
 
 	return columns
+}
+
+func testSchemaObjectExists(t *testing.T, db *sql.DB, objectType, name string) (bool, error) {
+	t.Helper()
+
+	var count int
+	err := db.QueryRowContext(
+		context.Background(),
+		`select count(*) from sqlite_master where type = ? and name = ?`,
+		objectType,
+		name,
+	).Scan(&count)
+	return count > 0, err
 }
