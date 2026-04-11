@@ -261,6 +261,69 @@ func TestServiceCreateTaskWithProgress_UsesLLMSuggestedBranchType(t *testing.T) 
 	require.Equal(t, "billing retry flow", task.DisplayName)
 }
 
+func TestServiceCreateTaskWithProgress_MarksBrokenWhenSetupScriptFails(t *testing.T) {
+	svc := newTestService(t)
+	svc.configRepo.repoConfig = RepoConfig{
+		Seed: SeedConfig{
+			SetupScript: "scripts/setup.sh",
+		},
+	}
+	svc.setupRunner.runErr = errors.New("exit status 1")
+
+	task, err := svc.service.CreateTaskWithProgress(t.Context(), NewTaskInput{
+		Cwd:                  "/tmp/repo",
+		Prompt:               "setup fails",
+		ConfirmedDisplayName: "setup fails",
+	}, CreateTaskOptions{}, nil)
+
+	require.Error(t, err)
+	require.Equal(t, TaskStatusBroken, task.Status)
+	require.Contains(t, task.LastError, "setup script")
+	require.Nil(t, svc.sessionClient.startedTask)
+}
+
+func TestServiceCreateTaskWithProgress_FailsBeforeCreatingTaskWhenSetupScriptValidationFails(t *testing.T) {
+	svc := newTestService(t)
+	svc.configRepo.repoConfig = RepoConfig{
+		Seed: SeedConfig{
+			SetupScript: "scripts/setup.sh",
+		},
+	}
+	svc.setupRunner.validateErr = errors.New("script not found")
+
+	task, err := svc.service.CreateTaskWithProgress(t.Context(), NewTaskInput{
+		Cwd:                  "/tmp/repo",
+		Prompt:               "validate fails",
+		ConfirmedDisplayName: "validate fails",
+	}, CreateTaskOptions{}, nil)
+
+	require.Error(t, err)
+	require.Nil(t, task)
+	require.EqualError(t, err, "setup script: script not found")
+	require.Nil(t, svc.taskRepo.createdTask)
+	require.Nil(t, svc.repoClient.createdTask)
+}
+
+func TestServiceCreateTaskWithProgress_RunsSetupScriptEvenWithoutCopyPaths(t *testing.T) {
+	svc := newTestService(t)
+	svc.configRepo.repoConfig = RepoConfig{
+		Seed: SeedConfig{
+			SetupScript: "scripts/setup.sh",
+		},
+	}
+
+	task, err := svc.service.CreateTaskWithProgress(t.Context(), NewTaskInput{
+		Cwd:                  "/tmp/repo",
+		Prompt:               "setup only",
+		ConfirmedDisplayName: "setup only",
+	}, CreateTaskOptions{}, nil)
+
+	require.NoError(t, err)
+	require.Equal(t, TaskStatusRunning, task.Status)
+	require.True(t, svc.setupRunner.runCalled)
+	require.Equal(t, "scripts/setup.sh", svc.setupRunner.runScriptPath)
+}
+
 func TestServiceCreateTaskWithProgress_RunsSetupScriptAfterSeedingBeforeTmux(t *testing.T) {
 	svc := newTestService(t)
 	svc.configRepo.repoConfig = RepoConfig{

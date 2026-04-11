@@ -80,6 +80,36 @@ func TestServiceDoctor_ReportsInvalidRepoConfigAsFailure(t *testing.T) {
 	require.Contains(t, result.Failures, "config: parse agent.yaml: invalid yaml")
 }
 
+func TestServiceDoctor_ReportsValidSetupScriptAsNote(t *testing.T) {
+	svc := newTestService(t)
+	svc.configRepo.repoConfig = RepoConfig{
+		Exists: true,
+		Seed: SeedConfig{
+			SetupScript: "scripts/setup.sh",
+		},
+	}
+
+	result, err := svc.service.Doctor(t.Context(), "/tmp/repo")
+	require.NoError(t, err)
+	require.Contains(t, result.Notes, "config: setup script ok: scripts/setup.sh")
+	require.Empty(t, result.Failures)
+}
+
+func TestServiceDoctor_ReportsInvalidSetupScriptAsFailure(t *testing.T) {
+	svc := newTestService(t)
+	svc.configRepo.repoConfig = RepoConfig{
+		Exists: true,
+		Seed: SeedConfig{
+			SetupScript: "scripts/missing.sh",
+		},
+	}
+	svc.setupRunner.validateErr = errors.New("setup script \"scripts/missing.sh\" not found")
+
+	result, err := svc.service.Doctor(t.Context(), "/tmp/repo")
+	require.NoError(t, err)
+	require.Contains(t, result.Failures, "config: setup script \"scripts/missing.sh\" not found")
+}
+
 func TestServiceDoctor_ReportsInvalidSeedPathsAsFailure(t *testing.T) {
 	svc := newTestService(t)
 	svc.configRepo.repoConfig = RepoConfig{
