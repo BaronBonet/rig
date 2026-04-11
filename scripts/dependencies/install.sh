@@ -20,5 +20,6 @@ mv -f "${TMP_GOBIN}/golangci-lint" "${DEST_DIR}/golangci-lint"
 echo "Downloading Go module and tool dependencies..."
 go mod download
 go tool sqlc version >/dev/null
+go list -m github.com/pressly/goose/v3 >/dev/null
 
 echo "All dependencies installed! ✨"

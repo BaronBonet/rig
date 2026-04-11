@@ -5,9 +5,11 @@ import (
 	"database/sql"
 	"fmt"
 	"io/fs"
-	"path/filepath"
-	"sort"
+	"slices"
 	"strings"
+	"testing/fstest"
+
+	"github.com/pressly/goose/v3"
 )
 
 func applyBootstrapSQL(ctx context.Context, db *sql.DB, files fs.FS, path string) error {
@@ -19,6 +21,45 @@ func applyBootstrapSQL(ctx context.Context, db *sql.DB, files fs.FS, path string
 		return fmt.Errorf("apply bootstrap %s: %w", path, err)
 	}
 	return nil
+}
+
+func applyGooseMigrations(ctx context.Context, db *sql.DB, files fs.FS, dir string) error {
+	goose.SetBaseFS(files)
+	defer goose.SetBaseFS(nil)
+
+	if err := goose.SetDialect("sqlite"); err != nil {
+		return fmt.Errorf("set goose sqlite dialect: %w", err)
+	}
+	if err := goose.UpContext(ctx, db, dir); err != nil {
+		return fmt.Errorf("apply goose migrations from %s: %w", dir, err)
+	}
+	return nil
+}
+
+func applyMigrations(ctx context.Context, db *sql.DB, files fs.FS, dir string) error {
+	entries, err := fs.ReadDir(files, dir)
+	if err != nil {
+		return fmt.Errorf("read migrations dir %s: %w", dir, err)
+	}
+
+	gooseFiles := make(fstest.MapFS, len(entries))
+	for _, entry := range entries {
+		if entry.IsDir() || !strings.HasSuffix(entry.Name(), ".sql") {
+			continue
+		}
+
+		path := dir + "/" + entry.Name()
+		content, err := fs.ReadFile(files, path)
+		if err != nil {
+			return fmt.Errorf("read migration %s: %w", path, err)
+		}
+
+		gooseFiles[path] = &fstest.MapFile{
+			Data: []byte("-- +goose Up\n" + string(content) + "\n-- +goose Down\n"),
+		}
+	}
+
+	return applyGooseMigrations(ctx, db, gooseFiles, dir)
 }
 
 func schemaObjectExists(ctx context.Context, db *sql.DB, objectType, name string) (bool, error) {
@@ -98,9 +139,6 @@ func columnSupportsConflictTarget(ctx context.Context, db *sql.DB, table, column
 	if err := rows.Err(); err != nil {
 		return false, err
 	}
-	if err := rows.Close(); err != nil {
-		return false, err
-	}
 	if targetPrimaryKeyOrder == 1 && primaryKeyCount == 1 {
 		return true, nil
 	}
@@ -116,7 +154,8 @@ func columnSupportsConflictTarget(ctx context.Context, db *sql.DB, table, column
 		unique  int
 		partial int
 	}
-	indexes := make([]indexInfo, 0)
+
+	var indexes []indexInfo
 	for indexRows.Next() {
 		var (
 			seq     int
@@ -131,9 +170,6 @@ func columnSupportsConflictTarget(ctx context.Context, db *sql.DB, table, column
 		indexes = append(indexes, indexInfo{name: name, unique: unique, partial: partial})
 	}
 	if err := indexRows.Err(); err != nil {
-		return false, err
-	}
-	if err := indexRows.Close(); err != nil {
 		return false, err
 	}
 
@@ -218,7 +254,10 @@ func uniqueIndexColumn(ctx context.Context, db *sql.DB, index string) (string, b
 }
 
 func allTablesExist(ctx context.Context, db *sql.DB, tables ...string) (bool, error) {
-	for _, table := range tables {
+	sortedTables := slices.Clone(tables)
+	slices.Sort(sortedTables)
+
+	for _, table := range sortedTables {
 		exists, err := tableExists(ctx, db, table)
 		if err != nil {
 			return false, err
@@ -232,7 +271,10 @@ func allTablesExist(ctx context.Context, db *sql.DB, tables ...string) (bool, er
 }
 
 func allIndexesExist(ctx context.Context, db *sql.DB, indexes ...string) (bool, error) {
-	for _, index := range indexes {
+	sortedIndexes := slices.Clone(indexes)
+	slices.Sort(sortedIndexes)
+
+	for _, index := range sortedIndexes {
 		exists, err := indexExists(ctx, db, index)
 		if err != nil {
 			return false, err
@@ -246,7 +288,10 @@ func allIndexesExist(ctx context.Context, db *sql.DB, indexes ...string) (bool, 
 }
 
 func allColumnsExist(ctx context.Context, db *sql.DB, table string, columns ...string) (bool, error) {
-	for _, column := range columns {
+	sortedColumns := slices.Clone(columns)
+	slices.Sort(sortedColumns)
+
+	for _, column := range sortedColumns {
 		exists, err := columnExists(ctx, db, table, column)
 		if err != nil {
 			return false, err
@@ -257,363 +302,4 @@ func allColumnsExist(ctx context.Context, db *sql.DB, table string, columns ...s
 	}
 
 	return true, nil
-}
-
-func ensureTaskMetadataColumns(ctx context.Context, db *sql.DB) error {
-	for _, column := range []struct {
-		name string
-		stmt string
-	}{
-		{name: "repo_name", stmt: `alter table tasks add column repo_name text not null default ''`},
-		{name: "agent_window_name", stmt: `alter table tasks add column agent_window_name text not null default 'agent'`},
-		{name: "editor_window_name", stmt: `alter table tasks add column editor_window_name text not null default 'editor'`},
-		{name: "agent_window_exists", stmt: `alter table tasks add column agent_window_exists integer not null default 0`},
-		{name: "editor_window_exists", stmt: `alter table tasks add column editor_window_exists integer not null default 0`},
-	} {
-		exists, err := columnExists(ctx, db, "tasks", column.name)
-		if err != nil {
-			return err
-		}
-		if exists {
-			continue
-		}
-		if _, err := db.ExecContext(ctx, column.stmt); err != nil {
-			return err
-		}
-	}
-
-	return nil
-}
-
-func tableColumnState(ctx context.Context, db *sql.DB, table string, columns ...string) (bool, bool, error) {
-	exists, err := tableExists(ctx, db, table)
-	if err != nil {
-		return false, false, err
-	}
-	if !exists {
-		return false, false, nil
-	}
-
-	complete, err := allColumnsExist(ctx, db, table, columns...)
-	if err != nil {
-		return false, false, err
-	}
-
-	return true, complete, nil
-}
-
-func seedLegacyMigrationState(ctx context.Context, db *sql.DB) error {
-	if _, err := db.ExecContext(ctx, `
-create table if not exists schema_migrations (
-  version text primary key,
-  applied_at text not null
-)`); err != nil {
-		return fmt.Errorf("create schema_migrations table: %w", err)
-	}
-
-	tasksExists, tasksComplete, err := tableColumnState(
-		ctx,
-		db,
-		"tasks",
-		"id",
-		"prompt",
-		"display_name",
-		"slug",
-		"repo_root",
-		"base_branch",
-		"branch_name",
-		"worktree_path",
-		"tmux_session",
-		"provider",
-		"status",
-		"worktree_exists",
-		"branch_exists",
-		"session_exists",
-		"last_error",
-		"created_at",
-		"updated_at",
-		"last_reconciled_at",
-	)
-	if err != nil {
-		return fmt.Errorf("check initial tasks table: %w", err)
-	}
-	if tasksExists && !tasksComplete {
-		return fmt.Errorf("incomplete managed schema for tasks table")
-	}
-
-	eventsExists, eventsComplete, err := tableColumnState(
-		ctx,
-		db,
-		"events",
-		"id",
-		"task_id",
-		"event_type",
-		"payload",
-		"created_at",
-	)
-	if err != nil {
-		return fmt.Errorf("check initial events table: %w", err)
-	}
-	if eventsExists && !eventsComplete {
-		return fmt.Errorf("incomplete managed schema for events table")
-	}
-	eventIDPrimaryKey := false
-	if eventsExists && eventsComplete {
-		eventIDPrimaryKey, err = columnIsExactIntegerPrimaryKey(ctx, db, "events", "id")
-		if err != nil {
-			return fmt.Errorf("check events.id primary key: %w", err)
-		}
-		if !eventIDPrimaryKey {
-			return fmt.Errorf("incomplete managed schema for events.id primary key")
-		}
-	}
-	initialTasksAndEventsComplete := tasksComplete && eventsComplete
-
-	if tasksExists {
-		if err := ensureTaskMetadataColumns(ctx, db); err != nil {
-			return fmt.Errorf("repair task metadata columns: %w", err)
-		}
-	}
-	taskMetadataColumnsComplete, err := allColumnsExist(
-		ctx,
-		db,
-		"tasks",
-		"repo_name",
-		"agent_window_name",
-		"editor_window_name",
-		"agent_window_exists",
-		"editor_window_exists",
-	)
-	if err != nil {
-		return fmt.Errorf("check task metadata columns: %w", err)
-	}
-	if tasksExists && !taskMetadataColumnsComplete {
-		return fmt.Errorf("incomplete managed schema for task metadata columns")
-	}
-
-	hookEventsExists, hookEventColumnsComplete, err := tableColumnState(
-		ctx,
-		db,
-		"task_hook_events",
-		"id",
-		"task_id",
-		"session_id",
-		"turn_id",
-		"event_name",
-		"occurred_at",
-		"raw_payload_json",
-		"last_assistant_message",
-		"prompt_preview",
-		"command_preview",
-		"command_result_preview",
-		"tool_use_id",
-	)
-	if err != nil {
-		return fmt.Errorf("check task_hook_events columns: %w", err)
-	}
-	if hookEventsExists && !hookEventColumnsComplete {
-		return fmt.Errorf("incomplete managed schema for task_hook_events table")
-	}
-	hookEventIDPrimaryKey := false
-	if hookEventsExists && hookEventColumnsComplete {
-		hookEventIDPrimaryKey, err = columnIsExactIntegerPrimaryKey(ctx, db, "task_hook_events", "id")
-		if err != nil {
-			return fmt.Errorf("check task_hook_events.id primary key: %w", err)
-		}
-		if !hookEventIDPrimaryKey {
-			return fmt.Errorf("incomplete managed schema for task_hook_events.id primary key")
-		}
-	}
-
-	hookSessionsExists, hookSessionColumnsComplete, err := tableColumnState(
-		ctx,
-		db,
-		"task_hook_sessions",
-		"task_id",
-		"session_id",
-		"model",
-		"cwd",
-		"transcript_path",
-		"start_source",
-		"current_turn_id",
-		"last_event_name",
-		"runtime_phase",
-		"started_at",
-		"last_activity_at",
-		"last_stop_at",
-		"last_prompt_preview",
-		"last_command_preview",
-		"last_command_result_preview",
-		"last_assistant_message",
-		"command_count",
-		"updated_at",
-	)
-	if err != nil {
-		return fmt.Errorf("check task_hook_sessions columns: %w", err)
-	}
-	if hookSessionsExists && !hookSessionColumnsComplete {
-		return fmt.Errorf("incomplete managed schema for task_hook_sessions table")
-	}
-	hookSessionTaskIDConflictTarget := false
-	if hookSessionsExists && hookSessionColumnsComplete {
-		hookSessionTaskIDConflictTarget, err = columnSupportsConflictTarget(ctx, db, "task_hook_sessions", "task_id")
-		if err != nil {
-			return fmt.Errorf("check task_hook_sessions.task_id uniqueness: %w", err)
-		}
-		if !hookSessionTaskIDConflictTarget {
-			return fmt.Errorf("incomplete managed schema for task_hook_sessions.task_id uniqueness")
-		}
-	}
-
-	observerSummariesExists, observerSummaryColumnsComplete, err := tableColumnState(
-		ctx,
-		db,
-		"task_observer_summaries",
-		"task_id",
-		"display_status",
-		"display_activity",
-		"process_alive",
-		"last_runtime_observed_at",
-		"updated_at",
-	)
-	if err != nil {
-		return fmt.Errorf("check task_observer_summaries columns: %w", err)
-	}
-	if observerSummariesExists && !observerSummaryColumnsComplete {
-		return fmt.Errorf("incomplete managed schema for task_observer_summaries table")
-	}
-	observerTaskIDConflictTarget := false
-	if observerSummariesExists && observerSummaryColumnsComplete {
-		observerTaskIDConflictTarget, err = columnSupportsConflictTarget(
-			ctx,
-			db,
-			"task_observer_summaries",
-			"task_id",
-		)
-		if err != nil {
-			return fmt.Errorf("check task_observer_summaries.task_id uniqueness: %w", err)
-		}
-		if !observerTaskIDConflictTarget {
-			return fmt.Errorf("incomplete managed schema for task_observer_summaries.task_id uniqueness")
-		}
-	}
-
-	hookObservabilityIndexesComplete, err := allIndexesExist(
-		ctx,
-		db,
-		"idx_task_hook_events_task_occurred_at",
-		"idx_task_hook_sessions_session_id",
-	)
-	if err != nil {
-		return fmt.Errorf("check hook observability indexes: %w", err)
-	}
-	hookObservabilityComplete := hookEventColumnsComplete &&
-		hookEventIDPrimaryKey &&
-		hookSessionColumnsComplete &&
-		hookSessionTaskIDConflictTarget &&
-		observerSummaryColumnsComplete &&
-		observerTaskIDConflictTarget &&
-		hookObservabilityIndexesComplete
-
-	managedMigrations := []struct {
-		version  string
-		complete bool
-	}{
-		{version: "000001_initial_tasks_and_events", complete: initialTasksAndEventsComplete},
-		{version: "000002_add_task_metadata_columns", complete: taskMetadataColumnsComplete},
-		{version: "000003_add_hook_observability_tables", complete: hookObservabilityComplete},
-	}
-
-	tx, err := db.BeginTx(ctx, nil)
-	if err != nil {
-		return fmt.Errorf("begin schema_migrations normalization: %w", err)
-	}
-
-	if _, err := tx.ExecContext(ctx, `delete from schema_migrations where version = ?`, "000001_sqlc_bootstrap"); err != nil {
-		_ = tx.Rollback()
-		return fmt.Errorf("remove legacy bootstrap migration row: %w", err)
-	}
-
-	for _, migration := range managedMigrations {
-		if !migration.complete {
-			if _, err := tx.ExecContext(ctx, `delete from schema_migrations where version = ?`, migration.version); err != nil {
-				_ = tx.Rollback()
-				return fmt.Errorf("remove stale migration %s: %w", migration.version, err)
-			}
-			continue
-		}
-
-		if _, err := tx.ExecContext(ctx, `
-insert into schema_migrations(version, applied_at)
-values (?, strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
-on conflict(version) do nothing`, migration.version); err != nil {
-			_ = tx.Rollback()
-			return fmt.Errorf("seed migration %s: %w", migration.version, err)
-		}
-	}
-
-	if err := tx.Commit(); err != nil {
-		return fmt.Errorf("commit schema_migrations normalization: %w", err)
-	}
-
-	return nil
-}
-
-func applyMigrations(ctx context.Context, db *sql.DB, files fs.FS, dir string) error {
-	if _, err := db.ExecContext(ctx, `
-create table if not exists schema_migrations (
-  version text primary key,
-  applied_at text not null
-)`); err != nil {
-		return fmt.Errorf("create schema_migrations table: %w", err)
-	}
-
-	entries, err := fs.ReadDir(files, dir)
-	if err != nil {
-		return fmt.Errorf("read migrations dir %s: %w", dir, err)
-	}
-
-	names := make([]string, 0, len(entries))
-	for _, entry := range entries {
-		if entry.IsDir() || !strings.HasSuffix(entry.Name(), ".sql") {
-			continue
-		}
-		names = append(names, entry.Name())
-	}
-	sort.Strings(names)
-
-	for _, name := range names {
-		version := strings.TrimSuffix(name, filepath.Ext(name))
-		var exists int
-		if err := db.QueryRowContext(ctx, `select count(*) from schema_migrations where version = ?`, version).Scan(&exists); err != nil {
-			return fmt.Errorf("check migration %s: %w", name, err)
-		}
-		if exists > 0 {
-			continue
-		}
-
-		content, err := fs.ReadFile(files, filepath.Join(dir, name))
-		if err != nil {
-			return fmt.Errorf("read migration %s: %w", filepath.Join(dir, name), err)
-		}
-
-		tx, err := db.BeginTx(ctx, nil)
-		if err != nil {
-			return fmt.Errorf("begin migration %s: %w", name, err)
-		}
-		if _, err := tx.ExecContext(ctx, string(content)); err != nil {
-			_ = tx.Rollback()
-			return fmt.Errorf("apply migration %s: %w", name, err)
-		}
-		if _, err := tx.ExecContext(ctx, `
-insert into schema_migrations(version, applied_at) values (?, strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))`, version); err != nil {
-			_ = tx.Rollback()
-			return fmt.Errorf("record migration %s: %w", name, err)
-		}
-		if err := tx.Commit(); err != nil {
-			return fmt.Errorf("commit migration %s: %w", name, err)
-		}
-	}
-
-	return nil
 }

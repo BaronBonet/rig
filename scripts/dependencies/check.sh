@@ -22,4 +22,9 @@ if [[ "${ACTUAL_SQLC_VERSION}" != "${SQLC_VERSION}" ]]; then
 	exit_code=1
 fi
 
+if ! go list -m github.com/pressly/goose/v3 >/dev/null 2>&1; then
+	echo "github.com/pressly/goose/v3 is not available"
+	exit_code=1
+fi
+
 exit ${exit_code}
