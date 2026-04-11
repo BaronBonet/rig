@@ -662,7 +662,6 @@ func NewService(
 	}
 }
 
-
 func (s *Service) Doctor(ctx context.Context, cwd string) (DoctorResult, error) {
 	result := DoctorResult{}
 
@@ -704,10 +703,11 @@ func (s *Service) Doctor(ctx context.Context, cwd string) (DoctorResult, error) 
 					}
 				}
 				if repoConfig.Seed.SetupScript != "" && s.setupRunner != nil {
-					if err := s.setupRunner.ValidateSetupScript(ctx, repoCtx.Root, repoConfig.Seed.SetupScript); err != nil {
+					scriptPath := repoConfig.Seed.SetupScript
+					if err := s.setupRunner.ValidateSetupScript(ctx, repoCtx.Root, scriptPath); err != nil {
 						result.Failures = append(result.Failures, "config: "+err.Error())
 					} else {
-						result.Notes = append(result.Notes, "config: setup script ok: "+repoConfig.Seed.SetupScript)
+						result.Notes = append(result.Notes, "config: setup script ok: "+scriptPath)
 					}
 				}
 			}
