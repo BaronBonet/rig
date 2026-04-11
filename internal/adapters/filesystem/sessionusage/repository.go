@@ -31,6 +31,27 @@ func (r *Repository) ReadSessionTokenUsage(
 	}
 }
 
+// scanTranscriptLines opens a JSONL transcript file and calls fn for each line.
+// It handles file opening, buffered scanning, and context cancellation.
+func scanTranscriptLines(ctx context.Context, path string, fn func(line []byte)) error {
+	f, err := os.Open(path)
+	if err != nil {
+		return nil
+	}
+	defer f.Close()
+
+	scanner := bufio.NewScanner(f)
+	scanner.Buffer(make([]byte, 0, 256*1024), 1024*1024)
+
+	for scanner.Scan() {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		fn(scanner.Bytes())
+	}
+	return nil
+}
+
 type codexTranscriptEnvelope struct {
 	Type    string          `json:"type"`
 	Payload json.RawMessage `json:"payload"`
@@ -50,45 +71,28 @@ type codexEventPayload struct {
 }
 
 func readCodexTokenUsage(ctx context.Context, transcriptPath string) (*core.SessionTokenUsage, error) {
-	if strings.TrimSpace(transcriptPath) == "" {
-		return nil, nil
-	}
-
-	f, err := os.Open(transcriptPath)
-	if err != nil {
-		return nil, nil
-	}
-	defer f.Close()
-
 	var latest *core.SessionTokenUsage
-	scanner := bufio.NewScanner(f)
-	scanner.Buffer(make([]byte, 0, 256*1024), 1024*1024)
 
-	for scanner.Scan() {
-		if err := ctx.Err(); err != nil {
-			return nil, err
-		}
-
-		line := scanner.Bytes()
+	err := scanTranscriptLines(ctx, transcriptPath, func(line []byte) {
 		var envelope codexTranscriptEnvelope
 		if err := json.Unmarshal(line, &envelope); err != nil {
-			continue
+			return
 		}
 		if envelope.Type != "event_msg" || len(envelope.Payload) == 0 {
-			continue
+			return
 		}
 
 		var payload codexEventPayload
 		if err := json.Unmarshal(envelope.Payload, &payload); err != nil {
-			continue
+			return
 		}
 		if payload.Type != "token_count" {
-			continue
+			return
 		}
 
 		usage := payload.Info.TotalTokenUsage
 		if usage.TotalTokens == 0 && usage.InputTokens == 0 && usage.OutputTokens == 0 {
-			continue
+			return
 		}
 
 		latest = &core.SessionTokenUsage{
@@ -98,9 +102,9 @@ func readCodexTokenUsage(ctx context.Context, transcriptPath string) (*core.Sess
 			ReasoningOutputTokens: usage.ReasoningOutputTokens,
 			TotalTokens:           usage.TotalTokens,
 		}
-	}
+	})
 
-	return latest, nil
+	return latest, err
 }
 
 // Claude transcript types. Each JSONL line may be an assistant message with
@@ -126,43 +130,29 @@ type claudeUsage struct {
 }
 
 func readClaudeTokenUsage(ctx context.Context, transcriptPath string) (*core.SessionTokenUsage, error) {
-	if strings.TrimSpace(transcriptPath) == "" {
-		return nil, nil
-	}
-
-	f, err := os.Open(transcriptPath)
-	if err != nil {
-		return nil, nil
-	}
-	defer f.Close()
-
 	// Track the last usage seen per unique message ID to deduplicate
 	// streaming updates that repeat the same message with growing output.
 	lastUsageByID := make(map[string]*claudeUsage)
-	scanner := bufio.NewScanner(f)
-	scanner.Buffer(make([]byte, 0, 256*1024), 1024*1024)
 
-	for scanner.Scan() {
-		if err := ctx.Err(); err != nil {
-			return nil, err
-		}
-
-		line := scanner.Bytes()
+	err := scanTranscriptLines(ctx, transcriptPath, func(line []byte) {
 		var entry claudeTranscriptLine
 		if err := json.Unmarshal(line, &entry); err != nil {
-			continue
+			return
 		}
 		if entry.Message == nil || entry.Message.Usage == nil || entry.Message.ID == "" {
-			continue
+			return
 		}
 
 		u := entry.Message.Usage
 		if u.InputTokens == 0 && u.OutputTokens == 0 &&
 			u.CacheReadInputTokens == 0 && u.CacheCreationInputTokens == 0 {
-			continue
+			return
 		}
 
 		lastUsageByID[entry.Message.ID] = u
+	})
+	if err != nil {
+		return nil, err
 	}
 
 	if len(lastUsageByID) == 0 {
@@ -174,8 +164,7 @@ func readClaudeTokenUsage(ctx context.Context, transcriptPath string) (*core.Ses
 		total.InputTokens += u.InputTokens + u.CacheCreationInputTokens
 		total.OutputTokens += u.OutputTokens
 		total.CacheCreationInputTokens += u.CacheCreationInputTokens
-		total.CacheReadInputTokens += u.CacheReadInputTokens
-		total.CachedInputTokens = total.CacheReadInputTokens
+		total.CachedInputTokens += u.CacheReadInputTokens
 	}
 	total.TotalTokens = total.InputTokens + total.OutputTokens + total.CachedInputTokens
 

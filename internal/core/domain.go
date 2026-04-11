@@ -202,7 +202,6 @@ type SessionTokenUsage struct {
 	OutputTokens             int
 	CachedInputTokens        int
 	CacheCreationInputTokens int
-	CacheReadInputTokens     int
 	ReasoningOutputTokens    int
 	TotalTokens              int
 }
@@ -212,7 +211,6 @@ func (u SessionTokenUsage) IsZero() bool {
 		u.OutputTokens == 0 &&
 		u.CachedInputTokens == 0 &&
 		u.CacheCreationInputTokens == 0 &&
-		u.CacheReadInputTokens == 0 &&
 		u.ReasoningOutputTokens == 0 &&
 		u.TotalTokens == 0
 }
