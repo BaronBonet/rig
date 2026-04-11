@@ -14,6 +14,8 @@ jobs:
     steps:
       - name: Check out repository
         uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
       - name: Set up Go
         uses: actions/setup-go@v5
@@ -21,20 +23,13 @@ jobs:
           go-version-file: go.mod
           cache: true
 
-      - name: Install dependencies
-        run: make dependencies install
-
       - name: Run tests
         run: make test
 
-      - name: Build release archives
-        env:
-          VERSION: ${{ github.ref_name }}
-        run: sh scripts/release/build.sh
-
-      - name: Publish GitHub release
-        uses: softprops/action-gh-release@v2
+      - name: Run GoReleaser
+        uses: goreleaser/goreleaser-action@v6
         with:
-          files: |
-            dist/*.tar.gz
-            dist/checksums.txt
+          version: "~> v2"
+          args: release --clean
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
