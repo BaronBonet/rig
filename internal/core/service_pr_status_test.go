@@ -11,6 +11,8 @@ import (
 
 type stubPRStatusChecker func(context.Context, string, string) (*PRStatus, error)
 
+func (s stubPRStatusChecker) IsAvailable(_ context.Context) error { return nil }
+
 func (s stubPRStatusChecker) CheckPRStatus(ctx context.Context, repoRoot string, branchName string) (*PRStatus, error) {
 	return s(ctx, repoRoot, branchName)
 }

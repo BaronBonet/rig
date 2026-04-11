@@ -17,6 +17,11 @@ func NewPRStatusChecker(runner execx.Runner) *PRStatusChecker {
 	return &PRStatusChecker{runner: runner}
 }
 
+func (c *PRStatusChecker) IsAvailable(ctx context.Context) error {
+	_, err := c.runner.Run(ctx, "", "gh", "--version")
+	return err
+}
+
 func (c *PRStatusChecker) CheckPRStatus(
 	ctx context.Context,
 	repoRoot string,
