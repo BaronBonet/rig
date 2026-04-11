@@ -37,6 +37,48 @@ latest_tag() {
     echo "$tag"
 }
 
+detect_shell_rc() {
+    shell_name="$(basename "${SHELL:-}")"
+    case "$shell_name" in
+        zsh)
+            echo "$HOME/.zshrc"
+            ;;
+        bash)
+            if [ "$(uname -s)" = "Darwin" ] && [ -f "$HOME/.bash_profile" ]; then
+                echo "$HOME/.bash_profile"
+            else
+                echo "$HOME/.bashrc"
+            fi
+            ;;
+        *)
+            echo ""
+            ;;
+    esac
+}
+
+ensure_on_path() {
+    case ":${PATH}:" in
+        *":${BIN_DIR}:"*) return ;;
+    esac
+
+    export_line="export PATH=\"${BIN_DIR}:\$PATH\""
+    rc_file="$(detect_shell_rc)"
+
+    if [ -z "$rc_file" ]; then
+        echo "Add ${BIN_DIR} to your PATH:"
+        echo "  $export_line"
+        return
+    fi
+
+    if [ -f "$rc_file" ] && grep -qF "$export_line" "$rc_file"; then
+        return
+    fi
+
+    printf '\n# Added by agent installer\n%s\n' "$export_line" >>"$rc_file"
+    echo "Added ${BIN_DIR} to PATH in $rc_file"
+    echo "Run: source $rc_file"
+}
+
 main() {
     require_cmd curl
     require_cmd tar
@@ -65,6 +107,7 @@ main() {
     install -m 0755 "$tmpdir/agent" "$BIN_DIR/agent"
 
     echo "agent installed to $BIN_DIR/agent"
+    ensure_on_path
     echo "Run: agent doctor"
     echo "If macOS blocks the binary, run: xattr -d com.apple.quarantine $BIN_DIR/agent"
 }
