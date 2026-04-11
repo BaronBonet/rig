@@ -63,13 +63,7 @@ func NewRepository(cfg Config) (*Repository, error) {
 		return repo, nil
 	}
 
-	if err := seedLegacyMigrationState(context.Background(), db); err != nil {
-		repo.initErr = err
-		_ = db.Close()
-		return repo, nil
-	}
-
-	if err := applyMigrations(context.Background(), db, sqlFiles, "migrations"); err != nil {
+	if err := applyGooseMigrations(context.Background(), db, sqlFiles, "migrations"); err != nil {
 		repo.initErr = err
 		_ = db.Close()
 		repo.db = nil
