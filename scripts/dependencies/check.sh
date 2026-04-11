@@ -15,6 +15,13 @@ if [[ "${ACTUAL_GOLANGCI_LINT_VERSION}" != "${GOLANGCI_LINT_VERSION}" ]]; then
 	exit_code=1
 fi
 
+ACTUAL_GO_TOOL_GOLANGCI_LINT_VERSION="$(go tool golangci-lint version | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' | head -1)"
+
+if [[ "${ACTUAL_GO_TOOL_GOLANGCI_LINT_VERSION}" != "${GOLANGCI_LINT_VERSION}" ]]; then
+	echo "go tool golangci-lint version (${ACTUAL_GO_TOOL_GOLANGCI_LINT_VERSION}) mismatch - expected ${GOLANGCI_LINT_VERSION}"
+	exit_code=1
+fi
+
 ACTUAL_SQLC_VERSION="$(go tool sqlc version | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' | head -1)"
 
 if [[ "${ACTUAL_SQLC_VERSION}" != "${SQLC_VERSION}" ]]; then
