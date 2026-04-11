@@ -125,6 +125,10 @@ type RestoreLaunchProvider interface {
 	RestoreLaunchRequest(task *Task, hookSession *HookSessionSummary) (LaunchRequest, error)
 }
 
+type SessionUsageReader interface {
+	ReadSessionTokenUsage(ctx context.Context, provider string, transcriptPath string) (*SessionTokenUsage, error)
+}
+
 type PRStatusChecker interface {
 	CheckPRStatus(ctx context.Context, repoRoot string, branchName string) (*PRStatus, error)
 }

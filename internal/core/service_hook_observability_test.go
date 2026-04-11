@@ -94,6 +94,93 @@ func (s *stubObserverRuntimeRepository) SubscribeObserverTaskUpdates(
 	return s.subscribeTaskUpdates(ctx)
 }
 
+type stubSessionUsageReader struct {
+	read func(ctx context.Context, provider string, transcriptPath string) (*SessionTokenUsage, error)
+}
+
+func (s stubSessionUsageReader) ReadSessionTokenUsage(
+	ctx context.Context,
+	provider string,
+	transcriptPath string,
+) (*SessionTokenUsage, error) {
+	if s.read == nil {
+		return nil, nil
+	}
+	return s.read(ctx, provider, transcriptPath)
+}
+
+func TestServiceListTaskViews_EnrichesTokenUsageFromTranscript(t *testing.T) {
+	h := newTestService(t)
+	task := h.existingTask("task-1")
+	task.Provider = "codex"
+
+	h.repoClient.repoResources = RepoResources{WorktreeExists: true, BranchExists: true}
+	h.sessionClient.sessionResources = SessionResources{
+		SessionExists:      true,
+		AgentWindowExists:  true,
+		EditorWindowExists: true,
+	}
+	h.service.hooks = stubHookObservabilityRepository{
+		listHookSessionSummaries: func(_ context.Context, taskIDs []string) (map[string]*HookSessionSummary, error) {
+			return map[string]*HookSessionSummary{
+				task.ID: {
+					TaskID:         task.ID,
+					TranscriptPath: "/tmp/codex-session.jsonl",
+				},
+			}, nil
+		},
+	}
+	h.service.usageReader = stubSessionUsageReader{
+		read: func(_ context.Context, provider string, transcriptPath string) (*SessionTokenUsage, error) {
+			require.Equal(t, "codex", provider)
+			require.Equal(t, "/tmp/codex-session.jsonl", transcriptPath)
+			return &SessionTokenUsage{
+				InputTokens:       1200,
+				OutputTokens:      300,
+				CachedInputTokens: 400,
+				TotalTokens:       1500,
+			}, nil
+		},
+	}
+
+	views, err := h.service.ListTaskViews(t.Context())
+	require.NoError(t, err)
+	require.Len(t, views, 1)
+	require.NotNil(t, views[0].TokenUsage)
+	require.Equal(t, 1500, views[0].TokenUsage.TotalTokens)
+}
+
+func TestServiceListTaskViews_SkipsTokenUsageWithoutTranscriptPath(t *testing.T) {
+	h := newTestService(t)
+	task := h.existingTask("task-1")
+	task.Provider = "codex"
+
+	h.repoClient.repoResources = RepoResources{WorktreeExists: true, BranchExists: true}
+	h.sessionClient.sessionResources = SessionResources{
+		SessionExists:      true,
+		AgentWindowExists:  true,
+		EditorWindowExists: true,
+	}
+	h.service.hooks = stubHookObservabilityRepository{
+		listHookSessionSummaries: func(_ context.Context, taskIDs []string) (map[string]*HookSessionSummary, error) {
+			return map[string]*HookSessionSummary{
+				task.ID: {TaskID: task.ID},
+			}, nil
+		},
+	}
+	h.service.usageReader = stubSessionUsageReader{
+		read: func(_ context.Context, provider string, transcriptPath string) (*SessionTokenUsage, error) {
+			t.Fatalf("unexpected usage read: provider=%s transcript=%s", provider, transcriptPath)
+			return nil, nil
+		},
+	}
+
+	views, err := h.service.ListTaskViews(t.Context())
+	require.NoError(t, err)
+	require.Len(t, views, 1)
+	require.Nil(t, views[0].TokenUsage)
+}
+
 func TestServiceListTaskViews_UsesHookSummaryWhenAvailable(t *testing.T) {
 	h := newTestService(t)
 	task := h.existingTask("task-1")

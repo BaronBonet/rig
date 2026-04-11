@@ -3,6 +3,7 @@ package cli
 import (
 	"context"
 	"fmt"
+	"strconv"
 	"strings"
 	"time"
 
@@ -695,6 +696,20 @@ func (m model) selectedTaskDetailView() string {
 	if elapsed != "" {
 		sessCol.WriteString(dimStyle.Render(m.icons.Time) + " " + elapsed + "\n")
 	}
+	if view.TokenUsage != nil && !view.TokenUsage.IsZero() {
+		u := view.TokenUsage
+		sessCol.WriteString(dimStyle.Render(m.icons.Token) + " Token Usage\n")
+		inputDetail := compactCount(u.InputTokens)
+		if u.CacheCreationInputTokens > 0 {
+			uncached := u.InputTokens - u.CacheCreationInputTokens
+			inputDetail += dimStyle.Render(" (uncached ") + compactCount(uncached) +
+				dimStyle.Render(" · new cache ") + compactCount(u.CacheCreationInputTokens) +
+				dimStyle.Render(")")
+		}
+		sessCol.WriteString("    input  " + inputDetail + "\n")
+		sessCol.WriteString("    output " + compactCount(u.OutputTokens) + "\n")
+		sessCol.WriteString("    cached " + compactCount(u.CachedInputTokens) + "\n")
+	}
 	if view != nil && view.Observer != nil {
 		if view.Observer.ProcessAlive {
 			sessCol.WriteString(dimStyle.Render(m.icons.Process) + " " + healthyStyle.Render("connected") + "\n")
@@ -864,6 +879,17 @@ func hookActivityFallback(hook *core.HookSessionSummary) string {
 		return hook.LastCommandText
 	}
 	return ""
+}
+
+func compactCount(n int) string {
+	switch {
+	case n >= 1_000_000:
+		return fmt.Sprintf("%.1fm", float64(n)/1_000_000)
+	case n >= 1_000:
+		return fmt.Sprintf("%.1fk", float64(n)/1_000)
+	default:
+		return strconv.Itoa(n)
+	}
 }
 
 func (m model) prStatusDisplay(pr *core.PRStatus) (string, lipgloss.Style) {

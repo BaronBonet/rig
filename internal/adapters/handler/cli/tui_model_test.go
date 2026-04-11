@@ -1469,3 +1469,98 @@ func TestPromptInputView_NoShimmerWhenNotBusy(t *testing.T) {
 	view := stripANSI(m.promptInputView())
 	require.NotContains(t, view, "Suggesting name...")
 }
+
+func TestCompactCount_FormatsTokenCounts(t *testing.T) {
+	require.Equal(t, "500", compactCount(500))
+	require.Equal(t, "25.2k", compactCount(25200))
+	require.Equal(t, "1.5m", compactCount(1500000))
+}
+
+func TestModelView_OverviewRowsDoNotShowTokenUsage(t *testing.T) {
+	service := NewMockTaskService(t)
+	task := tuiTask("auth-rewrite")
+	task.DisplayName = "auth rewrite"
+
+	view := &core.TaskView{
+		Task: task,
+		HookSession: &core.HookSessionSummary{
+			TaskID:    task.ID,
+			StartedAt: time.Now().Add(-15 * time.Minute),
+		},
+		TokenUsage: &core.SessionTokenUsage{
+			TotalTokens: 25200,
+		},
+	}
+
+	m := newLoadedTUIModelWithViews(t, service, view)
+	rendered := stripANSI(m.listView())
+
+	// Find the task row line and verify it has elapsed time but not token usage.
+	for _, line := range strings.Split(rendered, "\n") {
+		if strings.Contains(line, "auth rewrite") {
+			require.Contains(t, line, "15m")
+			require.NotContains(t, line, "tok")
+			return
+		}
+	}
+	t.Fatal("task row not found in overview")
+}
+
+func TestModelView_DetailPanelShowsTokenUsageSubSection(t *testing.T) {
+	service := NewMockTaskService(t)
+	task := tuiTask("auth-rewrite")
+	task.DisplayName = "auth rewrite"
+
+	m := newLoadedTUIModelWithViews(t, service, &core.TaskView{
+		Task: task,
+		HookSession: &core.HookSessionSummary{
+			TaskID:    task.ID,
+			StartedAt: time.Now().Add(-2 * time.Hour),
+		},
+		TokenUsage: &core.SessionTokenUsage{
+			InputTokens:              24000,
+			CacheCreationInputTokens: 8000,
+			CacheReadInputTokens:     5900000,
+			CachedInputTokens:        5900000,
+			OutputTokens:             1200,
+			TotalTokens:              5925200,
+		},
+	})
+
+	rendered := stripANSI(m.View().Content)
+	require.Contains(t, rendered, "Token Usage")
+	require.Contains(t, rendered, "input  24.0k")
+	require.Contains(t, rendered, "uncached 16.0k")
+	require.Contains(t, rendered, "new cache 8.0k")
+	require.Contains(t, rendered, "output 1.2k")
+	require.Contains(t, rendered, "cached 5.9m")
+}
+
+func TestModelView_DetailPanelShowsTokenUsageWithoutCacheSplit(t *testing.T) {
+	service := NewMockTaskService(t)
+	task := tuiTask("codex-task")
+	task.DisplayName = "codex task"
+
+	m := newLoadedTUIModelWithViews(t, service, &core.TaskView{
+		Task: task,
+		HookSession: &core.HookSessionSummary{
+			TaskID:    task.ID,
+			StartedAt: time.Now().Add(-10 * time.Minute),
+		},
+		TokenUsage: &core.SessionTokenUsage{
+			InputTokens:       240,
+			CachedInputTokens: 80,
+			OutputTokens:      25,
+			TotalTokens:       345,
+		},
+	})
+
+	rendered := stripANSI(m.View().Content)
+	require.Contains(t, rendered, "Token Usage")
+	require.Contains(t, rendered, "input  240")
+	require.Contains(t, rendered, "output 25")
+	require.Contains(t, rendered, "cached 80")
+	// No cache split for Codex
+	require.NotContains(t, rendered, "uncached")
+	require.NotContains(t, rendered, "new cache")
+}
