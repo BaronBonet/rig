@@ -142,5 +142,6 @@ type SessionUsageReader interface {
 }
 
 type PRStatusChecker interface {
+	IsAvailable(ctx context.Context) error
 	CheckPRStatus(ctx context.Context, repoRoot string, branchName string) (*PRStatus, error)
 }
