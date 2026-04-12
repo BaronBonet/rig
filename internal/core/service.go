@@ -826,7 +826,8 @@ func (s *Service) enrichRuntimeState(ctx context.Context, task *Task) error {
 
 	snapshot, err := s.session.SnapshotTaskSession(ctx, task)
 	if err != nil {
-		return err
+		// Runtime snapshots are best-effort enrichment; task listing should still work without them.
+		return nil
 	}
 
 	task.RuntimeState = provider.DetectRuntimeState(snapshot)

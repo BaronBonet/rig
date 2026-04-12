@@ -76,14 +76,6 @@ func TestModelUpdate_PromptSubmitStartsBackgroundCreationAndReturnsToListMode(t 
 		).
 		Return(tuiTask("billing-retry-flow"), nil).
 		Once()
-	service.EXPECT().
-		OpenTask(mock.Anything, "billing-retry-flow").
-		Return(nil).
-		Once()
-	service.EXPECT().
-		ListTaskViews(mock.Anything).
-		Return(taskViews(existing, other, tuiTask("billing-retry-flow")), nil).
-		Once()
 	m, createCmd := updateTUIModel(t, m, tea.KeyPressMsg{Code: tea.KeyEnter})
 	require.NotNil(t, createCmd)
 	require.Equal(t, tuiModeList, m.mode)
@@ -96,18 +88,13 @@ func TestModelUpdate_PromptSubmitStartsBackgroundCreationAndReturnsToListMode(t 
 	require.Equal(t, "/tmp/repo", m.createInput.Cwd)
 
 	createMsg := executeBatchUntil[createFinishedMsg](t, createCmd)
-	m, refreshCmd := updateTUIModel(t, m, createMsg)
+	m, followup := updateTUIModel(t, m, createMsg)
 	require.Equal(t, tuiModeList, m.mode)
-	require.NotNil(t, refreshCmd)
+	require.Nil(t, followup)
 	require.Contains(t, taskSlugs(m.tasks), "billing-retry-flow")
-
-	openMsg := refreshCmd()
-	m, followup := updateTUIModel(t, m, openMsg)
-	require.NotNil(t, followup)
-	refreshMsg := followup()
-	m, _ = updateTUIModel(t, m, refreshMsg)
 	require.False(t, m.busy)
 	require.False(t, m.createInFlight)
+	require.Equal(t, "billing-retry-flow", m.selectedTask().Slug)
 }
 
 func TestModelUpdate_TaskProgressNameSelectedPreservesTaskSnapshot(t *testing.T) {
@@ -206,30 +193,18 @@ func TestModelUpdate_CreateFlowWithoutTasksUsesModelCwdFallback(t *testing.T) {
 		).
 		Return(tuiTask("billing-retry-flow"), nil).
 		Once()
-	service.EXPECT().
-		OpenTask(mock.Anything, "billing-retry-flow").
-		Return(nil).
-		Once()
-	service.EXPECT().
-		ListTaskViews(mock.Anything).
-		Return(taskViews(tuiTask("billing-retry-flow")), nil).
-		Once()
 	m, createCmd := updateTUIModel(t, m, tea.KeyPressMsg{Code: tea.KeyEnter})
 	require.NotNil(t, createCmd)
 	require.Equal(t, tuiModeList, m.mode)
 
 	createMsg := executeBatchUntil[createFinishedMsg](t, createCmd)
-	m, refreshCmd := updateTUIModel(t, m, createMsg)
+	m, followup := updateTUIModel(t, m, createMsg)
 	require.Equal(t, tuiModeList, m.mode)
-	require.NotNil(t, refreshCmd)
+	require.Nil(t, followup)
 	require.Contains(t, taskSlugs(m.tasks), "billing-retry-flow")
-
-	openMsg := refreshCmd()
-	m, followup := updateTUIModel(t, m, openMsg)
-	require.NotNil(t, followup)
-	refreshMsg := followup()
-	m, _ = updateTUIModel(t, m, refreshMsg)
 	require.False(t, m.busy)
+	require.False(t, m.createInFlight)
+	require.Equal(t, "billing-retry-flow", m.selectedTask().Slug)
 }
 
 func TestModelUpdate_CreateFlowUsesConfiguredDefaultProvider(t *testing.T) {
@@ -254,28 +229,17 @@ func TestModelUpdate_CreateFlowUsesConfiguredDefaultProvider(t *testing.T) {
 		).
 		Return(tuiTask("billing-retry-flow"), nil).
 		Once()
-	service.EXPECT().
-		OpenTask(mock.Anything, "billing-retry-flow").
-		Return(nil).
-		Once()
-	service.EXPECT().
-		ListTaskViews(mock.Anything).
-		Return(taskViews(existing, tuiTask("billing-retry-flow")), nil).
-		Once()
 	m, createCmd := updateTUIModel(t, m, tea.KeyPressMsg{Code: tea.KeyEnter})
 	require.NotNil(t, createCmd)
 	require.Equal(t, tuiModeList, m.mode)
 
 	createMsg := executeBatchUntil[createFinishedMsg](t, createCmd)
 	m, followup := updateTUIModel(t, m, createMsg)
-	require.NotNil(t, followup)
-	openMsg := followup()
-	m, refreshAfterOpen := updateTUIModel(t, m, openMsg)
-	require.NotNil(t, refreshAfterOpen)
-	refreshMsg := refreshAfterOpen()
-	m, _ = updateTUIModel(t, m, refreshMsg)
+	require.Nil(t, followup)
 	require.Equal(t, "claude", m.createInput.Provider)
 	require.False(t, m.busy)
+	require.False(t, m.createInFlight)
+	require.Equal(t, "billing-retry-flow", m.selectedTask().Slug)
 }
 
 func TestModelUpdate_CreateFailureKeepsSyntheticRowVisibleAndRendersError(t *testing.T) {
@@ -393,7 +357,40 @@ func TestModelUpdate_CreateFailureWithPersistedTaskReturnsToListModeAndPreserves
 	require.Contains(t, view, "billing-retry-flow")
 }
 
-func TestModelUpdate_CreateFinishedRefreshKeepsSelectionOnPersistedTask(t *testing.T) {
+func TestModelUpdate_CreateFailureWithInvisiblePersistedTaskKeepsFailureVisible(t *testing.T) {
+	created := tuiTask("billing-retry-flow")
+	created.DisplayName = "billing retry flow"
+	created.RepoRoot = "/tmp/repo"
+	created.SessionExists = false
+	created.WorktreeExists = false
+
+	m := newLoadedTUIModel(t, NewMockTaskService(t), tuiTask("existing-task"))
+	m.createInFlight = true
+	m.createInput = core.NewTaskInput{
+		Cwd:      "/tmp/repo",
+		Prompt:   "add billing retry flow",
+		Provider: "codex",
+	}
+	m.creationTask = cloneTaskSnapshot(created)
+	m.creationSteps = []string{"Suggesting name...", "Creating worktree..."}
+	m.selected = m.syntheticCreationRowIndex()
+
+	m, cmd := updateTUIModel(t, m, createFinishedMsg{
+		task: created,
+		err:  errors.New("create failed after persist"),
+	})
+	require.Nil(t, cmd)
+	require.False(t, m.createInFlight)
+	require.True(t, m.creationFailed)
+	require.True(t, m.isSyntheticCreationRowSelected())
+
+	view := stripANSI(m.View().Content)
+	require.Contains(t, view, "billing retry flow")
+	require.Contains(t, view, "create failed after persist")
+	require.Contains(t, view, "Creating worktree...")
+}
+
+func TestModelUpdate_CreateFinishedKeepsSelectionOnPersistedTaskWithoutOpening(t *testing.T) {
 	service := NewMockTaskService(t)
 	alpha := tuiTask("alpha-task")
 	omega := tuiTask("omega-task")
@@ -409,17 +406,10 @@ func TestModelUpdate_CreateFinishedRefreshKeepsSelectionOnPersistedTask(t *testi
 	m.selected = m.syntheticCreationRowIndex()
 
 	m, cmd := updateTUIModel(t, m, createFinishedMsg{task: created})
-	require.NotNil(t, cmd)
+	require.Nil(t, cmd)
 	require.Equal(t, "billing-retry-flow", m.selectedTask().Slug)
-
-	m, refreshCmd := updateTUIModel(t, m, openFinishedMsg{})
-	require.NotNil(t, refreshCmd)
-
-	m, _ = updateTUIModel(t, m, tasksLoadedMsg{
-		requestID: m.tasksRequestSeq,
-		views:     taskViews(alpha, created, omega),
-	})
-	require.Equal(t, "billing-retry-flow", m.selectedTask().Slug)
+	require.False(t, m.busy)
+	require.False(t, m.createInFlight)
 	require.Equal(t, 1, strings.Count(stripANSI(m.listView()), "billing retry flow"))
 }
 
@@ -585,35 +575,85 @@ func TestModelUpdate_NewTaskWhileOtherBusyStateDoesNotReportCreateInProgressErro
 	require.NotContains(t, stripANSI(m.View().Content), "Task creation already in progress")
 }
 
-func TestModelUpdate_BackgroundCreationBlocksRefreshButNotCreateSpecificError(t *testing.T) {
-	m := newLoadedTUIModel(t, NewMockTaskService(t), tuiTask("existing-task"))
+func TestModelUpdate_BackgroundCreationRefreshRemainsAvailable(t *testing.T) {
+	service := NewMockTaskService(t)
+	existing := tuiTask("existing-task")
+	m := newLoadedTUIModel(t, service, existing)
 	m.busy = true
 	m.createInFlight = true
 
+	service.EXPECT().InvalidatePRCache().Once()
+	service.EXPECT().
+		ListTaskViews(mock.Anything).
+		Return(taskViews(existing), nil).
+		Once()
 	m, cmd := updateTUIModel(t, m, keyRunes("r"))
-	require.Nil(t, cmd)
+	require.NotNil(t, cmd)
 	require.Equal(t, tuiModeList, m.mode)
 	require.Nil(t, m.err)
-	require.NotContains(t, stripANSI(m.View().Content), "Task creation already in progress")
+	require.True(t, m.loading)
+
+	msg := cmd()
+	m, _ = updateTUIModel(t, m, msg)
+	require.True(t, m.createInFlight)
+	require.NotNil(t, m.syntheticCreationTaskView())
 }
 
-func TestModelUpdate_BackgroundCreationBlocksOpenAndCleanupOnExistingRows(t *testing.T) {
-	m := newLoadedTUIModel(t, NewMockTaskService(t), tuiTask("task-one"), tuiTask("task-two"))
+func TestModelUpdate_BackgroundCreationAllowsOpenAndCleanupOnExistingRows(t *testing.T) {
+	service := NewMockTaskService(t)
+	tasks := []*core.Task{tuiTask("task-one"), tuiTask("task-two")}
+	m := newLoadedTUIModel(t, service, tasks...)
 	m.busy = true
 	m.createInFlight = true
 	m.selected = 0
 
+	service.EXPECT().
+		OpenTask(mock.Anything, "task-one").
+		Return(nil).
+		Once()
+	service.EXPECT().
+		ListTaskViews(mock.Anything).
+		Return(taskViews(tasks...), nil).
+		Once()
 	m, cmd := updateTUIModel(t, m, tea.KeyPressMsg{Code: tea.KeyEnter})
-	require.Nil(t, cmd)
+	require.NotNil(t, cmd)
 	require.True(t, m.busy)
 	require.Equal(t, tuiModeList, m.mode)
 	require.Nil(t, m.err)
 
+	m, followup := updateTUIModel(t, m, cmd())
+	require.NotNil(t, followup)
+	m, _ = updateTUIModel(t, m, followup())
+	require.True(t, m.createInFlight)
+	require.Equal(t, tuiModeList, m.mode)
+
 	m, cmd = updateTUIModel(t, m, keyRunes("x"))
 	require.Nil(t, cmd)
 	require.True(t, m.busy)
-	require.Equal(t, tuiModeList, m.mode)
+	require.Equal(t, tuiModeCleanupConfirm, m.mode)
 	require.Nil(t, m.err)
+}
+
+func TestModelUpdate_RetryFromFailedSyntheticRowPreservesOriginalCreationRepo(t *testing.T) {
+	original := tuiTask("task-one")
+	original.RepoRoot = "/tmp/repo-a"
+	other := tuiTask("task-two")
+	other.RepoRoot = "/tmp/repo-b"
+
+	m := newLoadedTUIModel(t, NewMockTaskService(t), original, other)
+	m.creationFailed = true
+	m.createInput = core.NewTaskInput{
+		Cwd:      "/tmp/repo-a",
+		Prompt:   "add billing retry flow",
+		Provider: "codex",
+	}
+	m.creationTask = cloneTaskSnapshot(tuiTask("billing-retry-flow"))
+	m.selected = m.syntheticCreationRowIndex()
+
+	m, cmd := updateTUIModel(t, m, keyRunes("n"))
+	require.Nil(t, cmd)
+	require.Equal(t, tuiModePromptInput, m.mode)
+	require.Equal(t, "/tmp/repo-a", m.createInput.Cwd)
 }
 
 func TestModelUpdate_QIsBlockedWhileBackgroundCreationIsActive(t *testing.T) {
@@ -738,7 +778,7 @@ func TestModelUpdate_IgnoresStaleTasksLoadedMessages(t *testing.T) {
 	m := newLoadedTUIModel(t, service, existing)
 
 	m, followup := updateTUIModel(t, m, createFinishedMsg{task: newTask})
-	require.NotNil(t, followup)
+	require.Nil(t, followup)
 	require.Contains(t, taskSlugs(m.tasks), "billing-retry-flow")
 
 	m, cmd := updateTUIModel(t, m, tasksLoadedMsg{
