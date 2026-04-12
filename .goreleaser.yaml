@@ -17,13 +17,14 @@ builds:
 
 archives:
   - name_template: "{{ .ProjectName }}_{{ .Tag }}_{{ .Os }}_{{ .Arch }}"
-    format: tar.gz
+    formats: tar.gz
 
 checksum:
   name_template: "checksums.txt"
   algorithm: sha256
 
 release:
+  mode: keep-existing
   github:
     owner: BaronBonet
     name: rig

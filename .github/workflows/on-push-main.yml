@@ -1,15 +1,19 @@
-name: lint
+name: release-main
 
 on:
-  pull_request:
+  push:
     branches: [main]
 
+concurrency:
+  group: release-main
+  cancel-in-progress: false
+
 permissions:
-  contents: read
+  contents: write
 
 jobs:
-  lint-and-test:
-    runs-on: ubuntu-latest
+  release:
+    runs-on: macos-latest
     steps:
       - name: Check out repository
         uses: actions/checkout@v4
@@ -25,23 +29,22 @@ jobs:
       - name: Install Node dependencies
         run: npm ci
 
-      - name: Validate Conventional Commits
-        run: npx --no-install commitlint --from "${{ github.event.pull_request.base.sha }}" --to "${{ github.event.pull_request.head.sha }}" --verbose
-
       - name: Set up Go
         uses: actions/setup-go@v5
         with:
           go-version-file: go.mod
           cache: true
 
-      - name: Install dependencies
+      - name: Install Go dependencies
         run: ./scripts/dependencies/install.sh
 
-      - name: Generate code
-        run: ./scripts/generate/go.sh
+      - name: Install GoReleaser
+        uses: goreleaser/goreleaser-action@v6
+        with:
+          version: "~> v2"
+          install-only: true
 
-      - name: Run linters
-        run: ./scripts/ci/lint-go.sh
-
-      - name: Run tests
-        run: go test ./...
+      - name: Run semantic-release
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: npm run release
