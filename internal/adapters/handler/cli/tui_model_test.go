@@ -82,7 +82,7 @@ func TestModelUpdate_PromptSubmitStartsBackgroundCreationAndReturnsToListMode(t 
 	require.True(t, m.busy)
 	require.True(t, m.createInFlight)
 	require.Equal(t, core.TaskProgressNaming, m.creationProgress)
-	require.Equal(t, []string{"Suggesting name..."}, m.creationSteps)
+	require.Equal(t, []string{"Generating name..."}, m.creationSteps)
 	require.Equal(t, "add billing retry flow", m.createInput.Prompt)
 	require.Equal(t, "codex", m.createInput.Provider)
 	require.Equal(t, "/tmp/repo", m.createInput.Cwd)
@@ -418,7 +418,7 @@ func TestModelUpdate_CreateFailureWithInvisiblePersistedTaskKeepsFailureVisible(
 		Provider: "codex",
 	}
 	m.creationTask = cloneTaskSnapshot(created)
-	m.creationSteps = []string{"Suggesting name...", "Creating worktree..."}
+	m.creationSteps = []string{"Generating name...", "Creating worktree..."}
 	m.selected = m.syntheticCreationRowIndex()
 
 	m, cmd := updateTUIModel(t, m, createFinishedMsg{
@@ -467,7 +467,7 @@ func TestModelUpdate_TasksLoadedKeepsSyntheticRowWhileCreateRemainsInFlight(t *t
 		Provider: "codex",
 	}
 	m.creationProgress = core.TaskProgressWorktreeCreating
-	m.creationSteps = []string{"Suggesting name...", "Creating worktree..."}
+	m.creationSteps = []string{"Generating name...", "Creating worktree..."}
 	m.creationTask = cloneTaskSnapshot(tuiTask("billing-retry-flow"))
 	m.selected = m.syntheticCreationRowIndex()
 
@@ -1222,14 +1222,14 @@ func TestModelView_ListShowsSyntheticCreatingRow(t *testing.T) {
 		Provider: "codex",
 	}
 	m.creationProgress = core.TaskProgressNaming
-	m.creationSteps = []string{"Suggesting name..."}
+	m.creationSteps = []string{"Generating name..."}
 	m.selected = len(m.tasks)
 
 	view := stripANSI(m.View().Content)
 
 	require.Contains(t, view, "Creating task...")
 	require.Contains(t, view, "creating")
-	require.Contains(t, view, "Suggesting name...")
+	require.Contains(t, view, "Generating name...")
 }
 
 func TestModelUpdate_TaskProgressNameSelectedRenamesCreatingRow(t *testing.T) {
@@ -1240,7 +1240,7 @@ func TestModelUpdate_TaskProgressNameSelectedRenamesCreatingRow(t *testing.T) {
 		Provider: "codex",
 	}
 	m.creationProgress = core.TaskProgressNaming
-	m.creationSteps = []string{"Suggesting name..."}
+	m.creationSteps = []string{"Generating name..."}
 	m.selected = len(m.tasks)
 
 	task := tuiTask("billing-retry-flow")
@@ -1703,6 +1703,22 @@ func TestModelView_PRStatusShownInOverviewRows(t *testing.T) {
 
 	requireNextLineContains("auth rewrite", iconPROpen)
 	requireNextLineContains("billing retry", iconPRMerged)
+	requireNextLineContains("auth rewrite", "codex")
+	requireNextLineContains("billing retry", "claude")
+	requireNextLineNotContains := func(name, unwanted string) {
+		t.Helper()
+		for i, row := range rows {
+			if strings.Contains(row, name) && i+1 < len(rows) {
+				require.NotContains(t, rows[i+1], unwanted,
+					"line after %q should not contain %q, got %q", name, unwanted, rows[i+1])
+				return
+			}
+		}
+		t.Fatalf("did not find row for %q in view:\n%s", name, view)
+	}
+
+	requireNextLineNotContains("auth rewrite", "PR #42 open")
+	requireNextLineNotContains("billing retry", "PR #43 merged")
 }
 
 func TestModelUpdate_RefreshInvalidatesPRCache(t *testing.T) {
@@ -1972,7 +1988,7 @@ func TestPromptInputView_ShowsShimmerDuringNameSuggestion(t *testing.T) {
 	view := stripANSI(m.promptInputView())
 	require.Contains(t, view, "RIG")
 	require.Contains(t, view, "new task")
-	require.Contains(t, view, "Suggesting name...")
+	require.Contains(t, view, "Generating name...")
 }
 
 func TestPromptInputView_NoShimmerWhenNotBusy(t *testing.T) {
@@ -1984,7 +2000,7 @@ func TestPromptInputView_NoShimmerWhenNotBusy(t *testing.T) {
 	view := stripANSI(m.promptInputView())
 	require.Contains(t, view, "RIG")
 	require.Contains(t, view, "new task")
-	require.NotContains(t, view, "Suggesting name...")
+	require.NotContains(t, view, "Generating name...")
 }
 
 func TestPromptInputView_ShowsFixedProviderOrder(t *testing.T) {

@@ -809,15 +809,13 @@ func padLeftVisible(s string, width int) string {
 	return strings.Repeat(" ", width-visible) + s
 }
 
-// prTextForTask returns formatted PR text for the second line of a task row.
+// prTextForTask returns the compact PR indicator for the second line of a task row.
 func (m model) prTextForTask(view *core.TaskView) string {
 	if view == nil || view.PR == nil || view.PR.State == core.PRStateNone {
 		return mutedStyle.Render(iconPRNone)
 	}
 	icon, style := prStateIconStyle(view.PR.State)
-	return style.Render(fmt.Sprintf(
-		"%s PR #%d %s", icon, view.PR.Number, view.PR.State,
-	))
+	return style.Render(icon)
 }
 
 func (m model) selectedTaskDetailView() string {
@@ -1875,7 +1873,7 @@ func emptyFallback(value string, fallback string) string {
 func progressStepLabel(step core.TaskProgressStep) string {
 	switch step {
 	case core.TaskProgressNaming:
-		return "Suggesting name..."
+		return "Generating name..."
 	case core.TaskProgressWorktreeCreating:
 		return "Creating worktree..."
 	case core.TaskProgressWorkspaceSeeding:
