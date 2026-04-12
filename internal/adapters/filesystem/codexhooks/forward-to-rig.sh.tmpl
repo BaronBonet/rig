@@ -13,8 +13,8 @@ cat >"$payload_file"
 if command -v curl >/dev/null 2>&1 && curl -fsS --max-time 2 -X POST -H "Content-Type: application/json" -H "X-Codex-Hook-Event: $event_name" --data-binary @"$payload_file" "$collector_url"; then
   exit 0
 fi
-if command -v agent >/dev/null 2>&1; then
-  agent observer ingest "$event_name" <"$payload_file"
+if command -v rig >/dev/null 2>&1; then
+  rig observer ingest "$event_name" <"$payload_file"
   exit $?
 fi
 if [ -n "$agent_exec" ] && [ -x "$agent_exec" ]; then
@@ -22,7 +22,7 @@ if [ -n "$agent_exec" ] && [ -x "$agent_exec" ]; then
   exit $?
 fi
 if command -v go >/dev/null 2>&1 && [ -f "$agent_source_root/go.mod" ]; then
-  cd "$agent_source_root" && go run ./cmd/agent observer ingest "$event_name" <"$payload_file"
+  cd "$agent_source_root" && go run ./cmd/rig observer ingest "$event_name" <"$payload_file"
   exit $?
 fi
 exit 0

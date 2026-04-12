@@ -5,8 +5,8 @@ before:
     - make generate
 
 builds:
-  - main: ./cmd/agent
-    binary: agent
+  - main: ./cmd/rig
+    binary: rig
     env:
       - CGO_ENABLED=0
     goos:
@@ -26,4 +26,4 @@ checksum:
 release:
   github:
     owner: BaronBonet
-    name: tmux-llm
+    name: rig
