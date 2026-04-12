@@ -707,7 +707,7 @@ func TestModelUpdate_RefreshInFlightBlocksOverlappingActions(t *testing.T) {
 	require.Nil(t, cmd)
 }
 
-func TestModelUpdate_MainListViewRendersControlCenterDetails(t *testing.T) {
+func TestModelUpdate_MainListViewRendersHeaderAndTaskRows(t *testing.T) {
 	service := NewMockTaskService(t)
 	task := tuiTask("billing-retry-flow")
 	task.DisplayName = "billing retry flow"
@@ -722,10 +722,9 @@ func TestModelUpdate_MainListViewRendersControlCenterDetails(t *testing.T) {
 	m := newLoadedTUIModel(t, service, task)
 	view := stripANSI(m.View().Content)
 
-	require.Contains(t, view, "Control Center")
-	require.Contains(t, view, "Task")
-	require.Contains(t, view, "Provider")
-	require.Contains(t, view, "Status")
+	require.Contains(t, view, "RIG")
+	require.Contains(t, view, "n new")
+	require.Contains(t, view, "q quit")
 	require.Contains(t, view, "billing retry flow")
 	require.Contains(t, view, "running")
 }
@@ -788,7 +787,7 @@ func TestModelView_PrefersRuntimeBadgesOnSeparateTaskRows(t *testing.T) {
 	}
 }
 
-func TestModelView_ShowsProviderBadgeOnEveryTaskRow(t *testing.T) {
+func TestModelView_ShowsProviderOnSecondLine(t *testing.T) {
 	codexTask := tuiTask("task-codex")
 	codexTask.DisplayName = "codex task"
 	codexTask.Provider = "codex"
@@ -805,23 +804,36 @@ func TestModelView_ShowsProviderBadgeOnEveryTaskRow(t *testing.T) {
 	view := stripANSI(m.View().Content)
 	rows := strings.Split(view, "\n")
 
-	requireLineOrdered := func(name, first, second string) {
+	// In the two-line layout, line 1 has task name + status, line 2 has provider.
+	// Find the line after the task name line and check for provider.
+	requireNextLineContains := func(name, want string) {
 		t.Helper()
-		for _, row := range rows {
-			if strings.Contains(row, name) {
-				firstIndex := strings.Index(row, first)
-				secondIndex := strings.Index(row, second)
-				require.NotEqual(t, -1, firstIndex, "row %q missing %q", row, first)
-				require.NotEqual(t, -1, secondIndex, "row %q missing %q", row, second)
-				require.Less(t, firstIndex, secondIndex, "row %q has %q after %q", row, first, second)
+		for i, row := range rows {
+			if strings.Contains(row, name) && i+1 < len(rows) {
+				require.Contains(t, rows[i+1], want,
+					"line after %q should contain %q, got %q", name, want, rows[i+1])
 				return
 			}
 		}
 		t.Fatalf("did not find row for %q in view:\n%s", name, view)
 	}
 
-	requireLineOrdered("codex task", "⚡ codex", "● running")
-	requireLineOrdered("claude task", "✦ claude", "◐ needs input")
+	requireNextLineContains("codex task", "codex")
+	requireNextLineContains("claude task", "claude")
+
+	// Status is still on the same line as the task name
+	requireLineContains := func(name, want string) {
+		t.Helper()
+		for _, row := range rows {
+			if strings.Contains(row, name) {
+				require.Contains(t, row, want)
+				return
+			}
+		}
+		t.Fatalf("did not find row for %q in view:\n%s", name, view)
+	}
+	requireLineContains("codex task", "● running")
+	requireLineContains("claude task", "◐ needs input")
 }
 
 func TestModelView_ProviderBadgeCoexistsWithRuntimeBadge(t *testing.T) {
@@ -833,17 +845,22 @@ func TestModelView_ProviderBadgeCoexistsWithRuntimeBadge(t *testing.T) {
 
 	m := newLoadedTUIModel(t, NewMockTaskService(t), task)
 	view := stripANSI(m.View().Content)
-	for _, row := range strings.Split(view, "\n") {
+	rows := strings.Split(view, "\n")
+
+	// Line 1 has task name + status, line 2 has provider
+	foundName := false
+	for i, row := range rows {
 		if !strings.Contains(row, "running task") {
 			continue
 		}
-
-		require.Contains(t, row, "✦ claude")
-		require.Contains(t, row, "○ finished")
-		return
+		foundName = true
+		require.Contains(t, row, "○ finished", "status should be on name line")
+		require.Less(t, i+1, len(rows), "expected a second line after task name")
+		require.Contains(t, rows[i+1], "claude", "provider should be on the second line")
+		break
 	}
 
-	t.Fatalf("did not find row for %q in view:\n%s", "running task", view)
+	require.True(t, foundName, "did not find row for %q in view:\n%s", "running task", view)
 }
 
 func TestModelView_TaskRowsUseObserverStatus(t *testing.T) {
@@ -888,9 +905,7 @@ func TestModelView_OverviewRowsShowElapsedTimeWithoutClockIcon(t *testing.T) {
 	view := stripANSI(m.View().Content)
 	lines := strings.Split(view, "\n")
 
-	require.GreaterOrEqual(t, len(lines), 3)
-	require.Contains(t, lines[2], "Time")
-
+	// Elapsed time should appear on the same line as the task name (line 1 of the row)
 	for _, row := range lines {
 		if !strings.Contains(row, "auth rewrite") {
 			continue
@@ -1198,19 +1213,22 @@ func TestModelView_PRStatusShownInOverviewRows(t *testing.T) {
 	view := stripANSI(m.View().Content)
 	rows := strings.Split(view, "\n")
 
-	requireLineContains := func(name, want string) {
+	// In two-line layout, PR info is on the second line (same as provider).
+	// Find the line after the task name and check for the PR icon.
+	requireNextLineContains := func(name, want string) {
 		t.Helper()
-		for _, row := range rows {
-			if strings.Contains(row, name) {
-				require.Contains(t, row, want)
+		for i, row := range rows {
+			if strings.Contains(row, name) && i+1 < len(rows) {
+				require.Contains(t, rows[i+1], want,
+					"line after %q should contain %q, got %q", name, want, rows[i+1])
 				return
 			}
 		}
 		t.Fatalf("did not find row for %q in view:\n%s", name, view)
 	}
 
-	requireLineContains("auth rewrite", "◉")
-	requireLineContains("billing retry", "✔")
+	requireNextLineContains("auth rewrite", iconPROpen)
+	requireNextLineContains("billing retry", iconPRMerged)
 }
 
 func TestModelUpdate_RefreshInvalidatesPRCache(t *testing.T) {

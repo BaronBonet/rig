@@ -547,13 +547,11 @@ func (m model) updateNameConfirmKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	return m, cmd
 }
 
-// Grid column widths.
+// Two-line row column widths.
 const (
-	colWidthName     = 40
-	colWidthProvider = 10
-	colWidthPR       = 4
-	colWidthTime     = 10
-	colWidthStatus   = 18
+	colWidthAgent   = 7  // "claude" padded to 7 chars so PR aligns
+	colWidthStatus  = 14 // "◐ needs input " — widest status label, left-aligned
+	colWidthElapsed = 7  // "2h 15m" right-aligned
 )
 
 // truncateStr truncates s to max runes and appends "…" if it was longer.
@@ -586,12 +584,20 @@ func padRightVisible(s string, width int) string {
 func (m model) listView() string {
 	var b strings.Builder
 
-	// Header
-	header := titleStyle.Render(iconHeaderList + " Control Center")
-	keys := dimStyle.Render("j/k move · enter open · n new · x clean · r refresh · q quit")
-	b.WriteString(header + "  " + keys + "\n")
-	totalWidth := 3 + colWidthName + 2 + colWidthProvider + 2 + colWidthPR + 2 + colWidthTime + 2 + colWidthStatus
-	b.WriteString(dimStyle.Render(strings.Repeat("─", totalWidth)) + "\n")
+	totalWidth := m.width
+	if totalWidth < 40 {
+		totalWidth = 72
+	}
+
+	// Header: "RIG" on left, keybindings on right
+	left := headerLabelStyle.Render("RIG")
+	right := mutedStyle.Render("n new   x clean   ? help   q quit")
+	gap := totalWidth - lipgloss.Width(left) - lipgloss.Width(right)
+	if gap < 2 {
+		gap = 2
+	}
+	b.WriteString(left + strings.Repeat(" ", gap) + right + "\n")
+	b.WriteString(dividerStyle.Render(strings.Repeat("─", totalWidth)) + "\n")
 
 	if m.err != nil {
 		b.WriteString(errorStyle.Render("Error: "+m.err.Error()) + "\n\n")
@@ -612,58 +618,74 @@ func (m model) listView() string {
 		return b.String()
 	}
 
-	// Column header
-	colHeader := fmt.Sprintf("   %s  %s  %s  %s  %s",
-		padRight("Task", colWidthName),
-		padRight("Provider", colWidthProvider),
-		padRight("Pr", colWidthPR),
-		padRight("Time", colWidthTime),
-		padRight("Status", colWidthStatus),
-	)
-	b.WriteString(titleStyle.Render(colHeader) + "\n")
-
-	// Task rows
+	// Task rows — two lines per task
 	for i, task := range m.tasks {
 		view := m.taskViewAt(i)
-		providerText := providerIcon(task.Provider) + " " + emptyFallback(task.Provider, "-")
-		stateText, stateStyle := taskStateText(view)
+		stateText, stStyle := taskStateText(view)
 		elapsed := taskElapsed(view)
-		prIcon := m.prIconForTask(view)
 
-		timeText := ""
-		if elapsed != "" {
-			timeText = elapsed
+		// Line 1: task name (flex) + status (fixed) + time (fixed)
+		statusCell := padRightVisible(stateText, colWidthStatus)
+		timeCell := padLeftVisible(elapsed, colWidthElapsed)
+		rightBlock := statusCell + timeCell
+		rightWidth := colWidthStatus + colWidthElapsed
+		nameWidth := totalWidth - rightWidth - 4 // 4 = padding from style
+		if nameWidth < 10 {
+			nameWidth = 10
 		}
 
-		providerCell := padRightVisible(providerText, colWidthProvider)
-		prCell := padRightVisible(prIcon, colWidthPR)
-		timeCell := padRightVisible(timeText, colWidthTime)
-		stateCell := padRightVisible(stateText, colWidthStatus)
+		// Line 2: agent (fixed 7) + PR text
+		agentName := emptyFallback(task.Provider, "-")
+		agentCell := padRight(agentName, colWidthAgent)
+		prText := m.prTextForTask(view)
 
 		if i == m.selected {
-			nameCell := padRight(truncateStr(iconSelected+" "+task.DisplayName, colWidthName), colWidthName)
-			row := nameCell + "  " + providerStyle(
-				task.Provider,
-			).Render(providerCell) +
-				"  " + prCell + "  " + timeCell + "  " + stateStyle.Render(
-				stateCell,
-			)
-			b.WriteString(selectedRowStyle.Render(row) + "\n")
+			nameStr := truncateStr(task.DisplayName, nameWidth)
+			namePad := padRight(nameStr, nameWidth)
+			line1 := lipgloss.NewStyle().
+				Foreground(colorAccent).Render(namePad) +
+				stStyle.Render(statusCell) +
+				lipgloss.NewStyle().Foreground(colorAccent).Render(timeCell)
+			line2 := providerStyle(task.Provider).Render(agentCell) + prText
+			b.WriteString(selectedRowStyle.Render(line1) + "\n")
+			b.WriteString(selectedRowStyle.Render(line2) + "\n")
 		} else {
-			nameCell := padRight(truncateStr("  "+task.DisplayName, colWidthName), colWidthName)
-			row := nameCell + "  " + providerStyle(task.Provider).Render(providerCell) + "  " + prCell + "  " + timeCell + "  " + stateStyle.Render(stateCell)
-			b.WriteString(normalRowStyle.Render(row) + "\n")
+			nameStr := truncateStr(task.DisplayName, nameWidth)
+			namePad := padRight(nameStr, nameWidth)
+			line1 := namePad + rightBlock
+			line2 := providerStyle(task.Provider).Render(agentCell) + prText
+			b.WriteString(normalRowStyle.Render(line1) + "\n")
+			b.WriteString(normalRowStyle.Render(line2) + "\n")
 		}
 	}
 
 	detail := m.selectedTaskDetailView()
 	if detail != "" {
-		b.WriteString("\n")
-		b.WriteString(dimStyle.Render(strings.Repeat("─", totalWidth)) + "\n")
+		b.WriteString(dividerStyle.Render(strings.Repeat("─", totalWidth)) + "\n")
 		b.WriteString(detail)
 	}
 
 	return strings.TrimRight(b.String(), "\n")
+}
+
+// padLeftVisible right-aligns s within width, padding on the left.
+func padLeftVisible(s string, width int) string {
+	visible := lipgloss.Width(s)
+	if visible >= width {
+		return s
+	}
+	return strings.Repeat(" ", width-visible) + s
+}
+
+// prTextForTask returns formatted PR text for the second line of a task row.
+func (m model) prTextForTask(view *core.TaskView) string {
+	if view == nil || view.PR == nil || view.PR.State == core.PRStateNone {
+		return mutedStyle.Render(iconPRNone)
+	}
+	icon, style := prStateIconStyle(view.PR.State)
+	return style.Render(fmt.Sprintf(
+		"%s PR #%d %s", icon, view.PR.Number, view.PR.State,
+	))
 }
 
 func (m model) selectedTaskDetailView() string {
@@ -860,20 +882,6 @@ func taskElapsed(view *core.TaskView) string {
 		return ""
 	}
 	return formatElapsed(time.Since(started))
-}
-
-func (m model) prIconForTask(view *core.TaskView) string {
-	if view == nil || view.PR == nil {
-		return ""
-	}
-	switch view.PR.State {
-	case core.PRStateOpen:
-		return healthyStyle.Render(m.icons.PROpen)
-	case core.PRStateMerged:
-		return titleStyle.Render(m.icons.PRMerged)
-	default:
-		return ""
-	}
 }
 
 func isLLMOutputLatest(hook *core.HookSessionSummary) bool {
