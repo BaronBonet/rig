@@ -181,6 +181,18 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.width = msg.Width
 		m.promptInput.SetWidth(msg.Width - 4)
 		return m, nil
+	case tea.PasteMsg:
+		switch m.mode {
+		case tuiModePromptInput:
+			var cmd tea.Cmd
+			m.promptInput, cmd = m.promptInput.Update(msg)
+			return m, cmd
+		case tuiModeNameConfirm:
+			var cmd tea.Cmd
+			m.nameInput, cmd = m.nameInput.Update(msg)
+			return m, cmd
+		}
+		return m, nil
 	case tea.KeyPressMsg:
 		return m.updateKey(msg)
 	case tasksLoadedMsg:
