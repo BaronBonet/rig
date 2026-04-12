@@ -581,6 +581,15 @@ func padRightVisible(s string, width int) string {
 	return s + strings.Repeat(" ", width-visible)
 }
 
+// renderHeader renders a left-right header padded to totalWidth.
+func renderHeader(left, right string, totalWidth int) string {
+	gap := totalWidth - lipgloss.Width(left) - lipgloss.Width(right)
+	if gap < 2 {
+		gap = 2
+	}
+	return left + strings.Repeat(" ", gap) + right
+}
+
 func (m model) listView() string {
 	var b strings.Builder
 
@@ -590,13 +599,11 @@ func (m model) listView() string {
 	}
 
 	// Header: "RIG" on left, keybindings on right
-	left := headerLabelStyle.Render("RIG")
-	right := mutedStyle.Render("n new   x clean   ? help   q quit")
-	gap := totalWidth - lipgloss.Width(left) - lipgloss.Width(right)
-	if gap < 2 {
-		gap = 2
-	}
-	b.WriteString(left + strings.Repeat(" ", gap) + right + "\n")
+	b.WriteString(renderHeader(
+		headerLabelStyle.Render("RIG"),
+		mutedStyle.Render("n new   x clean   ? help   q quit"),
+		totalWidth,
+	) + "\n")
 	b.WriteString(dividerStyle.Render(strings.Repeat("─", totalWidth)) + "\n")
 
 	if m.err != nil {
@@ -1005,39 +1012,82 @@ func (m model) prStatusDisplay(pr *core.PRStatus) (string, lipgloss.Style) {
 }
 
 func (m model) promptInputView() string {
+	totalWidth := m.width
+	if totalWidth < 40 {
+		totalWidth = 72
+	}
+
 	var b strings.Builder
-	b.WriteString(titleStyle.Render(iconHeaderCreate+" Create Task") + "\n\n")
-	b.WriteString(dimStyle.Render("Enter the task prompt. Press Enter to submit, or Esc to cancel.") + "\n")
-	b.WriteString(dimStyle.Render("tab to switch provider: ") + providerToggle(m.provider) + "\n\n")
+
+	// Header
+	b.WriteString(renderHeader(
+		headerLabelStyle.Render("RIG"),
+		mutedStyle.Render("new task"),
+		totalWidth,
+	) + "\n")
+	b.WriteString(dividerStyle.Render(strings.Repeat("─", totalWidth)) + "\n")
+
 	if m.err != nil {
 		b.WriteString(errorStyle.Render("Error: "+m.err.Error()) + "\n\n")
 	}
+
+	// Instruction
+	b.WriteString(dimStyle.Render("Enter task prompt. Tab to switch provider.") + "\n\n")
+
+	// Provider toggle
+	selected := providerStyle(m.provider).Render(m.provider)
+	other := nextProvider(m.provider)
+	unselected := mutedStyle.Render(other)
+	b.WriteString(mutedStyle.Render("provider  ") + selected + mutedStyle.Render(" / ") + unselected + "\n\n")
+
+	// Textarea
 	b.WriteString(m.promptInput.View())
+
+	// Shimmer during naming step
 	if m.creationProgress == core.TaskProgressNaming {
 		label := progressStepLabel(core.TaskProgressNaming)
 		b.WriteString("\n\n" + warningStyle.Render("●") + " " + renderShimmer(label, m.shimmerTick))
 	}
+
+	b.WriteString("\n\n")
+	b.WriteString(
+		dimStyle.Render("enter") + mutedStyle.Render(" submit · ") +
+			dimStyle.Render("esc") + mutedStyle.Render(" cancel"),
+	)
+
 	return b.String()
 }
 
 func (m model) nameConfirmView() string {
+	totalWidth := m.width
+	if totalWidth < 40 {
+		totalWidth = 72
+	}
+
 	var b strings.Builder
-	b.WriteString(titleStyle.Render(iconHeaderCreate+" Create Task") + "\n\n")
+
+	// Header
+	b.WriteString(renderHeader(
+		headerLabelStyle.Render("RIG"),
+		mutedStyle.Render("new task"),
+		totalWidth,
+	) + "\n")
+	b.WriteString(dividerStyle.Render(strings.Repeat("─", totalWidth)) + "\n")
 
 	if m.err != nil {
 		b.WriteString(errorStyle.Render("Error: "+m.err.Error()) + "\n\n")
 	}
 
 	// Checkmark recap: completed prompt and provider.
-	b.WriteString(healthyStyle.Render("✔") + " " + dimStyle.Render(m.createInput.Prompt) + "\n")
+	b.WriteString(healthyStyle.Render(iconCheckmark) + " " + mutedStyle.Render(m.createInput.Prompt) + "\n")
 	b.WriteString(
-		healthyStyle.Render("✔") + " " +
-			dimStyle.Render("provider: ") + providerStyle(m.provider).Render(m.provider) + "\n",
+		healthyStyle.Render(iconCheckmark) + " " +
+			mutedStyle.Render("provider: ") + providerStyle(m.provider).Render(m.provider) + "\n",
 	)
 
 	if m.busy && len(m.creationSteps) > 0 {
 		// Name is confirmed — show it as a completed step.
-		b.WriteString(healthyStyle.Render("✔") + " " + dimStyle.Render("name: "+m.nameInput.Value()) + "\n")
+		b.WriteString(healthyStyle.Render(iconCheckmark) + " " + mutedStyle.Render("name: "+m.nameInput.Value()) + "\n")
 		b.WriteString("\n")
 
 		// Render completed creation steps and active shimmer step.
@@ -1047,7 +1097,7 @@ func (m model) nameConfirmView() string {
 				b.WriteString(warningStyle.Render("●") + " " + renderShimmer(label, m.shimmerTick) + "\n")
 			} else {
 				// Completed steps get checkmarks.
-				b.WriteString(healthyStyle.Render("✔") + " " + dimStyle.Render(label) + "\n")
+				b.WriteString(healthyStyle.Render(iconCheckmark) + " " + mutedStyle.Render(label) + "\n")
 			}
 		}
 	} else {
@@ -1056,8 +1106,8 @@ func (m model) nameConfirmView() string {
 		b.WriteString(warningStyle.Render("▸ Name: ") + m.nameInput.View() + "\n")
 		b.WriteString("\n")
 		b.WriteString(
-			healthyStyle.Render("Enter") + dimStyle.Render(" to create · ") +
-				errorStyle.Render("Esc") + dimStyle.Render(" to cancel"),
+			dimStyle.Render("enter") + mutedStyle.Render(" create · ") +
+				dimStyle.Render("esc") + mutedStyle.Render(" cancel"),
 		)
 	}
 
@@ -1070,13 +1120,32 @@ func (m model) confirmationView() string {
 		return dimStyle.Render("No task selected.")
 	}
 
+	totalWidth := m.width
+	if totalWidth < 40 {
+		totalWidth = 72
+	}
+
 	var b strings.Builder
-	b.WriteString(warningStyle.Render(iconHeaderCleanup+" Confirm Cleanup") + "\n\n")
-	b.WriteString("Task: " + primaryStyle.Render(task.DisplayName) + "\n")
+
+	// Header
+	b.WriteString(renderHeader(
+		headerLabelStyle.Render("RIG"),
+		errorStyle.Render("cleanup"),
+		totalWidth,
+	) + "\n")
+	b.WriteString(dividerStyle.Render(strings.Repeat("─", totalWidth)) + "\n")
+
+	// Task name
+	b.WriteString(primaryStyle.Render(task.DisplayName) + "\n\n")
+
+	// Explanation
 	b.WriteString(dimStyle.Render("The tmux session and worktree will be deleted.") + "\n")
 	b.WriteString(dimStyle.Render("The branch will be kept.") + "\n\n")
+
+	// Keybinds
 	b.WriteString(
-		healthyStyle.Render("y") + dimStyle.Render(" confirm · ") + errorStyle.Render("n") + dimStyle.Render(" cancel"),
+		dimStyle.Render("y") + mutedStyle.Render(" confirm · ") +
+			dimStyle.Render("n") + mutedStyle.Render(" cancel"),
 	)
 	return b.String()
 }
