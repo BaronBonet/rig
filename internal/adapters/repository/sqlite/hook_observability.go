@@ -33,6 +33,15 @@ type hookRecord struct {
 	StartSource          string
 }
 
+type hookTaskMatchKind int
+
+const (
+	hookTaskMatchUnknown hookTaskMatchKind = iota
+	hookTaskMatchTaskID
+	hookTaskMatchWorktree
+	hookTaskMatchSessionID
+)
+
 type hookSubscriber struct {
 	ch     chan core.HookSessionSummary
 	mu     sync.RWMutex
@@ -126,7 +135,7 @@ func (r *Repository) IngestHookEvent(ctx context.Context, raw core.HookEventInpu
 		return nil, err
 	}
 
-	taskID, err := r.resolveHookTaskID(ctx, raw)
+	taskID, matchKind, err := r.resolveHookTaskID(ctx, raw)
 	if err != nil {
 		return nil, err
 	}
@@ -165,6 +174,9 @@ func (r *Repository) IngestHookEvent(ctx context.Context, raw core.HookEventInpu
 	previous, err := loadHookSessionSummary(ctx, qtx, taskID)
 	if err != nil {
 		return nil, err
+	}
+	if shouldIgnoreForeignSessionEvent(previous, record, matchKind) {
+		return previous, nil
 	}
 	previousObserver, err := loadObserverSummary(ctx, qtx, taskID)
 	if err != nil {
@@ -338,22 +350,29 @@ func (r *Repository) SubscribeObserverTaskUpdates(ctx context.Context) (<-chan c
 	return subscriber.ch, cleanup, nil
 }
 
-func (r *Repository) resolveHookTaskID(ctx context.Context, raw core.HookEventInput) (string, error) {
+func (r *Repository) resolveHookTaskID(
+	ctx context.Context,
+	raw core.HookEventInput,
+) (string, hookTaskMatchKind, error) {
 	lookup := []struct {
 		value string
 		query func(context.Context, string) (string, error)
+		kind  hookTaskMatchKind
 	}{
 		{
 			value: raw.TaskID,
 			query: r.queries.GetTaskIDByID,
+			kind:  hookTaskMatchTaskID,
 		},
 		{
 			value: raw.Cwd,
 			query: r.queries.GetTaskIDByWorktreePath,
+			kind:  hookTaskMatchWorktree,
 		},
 		{
 			value: raw.SessionID,
 			query: r.queries.GetTaskIDBySessionID,
+			kind:  hookTaskMatchSessionID,
 		},
 	}
 
@@ -363,14 +382,40 @@ func (r *Repository) resolveHookTaskID(ctx context.Context, raw core.HookEventIn
 		}
 		taskID, err := candidate.query(ctx, candidate.value)
 		if err == nil {
-			return taskID, nil
+			return taskID, candidate.kind, nil
 		}
 		if !errors.Is(err, sql.ErrNoRows) {
-			return "", err
+			return "", hookTaskMatchUnknown, err
 		}
 	}
 
-	return "", fmt.Errorf("%w: map hook event to managed task", core.ErrUnmanagedHookEvent)
+	return "", hookTaskMatchUnknown, fmt.Errorf("%w: map hook event to managed task", core.ErrUnmanagedHookEvent)
+}
+
+func shouldIgnoreForeignSessionEvent(
+	previous *core.HookSessionSummary,
+	record hookRecord,
+	matchKind hookTaskMatchKind,
+) bool {
+	if previous == nil || matchKind != hookTaskMatchWorktree {
+		return false
+	}
+	if previous.SessionID == "" || record.SessionID == "" || previous.SessionID == record.SessionID {
+		return false
+	}
+	if shouldAllowSessionTakeover(previous, record) {
+		return false
+	}
+	return true
+}
+
+func shouldAllowSessionTakeover(previous *core.HookSessionSummary, record hookRecord) bool {
+	if previous == nil || record.EventName != "SessionStart" {
+		return false
+	}
+
+	source := strings.TrimSpace(record.StartSource)
+	return source == "resume" || previous.LastEventName == "Stop"
 }
 
 type hookSessionSummaryGetter interface {
