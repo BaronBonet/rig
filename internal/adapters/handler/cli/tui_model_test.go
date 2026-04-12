@@ -278,7 +278,7 @@ func TestModelUpdate_CreateFlowUsesConfiguredDefaultProvider(t *testing.T) {
 	require.False(t, m.busy)
 }
 
-func TestModelUpdate_CreateFailureReturnsToListModeAndRendersError(t *testing.T) {
+func TestModelUpdate_CreateFailureKeepsSyntheticRowVisibleAndRendersError(t *testing.T) {
 	service := NewMockTaskService(t)
 	existing := tuiTask("existing-task")
 	existing.RepoRoot = "/tmp/repo"
@@ -311,8 +311,12 @@ func TestModelUpdate_CreateFailureReturnsToListModeAndRendersError(t *testing.T)
 	require.Nil(t, followup)
 	require.Equal(t, tuiModeList, m.mode)
 	require.False(t, m.busy)
-	require.False(t, m.createInFlight)
-	require.Contains(t, stripANSI(m.View().Content), "create failed")
+	require.True(t, m.createInFlight)
+	require.Equal(t, len(m.taskViews), m.selected)
+	view := stripANSI(m.View().Content)
+	require.Contains(t, view, "create failed")
+	require.Contains(t, view, "Creating task...")
+	require.Contains(t, view, "add billing retry flow")
 }
 
 func TestModelUpdate_CreateFailureWithPersistedTaskReturnsToListModeAndPreservesError(t *testing.T) {
@@ -351,6 +355,83 @@ func TestModelUpdate_CreateFailureWithPersistedTaskReturnsToListModeAndPreserves
 	view := stripANSI(m.View().Content)
 	require.Contains(t, view, "create failed after persist")
 	require.Contains(t, view, "billing-retry-flow")
+}
+
+func TestModelUpdate_AsyncErrorKeepsSyntheticRowVisibleAndRendersError(t *testing.T) {
+	m := newLoadedTUIModel(t, NewMockTaskService(t), tuiTask("existing-task"))
+	m.createInFlight = true
+	m.busy = true
+	m.createInput = core.NewTaskInput{
+		Prompt:   "add billing retry flow",
+		Provider: "codex",
+	}
+	m.creationProgress = core.TaskProgressAgentLaunching
+	m.creationSteps = []string{"Creating worktree...", "Starting session...", "Launching agent..."}
+	m.shimmerTick = 3
+	m.selected = len(m.taskViews)
+
+	m, cmd := updateTUIModel(t, m, asyncErrMsg{err: errors.New("createTaskCmd panicked: boom")})
+	require.Nil(t, cmd)
+	require.False(t, m.busy)
+	require.True(t, m.createInFlight)
+	require.Equal(t, "", string(m.creationProgress))
+	require.Equal(t, 0, m.shimmerTick)
+	require.Equal(t, len(m.taskViews), m.selected)
+
+	view := stripANSI(m.View().Content)
+	require.Contains(t, view, "Creating task...")
+	require.Contains(t, view, "add billing retry flow")
+	require.Contains(t, view, "createTaskCmd panicked: boom")
+}
+
+func TestModelUpdate_SyntheticRowBlocksOpenAndCleanupActions(t *testing.T) {
+	m := newLoadedTUIModel(t, NewMockTaskService(t), tuiTask("existing-task"))
+	m.createInFlight = true
+	m.createInput = core.NewTaskInput{
+		Prompt:   "add billing retry flow",
+		Provider: "codex",
+	}
+	m.selected = m.syntheticCreationRowIndex()
+
+	m, cmd := updateTUIModel(t, m, tea.KeyPressMsg{Code: tea.KeyEnter})
+	require.Nil(t, cmd)
+	require.False(t, m.busy)
+	require.Equal(t, tuiModeList, m.mode)
+	require.Contains(t, stripANSI(m.View().Content), "Task is still being created")
+
+	m.err = nil
+	m, cmd = updateTUIModel(t, m, keyRunes("x"))
+	require.Nil(t, cmd)
+	require.Equal(t, tuiModeList, m.mode)
+	require.Contains(t, stripANSI(m.View().Content), "Task is still being created")
+
+	m.mode = tuiModeCleanupConfirm
+	m.err = nil
+	m, cmd = updateTUIModel(t, m, keyRunes("y"))
+	require.Nil(t, cmd)
+	require.False(t, m.busy)
+	require.Equal(t, tuiModeList, m.mode)
+	require.Contains(t, stripANSI(m.View().Content), "Task is still being created")
+}
+
+func TestModelUpdate_SyntheticRowNavigationMovesAwayAndBack(t *testing.T) {
+	m := newLoadedTUIModel(t, NewMockTaskService(t), tuiTask("task-one"), tuiTask("task-two"))
+	m.createInFlight = true
+	m.createInput = core.NewTaskInput{
+		Prompt:   "add billing retry flow",
+		Provider: "codex",
+	}
+	m.selected = m.syntheticCreationRowIndex()
+
+	m, cmd := updateTUIModel(t, m, keyRunes("k"))
+	require.NotNil(t, cmd)
+	require.Equal(t, 1, m.selected)
+	require.False(t, m.isSyntheticCreationRowSelected())
+
+	m, cmd = updateTUIModel(t, m, keyRunes("j"))
+	require.Nil(t, cmd)
+	require.Equal(t, m.syntheticCreationRowIndex(), m.selected)
+	require.True(t, m.isSyntheticCreationRowSelected())
 }
 
 func TestModelUpdate_NewTaskIsBlockedWhileBackgroundCreationExists(t *testing.T) {
@@ -874,6 +955,95 @@ func TestModelView_ProviderBadgeCoexistsWithRuntimeBadge(t *testing.T) {
 	}
 
 	require.True(t, foundName, "did not find row for %q in view:\n%s", "running task", view)
+}
+
+func TestModelView_ListShowsSyntheticCreatingRow(t *testing.T) {
+	m := newLoadedTUIModel(t, NewMockTaskService(t), tuiTask("existing-task"))
+	m.createInFlight = true
+	m.createInput = core.NewTaskInput{
+		Prompt:   "add billing retry flow",
+		Provider: "codex",
+	}
+	m.creationProgress = core.TaskProgressNaming
+	m.creationSteps = []string{"Suggesting name..."}
+	m.selected = len(m.tasks)
+
+	view := stripANSI(m.View().Content)
+
+	require.Contains(t, view, "Creating task...")
+	require.Contains(t, view, "creating")
+	require.Contains(t, view, "Suggesting name...")
+}
+
+func TestModelUpdate_TaskProgressNameSelectedRenamesCreatingRow(t *testing.T) {
+	m := newLoadedTUIModel(t, NewMockTaskService(t), tuiTask("existing-task"))
+	m.createInFlight = true
+	m.createInput = core.NewTaskInput{
+		Prompt:   "add billing retry flow",
+		Provider: "codex",
+	}
+	m.creationProgress = core.TaskProgressNaming
+	m.creationSteps = []string{"Suggesting name..."}
+	m.selected = len(m.tasks)
+
+	task := tuiTask("billing-retry-flow")
+	task.DisplayName = "billing retry flow"
+	task.Status = core.TaskStatusCreating
+	task.Provider = "codex"
+
+	m, _ = updateTUIModel(t, m, taskProgressMsg{
+		step: core.TaskProgressNameSelected,
+		task: task,
+	})
+
+	require.NotNil(t, m.creationTask)
+	require.Equal(t, "billing retry flow", m.creationTask.DisplayName)
+	require.Equal(t, "billing retry flow", m.selectedTask().DisplayName)
+	require.Contains(t, stripANSI(m.listView()), "billing retry flow")
+}
+
+func TestModelView_DetailPanelShowsSyntheticCreationProgress(t *testing.T) {
+	m := newLoadedTUIModel(t, NewMockTaskService(t), tuiTask("existing-task"))
+	m.createInFlight = true
+	m.createInput = core.NewTaskInput{
+		Prompt:   "add billing retry flow",
+		Provider: "codex",
+	}
+	m.creationProgress = core.TaskProgressAgentLaunching
+	m.creationSteps = []string{"Creating worktree...", "Starting session...", "Launching agent..."}
+	m.shimmerTick = 4
+	m.selected = len(m.tasks)
+
+	view := stripANSI(m.View().Content)
+
+	require.Contains(t, view, "add billing retry flow")
+	require.Contains(t, view, "codex")
+	require.Contains(t, view, "Creating worktree...")
+	require.Contains(t, view, "Starting session...")
+	require.Contains(t, view, "Launching agent...")
+	require.Contains(t, view, "✔")
+}
+
+func TestModelUpdate_RefreshDoesNotDuplicatePersistedSyntheticTask(t *testing.T) {
+	persisted := tuiTask("billing-retry-flow")
+	persisted.DisplayName = "billing retry flow"
+	m := newLoadedTUIModel(t, NewMockTaskService(t), persisted)
+	m.createInFlight = true
+	m.createInput = core.NewTaskInput{
+		Prompt:   "add billing retry flow",
+		Provider: "codex",
+	}
+	m.creationTask = cloneTaskSnapshot(persisted)
+	m.err = errors.New("createTaskCmd panicked: boom")
+
+	m, _ = updateTUIModel(t, m, tasksLoadedMsg{
+		requestID: m.tasksRequestSeq,
+		views:     taskViews(persisted),
+	})
+
+	require.Len(t, m.visibleTaskViews(), 1)
+	require.Equal(t, "billing retry flow", m.selectedTask().DisplayName)
+	require.Equal(t, 1, strings.Count(stripANSI(m.listView()), "billing retry flow"))
 }
 
 func TestModelView_TaskRowsUseObserverStatus(t *testing.T) {

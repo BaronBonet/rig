@@ -132,6 +132,7 @@ type asyncErrMsg struct {
 }
 
 const shimmerTickInterval = 60 * time.Millisecond
+const syntheticCreationTitle = "Creating task..."
 
 func newTUIModel(
 	service TaskService,
@@ -195,7 +196,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 		m.taskViews = filterVisibleTaskViews(msg.views)
 		m.tasks = taskViewsToTasks(m.taskViews)
-		if len(m.tasks) == 0 {
+		if len(m.visibleTaskViews()) == 0 {
 			m.selected = 0
 			if m.mode == tuiModeCleanupConfirm {
 				m.mode = tuiModeList
@@ -203,8 +204,8 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 
-		if m.selected >= len(m.tasks) {
-			m.selected = len(m.tasks) - 1
+		if m.selected >= len(m.visibleTaskViews()) {
+			m.selected = len(m.visibleTaskViews()) - 1
 		}
 
 		var cmds []tea.Cmd
@@ -217,7 +218,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				)
 			}
 		}
-		if task := m.selectedTask(); task != nil {
+		if task := m.selectedTask(); task != nil && strings.TrimSpace(task.ID) != "" {
 			cmds = append(cmds, fetchRecentEventsCmd(m.service, task.ID))
 		}
 		if len(cmds) > 0 {
@@ -311,12 +312,19 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 	case createFinishedMsg:
 		m.busy = false
+		m.progressCh = nil
+		m.err = msg.err
+		if msg.err != nil && msg.task == nil && m.createInFlight {
+			m.creationProgress = ""
+			m.shimmerTick = 0
+			m.mode = tuiModeList
+			m.selected = m.syntheticCreationRowIndex()
+			return m, nil
+		}
 		m.createInFlight = false
 		m.creationProgress = ""
 		m.creationSteps = nil
 		m.shimmerTick = 0
-		m.progressCh = nil
-		m.err = msg.err
 		if msg.task != nil {
 			m.creationTask = cloneTaskSnapshot(msg.task)
 			m.upsertTask(msg.task)
@@ -373,10 +381,15 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.err = msg.err
 		m.loading = false
 		m.busy = false
-		m.createInFlight = false
 		m.creationProgress = ""
 		m.shimmerTick = 0
 		m.progressCh = nil
+		if m.createInFlight {
+			m.mode = tuiModeList
+			m.selected = m.syntheticCreationRowIndex()
+			return m, nil
+		}
+		m.createInFlight = false
 		return m, nil
 	default:
 		return m, nil
@@ -431,6 +444,10 @@ func (m model) updateListKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		m.cleanupSubscriptions()
 		return m, tea.Quit
 	case "enter":
+		if m.isSyntheticCreationRowSelected() {
+			m.err = fmt.Errorf("Task is still being created")
+			return m, nil
+		}
 		task := m.selectedTask()
 		if task == nil {
 			return m, nil
@@ -440,7 +457,7 @@ func (m model) updateListKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		m.busy = true
 		return m, openTaskCmd(m.service, selectedIDOrSlug(task))
 	case "j", "down":
-		if m.selected < len(m.tasks)-1 {
+		if m.selected < m.visibleRowCount()-1 {
 			m.selected++
 			return m, m.fetchRecentEventsForSelected()
 		}
@@ -452,19 +469,23 @@ func (m model) updateListKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		}
 		return m, nil
 	case "g", "home":
-		if len(m.tasks) > 0 {
+		if m.visibleRowCount() > 0 {
 			m.selected = 0
 			return m, m.fetchRecentEventsForSelected()
 		}
 		return m, nil
 	case "G", "end":
-		if len(m.tasks) > 0 {
-			m.selected = len(m.tasks) - 1
+		if m.visibleRowCount() > 0 {
+			m.selected = m.visibleRowCount() - 1
 			return m, m.fetchRecentEventsForSelected()
 		}
 		return m, nil
 	case "x":
-		if len(m.tasks) == 0 {
+		if m.isSyntheticCreationRowSelected() {
+			m.err = fmt.Errorf("Task is still being created")
+			return m, nil
+		}
+		if m.visibleRowCount() == 0 {
 			return m, nil
 		}
 
@@ -495,6 +516,11 @@ func (m model) updateCleanupConfirmKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd)
 		m.mode = tuiModeList
 		return m, nil
 	case "y":
+		if m.isSyntheticCreationRowSelected() {
+			m.mode = tuiModeList
+			m.err = fmt.Errorf("Task is still being created")
+			return m, nil
+		}
 		task := m.selectedTask()
 		if task == nil {
 			m.mode = tuiModeList
@@ -538,6 +564,7 @@ func (m model) updatePromptInputKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 			Prompt:   prompt,
 			Provider: m.provider,
 		}
+		m.selected = m.syntheticCreationRowIndex()
 		m.promptInput.Blur()
 		progressCh, createCmd := createTaskCmd(m.service, m.createInput)
 		m.progressCh = progressCh
@@ -660,15 +687,19 @@ func (m model) listView() string {
 		b.WriteString(dimStyle.Render("Working...") + "\n\n")
 	}
 
-	if len(m.tasks) == 0 {
+	rows := m.visibleTaskViews()
+	if len(rows) == 0 {
 		b.WriteString(dimStyle.Render("No tasks found.") + "\n")
 		b.WriteString(dimStyle.Render("Press n to create one."))
 		return b.String()
 	}
 
 	// Task rows — two lines per task
-	for i, task := range m.tasks {
-		view := m.taskViewAt(i)
+	for i, view := range rows {
+		if view == nil || view.Task == nil {
+			continue
+		}
+		task := view.Task
 		stateText, stStyle := taskStateText(view)
 		elapsed := taskElapsed(view)
 
@@ -706,7 +737,7 @@ func (m model) listView() string {
 		}
 
 		// Vertical spacing between tasks
-		if i < len(m.tasks)-1 {
+		if i < len(rows)-1 {
 			b.WriteString("\n")
 		}
 	}
@@ -744,6 +775,10 @@ func (m model) selectedTaskDetailView() string {
 	task := m.selectedTask()
 	if task == nil {
 		return ""
+	}
+
+	if m.isSyntheticCreationRowSelected() {
+		return m.syntheticCreationDetailView()
 	}
 
 	view := m.selectedTaskView()
@@ -1252,43 +1287,37 @@ func (m model) confirmationView() string {
 }
 
 func (m model) selectedTask() *core.Task {
-	if len(m.tasks) == 0 {
+	view := m.selectedTaskView()
+	if view == nil {
 		return nil
 	}
-
-	if m.selected < 0 {
-		return m.tasks[0]
-	}
-
-	if m.selected >= len(m.tasks) {
-		return m.tasks[len(m.tasks)-1]
-	}
-
-	return m.tasks[m.selected]
+	return view.Task
 }
 
 func (m model) selectedTaskView() *core.TaskView {
-	if len(m.taskViews) == 0 {
+	rows := m.visibleTaskViews()
+	if len(rows) == 0 {
 		return nil
 	}
 
 	if m.selected < 0 {
-		return m.taskViews[0]
+		return rows[0]
 	}
 
-	if m.selected >= len(m.taskViews) {
-		return m.taskViews[len(m.taskViews)-1]
+	if m.selected >= len(rows) {
+		return rows[len(rows)-1]
 	}
 
-	return m.taskViews[m.selected]
+	return rows[m.selected]
 }
 
 func (m model) taskViewAt(index int) *core.TaskView {
-	if index < 0 || index >= len(m.taskViews) {
+	rows := m.visibleTaskViews()
+	if index < 0 || index >= len(rows) {
 		return nil
 	}
 
-	return m.taskViews[index]
+	return rows[index]
 }
 
 func (m *model) replaceTask(updated *core.Task) {
@@ -1423,10 +1452,101 @@ func isVisibleTask(task *core.Task) bool {
 
 func (m model) fetchRecentEventsForSelected() tea.Cmd {
 	task := m.selectedTask()
-	if task == nil {
+	if task == nil || strings.TrimSpace(task.ID) == "" {
 		return nil
 	}
 	return fetchRecentEventsCmd(m.service, task.ID)
+}
+
+func (m model) visibleTaskViews() []*core.TaskView {
+	rows := append([]*core.TaskView{}, m.taskViews...)
+	if view := m.syntheticCreationTaskView(); view != nil {
+		rows = append(rows, view)
+	}
+	return rows
+}
+
+func (m model) visibleRowCount() int {
+	return len(m.visibleTaskViews())
+}
+
+func (m model) syntheticCreationTaskView() *core.TaskView {
+	if !m.createInFlight {
+		return nil
+	}
+
+	task := cloneTaskSnapshot(m.creationTask)
+	if task == nil {
+		task = &core.Task{}
+	}
+	if syntheticTaskIsPersisted(task, m.taskViews) {
+		return nil
+	}
+
+	if strings.TrimSpace(task.DisplayName) == "" {
+		task.DisplayName = syntheticCreationTitle
+	}
+	if strings.TrimSpace(task.Provider) == "" {
+		task.Provider = emptyFallback(m.createInput.Provider, m.provider)
+	}
+	if strings.TrimSpace(task.Prompt) == "" {
+		task.Prompt = m.createInput.Prompt
+	}
+	task.Status = core.TaskStatusCreating
+	task.RuntimeState = core.RuntimeStateNone
+
+	return &core.TaskView{Task: task}
+}
+
+func (m model) syntheticCreationRowIndex() int {
+	return len(m.taskViews)
+}
+
+func (m model) isSyntheticCreationRowSelected() bool {
+	return m.syntheticCreationTaskView() != nil && m.selected >= len(m.taskViews)
+}
+
+func (m model) syntheticCreationDetailView() string {
+	totalWidth := m.width
+	if totalWidth < 40 {
+		totalWidth = 72
+	}
+
+	provider := emptyFallback(m.createInput.Provider, m.provider)
+
+	var b strings.Builder
+	b.WriteString("   " + headerLabelStyle.Render("CREATION") + "\n")
+	if strings.TrimSpace(m.createInput.Prompt) != "" {
+		b.WriteString("   " + mutedStyle.Render("prompt") + "   " +
+			primaryStyle.Render(m.createInput.Prompt) + "\n")
+	}
+	b.WriteString("   " + mutedStyle.Render("provider") + " " +
+		providerStyle(provider).Render(provider) + "\n")
+
+	if len(m.creationSteps) > 0 {
+		b.WriteString("\n")
+		for i, label := range m.creationSteps {
+			if i == len(m.creationSteps)-1 && m.creationProgress != "" &&
+				m.creationProgress != core.TaskProgressTaskCreated {
+				b.WriteString("   " + warningStyle.Render("●") + " " +
+					renderShimmer(label, m.shimmerTick) + "\n")
+				continue
+			}
+			b.WriteString("   " + healthyStyle.Render(iconCheckmark) + " " +
+				mutedStyle.Render(label) + "\n")
+		}
+	}
+
+	if m.err != nil {
+		b.WriteString("\n")
+		b.WriteString("   " + errorStyle.Render("Error: "+m.err.Error()))
+	}
+
+	if b.Len() == 0 {
+		return ""
+	}
+
+	return strings.TrimRight(b.String(), "\n")
 }
 
 func (m *model) nextRefreshTasksCmd() tea.Cmd {
@@ -1655,4 +1775,26 @@ func cloneTaskSnapshot(task *core.Task) *core.Task {
 
 	cloned := *task
 	return &cloned
+}
+
+func syntheticTaskIsPersisted(task *core.Task, views []*core.TaskView) bool {
+	if task == nil {
+		return false
+	}
+
+	key := strings.TrimSpace(selectedIDOrSlug(task))
+	if key == "" {
+		return false
+	}
+
+	for _, view := range views {
+		if view == nil || view.Task == nil {
+			continue
+		}
+		if strings.TrimSpace(selectedIDOrSlug(view.Task)) == key {
+			return true
+		}
+	}
+
+	return false
 }
