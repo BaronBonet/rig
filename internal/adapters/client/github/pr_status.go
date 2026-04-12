@@ -31,8 +31,8 @@ func (c *PRStatusChecker) CheckPRStatus(
 		ctx, repoRoot,
 		"gh", "pr", "view",
 		branchName,
-		"--json", "number,state",
-		"--jq", ".number,.state",
+		"--json", "number,state,isDraft",
+		"--jq", ".number,.state,.isDraft",
 	)
 	if err != nil {
 		return &core.PRStatus{State: core.PRStateNone}, nil
@@ -50,11 +50,21 @@ func parsePROutput(output string) *core.PRStatus {
 	number, _ := strconv.Atoi(strings.TrimSpace(lines[0]))
 	state := strings.TrimSpace(strings.ToLower(lines[1]))
 
+	isDraft := false
+	if len(lines) >= 3 {
+		isDraft = strings.TrimSpace(strings.ToLower(lines[2])) == "true"
+	}
+
 	switch state {
 	case "open":
+		if isDraft {
+			return &core.PRStatus{State: core.PRStateDraft, Number: number}
+		}
 		return &core.PRStatus{State: core.PRStateOpen, Number: number}
 	case "merged":
 		return &core.PRStatus{State: core.PRStateMerged, Number: number}
+	case "closed":
+		return &core.PRStatus{State: core.PRStateClosed, Number: number}
 	default:
 		return &core.PRStatus{State: core.PRStateNone}
 	}
