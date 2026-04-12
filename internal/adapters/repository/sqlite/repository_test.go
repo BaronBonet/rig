@@ -288,7 +288,7 @@ func TestNewRepository_CreatesFreshDatabaseWithGooseMigrations(t *testing.T) {
 		context.Background(),
 		`select version_id, is_applied from goose_db_version order by id desc limit 1`,
 	).Scan(&versionID, &isApplied))
-	require.EqualValues(t, 1, versionID)
+	require.EqualValues(t, 2, versionID)
 	require.True(t, isApplied)
 }
 

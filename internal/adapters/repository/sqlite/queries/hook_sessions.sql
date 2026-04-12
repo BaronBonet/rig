@@ -4,7 +4,7 @@ select
   current_turn_id, last_event_name, runtime_phase, started_at,
   last_activity_at, last_stop_at, last_prompt_preview,
   last_command_preview, last_command_result_preview,
-  last_assistant_message, command_count
+  last_assistant_message, command_count, last_prompt_submitted_at
 from task_hook_sessions
 where task_id = sqlc.arg(task_id)
 limit 1;
@@ -15,7 +15,7 @@ select
   current_turn_id, last_event_name, runtime_phase, started_at,
   last_activity_at, last_stop_at, last_prompt_preview,
   last_command_preview, last_command_result_preview,
-  last_assistant_message, command_count
+  last_assistant_message, command_count, last_prompt_submitted_at
 from task_hook_sessions
 ;
 
@@ -25,7 +25,7 @@ select
   current_turn_id, last_event_name, runtime_phase, started_at,
   last_activity_at, last_stop_at, last_prompt_preview,
   last_command_preview, last_command_result_preview,
-  last_assistant_message, command_count
+  last_assistant_message, command_count, last_prompt_submitted_at
 from task_hook_sessions
 where task_id in (sqlc.slice(task_ids));
 
@@ -35,9 +35,9 @@ insert into task_hook_sessions (
   current_turn_id, last_event_name, runtime_phase, started_at,
   last_activity_at, last_stop_at, last_prompt_preview,
   last_command_preview, last_command_result_preview,
-  last_assistant_message, command_count, updated_at
+  last_assistant_message, command_count, last_prompt_submitted_at, updated_at
 ) values (
-  ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?
+  ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?
 )
 on conflict(task_id) do update set
   session_id = excluded.session_id,
@@ -56,4 +56,5 @@ on conflict(task_id) do update set
   last_command_result_preview = excluded.last_command_result_preview,
   last_assistant_message = excluded.last_assistant_message,
   command_count = excluded.command_count,
+  last_prompt_submitted_at = excluded.last_prompt_submitted_at,
   updated_at = excluded.updated_at;

@@ -86,6 +86,7 @@ func hookSessionSummaryFromGetRow(row generated.GetHookSessionSummaryByTaskIDRow
 		row.LastCommandResultPreview,
 		row.LastAssistantMessage,
 		row.CommandCount,
+		row.LastPromptSubmittedAt,
 	)
 }
 
@@ -108,6 +109,7 @@ func hookSessionSummaryFromListAllRow(row generated.ListAllHookSessionSummariesR
 		row.LastCommandResultPreview,
 		row.LastAssistantMessage,
 		row.CommandCount,
+		row.LastPromptSubmittedAt,
 	)
 }
 
@@ -132,6 +134,7 @@ func hookSessionSummaryFromListByTaskIDsRow(
 		row.LastCommandResultPreview,
 		row.LastAssistantMessage,
 		row.CommandCount,
+		row.LastPromptSubmittedAt,
 	)
 }
 
@@ -153,6 +156,7 @@ func hookSessionSummaryFromValues(
 	lastCommandResultPreview string,
 	lastAssistantMessage string,
 	commandCount int64,
+	lastPromptSubmittedAt string,
 ) *core.HookSessionSummary {
 	return &core.HookSessionSummary{
 		TaskID:                taskID,
@@ -167,6 +171,7 @@ func hookSessionSummaryFromValues(
 		StartedAt:             parseTime(startedAt),
 		LastActivityAt:        parseTime(lastActivityAt),
 		LastStopAt:            parseTime(lastStopAt),
+		LastPromptSubmittedAt: parseTime(lastPromptSubmittedAt),
 		LastPromptText:        lastPromptPreview,
 		LastCommandText:       lastCommandPreview,
 		LastCommandResultText: lastCommandResultPreview,
@@ -273,6 +278,7 @@ func hookSessionSummaryParams(summary *core.HookSessionSummary) generated.Upsert
 		LastCommandResultPreview: summary.LastCommandResultText,
 		LastAssistantMessage:     summary.LastAssistantMessage,
 		CommandCount:             int64(summary.CommandCount),
+		LastPromptSubmittedAt:    formatTime(summary.LastPromptSubmittedAt),
 		UpdatedAt:                formatTime(summary.LastActivityAt),
 	}
 }
