@@ -48,6 +48,7 @@ type model struct {
 	width              int
 	loading            bool
 	busy               bool
+	createInFlight     bool
 	creationProgress   core.TaskProgressStep
 	creationSteps      []string
 	recentEvents       []core.HookEvent
@@ -55,6 +56,7 @@ type model struct {
 	shimmerTick        int
 	progressCh         <-chan taskProgressMsg
 	tasksRequestSeq    int
+	creationTask       *core.Task
 }
 
 type tasksLoadedMsg struct {
@@ -115,6 +117,7 @@ type createFinishedMsg struct {
 type taskProgressMsg struct {
 	step    core.TaskProgressStep
 	message string
+	task    *core.Task
 }
 
 type recentEventsMsg struct {
@@ -182,7 +185,9 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 		m.loading = false
-		m.busy = false
+		if !m.createInFlight {
+			m.busy = false
+		}
 		if msg.err != nil {
 			m.err = msg.err
 			return m, nil
@@ -306,22 +311,19 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 	case createFinishedMsg:
 		m.busy = false
+		m.createInFlight = false
 		m.creationProgress = ""
 		m.creationSteps = nil
 		m.shimmerTick = 0
 		m.progressCh = nil
 		m.err = msg.err
 		if msg.task != nil {
+			m.creationTask = cloneTaskSnapshot(msg.task)
 			m.upsertTask(msg.task)
 			m.tasksRequestSeq++
 		}
 		if msg.err != nil {
-			if msg.task != nil {
-				m.mode = tuiModeList
-			} else {
-				m.mode = tuiModeNameConfirm
-				m.nameInput.Focus()
-			}
+			m.mode = tuiModeList
 			return m, nil
 		}
 
@@ -343,10 +345,13 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		return m, nil
 	case taskProgressMsg:
+		if msg.task != nil {
+			m.creationTask = cloneTaskSnapshot(msg.task)
+		}
 		m.creationProgress = msg.step
 		if label := progressStepLabel(msg.step); label != "" {
-			// Avoid duplicating the initial "Creating worktree..." step
-			// that was seeded when entering the creation phase.
+			// Avoid duplicating the initial step that was seeded when
+			// entering the creation phase.
 			if len(m.creationSteps) == 0 || m.creationSteps[len(m.creationSteps)-1] != label {
 				m.creationSteps = append(m.creationSteps, label)
 			}
@@ -368,6 +373,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.err = msg.err
 		m.loading = false
 		m.busy = false
+		m.createInFlight = false
 		m.creationProgress = ""
 		m.shimmerTick = 0
 		m.progressCh = nil
@@ -401,6 +407,9 @@ func (m model) updateKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	}
 
 	if m.busy {
+		if m.createInFlight && msg.String() == "n" {
+			m.err = fmt.Errorf("Task creation already in progress")
+		}
 		return m, nil
 	}
 
@@ -518,13 +527,23 @@ func (m model) updatePromptInputKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 
 		m.err = nil
 		m.busy = true
+		m.createInFlight = true
+		m.mode = tuiModeList
+		m.creationTask = nil
 		m.creationProgress = core.TaskProgressNaming
+		m.creationSteps = []string{progressStepLabel(core.TaskProgressNaming)}
 		m.shimmerTick = 0
-		m.createInput.Prompt = prompt
-		m.createInput.Provider = m.provider
+		m.createInput = core.NewTaskInput{
+			Cwd:      m.creationCwd(),
+			Prompt:   prompt,
+			Provider: m.provider,
+		}
 		m.promptInput.Blur()
+		progressCh, createCmd := createTaskCmd(m.service, m.createInput)
+		m.progressCh = progressCh
 		return m, tea.Batch(
-			suggestTaskNameCmd(m.service, prompt, m.provider),
+			createCmd,
+			waitForProgressCmd(progressCh),
 			tea.Tick(shimmerTickInterval, func(time.Time) tea.Msg { return shimmerTickMsg{} }),
 		)
 	}
@@ -1546,7 +1565,11 @@ func createTaskCmd(service TaskService, input core.NewTaskInput) (<-chan taskPro
 			input,
 			core.CreateTaskOptions{OpenSession: false},
 			func(p core.TaskProgress) {
-				progressCh <- taskProgressMsg{step: p.Step, message: p.Message}
+				progressCh <- taskProgressMsg{
+					step:    p.Step,
+					message: p.Message,
+					task:    cloneTaskSnapshot(p.Task),
+				}
 			},
 		)
 		return createFinishedMsg{task: task, err: err}
@@ -1623,4 +1646,13 @@ func progressStepLabel(step core.TaskProgressStep) string {
 	default:
 		return ""
 	}
+}
+
+func cloneTaskSnapshot(task *core.Task) *core.Task {
+	if task == nil {
+		return nil
+	}
+
+	cloned := *task
+	return &cloned
 }

@@ -52,7 +52,7 @@ func TestModelUpdate_NEntersPromptEntryMode(t *testing.T) {
 	require.Nil(t, cmd)
 }
 
-func TestModelUpdate_CreateFlowSuggestsNameThenCreatesTask(t *testing.T) {
+func TestModelUpdate_PromptSubmitStartsBackgroundCreationAndReturnsToListMode(t *testing.T) {
 	service := NewMockTaskService(t)
 	existing := tuiTask("existing-task")
 	existing.RepoRoot = "/tmp/repo"
@@ -64,27 +64,12 @@ func TestModelUpdate_CreateFlowSuggestsNameThenCreatesTask(t *testing.T) {
 	m.promptInput.SetValue("add billing retry flow")
 
 	service.EXPECT().
-		SuggestTaskName(mock.Anything, "add billing retry flow", "codex").
-		Return(core.TaskSuggestion{Name: "billing retry flow", BranchType: "feat"}, nil).
-		Once()
-	m, suggestCmd := updateTUIModel(t, m, tea.KeyPressMsg{Code: tea.KeyEnter})
-	require.NotNil(t, suggestCmd)
-
-	m.selected = 1
-	suggestMsg := executeBatchUntil[suggestNameFinishedMsg](t, suggestCmd)
-	m, _ = updateTUIModel(t, m, suggestMsg)
-	require.Equal(t, tuiModeNameConfirm, m.mode)
-	require.Equal(t, "billing retry flow", m.nameInput.Value())
-
-	service.EXPECT().
 		CreateTaskWithProgress(
 			mock.Anything,
 			core.NewTaskInput{
-				Cwd:                  "/tmp/repo",
-				Prompt:               "add billing retry flow",
-				ConfirmedDisplayName: "billing retry flow",
-				ConfirmedBranchType:  "feat",
-				Provider:             "codex",
+				Cwd:      "/tmp/repo",
+				Prompt:   "add billing retry flow",
+				Provider: "codex",
 			},
 			core.CreateTaskOptions{OpenSession: false},
 			mock.Anything,
@@ -101,7 +86,14 @@ func TestModelUpdate_CreateFlowSuggestsNameThenCreatesTask(t *testing.T) {
 		Once()
 	m, createCmd := updateTUIModel(t, m, tea.KeyPressMsg{Code: tea.KeyEnter})
 	require.NotNil(t, createCmd)
+	require.Equal(t, tuiModeList, m.mode)
 	require.True(t, m.busy)
+	require.True(t, m.createInFlight)
+	require.Equal(t, core.TaskProgressNaming, m.creationProgress)
+	require.Equal(t, []string{"Suggesting name..."}, m.creationSteps)
+	require.Equal(t, "add billing retry flow", m.createInput.Prompt)
+	require.Equal(t, "codex", m.createInput.Provider)
+	require.Equal(t, "/tmp/repo", m.createInput.Cwd)
 
 	createMsg := executeBatchUntil[createFinishedMsg](t, createCmd)
 	m, refreshCmd := updateTUIModel(t, m, createMsg)
@@ -115,6 +107,82 @@ func TestModelUpdate_CreateFlowSuggestsNameThenCreatesTask(t *testing.T) {
 	refreshMsg := followup()
 	m, _ = updateTUIModel(t, m, refreshMsg)
 	require.False(t, m.busy)
+	require.False(t, m.createInFlight)
+}
+
+func TestModelUpdate_TaskProgressNameSelectedPreservesTaskSnapshot(t *testing.T) {
+	service := NewMockTaskService(t)
+	selectedTask := tuiTask("billing-retry-flow")
+	input := core.NewTaskInput{
+		Cwd:      "/tmp/repo",
+		Prompt:   "add billing retry flow",
+		Provider: "codex",
+	}
+
+	service.EXPECT().
+		CreateTaskWithProgress(
+			mock.Anything,
+			input,
+			core.CreateTaskOptions{OpenSession: false},
+			mock.Anything,
+		).
+		RunAndReturn(func(_ context.Context, gotInput core.NewTaskInput, _ core.CreateTaskOptions, progress func(core.TaskProgress)) (*core.Task, error) {
+			require.Equal(t, input, gotInput)
+			selectedTask.DisplayName = "Billing retry flow"
+			selectedTask.BranchName = "feat/billing-retry-flow"
+			progress(core.TaskProgress{
+				Step:    core.TaskProgressNameSelected,
+				Message: "Selected name: Billing retry flow",
+				Task:    selectedTask,
+			})
+			selectedTask.DisplayName = "mutated after send"
+			selectedTask.Slug = "mutated-after-send"
+			selectedTask.BranchName = "mutated-after-send"
+			return selectedTask, nil
+		})
+
+	progressCh, createCmd := createTaskCmd(service, input)
+	createMsg := createCmd()
+	require.IsType(t, createFinishedMsg{}, createMsg)
+
+	progressMsg := executeBatchUntil[taskProgressMsg](t, waitForProgressCmd(progressCh))
+	require.Equal(t, core.TaskProgressNameSelected, progressMsg.step)
+	require.Equal(t, "Selected name: Billing retry flow", progressMsg.message)
+	require.NotNil(t, progressMsg.task)
+	require.NotSame(t, selectedTask, progressMsg.task)
+	require.Equal(t, "Billing retry flow", progressMsg.task.DisplayName)
+	require.Equal(t, "billing-retry-flow", progressMsg.task.Slug)
+	require.Equal(t, "feat/billing-retry-flow", progressMsg.task.BranchName)
+
+	m := newLoadedTUIModel(t, NewMockTaskService(t), tuiTask("existing-task"))
+	m, _ = updateTUIModel(t, m, progressMsg)
+	require.NotNil(t, m.creationTask)
+	require.NotSame(t, progressMsg.task, m.creationTask)
+	require.Equal(t, "Billing retry flow", m.creationTask.DisplayName)
+	require.Equal(t, "billing-retry-flow", m.creationTask.Slug)
+	require.Equal(t, "feat/billing-retry-flow", m.creationTask.BranchName)
+}
+
+func TestModelUpdate_StaleTasksLoadedDoesNotClearCreateInFlight(t *testing.T) {
+	service := NewMockTaskService(t)
+	existing := tuiTask("existing-task")
+	existing.RepoRoot = "/tmp/repo"
+	m := newLoadedTUIModel(t, service, existing)
+
+	m, _ = updateTUIModel(t, m, keyRunes("n"))
+	m.promptInput.SetValue("add billing retry flow")
+
+	m, _ = updateTUIModel(t, m, tea.KeyPressMsg{Code: tea.KeyEnter})
+	require.True(t, m.createInFlight)
+	require.True(t, m.busy)
+
+	m, _ = updateTUIModel(t, m, tasksLoadedMsg{
+		requestID: 1,
+		views:     taskViews(existing),
+	})
+	require.True(t, m.busy)
+	require.True(t, m.createInFlight)
+	require.Equal(t, tuiModeList, m.mode)
 }
 
 func TestModelUpdate_CreateFlowWithoutTasksUsesModelCwdFallback(t *testing.T) {
@@ -126,25 +194,12 @@ func TestModelUpdate_CreateFlowWithoutTasksUsesModelCwdFallback(t *testing.T) {
 	m.promptInput.SetValue("add billing retry flow")
 
 	service.EXPECT().
-		SuggestTaskName(mock.Anything, "add billing retry flow", "codex").
-		Return(core.TaskSuggestion{Name: "billing retry flow", BranchType: "feat"}, nil).
-		Once()
-	m, suggestCmd := updateTUIModel(t, m, tea.KeyPressMsg{Code: tea.KeyEnter})
-	require.NotNil(t, suggestCmd)
-
-	suggestMsg := executeBatchUntil[suggestNameFinishedMsg](t, suggestCmd)
-	m, _ = updateTUIModel(t, m, suggestMsg)
-	require.Equal(t, tuiModeNameConfirm, m.mode)
-
-	service.EXPECT().
 		CreateTaskWithProgress(
 			mock.Anything,
 			core.NewTaskInput{
-				Cwd:                  "/tmp/fallback-repo",
-				Prompt:               "add billing retry flow",
-				ConfirmedDisplayName: "billing retry flow",
-				ConfirmedBranchType:  "feat",
-				Provider:             "codex",
+				Cwd:      "/tmp/fallback-repo",
+				Prompt:   "add billing retry flow",
+				Provider: "codex",
 			},
 			core.CreateTaskOptions{OpenSession: false},
 			mock.Anything,
@@ -161,6 +216,7 @@ func TestModelUpdate_CreateFlowWithoutTasksUsesModelCwdFallback(t *testing.T) {
 		Once()
 	m, createCmd := updateTUIModel(t, m, tea.KeyPressMsg{Code: tea.KeyEnter})
 	require.NotNil(t, createCmd)
+	require.Equal(t, tuiModeList, m.mode)
 
 	createMsg := executeBatchUntil[createFinishedMsg](t, createCmd)
 	m, refreshCmd := updateTUIModel(t, m, createMsg)
@@ -186,25 +242,12 @@ func TestModelUpdate_CreateFlowUsesConfiguredDefaultProvider(t *testing.T) {
 	m.promptInput.SetValue("add billing retry flow")
 
 	service.EXPECT().
-		SuggestTaskName(mock.Anything, "add billing retry flow", "claude").
-		Return(core.TaskSuggestion{Name: "billing retry flow", BranchType: "feat"}, nil).
-		Once()
-	m, suggestCmd := updateTUIModel(t, m, tea.KeyPressMsg{Code: tea.KeyEnter})
-	require.NotNil(t, suggestCmd)
-
-	suggestMsg := executeBatchUntil[suggestNameFinishedMsg](t, suggestCmd)
-	m, _ = updateTUIModel(t, m, suggestMsg)
-	require.Equal(t, "claude", m.provider)
-
-	service.EXPECT().
 		CreateTaskWithProgress(
 			mock.Anything,
 			core.NewTaskInput{
-				Cwd:                  "/tmp/repo",
-				Prompt:               "add billing retry flow",
-				ConfirmedDisplayName: "billing retry flow",
-				ConfirmedBranchType:  "feat",
-				Provider:             "claude",
+				Cwd:      "/tmp/repo",
+				Prompt:   "add billing retry flow",
+				Provider: "claude",
 			},
 			core.CreateTaskOptions{OpenSession: false},
 			mock.Anything,
@@ -221,6 +264,7 @@ func TestModelUpdate_CreateFlowUsesConfiguredDefaultProvider(t *testing.T) {
 		Once()
 	m, createCmd := updateTUIModel(t, m, tea.KeyPressMsg{Code: tea.KeyEnter})
 	require.NotNil(t, createCmd)
+	require.Equal(t, tuiModeList, m.mode)
 
 	createMsg := executeBatchUntil[createFinishedMsg](t, createCmd)
 	m, followup := updateTUIModel(t, m, createMsg)
@@ -234,30 +278,7 @@ func TestModelUpdate_CreateFlowUsesConfiguredDefaultProvider(t *testing.T) {
 	require.False(t, m.busy)
 }
 
-func TestModelUpdate_SuggestNameFailureReturnsToPromptModeAndRendersError(t *testing.T) {
-	service := NewMockTaskService(t)
-	service.EXPECT().
-		SuggestTaskName(mock.Anything, "add billing retry flow", "codex").
-		Return(core.TaskSuggestion{}, errors.New("suggest failed")).
-		Once()
-	m := newLoadedTUIModel(t, service, tuiTask("existing-task"))
-
-	m, _ = updateTUIModel(t, m, keyRunes("n"))
-	m.promptInput.SetValue("add billing retry flow")
-	m, suggestCmd := updateTUIModel(t, m, tea.KeyPressMsg{Code: tea.KeyEnter})
-	require.NotNil(t, suggestCmd)
-	require.True(t, m.busy)
-
-	msg := executeBatchUntil[suggestNameFinishedMsg](t, suggestCmd)
-	m, followup := updateTUIModel(t, m, msg)
-	require.Nil(t, followup)
-	require.Equal(t, tuiModePromptInput, m.mode)
-	require.False(t, m.busy)
-	require.True(t, m.promptInput.Focused())
-	require.Contains(t, stripANSI(m.View().Content), "suggest failed")
-}
-
-func TestModelUpdate_CreateFailureReturnsToNameConfirmModeAndRendersError(t *testing.T) {
+func TestModelUpdate_CreateFailureReturnsToListModeAndRendersError(t *testing.T) {
 	service := NewMockTaskService(t)
 	existing := tuiTask("existing-task")
 	existing.RepoRoot = "/tmp/repo"
@@ -267,22 +288,12 @@ func TestModelUpdate_CreateFailureReturnsToNameConfirmModeAndRendersError(t *tes
 	m.promptInput.SetValue("add billing retry flow")
 
 	service.EXPECT().
-		SuggestTaskName(mock.Anything, "add billing retry flow", "codex").
-		Return(core.TaskSuggestion{Name: "billing retry flow", BranchType: "feat"}, nil).
-		Once()
-	m, suggestCmd := updateTUIModel(t, m, tea.KeyPressMsg{Code: tea.KeyEnter})
-	msg := executeBatchUntil[suggestNameFinishedMsg](t, suggestCmd)
-	m, _ = updateTUIModel(t, m, msg)
-
-	service.EXPECT().
 		CreateTaskWithProgress(
 			mock.Anything,
 			core.NewTaskInput{
-				Cwd:                  "/tmp/repo",
-				Prompt:               "add billing retry flow",
-				ConfirmedDisplayName: "billing retry flow",
-				ConfirmedBranchType:  "feat",
-				Provider:             "codex",
+				Cwd:      "/tmp/repo",
+				Prompt:   "add billing retry flow",
+				Provider: "codex",
 			},
 			core.CreateTaskOptions{OpenSession: false},
 			mock.Anything,
@@ -292,13 +303,15 @@ func TestModelUpdate_CreateFailureReturnsToNameConfirmModeAndRendersError(t *tes
 	m, createCmd := updateTUIModel(t, m, tea.KeyPressMsg{Code: tea.KeyEnter})
 	require.NotNil(t, createCmd)
 	require.True(t, m.busy)
+	require.True(t, m.createInFlight)
+	require.Equal(t, tuiModeList, m.mode)
 
 	createMsg := executeBatchUntil[createFinishedMsg](t, createCmd)
 	m, followup := updateTUIModel(t, m, createMsg)
 	require.Nil(t, followup)
-	require.Equal(t, tuiModeNameConfirm, m.mode)
+	require.Equal(t, tuiModeList, m.mode)
 	require.False(t, m.busy)
-	require.True(t, m.nameInput.Focused())
+	require.False(t, m.createInFlight)
 	require.Contains(t, stripANSI(m.View().Content), "create failed")
 }
 
@@ -312,22 +325,12 @@ func TestModelUpdate_CreateFailureWithPersistedTaskReturnsToListModeAndPreserves
 	m.promptInput.SetValue("add billing retry flow")
 
 	service.EXPECT().
-		SuggestTaskName(mock.Anything, "add billing retry flow", "codex").
-		Return(core.TaskSuggestion{Name: "billing retry flow", BranchType: "feat"}, nil).
-		Once()
-	m, suggestCmd := updateTUIModel(t, m, tea.KeyPressMsg{Code: tea.KeyEnter})
-	msg := executeBatchUntil[suggestNameFinishedMsg](t, suggestCmd)
-	m, _ = updateTUIModel(t, m, msg)
-
-	service.EXPECT().
 		CreateTaskWithProgress(
 			mock.Anything,
 			core.NewTaskInput{
-				Cwd:                  "/tmp/repo",
-				Prompt:               "add billing retry flow",
-				ConfirmedDisplayName: "billing retry flow",
-				ConfirmedBranchType:  "feat",
-				Provider:             "codex",
+				Cwd:      "/tmp/repo",
+				Prompt:   "add billing retry flow",
+				Provider: "codex",
 			},
 			core.CreateTaskOptions{OpenSession: false},
 			mock.Anything,
@@ -337,19 +340,45 @@ func TestModelUpdate_CreateFailureWithPersistedTaskReturnsToListModeAndPreserves
 	m, createCmd := updateTUIModel(t, m, tea.KeyPressMsg{Code: tea.KeyEnter})
 	require.NotNil(t, createCmd)
 	require.True(t, m.busy)
+	require.True(t, m.createInFlight)
 
 	createMsg := executeBatchUntil[createFinishedMsg](t, createCmd)
 	m, followup := updateTUIModel(t, m, createMsg)
 	require.Nil(t, followup)
 	require.Equal(t, tuiModeList, m.mode)
 	require.False(t, m.busy)
+	require.False(t, m.createInFlight)
 	view := stripANSI(m.View().Content)
-	require.NotContains(t, view, "Confirm Task Name")
 	require.Contains(t, view, "create failed after persist")
 	require.Contains(t, view, "billing-retry-flow")
+}
 
-	_, duplicateCmd := updateTUIModel(t, m, tea.KeyPressMsg{Code: tea.KeyEnter})
-	require.NotNil(t, duplicateCmd)
+func TestModelUpdate_NewTaskIsBlockedWhileBackgroundCreationExists(t *testing.T) {
+	m := newLoadedTUIModel(t, NewMockTaskService(t), tuiTask("existing-task"))
+
+	m, _ = updateTUIModel(t, m, keyRunes("n"))
+	m.promptInput.SetValue("add billing retry flow")
+	m, createCmd := updateTUIModel(t, m, tea.KeyPressMsg{Code: tea.KeyEnter})
+	require.NotNil(t, createCmd)
+	require.True(t, m.busy)
+	require.Equal(t, tuiModeList, m.mode)
+
+	m, cmd := updateTUIModel(t, m, keyRunes("n"))
+	require.Nil(t, cmd)
+	require.Equal(t, tuiModeList, m.mode)
+	require.Contains(t, stripANSI(m.View().Content), "Task creation already in progress")
+}
+
+func TestModelUpdate_NewTaskWhileOtherBusyStateDoesNotReportCreateInProgressError(t *testing.T) {
+	m := newLoadedTUIModel(t, NewMockTaskService(t), tuiTask("existing-task"))
+	m.busy = true
+	m.createInFlight = false
+
+	m, cmd := updateTUIModel(t, m, keyRunes("n"))
+	require.Nil(t, cmd)
+	require.Equal(t, tuiModeList, m.mode)
+	require.Nil(t, m.err)
+	require.NotContains(t, stripANSI(m.View().Content), "Task creation already in progress")
 }
 
 func TestModelUpdate_PromptModeEscapeReturnsToListMode(t *testing.T) {
@@ -362,20 +391,11 @@ func TestModelUpdate_PromptModeEscapeReturnsToListMode(t *testing.T) {
 }
 
 func TestModelUpdate_NameConfirmModeEscapeReturnsToListMode(t *testing.T) {
-	service := NewMockTaskService(t)
-	existing := tuiTask("existing-task")
-	existing.RepoRoot = "/tmp/repo"
-	m := newLoadedTUIModel(t, service, existing)
-
-	m, _ = updateTUIModel(t, m, keyRunes("n"))
-	m.promptInput.SetValue("add billing retry flow")
-	service.EXPECT().
-		SuggestTaskName(mock.Anything, "add billing retry flow", "codex").
-		Return(core.TaskSuggestion{Name: "billing retry flow", BranchType: "feat"}, nil).
-		Once()
-	m, suggestCmd := updateTUIModel(t, m, tea.KeyPressMsg{Code: tea.KeyEnter})
-	msg := executeBatchUntil[suggestNameFinishedMsg](t, suggestCmd)
-	m, _ = updateTUIModel(t, m, msg)
+	m := newLoadedTUIModel(t, NewMockTaskService(t), tuiTask("existing-task"))
+	m.mode = tuiModeNameConfirm
+	m.createInput.Prompt = "add billing retry flow"
+	m.createInput.Provider = "codex"
+	m.nameInput.SetValue("billing retry flow")
 
 	m, cmd := updateTUIModel(t, m, tea.KeyPressMsg{Code: tea.KeyEscape})
 	require.Equal(t, tuiModeList, m.mode)
