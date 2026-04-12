@@ -55,8 +55,8 @@ type Dependencies struct {
 
 func NewRootCommand(deps Dependencies) *cobra.Command {
 	cmd := &cobra.Command{
-		Use:   "agent",
-		Short: "Manage task worktrees and tmux sessions for agent-driven work",
+		Use:   "rig",
+		Short: "Manage isolated workspaces for AI-assisted coding tasks",
 		Args:  cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			if deps.Service == nil {

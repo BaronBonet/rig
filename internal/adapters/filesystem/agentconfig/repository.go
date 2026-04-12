@@ -20,7 +20,7 @@ func NewLoader() *Loader {
 }
 
 func (l *Loader) LoadRepoConfig(_ context.Context, repoRoot string) (core.RepoConfig, error) {
-	raw, err := os.ReadFile(filepath.Join(repoRoot, "agent.yaml"))
+	raw, err := os.ReadFile(filepath.Join(repoRoot, "rig.yaml"))
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) {
 			return core.RepoConfig{}, nil
@@ -30,7 +30,7 @@ func (l *Loader) LoadRepoConfig(_ context.Context, repoRoot string) (core.RepoCo
 
 	var doc yaml.Node
 	if err := yaml.Unmarshal(raw, &doc); err != nil {
-		return core.RepoConfig{}, fmt.Errorf("parse agent.yaml: %w", err)
+		return core.RepoConfig{}, fmt.Errorf("parse rig.yaml: %w", err)
 	}
 	if err := validateDuplicateKeys(&doc); err != nil {
 		return core.RepoConfig{}, err
@@ -56,9 +56,9 @@ func parseSeed(doc *yaml.Node) (core.SeedConfig, error) {
 		return core.SeedConfig{}, nil
 	}
 	if root.Kind != yaml.MappingNode {
-		return core.SeedConfig{}, fmt.Errorf("invalid agent.yaml: root must be a mapping")
+		return core.SeedConfig{}, fmt.Errorf("invalid rig.yaml: root must be a mapping")
 	}
-	if err := validateAllowedKeys(root, "agent.yaml", "seed"); err != nil {
+	if err := validateAllowedKeys(root, "rig.yaml", "seed"); err != nil {
 		return core.SeedConfig{}, err
 	}
 
@@ -70,7 +70,7 @@ func parseSeed(doc *yaml.Node) (core.SeedConfig, error) {
 		return core.SeedConfig{}, nil
 	}
 	if seedNode.Kind != yaml.MappingNode {
-		return core.SeedConfig{}, fmt.Errorf("invalid agent.yaml: seed must be a mapping")
+		return core.SeedConfig{}, fmt.Errorf("invalid rig.yaml: seed must be a mapping")
 	}
 	if err := validateAllowedKeys(seedNode, "seed", "copy", "setup_script"); err != nil {
 		return core.SeedConfig{}, err
@@ -101,21 +101,21 @@ func parseSeedCopy(seedNode *yaml.Node) ([]string, error) {
 		return nil, nil
 	}
 	if copyNode.Kind != yaml.SequenceNode {
-		return nil, fmt.Errorf("invalid agent.yaml: seed.copy must be a sequence")
+		return nil, fmt.Errorf("invalid rig.yaml: seed.copy must be a sequence")
 	}
 
 	paths := make([]string, 0, len(copyNode.Content))
 	for i, item := range copyNode.Content {
 		if item.Kind != yaml.ScalarNode || item.Tag != "!!str" {
-			return nil, fmt.Errorf("invalid agent.yaml: seed.copy[%d] must be a string", i)
+			return nil, fmt.Errorf("invalid rig.yaml: seed.copy[%d] must be a string", i)
 		}
 
 		path := item.Value
 		if path == "" {
-			return nil, fmt.Errorf("invalid agent.yaml: seed.copy[%d] must not be empty", i)
+			return nil, fmt.Errorf("invalid rig.yaml: seed.copy[%d] must not be empty", i)
 		}
 		if err := validateSeedPath(path); err != nil {
-			return nil, fmt.Errorf("invalid agent.yaml: seed.copy[%d] %w", i, err)
+			return nil, fmt.Errorf("invalid rig.yaml: seed.copy[%d] %w", i, err)
 		}
 
 		paths = append(paths, path)
@@ -133,12 +133,12 @@ func parseSeedSetupScript(seedNode *yaml.Node) (string, error) {
 		return "", nil
 	}
 	if setupScriptNode.Kind != yaml.ScalarNode || setupScriptNode.Tag != "!!str" {
-		return "", fmt.Errorf("invalid agent.yaml: seed.setup_script must be a string")
+		return "", fmt.Errorf("invalid rig.yaml: seed.setup_script must be a string")
 	}
 	setupScript := setupScriptNode.Value
 	if setupScript != "" {
 		if err := validateSeedPath(setupScript); err != nil {
-			return "", fmt.Errorf("invalid agent.yaml: seed.setup_script %w", err)
+			return "", fmt.Errorf("invalid rig.yaml: seed.setup_script %w", err)
 		}
 	}
 	return setupScript, nil
@@ -149,14 +149,14 @@ func documentRoot(doc *yaml.Node) (*yaml.Node, error) {
 		return nil, nil
 	}
 	if doc.Kind != yaml.DocumentNode {
-		return nil, fmt.Errorf("invalid agent.yaml: expected a document")
+		return nil, fmt.Errorf("invalid rig.yaml: expected a document")
 	}
 	return doc.Content[0], nil
 }
 
 func lookupMapping(node *yaml.Node, key string) (*yaml.Node, bool, error) {
 	if node.Kind != yaml.MappingNode {
-		return nil, false, fmt.Errorf("invalid agent.yaml: expected mapping node")
+		return nil, false, fmt.Errorf("invalid rig.yaml: expected mapping node")
 	}
 	var matched *yaml.Node
 	for i := 0; i < len(node.Content); i += 2 {
@@ -164,7 +164,7 @@ func lookupMapping(node *yaml.Node, key string) (*yaml.Node, bool, error) {
 		valueNode := node.Content[i+1]
 		if keyNode.Kind == yaml.ScalarNode && keyNode.Tag == "!!str" && keyNode.Value == key {
 			if matched != nil {
-				return nil, false, fmt.Errorf("invalid agent.yaml: duplicate key %q", key)
+				return nil, false, fmt.Errorf("invalid rig.yaml: duplicate key %q", key)
 			}
 			matched = valueNode
 		}
@@ -209,7 +209,7 @@ func validateDuplicateKeys(node *yaml.Node) error {
 				return err
 			}
 			if _, ok := seen[keyName]; ok {
-				return fmt.Errorf("invalid agent.yaml: duplicate key %q", keyName)
+				return fmt.Errorf("invalid rig.yaml: duplicate key %q", keyName)
 			}
 			seen[keyName] = struct{}{}
 			if err := validateDuplicateKeys(keyNode); err != nil {
@@ -233,7 +233,7 @@ func validateDuplicateKeys(node *yaml.Node) error {
 
 func canonicalKeyName(node *yaml.Node) (string, error) {
 	if node == nil {
-		return "", fmt.Errorf("invalid agent.yaml: nil key")
+		return "", fmt.Errorf("invalid rig.yaml: nil key")
 	}
 	if node.Kind == yaml.ScalarNode {
 		return node.Value, nil
@@ -241,7 +241,7 @@ func canonicalKeyName(node *yaml.Node) (string, error) {
 
 	encoded, err := yaml.Marshal(node)
 	if err != nil {
-		return "", fmt.Errorf("invalid agent.yaml: encode key: %w", err)
+		return "", fmt.Errorf("invalid rig.yaml: encode key: %w", err)
 	}
 	return string(encoded), nil
 }

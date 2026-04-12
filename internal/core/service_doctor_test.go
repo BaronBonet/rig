@@ -40,7 +40,7 @@ func TestServiceDoctor_NotesMissingRepoConfigWhenRepoDetected(t *testing.T) {
 
 	result, err := svc.service.Doctor(t.Context(), "/tmp/repo")
 	require.NoError(t, err)
-	require.Contains(t, result.Notes, "config: agent.yaml not found")
+	require.Contains(t, result.Notes, "config: rig.yaml not found")
 	require.Empty(t, result.Failures)
 }
 
@@ -50,8 +50,8 @@ func TestServiceDoctor_NotesLoadedEmptyRepoConfig(t *testing.T) {
 
 	result, err := svc.service.Doctor(t.Context(), "/tmp/repo")
 	require.NoError(t, err)
-	require.Contains(t, result.Notes, "config: loaded agent.yaml")
-	require.NotContains(t, result.Notes, "config: agent.yaml not found")
+	require.Contains(t, result.Notes, "config: loaded rig.yaml")
+	require.NotContains(t, result.Notes, "config: rig.yaml not found")
 	require.Empty(t, result.Failures)
 }
 
@@ -64,7 +64,7 @@ func TestServiceDoctor_ReportsValidSeedPathsAsNotes(t *testing.T) {
 
 	result, err := svc.service.Doctor(t.Context(), "/tmp/repo")
 	require.NoError(t, err)
-	require.Contains(t, result.Notes, "config: loaded agent.yaml")
+	require.Contains(t, result.Notes, "config: loaded rig.yaml")
 	require.Contains(t, result.Notes, "config: seed path ok: .env")
 	require.Contains(t, result.Notes, "config: seed path ok: local/")
 	require.Equal(t, "/tmp/repo", svc.workspaceSeeder.validateRepoRoot)
@@ -74,11 +74,11 @@ func TestServiceDoctor_ReportsValidSeedPathsAsNotes(t *testing.T) {
 
 func TestServiceDoctor_ReportsInvalidRepoConfigAsFailure(t *testing.T) {
 	svc := newTestService(t)
-	svc.configRepo.loadErr = errors.New("parse agent.yaml: invalid yaml")
+	svc.configRepo.loadErr = errors.New("parse rig.yaml: invalid yaml")
 
 	result, err := svc.service.Doctor(t.Context(), "/tmp/repo")
 	require.NoError(t, err)
-	require.Contains(t, result.Failures, "config: parse agent.yaml: invalid yaml")
+	require.Contains(t, result.Failures, "config: parse rig.yaml: invalid yaml")
 }
 
 func TestServiceDoctor_ReportsValidSetupScriptAsNote(t *testing.T) {
@@ -121,7 +121,7 @@ func TestServiceDoctor_ReportsInvalidSeedPathsAsFailure(t *testing.T) {
 
 	result, err := svc.service.Doctor(t.Context(), "/tmp/repo")
 	require.NoError(t, err)
-	require.Contains(t, result.Notes, "config: loaded agent.yaml")
+	require.Contains(t, result.Notes, "config: loaded rig.yaml")
 	require.Contains(t, result.Failures, "config: invalid seed path \".env\": not found")
 }
 

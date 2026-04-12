@@ -698,9 +698,9 @@ func (s *Service) Doctor(ctx context.Context, cwd string) (DoctorResult, error) 
 			if err != nil {
 				result.Failures = append(result.Failures, "config: "+err.Error())
 			} else if !repoConfig.Exists {
-				result.Notes = append(result.Notes, "config: agent.yaml not found")
+				result.Notes = append(result.Notes, "config: rig.yaml not found")
 			} else {
-				result.Notes = append(result.Notes, "config: loaded agent.yaml")
+				result.Notes = append(result.Notes, "config: loaded rig.yaml")
 				if err := s.workspace.ValidateSeedPaths(ctx, repoCtx.Root, repoConfig.Seed.Copy); err != nil {
 					result.Failures = append(result.Failures, "config: "+err.Error())
 				} else {

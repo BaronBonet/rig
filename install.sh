@@ -3,12 +3,12 @@ set -eu
 
 PREFIX="${PREFIX:-$HOME/.local}"
 BIN_DIR="${BIN_DIR:-$PREFIX/bin}"
-AGENT_INSTALL_REPO="${AGENT_INSTALL_REPO:-BaronBonet/tmux-llm}"
+AGENT_INSTALL_REPO="${AGENT_INSTALL_REPO:-BaronBonet/rig}"
 AGENT_INSTALL_API_URL="${AGENT_INSTALL_API_URL:-https://api.github.com/repos/$AGENT_INSTALL_REPO/releases/latest}"
 AGENT_INSTALL_DOWNLOAD_ROOT="${AGENT_INSTALL_DOWNLOAD_ROOT:-https://github.com/$AGENT_INSTALL_REPO/releases/download}"
 
 fail() {
-    echo "agent installer: $*" >&2
+    echo "rig installer: $*" >&2
     exit 1
 }
 
@@ -74,7 +74,7 @@ ensure_on_path() {
         return
     fi
 
-    printf '\n# Added by agent installer\n%s\n' "$export_line" >>"$rc_file"
+    printf '\n# Added by rig installer\n%s\n' "$export_line" >>"$rc_file"
     echo "Added ${BIN_DIR} to PATH in $rc_file"
     echo "Run: source $rc_file"
 }
@@ -88,7 +88,7 @@ main() {
     goos="$(detect_goos)"
     goarch="$(detect_goarch)"
     version="$(latest_tag)"
-    archive="agent_${version}_${goos}_${goarch}.tar.gz"
+    archive="rig_${version}_${goos}_${goarch}.tar.gz"
     download_base="$AGENT_INSTALL_DOWNLOAD_ROOT/$version"
     tmpdir="$(mktemp -d)"
     trap 'rm -rf "$tmpdir"' EXIT INT TERM
@@ -104,12 +104,12 @@ main() {
 
     tar -xzf "$tmpdir/$archive" -C "$tmpdir"
     mkdir -p "$BIN_DIR"
-    install -m 0755 "$tmpdir/agent" "$BIN_DIR/agent"
+    install -m 0755 "$tmpdir/rig" "$BIN_DIR/rig"
 
-    echo "agent installed to $BIN_DIR/agent"
+    echo "rig installed to $BIN_DIR/rig"
     ensure_on_path
-    echo "Run: agent doctor"
-    echo "If macOS blocks the binary, run: xattr -d com.apple.quarantine $BIN_DIR/agent"
+    echo "Run: rig doctor"
+    echo "If macOS blocks the binary, run: xattr -d com.apple.quarantine $BIN_DIR/rig"
 }
 
 main "$@"

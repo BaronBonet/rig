@@ -4,12 +4,12 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project
 
-**agent** is a macOS CLI tool (Go) that creates isolated development environments for AI-assisted coding tasks. It manages git worktrees, tmux sessions, and LLM provider integrations (Codex and Claude) to run parallel coding tasks with observability.
+**rig** is a macOS CLI tool (Go) that creates isolated development environments for AI-assisted coding tasks. It manages git worktrees, tmux sessions, and LLM provider integrations (Codex and Claude) to run parallel coding tasks with observability.
 
 ## Commands
 
 ```bash
-make build              # Build binary to ./local/bin/agent (runs generate first)
+make build              # Build binary to ./local/bin/rig (runs generate first)
 make test               # Run all tests (runs generate first)
 make generate           # Regenerate sqlc + mockery mocks
 make format             # gofmt + goimports + golines (120 char line length)
@@ -46,7 +46,7 @@ Hexagonal architecture (Ports & Adapters) with dependency injection.
 ### Infrastructure (`internal/infrastructure/`)
 - `config.go` — Env var parsing (`AGENT_PROVIDER`, `AGENT_SQLITE_PATH`, `AGENT_HOOK_LISTEN_ADDR`, etc.)
 
-### Entry point (`cmd/agent/main.go`)
+### Entry point (`cmd/rig/main.go`)
 - Wires all adapters into `core.Service` via constructor injection
 
 ## Code Generation
@@ -66,5 +66,5 @@ Mocked interfaces: `TaskRepository`, `RepoClient`, `SessionClient`, `ProviderCli
 
 - Max line length: 120 characters
 - golangci-lint v2 with extensive linter set (see `.golangci.yaml`)
-- Imports: grouped with `agent/` local module prefix (handled by `goimports -local agent/`)
+- Imports: grouped with `rig/` local module prefix (handled by `goimports -local rig/`)
 - Formatting: gofmt → goimports → golines (120 chars)

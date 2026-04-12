@@ -26,7 +26,7 @@ generate: dependencies-check
 
 .PHONY: build
 build: generate
-	@go build -o ./local/bin/agent ./cmd/agent
+	@go build -o ./local/bin/rig ./cmd/rig
 
 ################################################################################
 ## Test

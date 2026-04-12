@@ -9,7 +9,7 @@ import (
 )
 
 func TestRepositoryLoadRepoConfig(t *testing.T) {
-	t.Run("missing agent.yaml returns empty config", func(t *testing.T) {
+	t.Run("missing rig.yaml returns empty config", func(t *testing.T) {
 		repo := NewLoader()
 
 		cfg, err := repo.LoadRepoConfig(t.Context(), t.TempDir())
@@ -20,7 +20,7 @@ func TestRepositoryLoadRepoConfig(t *testing.T) {
 
 	t.Run("valid yaml preserves authored seed copy entries", func(t *testing.T) {
 		repoRoot := t.TempDir()
-		require.NoError(t, os.WriteFile(filepath.Join(repoRoot, "agent.yaml"), []byte(`
+		require.NoError(t, os.WriteFile(filepath.Join(repoRoot, "rig.yaml"), []byte(`
 seed:
   copy:
     - .env
@@ -38,7 +38,7 @@ seed:
 
 	t.Run("empty file returns existing empty config", func(t *testing.T) {
 		repoRoot := t.TempDir()
-		require.NoError(t, os.WriteFile(filepath.Join(repoRoot, "agent.yaml"), []byte(""), 0o644))
+		require.NoError(t, os.WriteFile(filepath.Join(repoRoot, "rig.yaml"), []byte(""), 0o644))
 
 		repo := NewLoader()
 
@@ -50,7 +50,7 @@ seed:
 
 	t.Run("invalid yaml returns an error", func(t *testing.T) {
 		repoRoot := t.TempDir()
-		require.NoError(t, os.WriteFile(filepath.Join(repoRoot, "agent.yaml"), []byte("seed:\n  copy: [\n"), 0o644))
+		require.NoError(t, os.WriteFile(filepath.Join(repoRoot, "rig.yaml"), []byte("seed:\n  copy: [\n"), 0o644))
 
 		repo := NewLoader()
 
@@ -79,7 +79,7 @@ seed:
 		for _, tc := range tests {
 			t.Run(tc.name, func(t *testing.T) {
 				repoRoot := t.TempDir()
-				require.NoError(t, os.WriteFile(filepath.Join(repoRoot, "agent.yaml"), []byte(tc.body), 0o644))
+				require.NoError(t, os.WriteFile(filepath.Join(repoRoot, "rig.yaml"), []byte(tc.body), 0o644))
 
 				repo := NewLoader()
 
@@ -111,7 +111,7 @@ seed:
 		for _, tc := range tests {
 			t.Run(tc.name, func(t *testing.T) {
 				repoRoot := t.TempDir()
-				require.NoError(t, os.WriteFile(filepath.Join(repoRoot, "agent.yaml"), []byte(tc.body), 0o644))
+				require.NoError(t, os.WriteFile(filepath.Join(repoRoot, "rig.yaml"), []byte(tc.body), 0o644))
 
 				repo := NewLoader()
 
@@ -173,7 +173,7 @@ seed:
 		for _, tc := range tests {
 			t.Run(tc.name, func(t *testing.T) {
 				repoRoot := t.TempDir()
-				require.NoError(t, os.WriteFile(filepath.Join(repoRoot, "agent.yaml"), []byte(tc.body), 0o644))
+				require.NoError(t, os.WriteFile(filepath.Join(repoRoot, "rig.yaml"), []byte(tc.body), 0o644))
 
 				repo := NewLoader()
 
@@ -188,7 +188,7 @@ seed:
 		repoRoot := t.TempDir()
 		require.NoError(
 			t,
-			os.WriteFile(filepath.Join(repoRoot, "agent.yaml"), []byte("seed:\n  copies:\n    - .env\n"), 0o644),
+			os.WriteFile(filepath.Join(repoRoot, "rig.yaml"), []byte("seed:\n  copies:\n    - .env\n"), 0o644),
 		)
 
 		repo := NewLoader()
@@ -234,7 +234,7 @@ seed:
 		for _, tc := range tests {
 			t.Run(tc.name, func(t *testing.T) {
 				repoRoot := t.TempDir()
-				require.NoError(t, os.WriteFile(filepath.Join(repoRoot, "agent.yaml"), []byte(tc.body), 0o644))
+				require.NoError(t, os.WriteFile(filepath.Join(repoRoot, "rig.yaml"), []byte(tc.body), 0o644))
 
 				repo := NewLoader()
 
@@ -249,7 +249,7 @@ seed:
 func TestRepositoryLoadRepoConfig_ParsesSetupScript(t *testing.T) {
 	t.Run("valid setup_script is returned in config", func(t *testing.T) {
 		repoRoot := t.TempDir()
-		require.NoError(t, os.WriteFile(filepath.Join(repoRoot, "agent.yaml"), []byte(`
+		require.NoError(t, os.WriteFile(filepath.Join(repoRoot, "rig.yaml"), []byte(`
 seed:
   setup_script: scripts/setup.sh
 `), 0o644))
@@ -263,7 +263,7 @@ seed:
 
 	t.Run("setup_script with copy paths", func(t *testing.T) {
 		repoRoot := t.TempDir()
-		require.NoError(t, os.WriteFile(filepath.Join(repoRoot, "agent.yaml"), []byte(`
+		require.NoError(t, os.WriteFile(filepath.Join(repoRoot, "rig.yaml"), []byte(`
 seed:
   copy:
     - .env
@@ -280,7 +280,7 @@ seed:
 
 	t.Run("empty setup_script is treated as absent", func(t *testing.T) {
 		repoRoot := t.TempDir()
-		require.NoError(t, os.WriteFile(filepath.Join(repoRoot, "agent.yaml"), []byte(`
+		require.NoError(t, os.WriteFile(filepath.Join(repoRoot, "rig.yaml"), []byte(`
 seed:
   setup_script: ""
 `), 0o644))
@@ -294,7 +294,7 @@ seed:
 
 	t.Run("non-string setup_script returns an error", func(t *testing.T) {
 		repoRoot := t.TempDir()
-		require.NoError(t, os.WriteFile(filepath.Join(repoRoot, "agent.yaml"), []byte(`
+		require.NoError(t, os.WriteFile(filepath.Join(repoRoot, "rig.yaml"), []byte(`
 seed:
   setup_script: [a, b]
 `), 0o644))
@@ -307,7 +307,7 @@ seed:
 
 	t.Run("null setup_script returns an error", func(t *testing.T) {
 		repoRoot := t.TempDir()
-		require.NoError(t, os.WriteFile(filepath.Join(repoRoot, "agent.yaml"), []byte(`
+		require.NoError(t, os.WriteFile(filepath.Join(repoRoot, "rig.yaml"), []byte(`
 seed:
   setup_script: null
 `), 0o644))
@@ -320,7 +320,7 @@ seed:
 
 	t.Run("setup_script with path traversal returns an error", func(t *testing.T) {
 		repoRoot := t.TempDir()
-		require.NoError(t, os.WriteFile(filepath.Join(repoRoot, "agent.yaml"), []byte(`
+		require.NoError(t, os.WriteFile(filepath.Join(repoRoot, "rig.yaml"), []byte(`
 seed:
   setup_script: ../evil.sh
 `), 0o644))
@@ -333,7 +333,7 @@ seed:
 
 	t.Run("setup_script with absolute path returns an error", func(t *testing.T) {
 		repoRoot := t.TempDir()
-		require.NoError(t, os.WriteFile(filepath.Join(repoRoot, "agent.yaml"), []byte(`
+		require.NoError(t, os.WriteFile(filepath.Join(repoRoot, "rig.yaml"), []byte(`
 seed:
   setup_script: /tmp/evil.sh
 `), 0o644))
@@ -346,7 +346,7 @@ seed:
 
 	t.Run("setup_script with glob pattern returns an error", func(t *testing.T) {
 		repoRoot := t.TempDir()
-		require.NoError(t, os.WriteFile(filepath.Join(repoRoot, "agent.yaml"), []byte(`
+		require.NoError(t, os.WriteFile(filepath.Join(repoRoot, "rig.yaml"), []byte(`
 seed:
   setup_script: "scripts/*.sh"
 `), 0o644))

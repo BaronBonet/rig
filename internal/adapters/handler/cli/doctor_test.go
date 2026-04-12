@@ -17,7 +17,7 @@ func TestDoctorCommand_PrintsFailures(t *testing.T) {
 	service.EXPECT().
 		Doctor(mock.Anything, "/tmp/repo").
 		Return(core.DoctorResult{
-			Notes:    []string{"config: loaded agent.yaml"},
+			Notes:    []string{"config: loaded rig.yaml"},
 			Failures: []string{"codex: missing codex"},
 		}, nil).
 		Once()
@@ -33,7 +33,7 @@ func TestDoctorCommand_PrintsFailures(t *testing.T) {
 
 	err := cmd.Execute()
 	require.NoError(t, err)
-	require.Contains(t, out.String(), "config: loaded agent.yaml")
+	require.Contains(t, out.String(), "config: loaded rig.yaml")
 	require.Contains(t, out.String(), "codex: missing codex")
 }
 
@@ -44,7 +44,7 @@ func TestDoctorCommand_PrintsNotesBeforeOk(t *testing.T) {
 		Doctor(mock.Anything, "/tmp/repo").
 		Return(core.DoctorResult{
 			Notes: []string{
-				"config: loaded agent.yaml",
+				"config: loaded rig.yaml",
 				"config: seed path ok: .env",
 			},
 		}, nil).
@@ -61,7 +61,7 @@ func TestDoctorCommand_PrintsNotesBeforeOk(t *testing.T) {
 
 	err := cmd.Execute()
 	require.NoError(t, err)
-	require.Less(t, strings.Index(out.String(), "config: loaded agent.yaml"), strings.Index(out.String(), "doctor: ok"))
+	require.Less(t, strings.Index(out.String(), "config: loaded rig.yaml"), strings.Index(out.String(), "doctor: ok"))
 	require.Less(
 		t,
 		strings.Index(out.String(), "config: seed path ok: .env"),

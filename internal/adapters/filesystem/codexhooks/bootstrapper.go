@@ -14,10 +14,10 @@ import (
 	"rig/internal/core"
 )
 
-//go:embed forward-to-agent.sh.tmpl
+//go:embed forward-to-rig.sh.tmpl
 var forwarderScriptTemplateText string
 
-var forwarderScriptTemplate = template.Must(template.New("forward-to-agent.sh").Parse(forwarderScriptTemplateText))
+var forwarderScriptTemplate = template.Must(template.New("forward-to-rig.sh").Parse(forwarderScriptTemplateText))
 
 type Bootstrapper struct {
 	agentExec  string
@@ -55,7 +55,7 @@ func (b *Bootstrapper) BootstrapTaskWorkspace(_ context.Context, task *core.Task
 		return err
 	}
 
-	return os.WriteFile(filepath.Join(hooksDir, "forward-to-agent.sh"), rawScript, 0o755)
+	return os.WriteFile(filepath.Join(hooksDir, "forward-to-rig.sh"), rawScript, 0o755)
 }
 
 func (b *Bootstrapper) renderHooksJSON() ([]byte, error) {
@@ -96,7 +96,7 @@ func (b *Bootstrapper) commandForEvent(eventName string) string {
 	eventName = strings.TrimSpace(eventName)
 
 	return "/bin/sh -c " + shellQuote(fmt.Sprintf(
-		`repo_root=$(git rev-parse --show-toplevel 2>/dev/null) || exit 0; exec /bin/sh "$repo_root/.codex/hooks/forward-to-agent.sh" %s`,
+		`repo_root=$(git rev-parse --show-toplevel 2>/dev/null) || exit 0; exec /bin/sh "$repo_root/.codex/hooks/forward-to-rig.sh" %s`,
 		shellQuote(eventName),
 	))
 }
