@@ -118,6 +118,18 @@ func TestDeriveHookSessionSummary_MarksWaitingPermissionOnPermissionRequest(t *t
 	require.Equal(t, "git log --all --oneline", summary.LastCommandText)
 }
 
+func TestDeriveHookSessionSummary_UserPromptSubmitSetsLastPromptSubmittedAt(t *testing.T) {
+	ts := time.Date(2026, 4, 12, 10, 30, 0, 0, time.UTC)
+	summary := deriveHookSessionSummary(&core.HookSessionSummary{
+		TaskID: "task-1",
+	}, hookRecord{
+		EventName:  "UserPromptSubmit",
+		OccurredAt: ts,
+		PromptText: "fix the bug",
+	})
+	require.Equal(t, ts, summary.LastPromptSubmittedAt)
+}
+
 func TestTrimPreview_NormalizesWhitespaceAndTruncates(t *testing.T) {
 	long := "  line one\n\tline two  " + repeatString("x", hookPreviewMaxLen)
 

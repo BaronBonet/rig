@@ -134,6 +134,7 @@ type HookSessionSummary struct {
 	StartedAt             time.Time
 	LastActivityAt        time.Time
 	LastStopAt            time.Time
+	LastPromptSubmittedAt time.Time
 	TaskID                string
 	SessionID             string
 	Model                 string
