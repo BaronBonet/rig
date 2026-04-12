@@ -797,9 +797,19 @@ func (m model) selectedTaskDetailView() string {
 	}
 
 	// Activity section
+	var llmReplyText string
+	if view != nil && view.HookSession != nil {
+		llmReplyText = view.HookSession.LastAssistantMessage
+		if llmReplyText == "" {
+			llmReplyText = view.HookSession.LastCommandResultText
+		}
+		if llmReplyText == "" {
+			llmReplyText = view.HookSession.LastCommandText
+		}
+	}
 	hasActivity := false
 	if view != nil && view.HookSession != nil {
-		hasActivity = view.HookSession.LastPromptText != "" || view.HookSession.LastAssistantMessage != ""
+		hasActivity = view.HookSession.LastPromptText != "" || llmReplyText != ""
 	}
 	if hasActivity {
 		totalWidth := m.width
@@ -833,13 +843,13 @@ func (m model) selectedTaskDetailView() string {
 		}
 
 		// Blank line between prompt and response if both exist
-		if view.HookSession.LastPromptText != "" && view.HookSession.LastAssistantMessage != "" {
+		if view.HookSession.LastPromptText != "" && llmReplyText != "" {
 			b.WriteString("\n")
 		}
 
-		// LLM response
-		if view.HookSession.LastAssistantMessage != "" {
-			replyLines := wrapAndTruncate(view.HookSession.LastAssistantMessage, wrapWidth, maxActivityLines)
+		// LLM response (falls back to command result or command text if no assistant message)
+		if llmReplyText != "" {
+			replyLines := wrapAndTruncate(llmReplyText, wrapWidth, maxActivityLines)
 			iconStyle := lipgloss.NewStyle().Foreground(colorLLMReply)
 			var textStyle lipgloss.Style
 			if userSpokeLastVal {
