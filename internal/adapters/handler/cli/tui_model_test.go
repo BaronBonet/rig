@@ -546,12 +546,6 @@ func TestModelUpdate_HookTaskUpdated_UserPromptSubmitReplacesPriorTurnPreview(t 
 	require.Equal(t, "", m.selectedTaskView().HookSession.LastAssistantMessage)
 	require.Equal(t, "", m.selectedTaskView().HookSession.LastCommandText)
 	require.Equal(t, "", m.selectedTaskView().HookSession.LastCommandResultText)
-
-	rendered := stripANSI(m.View().Content)
-	require.Contains(t, rendered, "second prompt")
-	require.NotContains(t, rendered, "first answer")
-	require.NotContains(t, rendered, "go test ./...")
-	require.NotContains(t, rendered, "PASS")
 }
 
 func TestModelUpdate_ObserverTaskUpdatedPreservesHookSession(t *testing.T) {
@@ -957,19 +951,18 @@ func TestModelView_DetailPanelShowsGitAndSessionColumns(t *testing.T) {
 	)
 	view := stripANSI(m.View().Content)
 
-	// Git column
-	require.Contains(t, view, "Git")
+	// Workspace column
+	require.Contains(t, view, "WORKSPACE")
 	require.Contains(t, view, "feat/auth-rewrite")
 	require.Contains(t, view, "tmux-llm")
 
 	// Session column
-	require.Contains(t, view, "Session")
+	require.Contains(t, view, "SESSION")
 	require.Contains(t, view, "2h 13m")
-	require.Contains(t, view, "connected")
-	require.Contains(t, view, "refactor the token validation to use JWT")
-	require.Contains(t, view, "Updated validateToken() to use jwt.Parse")
+	require.Contains(t, view, "total")
 
 	// Removed fields should NOT appear
+	require.NotContains(t, view, "connected")
 	require.NotContains(t, view, "Selected Task")
 	require.NotContains(t, view, "Session Activity")
 	require.NotContains(t, view, "Recent Hook Events")
@@ -989,8 +982,8 @@ func TestModelView_SelectedTaskDetailShowsFallbackWhenHookDataMissing(t *testing
 	m := newLoadedTUIModel(t, service, task)
 	view := stripANSI(m.View().Content)
 
-	require.Contains(t, view, "Git")
-	require.Contains(t, view, "Session")
+	require.Contains(t, view, "WORKSPACE")
+	require.Contains(t, view, "SESSION")
 	require.Contains(t, view, "feat/billing-retry-flow")
 	require.Contains(t, view, "tmux-llm")
 	require.NotContains(t, view, "connected")
@@ -1558,12 +1551,12 @@ func TestModelView_DetailPanelShowsTokenUsageSubSection(t *testing.T) {
 	})
 
 	rendered := stripANSI(m.View().Content)
-	require.Contains(t, rendered, "Token Usage")
-	require.Contains(t, rendered, "input  24.0k")
-	require.Contains(t, rendered, "uncached 16.0k")
-	require.Contains(t, rendered, "new cache 8.0k")
-	require.Contains(t, rendered, "output 1.2k")
-	require.Contains(t, rendered, "cached 5.9m")
+	require.Contains(t, rendered, "tokens")
+	require.Contains(t, rendered, "in    24.0k")
+	require.Contains(t, rendered, "5.9m cached")
+	require.Contains(t, rendered, "new cache")
+	require.Contains(t, rendered, "8.0k new cache")
+	require.Contains(t, rendered, "out   1.2k")
 }
 
 func TestModelView_DetailPanelShowsTokenUsageWithoutCacheSplit(t *testing.T) {
@@ -1587,13 +1580,12 @@ func TestModelView_DetailPanelShowsTokenUsageWithoutCacheSplit(t *testing.T) {
 	})
 
 	rendered := stripANSI(m.View().Content)
-	require.Contains(t, rendered, "Token Usage")
-	require.Contains(t, rendered, "input  240")
-	require.Contains(t, rendered, "output 25")
-	require.Contains(t, rendered, "reasoning 9")
-	require.Contains(t, rendered, "cached 80")
-	// No cache split for Codex
-	require.NotContains(t, rendered, "uncached")
+	require.Contains(t, rendered, "tokens")
+	require.Contains(t, rendered, "in    240")
+	require.Contains(t, rendered, "80 cached")
+	require.Contains(t, rendered, "out   25")
+	require.Contains(t, rendered, "9 reasoning")
+	// No new cache line for Codex
 	require.NotContains(t, rendered, "new cache")
 }
 

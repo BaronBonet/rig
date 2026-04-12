@@ -697,89 +697,64 @@ func (m model) selectedTaskDetailView() string {
 	view := m.selectedTaskView()
 	var b strings.Builder
 
-	// Git column
-	var gitCol strings.Builder
-	gitCol.WriteString(titleStyle.Render("Git") + "\n")
+	// Workspace column
+	var wsCol strings.Builder
+	wsCol.WriteString(headerLabelStyle.Render("WORKSPACE") + "\n")
 	if strings.TrimSpace(task.BranchName) != "" {
-		gitCol.WriteString(dimStyle.Render(m.icons.Branch) + " " + truncateStr(task.BranchName, 38) + "\n")
+		wsCol.WriteString(mutedStyle.Render("branch") + " " +
+			primaryStyle.Render(truncateStr(task.BranchName, 38)) + "\n")
 	}
 	if strings.TrimSpace(task.RepoName) != "" {
-		gitCol.WriteString(dimStyle.Render(m.icons.Repo) + " " + task.RepoName + "\n")
+		wsCol.WriteString(mutedStyle.Render("repo") + "   " +
+			primaryStyle.Render(task.RepoName) + "\n")
 	}
 	if view != nil && view.PR != nil && view.PR.State != core.PRStateNone {
-		prIcon, prStyle := m.prStatusDisplay(view.PR)
-		gitCol.WriteString(prStyle.Render(prIcon+fmt.Sprintf(" #%d %s", view.PR.Number, view.PR.State)) + "\n")
+		prIcon, prStyle := prStateIconStyle(view.PR.State)
+		wsCol.WriteString(mutedStyle.Render("pr") + "     " +
+			prStyle.Render(fmt.Sprintf("%s #%d %s", prIcon, view.PR.Number, view.PR.State)) + "\n")
 	}
 
 	// Session column
 	var sessCol strings.Builder
-	sessCol.WriteString(titleStyle.Render("Session") + "\n")
+	sessCol.WriteString(headerLabelStyle.Render("SESSION") + "\n")
 	elapsed := taskElapsed(view)
 	if elapsed != "" {
-		sessCol.WriteString(dimStyle.Render(m.icons.Time) + " " + elapsed + "\n")
+		timeLine := mutedStyle.Render("time") + "   " +
+			primaryStyle.Bold(true).Render(elapsed) + mutedStyle.Render(" total")
+		turnElapsed := taskTurnElapsed(view)
+		if turnElapsed != "" {
+			timeLine += dividerStyle.Render(" · ") +
+				dimStyle.Render(turnElapsed) + mutedStyle.Render(" current turn")
+		}
+		sessCol.WriteString(timeLine + "\n")
 	}
 	if view.TokenUsage != nil {
 		u := view.TokenUsage
-		sessCol.WriteString(dimStyle.Render(m.icons.Token) + " Token Usage\n")
+		sessCol.WriteString(dimStyle.Render("tokens") + "\n")
 		inputDetail := compactCount(u.InputTokens)
-		if u.CacheCreationInputTokens > 0 {
-			uncached := u.InputTokens - u.CacheCreationInputTokens
-			inputDetail += dimStyle.Render(" (uncached ") + compactCount(uncached) +
-				dimStyle.Render(" · new cache ") + compactCount(u.CacheCreationInputTokens) +
-				dimStyle.Render(")")
+		if u.CachedInputTokens > 0 || u.CacheCreationInputTokens > 0 {
+			inputDetail += mutedStyle.Render(" (") +
+				compactCount(u.CachedInputTokens) + mutedStyle.Render(" cached")
+			if u.CacheCreationInputTokens > 0 {
+				inputDetail += mutedStyle.Render(" · ") +
+					compactCount(u.CacheCreationInputTokens) + mutedStyle.Render(" new cache")
+			}
+			inputDetail += mutedStyle.Render(")")
 		}
-		sessCol.WriteString("    input  " + inputDetail + "\n")
+		sessCol.WriteString("  " + mutedStyle.Render("in") + "    " + inputDetail + "\n")
 		outputDetail := compactCount(u.OutputTokens)
 		if u.ReasoningOutputTokens > 0 {
-			outputDetail += dimStyle.Render(
-				" (reasoning ",
-			) + compactCount(
-				u.ReasoningOutputTokens,
-			) + dimStyle.Render(
-				")",
-			)
+			outputDetail += mutedStyle.Render(" (") +
+				compactCount(u.ReasoningOutputTokens) + mutedStyle.Render(" reasoning") +
+				mutedStyle.Render(")")
 		}
-		sessCol.WriteString("    output " + outputDetail + "\n")
-		sessCol.WriteString("    cached " + compactCount(u.CachedInputTokens) + "\n")
-	}
-	if view != nil && view.Observer != nil {
-		if view.Observer.ProcessAlive {
-			sessCol.WriteString(dimStyle.Render(m.icons.Process) + " " + healthyStyle.Render("connected") + "\n")
-		} else {
-			sessCol.WriteString(dimStyle.Render(m.icons.Process) + " " + dimStyle.Render("disconnected") + "\n")
-		}
-	}
-	if view != nil && view.HookSession != nil {
-		hook := view.HookSession
-		llmLatest := isLLMOutputLatest(hook)
-		promptText := truncateStr(strings.TrimSpace(hook.LastPromptText), 40)
-		outputText := truncateStr(strings.TrimSpace(hook.LastAssistantMessage), 40)
-		if outputText == "" {
-			outputText = truncateStr(strings.TrimSpace(hookActivityFallback(hook)), 40)
-		}
-
-		if promptText != "" {
-			icon := dimStyle.Render(m.icons.Prompt)
-			if llmLatest {
-				sessCol.WriteString(icon + " " + dimStyle.Render(promptText) + "\n")
-			} else {
-				sessCol.WriteString(icon + " " + primaryStyle.Bold(true).Render(promptText) + "\n")
-			}
-		}
-		if outputText != "" {
-			icon := dimStyle.Render(m.icons.LLMOutput)
-			if llmLatest {
-				sessCol.WriteString(icon + " " + primaryStyle.Bold(true).Render(outputText) + "\n")
-			} else {
-				sessCol.WriteString(icon + " " + dimStyle.Render(outputText) + "\n")
-			}
-		}
+		sessCol.WriteString("  " + mutedStyle.Render("out") + "   " + outputDetail + "\n")
 	}
 
 	// Combine two columns side by side
-	gitLines := strings.Split(strings.TrimRight(gitCol.String(), "\n"), "\n")
+	wsLines := strings.Split(strings.TrimRight(wsCol.String(), "\n"), "\n")
 	sessLines := strings.Split(strings.TrimRight(sessCol.String(), "\n"), "\n")
-	maxLines := len(gitLines)
+	maxLines := len(wsLines)
 	if len(sessLines) > maxLines {
 		maxLines = len(sessLines)
 	}
@@ -787,8 +762,8 @@ func (m model) selectedTaskDetailView() string {
 	colWidth := 42
 	for i := 0; i < maxLines; i++ {
 		left := ""
-		if i < len(gitLines) {
-			left = gitLines[i]
+		if i < len(wsLines) {
+			left = wsLines[i]
 		}
 		right := ""
 		if i < len(sessLines) {
@@ -882,6 +857,16 @@ func taskElapsed(view *core.TaskView) string {
 		return ""
 	}
 	return formatElapsed(time.Since(started))
+}
+
+func taskTurnElapsed(view *core.TaskView) string {
+	if view == nil || view.HookSession == nil {
+		return ""
+	}
+	if view.HookSession.LastPromptSubmittedAt.IsZero() {
+		return ""
+	}
+	return formatElapsed(time.Since(view.HookSession.LastPromptSubmittedAt))
 }
 
 func isLLMOutputLatest(hook *core.HookSessionSummary) bool {
