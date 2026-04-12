@@ -257,9 +257,12 @@ func (w *TMuxWatcher) overrideWithHookPhase(
 	case core.HookRuntimePhasePrompted, core.HookRuntimePhaseRunningCommand:
 		return core.RuntimeStateRunning
 	case core.HookRuntimePhaseIdle:
-		if hs.LastEventName == "Stop" || rs == core.RuntimeStateNeedsInput {
-			return rs
+		if hs.LastEventName == "Stop" {
+			return core.RuntimeStateNeedsInput
 		}
+		// Between tools (e.g. PostToolUse) Claude is still working —
+		// don't trust tmux which may see a stale ❯ prompt and falsely
+		// report NeedsInput.
 		return core.RuntimeStateRunning
 	}
 

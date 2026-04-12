@@ -364,3 +364,4 @@ func TestRuntimeDetector_Detect_PermissionPromptNotConfusedWithBusy(t *testing.T
 
 	require.Equal(t, core.RuntimeStateNeedsInput, state)
 }
+
