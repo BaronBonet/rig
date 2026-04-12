@@ -10,57 +10,6 @@ import (
 	"rig/internal/core"
 )
 
-// IconSet holds all icons used in the TUI. Two sets are available:
-// Nerd Font (primary) and Unicode fallback.
-type IconSet struct {
-	Branch    string
-	Repo      string
-	PROpen    string
-	PRMerged  string
-	Time      string
-	Process   string
-	Prompt    string
-	LLMOutput string
-	Token     string
-}
-
-func nerdFontIcons() IconSet {
-	return IconSet{
-		Branch:    "\uE725",     // nf-dev-git_branch
-		Repo:      "\uF401",     // nf-oct-repo
-		PROpen:    "\uE726",     // nf-dev-git_pull_request
-		PRMerged:  "\uE727",     // nf-dev-git_merge
-		Time:      "\uF017",     // nf-fa-clock_o
-		Process:   "\uF1E6",     // nf-fa-plug
-		Prompt:    "\uF007",     // nf-fa-user
-		LLMOutput: "\U000F06A9", // nf-md-robot
-		Token:     "\U000F0426", // nf-md-counter
-	}
-}
-
-func unicodeFallbackIcons() IconSet {
-	return IconSet{
-		Branch:    "🌿",
-		Repo:      "📁",
-		PROpen:    "◉",
-		PRMerged:  "✔",
-		Time:      "🕐",
-		Process:   "🔌",
-		Prompt:    "👤",
-		LLMOutput: "🤖",
-		Token:     "🔢",
-	}
-}
-
-// activeIcons returns the icon set to use. Defaults to Nerd Font.
-// Call with useNerdFont=false to get Unicode fallback.
-func activeIcons(useNerdFont bool) IconSet {
-	if useNerdFont {
-		return nerdFontIcons()
-	}
-	return unicodeFallbackIcons()
-}
-
 // Colors
 var (
 	colorPrimary    = lipgloss.Color("#b8bcc8")
@@ -84,16 +33,6 @@ const (
 	iconStatusActive   = "●"
 	iconStatusIdle     = "○"
 	iconStatusProgress = "◐"
-
-	// Header / provider (kept for existing view code; Task 10 will remove)
-	iconHeaderList    = "◈"
-	iconHeaderCreate  = "✦"
-	iconHeaderCleanup = "⚠"
-
-	iconSelected = "▸"
-
-	iconProviderCodex  = "⚡"
-	iconProviderClaude = "✦"
 
 	// PR status (GitHub-inspired, distinct from task status circles)
 	iconPROpen   = "⊙"

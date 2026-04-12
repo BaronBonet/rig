@@ -53,7 +53,6 @@ type model struct {
 	shimmerTick        int
 	progressCh         <-chan taskProgressMsg
 	tasksRequestSeq    int
-	icons              IconSet
 }
 
 type tasksLoadedMsg struct {
@@ -129,7 +128,6 @@ func newTUIModel(
 	defaultCreationCwd string,
 	defaultProvider string,
 	observerSocketPath string,
-	useNerdFont bool,
 	initialErr error,
 ) model {
 	promptInput := textarea.New()
@@ -153,7 +151,6 @@ func newTUIModel(
 		observerSocketPath: strings.TrimSpace(observerSocketPath),
 		provider:           emptyFallback(defaultProvider, "codex"),
 		tasksRequestSeq:    1,
-		icons:              activeIcons(useNerdFont),
 	}
 }
 
@@ -997,20 +994,6 @@ func compactCount(n int) string {
 	}
 }
 
-func (m model) prStatusDisplay(pr *core.PRStatus) (string, lipgloss.Style) {
-	if pr == nil {
-		return "", dimStyle
-	}
-	switch pr.State {
-	case core.PRStateOpen:
-		return m.icons.PROpen, healthyStyle
-	case core.PRStateMerged:
-		return m.icons.PRMerged, titleStyle
-	default:
-		return "", dimStyle
-	}
-}
-
 func (m model) promptInputView() string {
 	totalWidth := m.width
 	if totalWidth < 40 {
@@ -1307,15 +1290,6 @@ func nextProvider(current string) string {
 	return availableProviders[0]
 }
 
-func providerIcon(provider string) string {
-	switch provider {
-	case "claude":
-		return iconProviderClaude
-	default:
-		return iconProviderCodex
-	}
-}
-
 func providerStyle(provider string) lipgloss.Style {
 	switch provider {
 	case "claude":
@@ -1323,21 +1297,6 @@ func providerStyle(provider string) lipgloss.Style {
 	default:
 		return codexStyle
 	}
-}
-
-func providerToggle(selected string) string {
-	var parts []string
-	for _, p := range availableProviders {
-		label := providerIcon(p) + " " + p
-		style := providerStyle(p)
-		if p == selected {
-			parts = append(parts, style.Bold(true).Underline(true).Render(label))
-		} else {
-			parts = append(parts, style.Faint(true).Render(label))
-		}
-	}
-
-	return strings.Join(parts, dimStyle.Render(" / "))
 }
 
 func filterVisibleTasks(tasks []*core.Task) []*core.Task {

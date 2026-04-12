@@ -119,7 +119,7 @@ func TestModelUpdate_CreateFlowSuggestsNameThenCreatesTask(t *testing.T) {
 
 func TestModelUpdate_CreateFlowWithoutTasksUsesModelCwdFallback(t *testing.T) {
 	service := NewMockTaskService(t)
-	m := newTUIModel(service, "/tmp/fallback-repo", "codex", "", false, nil)
+	m := newTUIModel(service, "/tmp/fallback-repo", "codex", "", nil)
 	m.loading = false
 
 	m, _ = updateTUIModel(t, m, keyRunes("n"))
@@ -905,7 +905,7 @@ func TestModelView_OverviewRowsShowElapsedTimeWithoutClockIcon(t *testing.T) {
 			continue
 		}
 		require.Contains(t, row, "15m")
-		require.NotContains(t, row, m.icons.Time)
+		require.NotContains(t, row, "\U0001F550") // old clock emoji icon should not appear
 		return
 	}
 
@@ -1129,7 +1129,7 @@ func TestModelUpdate_CleanupSuccessRefreshFailureRemovesTaskFromVisibleList(t *t
 }
 
 func TestModelView_ShowsLoadingBeforeInitialLoadCompletes(t *testing.T) {
-	m := newTUIModel(NewMockTaskService(t), "/tmp/default", "codex", "", false, nil)
+	m := newTUIModel(NewMockTaskService(t), "/tmp/default", "codex", "", nil)
 	require.Contains(t, stripANSI(m.View().Content), "Loading tasks")
 }
 
@@ -1146,7 +1146,7 @@ func TestModelInit_SubscribesToHookUpdates(t *testing.T) {
 		Return((<-chan core.HookSessionSummary)(hookUpdates), func() {}, nil).
 		Once()
 
-	cmd := newTUIModel(service, "/tmp/default", "codex", "", false, nil).Init()
+	cmd := newTUIModel(service, "/tmp/default", "codex", "", nil).Init()
 	require.NotNil(t, cmd)
 
 	msg := cmd()
@@ -1318,7 +1318,6 @@ func newLoadedTUIModelWithProviderAndViews(
 		"/tmp/default",
 		provider,
 		"",
-		false,
 		nil,
 	).Update(tasksLoadedMsg{requestID: 1, views: views})
 	m, ok := next.(model)
@@ -1356,7 +1355,7 @@ func stripANSI(s string) string {
 }
 
 func TestListViewShowsInitialError(t *testing.T) {
-	m := newTUIModel(NewMockTaskService(t), "/tmp/default", "codex", "", false, errors.New("observer unavailable"))
+	m := newTUIModel(NewMockTaskService(t), "/tmp/default", "codex", "", errors.New("observer unavailable"))
 	m.loading = false
 
 	view := stripANSI(m.listView())
@@ -1597,19 +1596,4 @@ func TestModelView_DetailPanelShowsTokenUsageWithoutCacheSplit(t *testing.T) {
 	require.Contains(t, rendered, "9 reasoning")
 	// No new cache line for Codex
 	require.NotContains(t, rendered, "new cache")
-}
-
-func TestProviderToggle_SelectedProviderUsesProviderColorBoldAndUnderline(t *testing.T) {
-	rendered := providerToggle("codex")
-
-	require.Contains(t, rendered, providerStyle("codex").Bold(true).Underline(true).Render("⚡ codex"))
-	require.Contains(t, stripANSI(rendered), "⚡ codex / ✦ claude")
-}
-
-func TestProviderToggle_UnselectedProviderUsesDimmedProviderStyle(t *testing.T) {
-	rendered := providerToggle("codex")
-
-	require.Contains(t, rendered, providerStyle("claude").Faint(true).Render("✦ claude"))
-	require.NotContains(t, rendered, providerStyle("codex").Render("⚡ codex"))
-	require.NotContains(t, rendered, dimStyle.Render("✦ claude"))
 }

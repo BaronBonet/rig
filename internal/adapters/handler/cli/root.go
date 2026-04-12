@@ -50,7 +50,6 @@ type Dependencies struct {
 	Stderr              io.Writer
 	Cwd                 string
 	DefaultProvider     string
-	UseNerdFont         bool
 }
 
 func NewRootCommand(deps Dependencies) *cobra.Command {
@@ -73,7 +72,6 @@ func NewRootCommand(deps Dependencies) *cobra.Command {
 					deps.Cwd,
 					deps.DefaultProvider,
 					deps.ObserverSocketPath,
-					deps.UseNerdFont,
 					startupErr,
 				),
 				tea.WithInput(cmd.InOrStdin()),
