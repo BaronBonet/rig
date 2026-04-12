@@ -8,7 +8,7 @@ import (
 	"sync"
 	"time"
 
-	"agent/internal/core"
+	"rig/internal/core"
 )
 
 type RuntimeMonitor struct {

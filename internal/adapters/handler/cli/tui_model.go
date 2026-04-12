@@ -7,8 +7,8 @@ import (
 	"strings"
 	"time"
 
-	observer "agent/internal/adapters/observability/observer"
-	"agent/internal/core"
+	observer "rig/internal/adapters/observability/observer"
+	"rig/internal/core"
 
 	"charm.land/bubbles/v2/textarea"
 	"charm.land/bubbles/v2/textinput"

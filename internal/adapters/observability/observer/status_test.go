@@ -3,7 +3,7 @@ package observer
 import (
 	"testing"
 
-	"agent/internal/core"
+	"rig/internal/core"
 
 	"github.com/stretchr/testify/require"
 )

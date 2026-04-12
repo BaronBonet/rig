@@ -11,7 +11,7 @@ import (
 	"strings"
 	"text/template"
 
-	"agent/internal/core"
+	"rig/internal/core"
 )
 
 //go:embed forward-to-agent.sh.tmpl

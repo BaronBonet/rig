@@ -4,7 +4,7 @@ import (
 	"context"
 	"sync"
 
-	"agent/internal/core"
+	"rig/internal/core"
 )
 
 type Hub struct {

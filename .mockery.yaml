@@ -10,7 +10,7 @@ all: false
 recursive: false
 dir: "{{ .InterfaceDirRelative }}"
 packages:
-  agent/internal/core:
+  rig/internal/core:
     interfaces:
       TaskRepository:
       RepoConfigLoader:
@@ -21,13 +21,13 @@ packages:
       RuntimeMonitor:
       ProviderClient:
       PRStatusChecker:
-  agent/internal/adapters/handler/cli:
+  rig/internal/adapters/handler/cli:
     interfaces:
       TaskService:
-  agent/internal/pkg/execx:
+  rig/internal/pkg/execx:
     interfaces:
       Runner:
-  agent/internal/adapters/client/tmux:
+  rig/internal/adapters/client/tmux:
     interfaces:
       controlPipe:
       controlPipeFactory:

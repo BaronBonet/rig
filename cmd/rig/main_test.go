@@ -6,7 +6,7 @@ import (
 	"path/filepath"
 	"testing"
 
-	"agent/internal/core"
+	"rig/internal/core"
 
 	"github.com/stretchr/testify/require"
 )

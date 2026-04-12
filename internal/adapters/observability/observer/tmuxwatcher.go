@@ -6,7 +6,7 @@ import (
 	"strings"
 	"time"
 
-	"agent/internal/core"
+	"rig/internal/core"
 )
 
 type observerTaskLister interface {

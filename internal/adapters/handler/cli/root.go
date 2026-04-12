@@ -8,9 +8,9 @@ import (
 	"strings"
 	"time"
 
-	hookhttp "agent/internal/adapters/observability/codexhooks"
-	observer "agent/internal/adapters/observability/observer"
-	"agent/internal/core"
+	hookhttp "rig/internal/adapters/observability/codexhooks"
+	observer "rig/internal/adapters/observability/observer"
+	"rig/internal/core"
 
 	tea "charm.land/bubbletea/v2"
 	"github.com/spf13/cobra"

@@ -8,7 +8,7 @@ import (
 	"testing"
 	"time"
 
-	"agent/internal/core"
+	"rig/internal/core"
 
 	tea "charm.land/bubbletea/v2"
 	"github.com/stretchr/testify/mock"

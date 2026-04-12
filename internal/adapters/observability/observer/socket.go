@@ -12,7 +12,7 @@ import (
 	"path/filepath"
 	"sync"
 
-	"agent/internal/core"
+	"rig/internal/core"
 )
 
 type SocketServerConfig struct {

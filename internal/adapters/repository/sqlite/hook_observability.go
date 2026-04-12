@@ -9,8 +9,8 @@ import (
 	"sync"
 	"time"
 
-	"agent/internal/adapters/repository/sqlite/generated"
-	"agent/internal/core"
+	"rig/internal/adapters/repository/sqlite/generated"
+	"rig/internal/core"
 )
 
 const hookPreviewMaxLen = 240

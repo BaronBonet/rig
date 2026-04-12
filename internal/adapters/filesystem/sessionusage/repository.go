@@ -7,7 +7,7 @@ import (
 	"os"
 	"strings"
 
-	"agent/internal/core"
+	"rig/internal/core"
 )
 
 type Repository struct{}

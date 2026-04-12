@@ -14,8 +14,8 @@ import (
 	"testing"
 	"time"
 
-	sqliterepo "agent/internal/adapters/repository/sqlite"
-	"agent/internal/core"
+	sqliterepo "rig/internal/adapters/repository/sqlite"
+	"rig/internal/core"
 
 	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"

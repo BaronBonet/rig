@@ -1,6 +1,6 @@
 package observer
 
-import "agent/internal/core"
+import "rig/internal/core"
 
 type StatusInput struct {
 	TaskStatus    core.TaskStatus

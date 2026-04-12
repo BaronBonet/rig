@@ -11,7 +11,7 @@ import (
 	"sync"
 	"time"
 
-	"agent/internal/pkg/slug"
+	"rig/internal/pkg/slug"
 )
 
 type DoctorResult struct {

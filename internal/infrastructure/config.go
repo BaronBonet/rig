@@ -5,13 +5,13 @@ import (
 	"os"
 	"path/filepath"
 
-	"agent/internal/adapters/repository/sqlite"
-	"agent/internal/core"
+	"rig/internal/adapters/repository/sqlite"
+	"rig/internal/core"
 
 	"github.com/caarlos0/env/v11"
 
-	claudeclient "agent/internal/adapters/client/claude"
-	codexclient "agent/internal/adapters/client/codex"
+	claudeclient "rig/internal/adapters/client/claude"
+	codexclient "rig/internal/adapters/client/codex"
 )
 
 // TODO: this is way to complicated, move the adapter specific stuff to their own repos

@@ -1,4 +1,4 @@
-module agent
+module rig
 
 go 1.26.1
 
