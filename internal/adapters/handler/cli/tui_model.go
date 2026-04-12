@@ -1243,8 +1243,8 @@ func (m model) promptInputView() string {
 
 	b.WriteString("\n\n")
 	b.WriteString(
-		dimStyle.Render("enter") + mutedStyle.Render(" submit · ") +
-			dimStyle.Render("esc") + mutedStyle.Render(" cancel"),
+		keybindStyle.Render("enter") + mutedStyle.Render(" submit · ") +
+			keybindStyle.Render("esc") + mutedStyle.Render(" cancel"),
 	)
 
 	return b.String()
@@ -1300,8 +1300,8 @@ func (m model) nameConfirmView() string {
 		b.WriteString(warningStyle.Render("▸ Name: ") + m.nameInput.View() + "\n")
 		b.WriteString("\n")
 		b.WriteString(
-			dimStyle.Render("enter") + mutedStyle.Render(" create · ") +
-				dimStyle.Render("esc") + mutedStyle.Render(" cancel"),
+			keybindStyle.Render("enter") + mutedStyle.Render(" create · ") +
+				keybindStyle.Render("esc") + mutedStyle.Render(" cancel"),
 		)
 	}
 
@@ -1338,8 +1338,8 @@ func (m model) confirmationView() string {
 
 	// Keybinds
 	b.WriteString(
-		dimStyle.Render("y") + mutedStyle.Render(" confirm · ") +
-			dimStyle.Render("n") + mutedStyle.Render(" cancel"),
+		keybindStyle.Render("y") + mutedStyle.Render(" confirm · ") +
+			keybindStyle.Render("n") + mutedStyle.Render(" cancel"),
 	)
 	return b.String()
 }

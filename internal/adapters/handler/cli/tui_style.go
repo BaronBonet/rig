@@ -85,6 +85,9 @@ var (
 	normalRowStyle = lipgloss.NewStyle().
 			PaddingLeft(3)
 
+	keybindStyle = lipgloss.NewStyle().
+			Foreground(colorAccent)
+
 	mutedStyle = lipgloss.NewStyle().
 			Foreground(colorMuted)
 
