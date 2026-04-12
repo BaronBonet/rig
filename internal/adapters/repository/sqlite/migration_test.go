@@ -1,9 +1,12 @@
 package sqlite
 
 import (
+	"bytes"
 	"context"
 	"database/sql"
+	"log"
 	"path/filepath"
+	"strings"
 	"testing"
 	"testing/fstest"
 
@@ -37,6 +40,29 @@ insert into numbers(value) values (2);
 	var count int
 	require.NoError(t, db.QueryRowContext(context.Background(), `select count(*) from numbers`).Scan(&count))
 	require.Equal(t, 2, count)
+}
+
+func TestApplyGooseMigrations_DoesNotEmitLogs(t *testing.T) {
+	db, err := sql.Open("sqlite", ":memory:")
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, db.Close()) })
+
+	files := fstest.MapFS{
+		"migrations/000001_create_numbers.sql": {Data: []byte(`
+-- +goose Up
+create table numbers (value integer not null);
+-- +goose Down
+`)},
+	}
+
+	originalWriter := log.Writer()
+	var buf bytes.Buffer
+	log.SetOutput(&buf)
+	t.Cleanup(func() { log.SetOutput(originalWriter) })
+
+	require.NoError(t, applyGooseMigrations(context.Background(), db, files, "migrations"))
+	require.NoError(t, applyGooseMigrations(context.Background(), db, files, "migrations"))
+	require.Empty(t, strings.TrimSpace(buf.String()))
 }
 
 func TestApplyGooseMigrations_FailsOnInvalidSQL(t *testing.T) {
