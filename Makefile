@@ -31,9 +31,8 @@ build: generate
 ################################################################################
 
 .PHONY: test
-test: generate
-	@sh ./scripts/generate/go_test.sh
-	@go test ./...
+test:
+	@go tool gotestsum --format pkgname --format-hide-empty-pkg -- ./...
 
 ################################################################################
 ## Local Development

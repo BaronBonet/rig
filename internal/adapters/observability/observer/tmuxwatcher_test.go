@@ -341,11 +341,13 @@ func TestTMuxWatcher_OverrideWithHookPhase_ClaudeIdlePostToolUseTrustsNeedsInput
 
 	repo := &stubWatcherObserverRepository{}
 	watcher := NewTMuxWatcher(TMuxWatcherConfig{
-		Tasks:     stubObserverTaskLister{tasks: []*core.Task{task}},
-		Monitor:   monitor,
-		Repo:      repo,
-		Hooks:     hooks,
-		Providers: map[string]core.ProviderClient{"claude": stubTMuxWatcherProvider{runtimeState: core.RuntimeStateNeedsInput}},
+		Tasks:   stubObserverTaskLister{tasks: []*core.Task{task}},
+		Monitor: monitor,
+		Repo:    repo,
+		Hooks:   hooks,
+		Providers: map[string]core.ProviderClient{
+			"claude": stubTMuxWatcherProvider{runtimeState: core.RuntimeStateNeedsInput},
+		},
 	})
 
 	require.NoError(t, watcher.RefreshAll(context.Background()))

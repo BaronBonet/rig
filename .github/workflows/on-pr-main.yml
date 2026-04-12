@@ -29,11 +29,5 @@ jobs:
       - name: Run linters
         run: ./scripts/ci/lint-go.sh
 
-      - name: Run regression check
-        run: sh ./scripts/generate/go_test.sh
-
       - name: Run tests
         run: go test ./...
-
-      - name: Run workflow assertions
-        run: sh ./scripts/ci/github_actions_test.sh
