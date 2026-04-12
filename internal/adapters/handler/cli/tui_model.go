@@ -623,7 +623,7 @@ func (m model) listView() string {
 	// Header: "RIG" on left, keybindings on right
 	b.WriteString(renderHeader(
 		headerLabelStyle.Render("RIG"),
-		mutedStyle.Render("n new   x clean   ? help   q quit"),
+		mutedStyle.Render("n new   r refresh   x clean   q quit"),
 		totalWidth,
 	) + "\n")
 	b.WriteString(dividerStyle.Render(strings.Repeat("─", totalWidth)) + "\n")
@@ -923,8 +923,8 @@ func (m model) selectedTaskDetailView() string {
 func currentTurnLLMActions(events []core.HookEvent, maxActions int) []string {
 	var actions []string
 	for _, ev := range events {
-		if ev.EventName == "UserPromptSubmit" {
-			break // stop at the boundary of the current turn
+		if ev.EventName == "UserPromptSubmit" || ev.EventName == "SessionStart" {
+			break // stop at the boundary of the current turn or session
 		}
 		var text string
 		switch ev.EventName {
