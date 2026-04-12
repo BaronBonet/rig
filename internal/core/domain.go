@@ -62,7 +62,9 @@ type PRState string
 const (
 	PRStateNone   PRState = ""
 	PRStateOpen   PRState = "open"
+	PRStateDraft  PRState = "draft"
 	PRStateMerged PRState = "merged"
+	PRStateClosed PRState = "closed"
 )
 
 type PRStatus struct {
