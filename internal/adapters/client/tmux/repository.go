@@ -7,8 +7,8 @@ import (
 	"strings"
 	"time"
 
-	"agent/internal/core"
-	"agent/internal/pkg/execx"
+	"rig/internal/core"
+	"rig/internal/pkg/execx"
 )
 
 type Repository struct {

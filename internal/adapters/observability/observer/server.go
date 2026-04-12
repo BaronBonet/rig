@@ -9,9 +9,9 @@ import (
 	"sync"
 	"time"
 
-	claudehookhttp "agent/internal/adapters/observability/claudehooks"
-	hookhttp "agent/internal/adapters/observability/codexhooks"
-	"agent/internal/core"
+	claudehookhttp "rig/internal/adapters/observability/claudehooks"
+	hookhttp "rig/internal/adapters/observability/codexhooks"
+	"rig/internal/core"
 )
 
 type ServerConfig struct {

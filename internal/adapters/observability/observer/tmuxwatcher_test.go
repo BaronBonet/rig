@@ -6,8 +6,8 @@ import (
 	"testing"
 	"time"
 
-	"agent/internal/adapters/client/codex"
-	"agent/internal/core"
+	"rig/internal/adapters/client/codex"
+	"rig/internal/core"
 
 	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"

@@ -5,8 +5,8 @@ import (
 	"strconv"
 	"strings"
 
-	"agent/internal/core"
-	"agent/internal/pkg/execx"
+	"rig/internal/core"
+	"rig/internal/pkg/execx"
 )
 
 type PRStatusChecker struct {

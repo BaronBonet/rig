@@ -6,8 +6,8 @@ import (
 	"path/filepath"
 	"testing"
 
-	"agent/internal/core"
-	"agent/internal/pkg/execx"
+	"rig/internal/core"
+	"rig/internal/pkg/execx"
 
 	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"

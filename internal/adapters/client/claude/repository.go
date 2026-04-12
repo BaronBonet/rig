@@ -7,9 +7,9 @@ import (
 	"strings"
 	"unicode"
 
-	"agent/internal/core"
-	"agent/internal/pkg/execx"
-	"agent/internal/pkg/prompts"
+	"rig/internal/core"
+	"rig/internal/pkg/execx"
+	"rig/internal/pkg/prompts"
 )
 
 type Repository struct {

@@ -3,8 +3,8 @@ package sqlite
 import (
 	"time"
 
-	"agent/internal/adapters/repository/sqlite/generated"
-	"agent/internal/core"
+	"rig/internal/adapters/repository/sqlite/generated"
+	"rig/internal/core"
 )
 
 func taskFromRow(row generated.Task) *core.Task {

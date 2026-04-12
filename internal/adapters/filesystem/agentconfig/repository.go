@@ -8,7 +8,7 @@ import (
 	"path/filepath"
 	"strings"
 
-	"agent/internal/core"
+	"rig/internal/core"
 
 	"gopkg.in/yaml.v3"
 )
