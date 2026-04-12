@@ -393,6 +393,90 @@ func TestModelUpdate_CreateFailureWithPersistedTaskReturnsToListModeAndPreserves
 	require.Contains(t, view, "billing-retry-flow")
 }
 
+func TestModelUpdate_CreateFinishedRefreshKeepsSelectionOnPersistedTask(t *testing.T) {
+	service := NewMockTaskService(t)
+	alpha := tuiTask("alpha-task")
+	omega := tuiTask("omega-task")
+	created := tuiTask("billing-retry-flow")
+	created.DisplayName = "billing retry flow"
+	m := newLoadedTUIModel(t, service, alpha, omega)
+	m.createInFlight = true
+	m.createInput = core.NewTaskInput{
+		Prompt:   "add billing retry flow",
+		Provider: "codex",
+	}
+	m.creationTask = cloneTaskSnapshot(created)
+	m.selected = m.syntheticCreationRowIndex()
+
+	m, cmd := updateTUIModel(t, m, createFinishedMsg{task: created})
+	require.NotNil(t, cmd)
+	require.Equal(t, "billing-retry-flow", m.selectedTask().Slug)
+
+	m, refreshCmd := updateTUIModel(t, m, openFinishedMsg{})
+	require.NotNil(t, refreshCmd)
+
+	m, _ = updateTUIModel(t, m, tasksLoadedMsg{
+		requestID: m.tasksRequestSeq,
+		views:     taskViews(alpha, created, omega),
+	})
+	require.Equal(t, "billing-retry-flow", m.selectedTask().Slug)
+	require.Equal(t, 1, strings.Count(stripANSI(m.listView()), "billing retry flow"))
+}
+
+func TestModelUpdate_TasksLoadedKeepsSyntheticRowWhileCreateRemainsInFlight(t *testing.T) {
+	m := newLoadedTUIModel(t, NewMockTaskService(t), tuiTask("existing-task"))
+	m.createInFlight = true
+	m.createInput = core.NewTaskInput{
+		Prompt:   "add billing retry flow",
+		Provider: "codex",
+	}
+	m.creationProgress = core.TaskProgressWorktreeCreating
+	m.creationSteps = []string{"Suggesting name...", "Creating worktree..."}
+	m.creationTask = cloneTaskSnapshot(tuiTask("billing-retry-flow"))
+	m.selected = m.syntheticCreationRowIndex()
+
+	m, _ = updateTUIModel(t, m, tasksLoadedMsg{
+		requestID: m.tasksRequestSeq,
+		views:     taskViews(tuiTask("existing-task")),
+	})
+
+	require.True(t, m.createInFlight)
+	require.NotNil(t, m.syntheticCreationTaskView())
+	require.True(t, m.isSyntheticCreationRowSelected())
+	require.Equal(t, "billing-retry-flow", m.selectedTask().Slug)
+	require.Equal(t, 2, m.visibleRowCount())
+}
+
+func TestModelUpdate_CreateFailureWithPersistedTaskRefreshKeepsSelectionOnPersistedTask(t *testing.T) {
+	service := NewMockTaskService(t)
+	alpha := tuiTask("alpha-task")
+	omega := tuiTask("omega-task")
+	created := tuiTask("billing-retry-flow")
+	created.DisplayName = "billing retry flow"
+	m := newLoadedTUIModel(t, service, alpha, omega)
+	m.createInFlight = true
+	m.createInput = core.NewTaskInput{
+		Prompt:   "add billing retry flow",
+		Provider: "codex",
+	}
+	m.creationTask = cloneTaskSnapshot(created)
+	m.selected = m.syntheticCreationRowIndex()
+
+	m, cmd := updateTUIModel(t, m, createFinishedMsg{
+		task: created,
+		err:  errors.New("create failed after persist"),
+	})
+	require.Nil(t, cmd)
+	require.Equal(t, "billing-retry-flow", m.selectedTask().Slug)
+
+	m, _ = updateTUIModel(t, m, tasksLoadedMsg{
+		requestID: m.tasksRequestSeq,
+		views:     taskViews(alpha, created, omega),
+	})
+	require.Equal(t, "billing-retry-flow", m.selectedTask().Slug)
+	require.Contains(t, stripANSI(m.View().Content), "create failed after persist")
+}
+
 func TestModelUpdate_AsyncErrorKeepsSyntheticRowVisibleAndRendersError(t *testing.T) {
 	m := newLoadedTUIModel(t, NewMockTaskService(t), tuiTask("existing-task"))
 	m.createInFlight = true

@@ -187,6 +187,11 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if msg.requestID != 0 && msg.requestID < m.tasksRequestSeq {
 			return m, nil
 		}
+		selectedKey := ""
+		selectedSynthetic := m.isSyntheticCreationRowSelected()
+		if task := m.selectedTask(); task != nil {
+			selectedKey = strings.TrimSpace(selectedIDOrSlug(task))
+		}
 		m.loading = false
 		if !m.createInFlight {
 			m.busy = false
@@ -206,7 +211,11 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 
-		if m.selected >= len(m.visibleTaskViews()) {
+		switch {
+		case selectedKey != "" && m.selectTaskByIDOrSlug(selectedKey):
+		case selectedSynthetic && m.syntheticCreationTaskView() != nil:
+			m.selected = m.syntheticCreationRowIndex()
+		case m.selected >= len(m.visibleTaskViews()):
 			m.selected = len(m.visibleTaskViews()) - 1
 		}
 
@@ -1337,6 +1346,31 @@ func (m model) taskViewAt(index int) *core.TaskView {
 	}
 
 	return rows[index]
+}
+
+func (m *model) selectTaskByIDOrSlug(key string) bool {
+	key = strings.TrimSpace(key)
+	if key == "" {
+		return false
+	}
+
+	for i, view := range m.taskViews {
+		if view == nil || view.Task == nil {
+			continue
+		}
+		if strings.TrimSpace(selectedIDOrSlug(view.Task)) == key {
+			m.selected = i
+			return true
+		}
+	}
+
+	if synthetic := m.syntheticCreationTaskView(); synthetic != nil && synthetic.Task != nil &&
+		strings.TrimSpace(selectedIDOrSlug(synthetic.Task)) == key {
+		m.selected = m.syntheticCreationRowIndex()
+		return true
+	}
+
+	return false
 }
 
 func (m *model) replaceTask(updated *core.Task) {
