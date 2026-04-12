@@ -631,7 +631,6 @@ func (m model) listView() string {
 		// Line 1: task name (flex) + status (fixed) + time (fixed)
 		statusCell := padRightVisible(stateText, colWidthStatus)
 		timeCell := padLeftVisible(elapsed, colWidthElapsed)
-		rightBlock := statusCell + timeCell
 		rightWidth := colWidthStatus + colWidthElapsed
 		nameWidth := totalWidth - rightWidth - 4 // 4 = padding from style
 		if nameWidth < 10 {
@@ -643,23 +642,28 @@ func (m model) listView() string {
 		agentCell := padRight(agentName, colWidthAgent)
 		prText := m.prTextForTask(view)
 
+		nameStr := truncateStr(task.DisplayName, nameWidth)
+		namePad := padRight(nameStr, nameWidth)
+
 		if i == m.selected {
-			nameStr := truncateStr(task.DisplayName, nameWidth)
-			namePad := padRight(nameStr, nameWidth)
-			line1 := lipgloss.NewStyle().
-				Foreground(colorAccent).Render(namePad) +
-				stStyle.Render(statusCell) +
-				lipgloss.NewStyle().Foreground(colorAccent).Render(timeCell)
+			nameRendered := lipgloss.NewStyle().Foreground(colorAccent).Bold(true).Render(namePad)
+			timeRendered := primaryStyle.Render(timeCell)
+			line1 := nameRendered + stStyle.Render(statusCell) + timeRendered
 			line2 := providerStyle(task.Provider).Render(agentCell) + prText
 			b.WriteString(selectedRowStyle.Render(line1) + "\n")
 			b.WriteString(selectedRowStyle.Render(line2) + "\n")
 		} else {
-			nameStr := truncateStr(task.DisplayName, nameWidth)
-			namePad := padRight(nameStr, nameWidth)
-			line1 := namePad + rightBlock
+			nameRendered := dimStyle.Render(namePad)
+			timeRendered := dimStyle.Render(timeCell)
+			line1 := nameRendered + stStyle.Render(statusCell) + timeRendered
 			line2 := providerStyle(task.Provider).Render(agentCell) + prText
 			b.WriteString(normalRowStyle.Render(line1) + "\n")
 			b.WriteString(normalRowStyle.Render(line2) + "\n")
+		}
+
+		// Vertical spacing between tasks
+		if i < len(m.tasks)-1 {
+			b.WriteString("\n")
 		}
 	}
 
@@ -703,10 +707,21 @@ func (m model) selectedTaskDetailView() string {
 
 	// Workspace column
 	var wsCol strings.Builder
+	// Column width: use ~45% of terminal width, min 42
+	tw := m.width
+	if tw < 40 {
+		tw = 72
+	}
+	detailColWidth := tw * 45 / 100
+	if detailColWidth < 42 {
+		detailColWidth = 42
+	}
+	branchMaxLen := detailColWidth - 9 // "branch" + spaces + some margin
+
 	wsCol.WriteString(headerLabelStyle.Render("WORKSPACE") + "\n")
 	if strings.TrimSpace(task.BranchName) != "" {
 		wsCol.WriteString(mutedStyle.Render("branch") + " " +
-			primaryStyle.Render(truncateStr(task.BranchName, 38)) + "\n")
+			primaryStyle.Render(truncateStr(task.BranchName, branchMaxLen)) + "\n")
 	}
 	if strings.TrimSpace(task.RepoName) != "" {
 		wsCol.WriteString(mutedStyle.Render("repo") + "   " +
@@ -763,7 +778,7 @@ func (m model) selectedTaskDetailView() string {
 		maxLines = len(sessLines)
 	}
 
-	colWidth := 42
+	colWidth := detailColWidth
 	for i := 0; i < maxLines; i++ {
 		left := ""
 		if i < len(wsLines) {

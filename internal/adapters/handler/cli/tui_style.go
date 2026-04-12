@@ -80,13 +80,10 @@ var (
 				BorderLeft(true).
 				BorderStyle(lipgloss.Border{Left: "│"}).
 				BorderForeground(colorAccent).
-				PaddingLeft(1).
-				Bold(true).
-				Foreground(colorPrimary)
+				PaddingLeft(2)
 
 	normalRowStyle = lipgloss.NewStyle().
-			PaddingLeft(3).
-			Foreground(colorDimmed)
+			PaddingLeft(3)
 
 	mutedStyle = lipgloss.NewStyle().
 			Foreground(colorMuted)
