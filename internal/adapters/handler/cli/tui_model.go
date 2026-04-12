@@ -777,7 +777,97 @@ func (m model) selectedTaskDetailView() string {
 		b.WriteString("   " + left + right + "\n")
 	}
 
+	// Activity section
+	hasActivity := false
+	if view != nil && view.HookSession != nil {
+		hasActivity = view.HookSession.LastPromptText != "" || view.HookSession.LastAssistantMessage != ""
+	}
+	if hasActivity {
+		totalWidth := m.width
+		if totalWidth < 40 {
+			totalWidth = 72
+		}
+		b.WriteString(dividerStyle.Render(strings.Repeat("─", totalWidth)) + "\n")
+		b.WriteString("   " + headerLabelStyle.Render("ACTIVITY") + "\n")
+
+		userSpokeLastVal := view.HookSession.LastEventName == "UserPromptSubmit"
+		wrapWidth := totalWidth - 5 // 3 spaces margin + icon + space
+		const maxActivityLines = 3
+
+		// User prompt
+		if view.HookSession.LastPromptText != "" {
+			promptLines := wrapAndTruncate(view.HookSession.LastPromptText, wrapWidth, maxActivityLines)
+			iconStyle := lipgloss.NewStyle().Foreground(colorUserPrompt)
+			var textStyle lipgloss.Style
+			if userSpokeLastVal {
+				textStyle = primaryStyle
+			} else {
+				textStyle = dimStyle
+			}
+			for j, line := range promptLines {
+				if j == 0 {
+					b.WriteString("   " + iconStyle.Render(iconUserPrompt) + " " + textStyle.Render(line) + "\n")
+				} else {
+					b.WriteString("   " + "  " + textStyle.Render(line) + "\n")
+				}
+			}
+		}
+
+		// Blank line between prompt and response if both exist
+		if view.HookSession.LastPromptText != "" && view.HookSession.LastAssistantMessage != "" {
+			b.WriteString("\n")
+		}
+
+		// LLM response
+		if view.HookSession.LastAssistantMessage != "" {
+			replyLines := wrapAndTruncate(view.HookSession.LastAssistantMessage, wrapWidth, maxActivityLines)
+			iconStyle := lipgloss.NewStyle().Foreground(colorLLMReply)
+			var textStyle lipgloss.Style
+			if userSpokeLastVal {
+				textStyle = dimStyle
+			} else {
+				textStyle = primaryStyle
+			}
+			for j, line := range replyLines {
+				if j == 0 {
+					b.WriteString("   " + iconStyle.Render(iconLLMReply) + " " + textStyle.Render(line) + "\n")
+				} else {
+					b.WriteString("   " + "  " + textStyle.Render(line) + "\n")
+				}
+			}
+		}
+	}
+
 	return strings.TrimRight(b.String(), "\n")
+}
+
+func wrapAndTruncate(text string, width int, maxLines int) []string {
+	if text == "" {
+		return nil
+	}
+	words := strings.Fields(text)
+	if len(words) == 0 {
+		return nil
+	}
+	var lines []string
+	current := words[0]
+	for _, word := range words[1:] {
+		if len(current)+1+len(word) > width {
+			lines = append(lines, current)
+			current = word
+		} else {
+			current += " " + word
+		}
+	}
+	lines = append(lines, current)
+	if len(lines) > maxLines {
+		lines = lines[:maxLines]
+		last := lines[maxLines-1]
+		if len(last) > 3 {
+			lines[maxLines-1] = last[:len(last)-3] + "..."
+		}
+	}
+	return lines
 }
 
 func taskStateText(view *core.TaskView) (string, lipgloss.Style) {
