@@ -325,10 +325,32 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.busy = false
 		m.progressCh = nil
 		m.err = msg.err
-		if msg.err != nil && msg.task == nil && m.createInFlight {
-			m.markCreationFailed()
+		if msg.err != nil {
+			if msg.task != nil {
+				m.creationTask = cloneTaskSnapshot(msg.task)
+				m.tasksRequestSeq++
+				if isVisibleTask(msg.task) {
+					m.upsertTask(msg.task)
+					m.selectTaskByIDOrSlug(selectedIDOrSlug(msg.task))
+				} else {
+					m.selected = m.syntheticCreationRowIndex()
+				}
+				m.createInFlight = false
+				m.creationFailed = true
+				m.creationProgress = ""
+				m.shimmerTick = 0
+				m.mode = tuiModeList
+				return m, nil
+			}
+			if m.createInFlight {
+				m.markCreationFailed()
+				return m, nil
+			}
+			m.mode = tuiModeList
 			return m, nil
 		}
+
+		m.mode = tuiModeList
 		m.createInFlight = false
 		m.creationFailed = false
 		m.creationProgress = ""
@@ -336,17 +358,11 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.shimmerTick = 0
 		if msg.task != nil {
 			m.creationTask = cloneTaskSnapshot(msg.task)
-			m.upsertTask(msg.task)
 			m.tasksRequestSeq++
+			m.upsertTask(msg.task)
+			m.selectTaskByIDOrSlug(selectedIDOrSlug(msg.task))
 		}
-		if msg.err != nil {
-			m.mode = tuiModeList
-			return m, nil
-		}
-
-		m.mode = tuiModeList
-		m.busy = true
-		return m, openTaskCmd(m.service, selectedIDOrSlug(msg.task))
+		return m, nil
 	case recentEventsMsg:
 		if task := m.selectedTask(); task != nil && task.ID == msg.taskID {
 			m.recentEvents = msg.events
@@ -457,9 +473,6 @@ func (m model) updateListKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 			m.err = m.syntheticCreationRowActionError()
 			return m, nil
 		}
-		if m.blockedByActiveCreation("") {
-			return m, nil
-		}
 		task := m.selectedTask()
 		if task == nil {
 			return m, nil
@@ -497,9 +510,6 @@ func (m model) updateListKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 			m.err = m.syntheticCreationRowActionError()
 			return m, nil
 		}
-		if m.blockedByActiveCreation("") {
-			return m, nil
-		}
 		if m.visibleRowCount() == 0 {
 			return m, nil
 		}
@@ -510,18 +520,16 @@ func (m model) updateListKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		if m.blockedByActiveCreation("Task creation already in progress") {
 			return m, nil
 		}
+		creationCwd := m.creationCwd()
 		m.err = nil
 		m.creationFailed = false
 		m.mode = tuiModePromptInput
-		m.createInput = core.NewTaskInput{Cwd: m.creationCwd()}
+		m.createInput = core.NewTaskInput{Cwd: creationCwd}
 		m.promptInput.Reset()
 		m.promptInput.Focus()
 		m.nameInput.Blur()
 		return m, nil
 	case "r":
-		if m.blockedByActiveCreation("") {
-			return m, nil
-		}
 		m.service.InvalidatePRCache()
 		m.err = nil
 		m.busy = true
@@ -541,10 +549,6 @@ func (m model) updateCleanupConfirmKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd)
 		if m.isSyntheticCreationRowSelected() {
 			m.mode = tuiModeList
 			m.err = m.syntheticCreationRowActionError()
-			return m, nil
-		}
-		if m.blockedByActiveCreation("") {
-			m.mode = tuiModeList
 			return m, nil
 		}
 		task := m.selectedTask()
@@ -1817,6 +1821,15 @@ func selectedIDOrSlug(task *core.Task) string {
 }
 
 func (m model) creationCwd() string {
+	if m.isSyntheticCreationRowSelected() {
+		if cwd := strings.TrimSpace(m.createInput.Cwd); cwd != "" {
+			return cwd
+		}
+		if m.creationTask != nil && strings.TrimSpace(m.creationTask.RepoRoot) != "" {
+			return m.creationTask.RepoRoot
+		}
+	}
+
 	task := m.selectedTask()
 	if task != nil && strings.TrimSpace(task.RepoRoot) != "" {
 		return task.RepoRoot
