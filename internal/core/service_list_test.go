@@ -67,7 +67,7 @@ func TestServiceListTasks_EnrichesRuntimeStateForCodexTask(t *testing.T) {
 	require.Equal(t, observedAt, tasks[0].RuntimeStateUpdatedAt)
 }
 
-func TestServiceListTasks_ReturnsRuntimeSnapshotErrors(t *testing.T) {
+func TestServiceListTasks_SnapshotErrorIsBestEffort(t *testing.T) {
 	worktree := t.TempDir()
 	svc := newTestService(t)
 	svc.taskRepo.listTasks = []*Task{{
@@ -91,6 +91,7 @@ func TestServiceListTasks_ReturnsRuntimeSnapshotErrors(t *testing.T) {
 	svc.sessionClient.snapshotErr = errors.New("snapshot failed")
 
 	tasks, err := svc.service.ListTasks(t.Context())
-	require.Nil(t, tasks)
-	require.EqualError(t, err, "snapshot failed")
+	require.NoError(t, err)
+	require.Len(t, tasks, 1)
+	require.Equal(t, RuntimeStateNone, tasks[0].RuntimeState)
 }
