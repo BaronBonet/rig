@@ -623,8 +623,7 @@ func TestModelUpdate_EnterDispatchesOpenAndKeepsTUIOpen(t *testing.T) {
 	require.NotNil(t, cmd)
 
 	msg = cmd()
-	m, cmd = updateTUIModel(t, m, msg)
-	require.Nil(t, cmd)
+	m, _ = updateTUIModel(t, m, msg)
 	require.False(t, m.busy)
 }
 
@@ -1311,6 +1310,12 @@ func newLoadedTUIModelWithProviderAndViews(
 	service.EXPECT().
 		GetPRStatus(mock.Anything, mock.Anything, mock.Anything).
 		Return(&core.PRStatus{State: core.PRStateNone}, nil).
+		Maybe()
+
+	// Allow recent-events fetches that may be triggered during task load or navigation.
+	service.EXPECT().
+		GetTaskHookEvents(mock.Anything, mock.Anything, mock.Anything).
+		Return(nil, nil).
 		Maybe()
 
 	next, cmd := newTUIModel(

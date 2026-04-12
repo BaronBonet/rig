@@ -50,6 +50,8 @@ type model struct {
 	busy               bool
 	creationProgress   core.TaskProgressStep
 	creationSteps      []string
+	recentEvents       []core.HookEvent
+	recentEventsTaskID string
 	shimmerTick        int
 	progressCh         <-chan taskProgressMsg
 	tasksRequestSeq    int
@@ -113,6 +115,11 @@ type createFinishedMsg struct {
 type taskProgressMsg struct {
 	step    core.TaskProgressStep
 	message string
+}
+
+type recentEventsMsg struct {
+	taskID string
+	events []core.HookEvent
 }
 
 type shimmerTickMsg struct{}
@@ -195,14 +202,21 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.selected = len(m.tasks) - 1
 		}
 
-		var prCmds []tea.Cmd
+		var cmds []tea.Cmd
 		for _, view := range m.taskViews {
-			if view != nil && view.Task != nil && strings.TrimSpace(view.Task.BranchName) != "" && strings.TrimSpace(view.Task.RepoRoot) != "" {
-				prCmds = append(prCmds, fetchPRStatusCmd(m.service, view.Task.ID, view.Task.RepoRoot, view.Task.BranchName))
+			if view != nil && view.Task != nil && strings.TrimSpace(view.Task.BranchName) != "" &&
+				strings.TrimSpace(view.Task.RepoRoot) != "" {
+				cmds = append(
+					cmds,
+					fetchPRStatusCmd(m.service, view.Task.ID, view.Task.RepoRoot, view.Task.BranchName),
+				)
 			}
 		}
-		if len(prCmds) > 0 {
-			return m, tea.Batch(prCmds...)
+		if task := m.selectedTask(); task != nil {
+			cmds = append(cmds, fetchRecentEventsCmd(m.service, task.ID))
+		}
+		if len(cmds) > 0 {
+			return m, tea.Batch(cmds...)
 		}
 		return m, nil
 	case observerSubscriptionReadyMsg:
@@ -227,7 +241,12 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, waitForHookUpdateCmd(msg.updates)
 	case hookTaskUpdatedMsg:
 		m.applyHookSessionUpdate(msg.update)
-		return m, waitForHookUpdateCmd(m.hookUpdates)
+		var cmds []tea.Cmd
+		cmds = append(cmds, waitForHookUpdateCmd(m.hookUpdates))
+		if task := m.selectedTask(); task != nil && task.ID == msg.update.TaskID {
+			cmds = append(cmds, fetchRecentEventsCmd(m.service, task.ID))
+		}
+		return m, tea.Batch(cmds...)
 	case hookSubscriptionClosedMsg:
 		if m.unsubscribeHooks != nil {
 			m.unsubscribeHooks()
@@ -309,6 +328,12 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.mode = tuiModeList
 		m.busy = true
 		return m, openTaskCmd(m.service, selectedIDOrSlug(msg.task))
+	case recentEventsMsg:
+		if task := m.selectedTask(); task != nil && task.ID == msg.taskID {
+			m.recentEvents = msg.events
+			m.recentEventsTaskID = msg.taskID
+		}
+		return m, nil
 	case prStatusLoadedMsg:
 		for _, view := range m.taskViews {
 			if view != nil && view.Task != nil && view.Task.ID == msg.taskID {
@@ -408,25 +433,25 @@ func (m model) updateListKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	case "j", "down":
 		if m.selected < len(m.tasks)-1 {
 			m.selected++
-			return m, nil
+			return m, m.fetchRecentEventsForSelected()
 		}
 		return m, nil
 	case "k", "up":
 		if m.selected > 0 {
 			m.selected--
-			return m, nil
+			return m, m.fetchRecentEventsForSelected()
 		}
 		return m, nil
 	case "g", "home":
 		if len(m.tasks) > 0 {
 			m.selected = 0
-			return m, nil
+			return m, m.fetchRecentEventsForSelected()
 		}
 		return m, nil
 	case "G", "end":
 		if len(m.tasks) > 0 {
 			m.selected = len(m.tasks) - 1
-			return m, nil
+			return m, m.fetchRecentEventsForSelected()
 		}
 		return m, nil
 	case "x":
@@ -797,16 +822,27 @@ func (m model) selectedTaskDetailView() string {
 	}
 
 	// Activity section
-	var llmReplyText string
-	if view != nil && view.HookSession != nil {
-		llmReplyText = view.HookSession.LastAssistantMessage
-		if llmReplyText == "" {
-			llmReplyText = view.HookSession.LastCommandText
+	const maxDisplayedActions = 5
+
+	// Derive LLM actions from recent hook events when available.
+	var llmActions []string
+	if m.recentEventsTaskID == task.ID && len(m.recentEvents) > 0 {
+		llmActions = currentTurnLLMActions(m.recentEvents, maxDisplayedActions)
+	}
+
+	// Fallback: use the HookSession summary when we have no event-sourced actions.
+	var fallbackReplyText string
+	if len(llmActions) == 0 && view != nil && view.HookSession != nil {
+		fallbackReplyText = view.HookSession.LastAssistantMessage
+		if fallbackReplyText == "" {
+			fallbackReplyText = view.HookSession.LastCommandText
 		}
 	}
+
 	hasActivity := false
 	if view != nil && view.HookSession != nil {
-		hasActivity = view.HookSession.LastPromptText != "" || llmReplyText != ""
+		hasActivity = view.HookSession.LastPromptText != "" ||
+			len(llmActions) > 0 || fallbackReplyText != ""
 	}
 	if hasActivity {
 		totalWidth := m.width
@@ -816,55 +852,101 @@ func (m model) selectedTaskDetailView() string {
 		b.WriteString(dividerStyle.Render(strings.Repeat("─", totalWidth)) + "\n")
 		b.WriteString("   " + headerLabelStyle.Render("ACTIVITY") + "\n")
 
-		userSpokeLastVal := view.HookSession.LastEventName == "UserPromptSubmit"
 		wrapWidth := totalWidth - 5 // 3 spaces margin + icon + space
 		const maxActivityLines = 3
 
 		// User prompt
 		if view.HookSession.LastPromptText != "" {
-			promptLines := wrapAndTruncate(view.HookSession.LastPromptText, wrapWidth, maxActivityLines)
-			iconStyle := lipgloss.NewStyle().Foreground(colorUserPrompt)
-			var textStyle lipgloss.Style
-			if userSpokeLastVal {
-				textStyle = primaryStyle
-			} else {
-				textStyle = dimStyle
+			promptLines := wrapAndTruncate(
+				view.HookSession.LastPromptText, wrapWidth, maxActivityLines,
+			)
+			iconSt := lipgloss.NewStyle().Foreground(colorUserPrompt)
+			textSt := dimStyle
+			if len(llmActions) == 0 && fallbackReplyText == "" {
+				textSt = primaryStyle
 			}
 			for j, line := range promptLines {
 				if j == 0 {
-					b.WriteString("   " + iconStyle.Render(iconUserPrompt) + " " + textStyle.Render(line) + "\n")
+					b.WriteString("   " + iconSt.Render(iconUserPrompt) + " " +
+						textSt.Render(line) + "\n")
 				} else {
-					b.WriteString("   " + "  " + textStyle.Render(line) + "\n")
+					b.WriteString("   " + "  " + textSt.Render(line) + "\n")
 				}
 			}
 		}
 
-		// Blank line between prompt and response if both exist
-		if view.HookSession.LastPromptText != "" && llmReplyText != "" {
-			b.WriteString("\n")
-		}
-
-		// LLM response (falls back to command result or command text if no assistant message)
-		if llmReplyText != "" {
-			replyLines := wrapAndTruncate(llmReplyText, wrapWidth, maxActivityLines)
-			iconStyle := lipgloss.NewStyle().Foreground(colorLLMReply)
-			var textStyle lipgloss.Style
-			if userSpokeLastVal {
-				textStyle = dimStyle
-			} else {
-				textStyle = primaryStyle
+		// LLM actions from recent events
+		if len(llmActions) > 0 {
+			if view.HookSession.LastPromptText != "" {
+				b.WriteString("\n")
 			}
+			iconSt := lipgloss.NewStyle().Foreground(colorLLMReply)
+			for i, actionText := range llmActions {
+				actionLines := wrapAndTruncate(actionText, wrapWidth, maxActivityLines)
+				textSt := dimStyle
+				if i == len(llmActions)-1 {
+					textSt = primaryStyle
+				}
+				for j, line := range actionLines {
+					if j == 0 {
+						b.WriteString("   " + iconSt.Render(iconLLMReply) + " " +
+							textSt.Render(line) + "\n")
+					} else {
+						b.WriteString("   " + "  " + textSt.Render(line) + "\n")
+					}
+				}
+			}
+		} else if fallbackReplyText != "" {
+			// Fallback: single LLM response from HookSession summary
+			if view.HookSession.LastPromptText != "" {
+				b.WriteString("\n")
+			}
+			replyLines := wrapAndTruncate(fallbackReplyText, wrapWidth, maxActivityLines)
+			iconSt := lipgloss.NewStyle().Foreground(colorLLMReply)
 			for j, line := range replyLines {
 				if j == 0 {
-					b.WriteString("   " + iconStyle.Render(iconLLMReply) + " " + textStyle.Render(line) + "\n")
+					b.WriteString("   " + iconSt.Render(iconLLMReply) + " " +
+						primaryStyle.Render(line) + "\n")
 				} else {
-					b.WriteString("   " + "  " + textStyle.Render(line) + "\n")
+					b.WriteString("   " + "  " + primaryStyle.Render(line) + "\n")
 				}
 			}
 		}
 	}
 
 	return strings.TrimRight(b.String(), "\n")
+}
+
+// currentTurnLLMActions extracts up to maxActions LLM action texts from the
+// current turn (events after the last UserPromptSubmit). Events are expected in
+// latest-first order as returned by the query.
+func currentTurnLLMActions(events []core.HookEvent, maxActions int) []string {
+	var actions []string
+	for _, ev := range events {
+		if ev.EventName == "UserPromptSubmit" {
+			break // stop at the boundary of the current turn
+		}
+		var text string
+		switch ev.EventName {
+		case "Stop":
+			text = ev.LastAssistantMessage
+		case "PostToolUse":
+			if ev.CommandText != "" {
+				text = ev.CommandText
+			}
+		}
+		if text != "" {
+			actions = append(actions, text)
+		}
+	}
+	// actions are in reverse order (latest first), reverse them
+	for i, j := 0, len(actions)-1; i < j; i, j = i+1, j-1 {
+		actions[i], actions[j] = actions[j], actions[i]
+	}
+	if len(actions) > maxActions {
+		actions = actions[len(actions)-maxActions:]
+	}
+	return actions
 }
 
 func wrapAndTruncate(text string, width int, maxLines int) []string {
@@ -1305,6 +1387,14 @@ func isVisibleTask(task *core.Task) bool {
 	return task != nil && (task.SessionExists || task.WorktreeExists)
 }
 
+func (m model) fetchRecentEventsForSelected() tea.Cmd {
+	task := m.selectedTask()
+	if task == nil {
+		return nil
+	}
+	return fetchRecentEventsCmd(m.service, task.ID)
+}
+
 func (m *model) nextRefreshTasksCmd() tea.Cmd {
 	m.tasksRequestSeq++
 	return refreshTasksCmd(m.service, m.tasksRequestSeq)
@@ -1317,6 +1407,16 @@ func fetchPRStatusCmd(service TaskService, taskID, repoRoot, branch string) tea.
 			return prStatusLoadedMsg{taskID: taskID, status: &core.PRStatus{State: core.PRStateNone}}
 		}
 		return prStatusLoadedMsg{taskID: taskID, status: status}
+	})
+}
+
+func fetchRecentEventsCmd(service TaskService, taskID string) tea.Cmd {
+	return safeCmd("fetchRecentEventsCmd", func() tea.Msg {
+		events, err := service.GetTaskHookEvents(context.Background(), taskID, 20)
+		if err != nil {
+			return recentEventsMsg{taskID: taskID}
+		}
+		return recentEventsMsg{taskID: taskID, events: events}
 	})
 }
 
