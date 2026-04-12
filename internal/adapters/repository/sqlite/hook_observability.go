@@ -415,7 +415,19 @@ func shouldAllowSessionTakeover(previous *core.HookSessionSummary, record hookRe
 	}
 
 	source := strings.TrimSpace(record.StartSource)
-	return source == "resume" || previous.LastEventName == "Stop"
+	if source == "resume" || previous.LastEventName == "Stop" {
+		return true
+	}
+
+	// Allow a fresh "startup" session to take over when the previous session
+	// is not actively running a command. Subagents start while the parent is
+	// in RunningCommand phase (it just dispatched the Agent tool); legitimate
+	// new sessions start when the previous session has gone idle or finished.
+	if source == "startup" && previous.RuntimePhase != core.HookRuntimePhaseRunningCommand {
+		return true
+	}
+
+	return false
 }
 
 type hookSessionSummaryGetter interface {
