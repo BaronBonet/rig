@@ -6,12 +6,11 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"rig/internal/pkg/slug"
 	"slices"
 	"strings"
 	"sync"
 	"time"
-
-	"rig/internal/pkg/slug"
 )
 
 type DoctorResult struct {
@@ -826,7 +825,7 @@ func (s *Service) enrichRuntimeState(ctx context.Context, task *Task) error {
 
 	snapshot, err := s.session.SnapshotTaskSession(ctx, task)
 	if err != nil {
-		return nil
+		return err
 	}
 
 	task.RuntimeState = provider.DetectRuntimeState(snapshot)
@@ -861,14 +860,6 @@ func (s *Service) markCleanupBroken(ctx context.Context, task *Task, failure err
 	}
 
 	return task, failure
-}
-
-func windowOrDefault(window, fallback string) string {
-	if strings.TrimSpace(window) == "" {
-		return fallback
-	}
-
-	return window
 }
 
 func fallbackDisplayName(prompt string) string {
