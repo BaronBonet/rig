@@ -3,8 +3,10 @@ package sqlite
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"fmt"
 	"io/fs"
+	"path/filepath"
 	"sync"
 
 	"github.com/pressly/goose/v3"
@@ -27,13 +29,25 @@ func applyGooseMigrations(ctx context.Context, db *sql.DB, files fs.FS, dir stri
 	gooseMigrationMu.Lock()
 	defer gooseMigrationMu.Unlock()
 
-	goose.SetBaseFS(files)
-	defer goose.SetBaseFS(nil)
-
-	if err := goose.SetDialect("sqlite"); err != nil {
-		return fmt.Errorf("set goose sqlite dialect: %w", err)
+	migrationsFS, err := fs.Sub(files, dir)
+	if err != nil {
+		return fmt.Errorf("open goose migrations fs %s: %w", dir, err)
 	}
-	if err := goose.UpContext(ctx, db, dir); err != nil {
+
+	provider, err := goose.NewProvider(goose.DialectSQLite3, db, migrationsFS)
+	if err != nil {
+		return fmt.Errorf("create goose provider for %s: %w", dir, err)
+	}
+	if _, err := provider.Up(ctx); err != nil {
+		var partialErr *goose.PartialError
+		if errors.As(err, &partialErr) && partialErr.Failed != nil && partialErr.Failed.Source != nil {
+			return fmt.Errorf(
+				"apply goose migration %s from %s: %w",
+				filepath.Base(partialErr.Failed.Source.Path),
+				dir,
+				err,
+			)
+		}
 		return fmt.Errorf("apply goose migrations from %s: %w", dir, err)
 	}
 	return nil
