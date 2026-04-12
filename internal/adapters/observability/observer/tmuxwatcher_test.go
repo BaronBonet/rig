@@ -306,6 +306,54 @@ func TestTMuxWatcher_OverrideWithHookPhase_CodexStopUsesPromptFallbackForNeedsIn
 	require.Equal(t, core.DisplayStatusNeedsInput, repo.lastUpsert.DisplayStatus)
 }
 
+func TestTMuxWatcher_OverrideWithHookPhase_ClaudeIdlePostToolUseTrustsNeedsInput(t *testing.T) {
+	now := time.Date(2026, 4, 12, 9, 0, 0, 0, time.UTC)
+	task := &core.Task{
+		ID:              "task-1",
+		TmuxSession:     "repo_task-1",
+		AgentWindowName: "agent",
+		Provider:        "claude",
+		Status:          core.TaskStatusRunning,
+	}
+
+	monitor := core.NewMockRuntimeMonitor(t)
+	monitor.EXPECT().Snapshot(mock.Anything, task).Return(core.RuntimeSnapshot{
+		SessionName:       task.TmuxSession,
+		PaneID:            "%24",
+		ForegroundCommand: "claude",
+		Content:           "\n❯ \n",
+		ObservedAt:        now,
+	}, nil).Once()
+
+	// Simulate a killed session: hooks still report Idle with last event
+	// PostToolUse (no Stop event was received). tmux correctly detects the
+	// input prompt — the override should trust tmux's NeedsInput.
+	hooks := &stubHookObservabilityRepository{
+		summaries: map[string]*core.HookSessionSummary{
+			task.ID: {
+				TaskID:         task.ID,
+				RuntimePhase:   core.HookRuntimePhaseIdle,
+				LastEventName:  "PostToolUse",
+				LastActivityAt: now.Add(-30 * time.Second),
+			},
+		},
+	}
+
+	repo := &stubWatcherObserverRepository{}
+	watcher := NewTMuxWatcher(TMuxWatcherConfig{
+		Tasks:     stubObserverTaskLister{tasks: []*core.Task{task}},
+		Monitor:   monitor,
+		Repo:      repo,
+		Hooks:     hooks,
+		Providers: map[string]core.ProviderClient{"claude": stubTMuxWatcherProvider{runtimeState: core.RuntimeStateNeedsInput}},
+	})
+
+	require.NoError(t, watcher.RefreshAll(context.Background()))
+	require.NotNil(t, repo.lastUpsert)
+	require.Equal(t, core.DisplayStatusNeedsInput, repo.lastUpsert.DisplayStatus)
+	require.True(t, repo.lastUpsert.ProcessAlive)
+}
+
 type stubObserverTaskLister struct {
 	tasks []*core.Task
 	err   error

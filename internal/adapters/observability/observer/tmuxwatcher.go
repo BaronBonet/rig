@@ -220,10 +220,7 @@ func (w *TMuxWatcher) overrideWithHookPhase(
 		case core.HookRuntimePhasePrompted, core.HookRuntimePhaseRunningCommand:
 			return core.RuntimeStateRunning
 		case core.HookRuntimePhaseIdle:
-			if hs.LastEventName == "PostToolUse" && rs == core.RuntimeStateNeedsInput {
-				return rs
-			}
-			if hs.LastEventName == "Stop" {
+			if hs.LastEventName == "Stop" || rs == core.RuntimeStateNeedsInput {
 				return rs
 			}
 			return core.RuntimeStateRunning
@@ -236,7 +233,7 @@ func (w *TMuxWatcher) overrideWithHookPhase(
 	case core.HookRuntimePhasePrompted, core.HookRuntimePhaseRunningCommand:
 		return core.RuntimeStateRunning
 	case core.HookRuntimePhaseIdle:
-		if hs.LastEventName == "Stop" {
+		if hs.LastEventName == "Stop" || rs == core.RuntimeStateNeedsInput {
 			return rs
 		}
 		return core.RuntimeStateRunning
