@@ -1066,8 +1066,11 @@ func TestModelUpdate_ConfirmationViewExplainsDeletionScope(t *testing.T) {
 	m, _ = updateTUIModel(t, m, keyRunes("x"))
 
 	view := stripANSI(m.View().Content)
+	require.Contains(t, view, "RIG")
+	require.Contains(t, view, "cleanup")
 	require.Contains(t, view, "tmux session and worktree will be deleted")
 	require.Contains(t, view, "branch will be kept")
+	require.NotContains(t, view, "Confirm Cleanup")
 }
 
 func TestModelUpdate_CleanupFailureRendersInlineErrorAndKeepsTUIUsable(t *testing.T) {
@@ -1444,11 +1447,14 @@ func TestNameConfirmView_ShowsCheckmarkRecap(t *testing.T) {
 
 	view := stripANSI(m.nameConfirmView())
 
+	require.Contains(t, view, "RIG")
+	require.Contains(t, view, "new task")
 	require.Contains(t, view, "✔")
 	require.Contains(t, view, "add dark mode toggle to settings page")
 	require.Contains(t, view, "codex")
 	require.Contains(t, view, "Name:")
-	require.Contains(t, view, "Enter to create")
+	require.Contains(t, view, "enter")
+	require.Contains(t, view, "create")
 }
 
 func TestNameConfirmView_ShowsProgressStepsDuringCreation(t *testing.T) {
@@ -1481,6 +1487,8 @@ func TestPromptInputView_ShowsShimmerDuringNameSuggestion(t *testing.T) {
 	m.shimmerTick = 5
 
 	view := stripANSI(m.promptInputView())
+	require.Contains(t, view, "RIG")
+	require.Contains(t, view, "new task")
 	require.Contains(t, view, "Suggesting name...")
 }
 
@@ -1491,6 +1499,8 @@ func TestPromptInputView_NoShimmerWhenNotBusy(t *testing.T) {
 	m.creationProgress = ""
 
 	view := stripANSI(m.promptInputView())
+	require.Contains(t, view, "RIG")
+	require.Contains(t, view, "new task")
 	require.NotContains(t, view, "Suggesting name...")
 }
 
