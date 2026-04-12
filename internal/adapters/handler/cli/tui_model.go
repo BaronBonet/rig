@@ -34,6 +34,7 @@ type model struct {
 	err                error
 	createInput        core.NewTaskInput
 	provider           string
+	promptProvider     string
 	defaultCreationCwd string
 	mode               tuiMode
 	taskViews          []*core.TaskView
@@ -163,6 +164,7 @@ func newTUIModel(
 		defaultCreationCwd: emptyFallback(defaultCreationCwd, "."),
 		observerSocketPath: strings.TrimSpace(observerSocketPath),
 		provider:           emptyFallback(defaultProvider, "codex"),
+		promptProvider:     emptyFallback(defaultProvider, "codex"),
 		tasksRequestSeq:    1,
 	}
 }
@@ -537,6 +539,7 @@ func (m model) updateListKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		m.creationFailed = false
 		m.mode = tuiModePromptInput
 		m.createInput = core.NewTaskInput{Cwd: creationCwd}
+		m.promptProvider = m.provider
 		m.promptInput.Reset()
 		m.promptInput.Focus()
 		m.nameInput.Blur()
@@ -585,13 +588,14 @@ func (m model) updatePromptInputKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		m.promptInput.Blur()
 		return m, nil
 	case tea.KeyTab:
-		m.provider = nextProvider(m.provider)
+		m.promptProvider = nextProvider(m.promptProvider)
 		return m, nil
 	case tea.KeyEnter:
 		prompt := strings.TrimSpace(m.promptInput.Value())
 		if prompt == "" {
 			return m, nil
 		}
+		selectedProvider := emptyFallback(m.promptProvider, m.provider)
 
 		m.err = nil
 		m.busy = true
@@ -602,10 +606,11 @@ func (m model) updatePromptInputKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		m.creationProgress = core.TaskProgressNaming
 		m.creationSteps = []string{progressStepLabel(core.TaskProgressNaming)}
 		m.shimmerTick = 0
+		m.provider = selectedProvider
 		m.createInput = core.NewTaskInput{
 			Cwd:      m.creationCwd(),
 			Prompt:   prompt,
-			Provider: m.provider,
+			Provider: selectedProvider,
 		}
 		m.selected = m.syntheticCreationRowIndex()
 		m.promptInput.Blur()
@@ -644,7 +649,7 @@ func (m model) updateNameConfirmKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		m.shimmerTick = 0
 		input := m.createInput
 		input.ConfirmedDisplayName = name
-		input.Provider = m.provider
+		input.Provider = emptyFallback(m.createInput.Provider, m.provider)
 		progressCh, createCmd := createTaskCmd(m.service, input)
 		m.progressCh = progressCh
 		return m, tea.Batch(
@@ -1215,10 +1220,17 @@ func (m model) promptInputView() string {
 	b.WriteString(dimStyle.Render("Enter task prompt. Tab to switch provider.") + "\n\n")
 
 	// Provider toggle
-	selected := providerStyle(m.provider).Render(m.provider)
-	other := nextProvider(m.provider)
-	unselected := mutedStyle.Render(other)
-	b.WriteString(mutedStyle.Render("provider  ") + selected + mutedStyle.Render(" / ") + unselected + "\n\n")
+	selectedProvider := emptyFallback(m.promptProvider, m.provider)
+	codexLabel := mutedStyle.Render("codex")
+	claudeLabel := mutedStyle.Render("claude")
+	if selectedProvider == "claude" {
+		claudeLabel = providerStyle("claude").Render("claude")
+	} else {
+		codexLabel = providerStyle("codex").Render("codex")
+	}
+	b.WriteString(
+		mutedStyle.Render("provider  ") + codexLabel + mutedStyle.Render(" / ") + claudeLabel + "\n\n",
+	)
 
 	// Textarea
 	b.WriteString(m.promptInput.View())
@@ -1262,7 +1274,9 @@ func (m model) nameConfirmView() string {
 	b.WriteString(healthyStyle.Render(iconCheckmark) + " " + mutedStyle.Render(m.createInput.Prompt) + "\n")
 	b.WriteString(
 		healthyStyle.Render(iconCheckmark) + " " +
-			mutedStyle.Render("provider: ") + providerStyle(m.provider).Render(m.provider) + "\n",
+			mutedStyle.Render("provider: ") +
+			providerStyle(emptyFallback(m.createInput.Provider, m.provider)).
+				Render(emptyFallback(m.createInput.Provider, m.provider)) + "\n",
 	)
 
 	if m.busy && len(m.creationSteps) > 0 {

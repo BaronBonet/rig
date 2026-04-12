@@ -242,6 +242,52 @@ func TestModelUpdate_CreateFlowUsesConfiguredDefaultProvider(t *testing.T) {
 	require.Equal(t, "billing-retry-flow", m.selectedTask().Slug)
 }
 
+func TestModelUpdate_PromptTabMovesHighlightWithoutChangingCommittedProvider(t *testing.T) {
+	m := newLoadedTUIModelWithProvider(t, NewMockTaskService(t), "codex", tuiTask("existing-task"))
+
+	m, _ = updateTUIModel(t, m, keyRunes("n"))
+	require.Equal(t, "codex", m.provider)
+	require.Equal(t, "codex", m.promptProvider)
+
+	m, cmd := updateTUIModel(t, m, tea.KeyPressMsg{Code: tea.KeyTab})
+	require.Nil(t, cmd)
+	require.Equal(t, "codex", m.provider)
+	require.Equal(t, "claude", m.promptProvider)
+}
+
+func TestModelUpdate_PromptSubmitUsesHighlightedProvider(t *testing.T) {
+	service := NewMockTaskService(t)
+	existing := tuiTask("existing-task")
+	existing.RepoRoot = "/tmp/repo"
+	m := newLoadedTUIModelWithProvider(t, service, "codex", existing)
+
+	m, _ = updateTUIModel(t, m, keyRunes("n"))
+	m.promptInput.SetValue("add billing retry flow")
+	m, _ = updateTUIModel(t, m, tea.KeyPressMsg{Code: tea.KeyTab})
+
+	service.EXPECT().
+		CreateTaskWithProgress(
+			mock.Anything,
+			core.NewTaskInput{
+				Cwd:      "/tmp/repo",
+				Prompt:   "add billing retry flow",
+				Provider: "claude",
+			},
+			core.CreateTaskOptions{OpenSession: false},
+			mock.Anything,
+		).
+		Return(tuiTask("billing-retry-flow"), nil).
+		Once()
+	m, createCmd := updateTUIModel(t, m, tea.KeyPressMsg{Code: tea.KeyEnter})
+	require.NotNil(t, createCmd)
+	require.Equal(t, "claude", m.provider)
+	require.Equal(t, "claude", m.createInput.Provider)
+
+	createMsg := executeBatchUntil[createFinishedMsg](t, createCmd)
+	m, _ = updateTUIModel(t, m, createMsg)
+	require.Equal(t, "billing-retry-flow", m.selectedTask().Slug)
+}
+
 func TestModelUpdate_CreateFailureKeepsSyntheticRowVisibleAndRendersError(t *testing.T) {
 	service := NewMockTaskService(t)
 	existing := tuiTask("existing-task")
@@ -1939,6 +1985,28 @@ func TestPromptInputView_NoShimmerWhenNotBusy(t *testing.T) {
 	require.Contains(t, view, "RIG")
 	require.Contains(t, view, "new task")
 	require.NotContains(t, view, "Suggesting name...")
+}
+
+func TestPromptInputView_ShowsFixedProviderOrder(t *testing.T) {
+	m := newLoadedTUIModelWithProvider(t, NewMockTaskService(t), "claude", tuiTask("task-one"))
+	m.mode = tuiModePromptInput
+	m.promptProvider = "claude"
+
+	view := stripANSI(m.promptInputView())
+	require.Contains(t, view, "provider  codex / claude")
+	require.NotContains(t, view, "provider  claude / codex")
+}
+
+func TestNameConfirmView_ShowsSubmittedProviderInsteadOfCommittedDefault(t *testing.T) {
+	m := newLoadedTUIModelWithProvider(t, NewMockTaskService(t), "codex", tuiTask("task-one"))
+	m.mode = tuiModeNameConfirm
+	m.createInput.Prompt = "add dark mode toggle to settings page"
+	m.createInput.Provider = "claude"
+	m.nameInput.SetValue("dark-mode-settings-toggle")
+
+	view := stripANSI(m.nameConfirmView())
+	require.Contains(t, view, "provider: claude")
+	require.NotContains(t, view, "provider: codex")
 }
 
 func TestCompactCount_FormatsTokenCounts(t *testing.T) {
