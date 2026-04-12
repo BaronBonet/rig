@@ -95,10 +95,9 @@ func (b *Bootstrapper) renderHooksJSON() ([]byte, error) {
 func (b *Bootstrapper) commandForEvent(eventName string) string {
 	eventName = strings.TrimSpace(eventName)
 
-	return "/bin/sh -c " + shellQuote(fmt.Sprintf(
-		`repo_root=$(git rev-parse --show-toplevel 2>/dev/null) || exit 0; exec /bin/sh "$repo_root/.codex/hooks/forward-to-rig.sh" %s`,
-		shellQuote(eventName),
-	))
+	cmd := `repo_root=$(git rev-parse --show-toplevel 2>/dev/null) || exit 0;` +
+		` exec /bin/sh "$repo_root/.codex/hooks/forward-to-rig.sh" ` + shellQuote(eventName)
+	return "/bin/sh -c " + shellQuote(cmd)
 }
 
 func (b *Bootstrapper) renderForwarderScript() ([]byte, error) {

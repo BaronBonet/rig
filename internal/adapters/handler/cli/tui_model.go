@@ -963,26 +963,6 @@ func taskTurnElapsed(view *core.TaskView) string {
 	return formatElapsed(time.Since(view.HookSession.LastPromptSubmittedAt))
 }
 
-func isLLMOutputLatest(hook *core.HookSessionSummary) bool {
-	if hook == nil {
-		return false
-	}
-	return hook.LastEventName != "UserPromptSubmit"
-}
-
-func hookActivityFallback(hook *core.HookSessionSummary) string {
-	if hook == nil {
-		return ""
-	}
-	if hook.LastCommandResultText != "" {
-		return hook.LastCommandResultText
-	}
-	if hook.LastCommandText != "" {
-		return hook.LastCommandText
-	}
-	return ""
-}
-
 func compactCount(n int) string {
 	switch {
 	case n >= 1_000_000:
@@ -1297,17 +1277,6 @@ func providerStyle(provider string) lipgloss.Style {
 	default:
 		return codexStyle
 	}
-}
-
-func filterVisibleTasks(tasks []*core.Task) []*core.Task {
-	filtered := make([]*core.Task, 0, len(tasks))
-	for _, task := range tasks {
-		if isVisibleTask(task) {
-			filtered = append(filtered, task)
-		}
-	}
-
-	return filtered
 }
 
 func isVisibleTask(task *core.Task) bool {
