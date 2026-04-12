@@ -23,8 +23,17 @@ jobs:
           go-version-file: go.mod
           cache: true
 
+      - name: Generate code
+        run: ./scripts/generate/go.sh
+
+      - name: Run regression check
+        run: sh ./scripts/generate/go_test.sh
+
       - name: Run tests
-        run: make test
+        run: go test ./...
+
+      - name: Run workflow assertions
+        run: sh ./scripts/release/release_repo_test.sh
 
       - name: Run GoReleaser
         uses: goreleaser/goreleaser-action@v6

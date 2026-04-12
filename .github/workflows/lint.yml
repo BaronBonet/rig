@@ -21,12 +21,19 @@ jobs:
           cache: true
 
       - name: Install dependencies
-        run: make dependencies install
+        run: ./scripts/dependencies/install.sh
+
+      - name: Generate code
+        run: ./scripts/generate/go.sh
 
       - name: Run linters
-        run: |
-          source ./scripts/config-local-dev.sh
-          make lint-all
+        run: ./scripts/ci/lint-go.sh
+
+      - name: Run regression check
+        run: sh ./scripts/generate/go_test.sh
 
       - name: Run tests
-        run: make test
+        run: go test ./...
+
+      - name: Run workflow assertions
+        run: sh ./scripts/ci/github_actions_test.sh
