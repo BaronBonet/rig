@@ -511,6 +511,19 @@ func TestRepositoryIngestHookEvent_IgnoresNestedSessionEventsForEstablishedTaskS
 	require.Equal(t, "sess-parent", parentSummary.SessionID)
 	require.Equal(t, "fix the billing retry flow", parentSummary.LastPromptText)
 
+	// Parent dispatches the Agent tool — this sets RuntimePhase to
+	// RunningCommand, which is what distinguishes the parent from a new
+	// top-level session (whose predecessor would be Idle).
+	_, err = repo.IngestHookEvent(context.Background(), core.HookEventInput{
+		Cwd:         task.WorktreePath,
+		EventName:   "PreToolUse",
+		SessionID:   "sess-parent",
+		TurnID:      "turn-parent",
+		CommandText: "Agent dispatch subagent",
+		OccurredAt:  time.Date(2026, 4, 8, 10, 1, 30, 0, time.UTC),
+	})
+	require.NoError(t, err)
+
 	nestedSummary, err := repo.IngestHookEvent(context.Background(), core.HookEventInput{
 		Cwd:            task.WorktreePath,
 		EventName:      "SessionStart",
@@ -543,7 +556,85 @@ func TestRepositoryIngestHookEvent_IgnoresNestedSessionEventsForEstablishedTaskS
 	require.Equal(t, "turn-parent", summary.CurrentTurnID)
 	require.Equal(t, "fix the billing retry flow", summary.LastPromptText)
 	require.Equal(t, "/tmp/parent.jsonl", summary.TranscriptPath)
-	require.Equal(t, core.HookRuntimePhasePrompted, summary.RuntimePhase)
+	require.Equal(t, core.HookRuntimePhaseRunningCommand, summary.RuntimePhase)
+}
+
+func TestRepositoryIngestHookEvent_AllowsNewSessionAfterUncleanShutdown(t *testing.T) {
+	repo := newTestRepository(t)
+	task := seedTask(t, repo, core.Task{
+		ID:           "task-1",
+		Slug:         "task-1",
+		DisplayName:  "task 1",
+		WorktreePath: "/tmp/repo-task-1",
+	})
+
+	// First session starts and does some work but crashes (no Stop event).
+	_, err := repo.IngestHookEvent(context.Background(), core.HookEventInput{
+		Cwd:            task.WorktreePath,
+		EventName:      "SessionStart",
+		SessionID:      "sess-old",
+		Model:          "claude-opus-4-5-20251001",
+		TranscriptPath: "/tmp/old.jsonl",
+		StartSource:    "startup",
+		OccurredAt:     time.Date(2026, 4, 8, 10, 0, 0, 0, time.UTC),
+	})
+	require.NoError(t, err)
+
+	_, err = repo.IngestHookEvent(context.Background(), core.HookEventInput{
+		Cwd:        task.WorktreePath,
+		EventName:  "UserPromptSubmit",
+		SessionID:  "sess-old",
+		TurnID:     "turn-old",
+		PromptText: "fix the billing retry flow",
+		OccurredAt: time.Date(2026, 4, 8, 10, 0, 1, 0, time.UTC),
+	})
+	require.NoError(t, err)
+
+	_, err = repo.IngestHookEvent(context.Background(), core.HookEventInput{
+		Cwd:         task.WorktreePath,
+		EventName:   "PostToolUse",
+		SessionID:   "sess-old",
+		TurnID:      "turn-old",
+		CommandText: "Read internal/billing/retry.go",
+		OccurredAt:  time.Date(2026, 4, 8, 10, 0, 5, 0, time.UTC),
+	})
+	require.NoError(t, err)
+	// Session crashes here — no Stop event.
+
+	// New session starts for the same task with a new session ID.
+	_, err = repo.IngestHookEvent(context.Background(), core.HookEventInput{
+		Cwd:            task.WorktreePath,
+		EventName:      "SessionStart",
+		SessionID:      "sess-new",
+		Model:          "claude-opus-4-5-20251001",
+		TranscriptPath: "/tmp/new.jsonl",
+		StartSource:    "startup",
+		OccurredAt:     time.Date(2026, 4, 8, 10, 5, 0, 0, time.UTC),
+	})
+	require.NoError(t, err)
+
+	summary, err := repo.IngestHookEvent(context.Background(), core.HookEventInput{
+		Cwd:        task.WorktreePath,
+		EventName:  "UserPromptSubmit",
+		SessionID:  "sess-new",
+		TurnID:     "turn-new",
+		PromptText: "fix the billing retry flow (retry)",
+		OccurredAt: time.Date(2026, 4, 8, 10, 5, 1, 0, time.UTC),
+	})
+	require.NoError(t, err)
+	require.NotNil(t, summary)
+
+	// The new session must take over: hook phase should reflect the new
+	// session's UserPromptSubmit, not the old session's stale PostToolUse.
+	summaries, err := repo.ListHookSessionSummaries(context.Background(), []string{task.ID})
+	require.NoError(t, err)
+
+	got := summaries[task.ID]
+	require.Equal(t, "sess-new", got.SessionID)
+	require.Equal(t, "turn-new", got.CurrentTurnID)
+	require.Equal(t, "fix the billing retry flow (retry)", got.LastPromptText)
+	require.Equal(t, "/tmp/new.jsonl", got.TranscriptPath)
+	require.Equal(t, core.HookRuntimePhasePrompted, got.RuntimePhase)
 }
 
 func TestRepositoryListHookEvents_OrdersLatestFirst(t *testing.T) {
