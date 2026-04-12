@@ -311,12 +311,48 @@ func TestModelUpdate_CreateFailureKeepsSyntheticRowVisibleAndRendersError(t *tes
 	require.Nil(t, followup)
 	require.Equal(t, tuiModeList, m.mode)
 	require.False(t, m.busy)
-	require.True(t, m.createInFlight)
+	require.False(t, m.createInFlight)
 	require.Equal(t, len(m.taskViews), m.selected)
 	view := stripANSI(m.View().Content)
 	require.Contains(t, view, "create failed")
 	require.Contains(t, view, "Creating task...")
 	require.Contains(t, view, "add billing retry flow")
+}
+
+func TestModelUpdate_CreateFailureKeepsSyntheticRowVisibleButAllowsRecoveryActions(t *testing.T) {
+	service := NewMockTaskService(t)
+	existing := tuiTask("existing-task")
+	existing.RepoRoot = "/tmp/repo"
+	m := newLoadedTUIModel(t, service, existing)
+
+	m, _ = updateTUIModel(t, m, keyRunes("n"))
+	m.promptInput.SetValue("add billing retry flow")
+
+	service.EXPECT().
+		CreateTaskWithProgress(
+			mock.Anything,
+			core.NewTaskInput{
+				Cwd:      "/tmp/repo",
+				Prompt:   "add billing retry flow",
+				Provider: "codex",
+			},
+			core.CreateTaskOptions{OpenSession: false},
+			mock.Anything,
+		).
+		Return(nil, errors.New("create failed")).
+		Once()
+	m, createCmd := updateTUIModel(t, m, tea.KeyPressMsg{Code: tea.KeyEnter})
+	require.NotNil(t, createCmd)
+
+	createMsg := executeBatchUntil[createFinishedMsg](t, createCmd)
+	m, _ = updateTUIModel(t, m, createMsg)
+	require.False(t, m.createInFlight)
+	require.Contains(t, stripANSI(m.View().Content), "Creating task...")
+
+	m, cmd := updateTUIModel(t, m, keyRunes("n"))
+	require.Nil(t, cmd)
+	require.Equal(t, tuiModePromptInput, m.mode)
+	require.True(t, m.promptInput.Focused())
 }
 
 func TestModelUpdate_CreateFailureWithPersistedTaskReturnsToListModeAndPreservesError(t *testing.T) {
@@ -373,7 +409,7 @@ func TestModelUpdate_AsyncErrorKeepsSyntheticRowVisibleAndRendersError(t *testin
 	m, cmd := updateTUIModel(t, m, asyncErrMsg{err: errors.New("createTaskCmd panicked: boom")})
 	require.Nil(t, cmd)
 	require.False(t, m.busy)
-	require.True(t, m.createInFlight)
+	require.False(t, m.createInFlight)
 	require.Equal(t, "", string(m.creationProgress))
 	require.Equal(t, 0, m.shimmerTick)
 	require.Equal(t, len(m.taskViews), m.selected)
@@ -387,6 +423,7 @@ func TestModelUpdate_AsyncErrorKeepsSyntheticRowVisibleAndRendersError(t *testin
 func TestModelUpdate_SyntheticRowBlocksOpenAndCleanupActions(t *testing.T) {
 	m := newLoadedTUIModel(t, NewMockTaskService(t), tuiTask("existing-task"))
 	m.createInFlight = true
+	m.busy = true
 	m.createInput = core.NewTaskInput{
 		Prompt:   "add billing retry flow",
 		Provider: "codex",
@@ -395,7 +432,7 @@ func TestModelUpdate_SyntheticRowBlocksOpenAndCleanupActions(t *testing.T) {
 
 	m, cmd := updateTUIModel(t, m, tea.KeyPressMsg{Code: tea.KeyEnter})
 	require.Nil(t, cmd)
-	require.False(t, m.busy)
+	require.True(t, m.busy)
 	require.Equal(t, tuiModeList, m.mode)
 	require.Contains(t, stripANSI(m.View().Content), "Task is still being created")
 
@@ -403,20 +440,22 @@ func TestModelUpdate_SyntheticRowBlocksOpenAndCleanupActions(t *testing.T) {
 	m, cmd = updateTUIModel(t, m, keyRunes("x"))
 	require.Nil(t, cmd)
 	require.Equal(t, tuiModeList, m.mode)
+	require.True(t, m.busy)
 	require.Contains(t, stripANSI(m.View().Content), "Task is still being created")
 
 	m.mode = tuiModeCleanupConfirm
 	m.err = nil
 	m, cmd = updateTUIModel(t, m, keyRunes("y"))
 	require.Nil(t, cmd)
-	require.False(t, m.busy)
+	require.True(t, m.busy)
 	require.Equal(t, tuiModeList, m.mode)
 	require.Contains(t, stripANSI(m.View().Content), "Task is still being created")
 }
 
-func TestModelUpdate_SyntheticRowNavigationMovesAwayAndBack(t *testing.T) {
+func TestModelUpdate_BackgroundCreationKeepsListNavigationInteractive(t *testing.T) {
 	m := newLoadedTUIModel(t, NewMockTaskService(t), tuiTask("task-one"), tuiTask("task-two"))
 	m.createInFlight = true
+	m.busy = true
 	m.createInput = core.NewTaskInput{
 		Prompt:   "add billing retry flow",
 		Provider: "codex",
@@ -460,6 +499,54 @@ func TestModelUpdate_NewTaskWhileOtherBusyStateDoesNotReportCreateInProgressErro
 	require.Equal(t, tuiModeList, m.mode)
 	require.Nil(t, m.err)
 	require.NotContains(t, stripANSI(m.View().Content), "Task creation already in progress")
+}
+
+func TestModelUpdate_BackgroundCreationBlocksRefreshButNotCreateSpecificError(t *testing.T) {
+	m := newLoadedTUIModel(t, NewMockTaskService(t), tuiTask("existing-task"))
+	m.busy = true
+	m.createInFlight = true
+
+	m, cmd := updateTUIModel(t, m, keyRunes("r"))
+	require.Nil(t, cmd)
+	require.Equal(t, tuiModeList, m.mode)
+	require.Nil(t, m.err)
+	require.NotContains(t, stripANSI(m.View().Content), "Task creation already in progress")
+}
+
+func TestModelUpdate_BackgroundCreationBlocksOpenAndCleanupOnExistingRows(t *testing.T) {
+	m := newLoadedTUIModel(t, NewMockTaskService(t), tuiTask("task-one"), tuiTask("task-two"))
+	m.busy = true
+	m.createInFlight = true
+	m.selected = 0
+
+	m, cmd := updateTUIModel(t, m, tea.KeyPressMsg{Code: tea.KeyEnter})
+	require.Nil(t, cmd)
+	require.True(t, m.busy)
+	require.Equal(t, tuiModeList, m.mode)
+	require.Nil(t, m.err)
+
+	m, cmd = updateTUIModel(t, m, keyRunes("x"))
+	require.Nil(t, cmd)
+	require.True(t, m.busy)
+	require.Equal(t, tuiModeList, m.mode)
+	require.Nil(t, m.err)
+}
+
+func TestModelUpdate_QIsBlockedWhileBackgroundCreationIsActive(t *testing.T) {
+	m := newLoadedTUIModel(t, NewMockTaskService(t), tuiTask("existing-task"))
+	m.busy = true
+	m.createInFlight = true
+	m.createInput = core.NewTaskInput{
+		Prompt:   "add billing retry flow",
+		Provider: "codex",
+	}
+	m.selected = m.syntheticCreationRowIndex()
+
+	m, cmd := updateTUIModel(t, m, keyRunes("q"))
+	require.Nil(t, cmd)
+	require.Equal(t, tuiModeList, m.mode)
+	require.True(t, m.createInFlight)
+	require.Contains(t, stripANSI(m.View().Content), "Task creation is still in progress")
 }
 
 func TestModelUpdate_PromptModeEscapeReturnsToListMode(t *testing.T) {

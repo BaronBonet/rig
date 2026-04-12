@@ -2,6 +2,7 @@ package cli
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strconv"
 	"strings"
@@ -49,6 +50,7 @@ type model struct {
 	loading            bool
 	busy               bool
 	createInFlight     bool
+	creationFailed     bool
 	creationProgress   core.TaskProgressStep
 	creationSteps      []string
 	recentEvents       []core.HookEvent
@@ -315,13 +317,11 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.progressCh = nil
 		m.err = msg.err
 		if msg.err != nil && msg.task == nil && m.createInFlight {
-			m.creationProgress = ""
-			m.shimmerTick = 0
-			m.mode = tuiModeList
-			m.selected = m.syntheticCreationRowIndex()
+			m.markCreationFailed()
 			return m, nil
 		}
 		m.createInFlight = false
+		m.creationFailed = false
 		m.creationProgress = ""
 		m.creationSteps = nil
 		m.shimmerTick = 0
@@ -385,11 +385,11 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.shimmerTick = 0
 		m.progressCh = nil
 		if m.createInFlight {
-			m.mode = tuiModeList
-			m.selected = m.syntheticCreationRowIndex()
+			m.markCreationFailed()
 			return m, nil
 		}
 		m.createInFlight = false
+		m.creationFailed = false
 		return m, nil
 	default:
 		return m, nil
@@ -419,10 +419,7 @@ func (m model) updateKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		return m, tea.Quit
 	}
 
-	if m.busy {
-		if m.createInFlight && msg.String() == "n" {
-			m.err = fmt.Errorf("Task creation already in progress")
-		}
+	if m.busy && !m.createInFlight {
 		return m, nil
 	}
 
@@ -441,11 +438,17 @@ func (m model) updateKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 func (m model) updateListKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	switch msg.String() {
 	case "q":
+		if m.blockedByActiveCreation("Task creation is still in progress") {
+			return m, nil
+		}
 		m.cleanupSubscriptions()
 		return m, tea.Quit
 	case "enter":
 		if m.isSyntheticCreationRowSelected() {
-			m.err = fmt.Errorf("Task is still being created")
+			m.err = m.syntheticCreationRowActionError()
+			return m, nil
+		}
+		if m.blockedByActiveCreation("") {
 			return m, nil
 		}
 		task := m.selectedTask()
@@ -482,7 +485,10 @@ func (m model) updateListKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		return m, nil
 	case "x":
 		if m.isSyntheticCreationRowSelected() {
-			m.err = fmt.Errorf("Task is still being created")
+			m.err = m.syntheticCreationRowActionError()
+			return m, nil
+		}
+		if m.blockedByActiveCreation("") {
 			return m, nil
 		}
 		if m.visibleRowCount() == 0 {
@@ -492,7 +498,11 @@ func (m model) updateListKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		m.mode = tuiModeCleanupConfirm
 		return m, nil
 	case "n":
+		if m.blockedByActiveCreation("Task creation already in progress") {
+			return m, nil
+		}
 		m.err = nil
+		m.creationFailed = false
 		m.mode = tuiModePromptInput
 		m.createInput = core.NewTaskInput{Cwd: m.creationCwd()}
 		m.promptInput.Reset()
@@ -500,6 +510,9 @@ func (m model) updateListKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		m.nameInput.Blur()
 		return m, nil
 	case "r":
+		if m.blockedByActiveCreation("") {
+			return m, nil
+		}
 		m.service.InvalidatePRCache()
 		m.err = nil
 		m.busy = true
@@ -518,7 +531,11 @@ func (m model) updateCleanupConfirmKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd)
 	case "y":
 		if m.isSyntheticCreationRowSelected() {
 			m.mode = tuiModeList
-			m.err = fmt.Errorf("Task is still being created")
+			m.err = m.syntheticCreationRowActionError()
+			return m, nil
+		}
+		if m.blockedByActiveCreation("") {
+			m.mode = tuiModeList
 			return m, nil
 		}
 		task := m.selectedTask()
@@ -554,6 +571,7 @@ func (m model) updatePromptInputKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		m.err = nil
 		m.busy = true
 		m.createInFlight = true
+		m.creationFailed = false
 		m.mode = tuiModeList
 		m.creationTask = nil
 		m.creationProgress = core.TaskProgressNaming
@@ -596,6 +614,7 @@ func (m model) updateNameConfirmKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		m.busy = true
 		m.nameInput.Blur()
 		m.creationProgress = core.TaskProgressWorktreeCreating
+		m.creationFailed = false
 		m.creationSteps = []string{progressStepLabel(core.TaskProgressWorktreeCreating)}
 		m.shimmerTick = 0
 		input := m.createInput
@@ -1471,7 +1490,7 @@ func (m model) visibleRowCount() int {
 }
 
 func (m model) syntheticCreationTaskView() *core.TaskView {
-	if !m.createInFlight {
+	if !m.hasSyntheticCreationRow() {
 		return nil
 	}
 
@@ -1493,6 +1512,9 @@ func (m model) syntheticCreationTaskView() *core.TaskView {
 		task.Prompt = m.createInput.Prompt
 	}
 	task.Status = core.TaskStatusCreating
+	if m.creationFailed {
+		task.Status = core.TaskStatusBroken
+	}
 	task.RuntimeState = core.RuntimeStateNone
 
 	return &core.TaskView{Task: task}
@@ -1547,6 +1569,36 @@ func (m model) syntheticCreationDetailView() string {
 	}
 
 	return strings.TrimRight(b.String(), "\n")
+}
+
+func (m *model) markCreationFailed() {
+	m.createInFlight = false
+	m.creationFailed = true
+	m.creationProgress = ""
+	m.shimmerTick = 0
+	m.mode = tuiModeList
+	m.selected = m.syntheticCreationRowIndex()
+}
+
+func (m model) hasSyntheticCreationRow() bool {
+	return m.createInFlight || m.creationFailed
+}
+
+func (m *model) blockedByActiveCreation(errMsg string) bool {
+	if !m.createInFlight {
+		return false
+	}
+	if strings.TrimSpace(errMsg) != "" {
+		m.err = errors.New(errMsg)
+	}
+	return true
+}
+
+func (m model) syntheticCreationRowActionError() error {
+	if m.createInFlight {
+		return fmt.Errorf("Task is still being created")
+	}
+	return fmt.Errorf("Task creation failed")
 }
 
 func (m *model) nextRefreshTasksCmd() tea.Cmd {
