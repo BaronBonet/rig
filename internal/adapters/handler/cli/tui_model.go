@@ -801,9 +801,6 @@ func (m model) selectedTaskDetailView() string {
 	if view != nil && view.HookSession != nil {
 		llmReplyText = view.HookSession.LastAssistantMessage
 		if llmReplyText == "" {
-			llmReplyText = view.HookSession.LastCommandResultText
-		}
-		if llmReplyText == "" {
 			llmReplyText = view.HookSession.LastCommandText
 		}
 	}
