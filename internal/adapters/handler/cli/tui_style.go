@@ -6,6 +6,8 @@ import (
 	"strings"
 
 	"charm.land/lipgloss/v2"
+
+	"rig/internal/core"
 )
 
 // IconSet holds all icons used in the TUI. Two sets are available:
@@ -61,22 +63,29 @@ func activeIcons(useNerdFont bool) IconSet {
 
 // Colors
 var (
-	colorPrimary = lipgloss.Color("#c8c8d4")
-	colorDimmed  = lipgloss.Color("#7b7b8e")
-	colorAccent  = lipgloss.Color("#6c6ce0")
-	colorHealthy = lipgloss.Color("#5a9e6f")
-	colorWarning = lipgloss.Color("#c4a24e")
-	colorError   = lipgloss.Color("#c05050")
-	colorClaude  = lipgloss.Color("#e08a5a")
-	colorCodex   = lipgloss.Color("#5ac4a0")
+	colorPrimary    = lipgloss.Color("#b8bcc8")
+	colorDimmed     = lipgloss.Color("#5a5e70")
+	colorMuted      = lipgloss.Color("#3d4050")
+	colorDivider    = lipgloss.Color("#2a2d3a")
+	colorAccent     = lipgloss.Color("#7c8af6")
+	colorHealthy    = lipgloss.Color("#4aba7a")
+	colorWarning    = lipgloss.Color("#c4a24e")
+	colorError      = lipgloss.Color("#c05050")
+	colorClaude     = lipgloss.Color("#d4956a")
+	colorCodex      = lipgloss.Color("#5ac4a0")
+	colorPRMerged   = lipgloss.Color("#9b7ce8")
+	colorUserPrompt = lipgloss.Color("#7c8af6")
+	colorLLMReply   = lipgloss.Color("#4aba7a")
 )
 
 // Icons
 const (
+	// Task status
 	iconStatusActive   = "●"
 	iconStatusIdle     = "○"
 	iconStatusProgress = "◐"
 
+	// Header / provider (kept for existing view code; Task 10 will remove)
 	iconHeaderList    = "◈"
 	iconHeaderCreate  = "✦"
 	iconHeaderCleanup = "⚠"
@@ -85,6 +94,20 @@ const (
 
 	iconProviderCodex  = "⚡"
 	iconProviderClaude = "✦"
+
+	// PR status (GitHub-inspired, distinct from task status circles)
+	iconPROpen   = "⊙"
+	iconPRDraft  = "⊘"
+	iconPRMerged = "⊕"
+	iconPRClosed = "⊗"
+	iconPRNone   = "—"
+
+	// Activity feed
+	iconUserPrompt = "▸"
+	iconLLMReply   = "◂"
+
+	// Progress
+	iconCheckmark = "✔"
 )
 
 // Styles
@@ -116,15 +139,28 @@ var (
 
 	selectedRowStyle = lipgloss.NewStyle().
 				BorderLeft(true).
-				BorderStyle(lipgloss.ThickBorder()).
+				BorderStyle(lipgloss.Border{Left: "│"}).
 				BorderForeground(colorAccent).
-				PaddingLeft(2).
+				PaddingLeft(1).
 				Bold(true).
 				Foreground(colorPrimary)
 
 	normalRowStyle = lipgloss.NewStyle().
 			PaddingLeft(3).
 			Foreground(colorDimmed)
+
+	mutedStyle = lipgloss.NewStyle().
+			Foreground(colorMuted)
+
+	dividerStyle = lipgloss.NewStyle().
+			Foreground(colorDivider)
+
+	prMergedStyle = lipgloss.NewStyle().
+			Foreground(colorPRMerged)
+
+	headerLabelStyle = lipgloss.NewStyle().
+				Foreground(lipgloss.Color("#8b8fa3")).
+				Bold(true)
 )
 
 // statusStyle returns the icon and style for a given task status.
@@ -172,6 +208,21 @@ func displayStateStyle(status string, activity string) (string, lipgloss.Style) 
 		return iconStatusIdle, dimStyle
 	default:
 		return "", dimStyle
+	}
+}
+
+func prStateIconStyle(state core.PRState) (string, lipgloss.Style) {
+	switch state {
+	case core.PRStateOpen:
+		return iconPROpen, healthyStyle
+	case core.PRStateDraft:
+		return iconPRDraft, warningStyle
+	case core.PRStateMerged:
+		return iconPRMerged, prMergedStyle
+	case core.PRStateClosed:
+		return iconPRClosed, errorStyle
+	default:
+		return iconPRNone, mutedStyle
 	}
 }
 
