@@ -30,6 +30,7 @@ type TaskService interface {
 	SubscribeTaskHookUpdates(ctx context.Context) (<-chan core.HookSessionSummary, func(), error)
 	OpenTask(ctx context.Context, idOrSlug string) error
 	DeleteTaskResources(ctx context.Context, idOrSlug string) (*core.Task, error)
+	GetTaskHookEvents(ctx context.Context, taskID string, limit int) ([]core.HookEvent, error)
 	GetPRStatus(ctx context.Context, repoRoot string, branchName string) (*core.PRStatus, error)
 	InvalidatePRCache()
 }
