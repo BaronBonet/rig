@@ -988,6 +988,38 @@ func TestModelView_SelectedTaskDetailShowsFallbackWhenHookDataMissing(t *testing
 	require.NotContains(t, view, "connected")
 }
 
+func TestCurrentTurnLLMActions_IgnoresEventsFromOtherSessions(t *testing.T) {
+	events := []core.HookEvent{
+		{
+			EventName:   "PostToolUse",
+			SessionID:   "sess-child",
+			TurnID:      "turn-child",
+			CommandText: "sed -n '1,120p' internal/core/task.go",
+		},
+		{
+			EventName:            "Stop",
+			SessionID:            "sess-child",
+			TurnID:               "turn-child",
+			LastAssistantMessage: "Implemented Task 1 in the child agent",
+		},
+		{
+			EventName:   "PostToolUse",
+			SessionID:   "sess-parent",
+			TurnID:      "turn-parent",
+			CommandText: "go test ./internal/adapters/handler/cli -count=1",
+		},
+		{
+			EventName:   "UserPromptSubmit",
+			SessionID:   "sess-parent",
+			TurnID:      "turn-parent",
+			PromptText:  "fix the billing retry flow",
+		},
+	}
+
+	actions := currentTurnLLMActions(events, "sess-parent", "turn-parent", 5)
+	require.Equal(t, []string{"go test ./internal/adapters/handler/cli -count=1"}, actions)
+}
+
 func TestTaskStateText_PrefersNeedsInputOverHookActivity(t *testing.T) {
 	view := taskViewWithObserver(
 		tuiTask("billing-retry-flow"),

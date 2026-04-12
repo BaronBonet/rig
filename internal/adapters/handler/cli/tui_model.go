@@ -827,7 +827,13 @@ func (m model) selectedTaskDetailView() string {
 	// Derive LLM actions from recent hook events when available.
 	var llmActions []string
 	if m.recentEventsTaskID == task.ID && len(m.recentEvents) > 0 {
-		llmActions = currentTurnLLMActions(m.recentEvents, maxDisplayedActions)
+		sessionID := ""
+		turnID := ""
+		if view != nil && view.HookSession != nil {
+			sessionID = view.HookSession.SessionID
+			turnID = view.HookSession.CurrentTurnID
+		}
+		llmActions = currentTurnLLMActions(m.recentEvents, sessionID, turnID, maxDisplayedActions)
 	}
 
 	// Fallback: use the HookSession summary when we have no event-sourced actions.
@@ -918,11 +924,20 @@ func (m model) selectedTaskDetailView() string {
 }
 
 // currentTurnLLMActions extracts up to maxActions LLM action texts from the
-// current turn (events after the last UserPromptSubmit). Events are expected in
-// latest-first order as returned by the query.
-func currentTurnLLMActions(events []core.HookEvent, maxActions int) []string {
+// current task session's current turn. Events are expected in latest-first
+// order as returned by the query.
+func currentTurnLLMActions(events []core.HookEvent, sessionID string, turnID string, maxActions int) []string {
 	var actions []string
 	for _, ev := range events {
+		if sessionID != "" && ev.SessionID != "" && ev.SessionID != sessionID {
+			continue
+		}
+		if turnID != "" && ev.TurnID != "" && ev.TurnID != turnID {
+			if ev.EventName == "UserPromptSubmit" || ev.EventName == "SessionStart" {
+				break
+			}
+			continue
+		}
 		if ev.EventName == "UserPromptSubmit" || ev.EventName == "SessionStart" {
 			break // stop at the boundary of the current turn or session
 		}

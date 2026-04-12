@@ -478,6 +478,74 @@ func TestRepositoryIngestHookEvent_MapsTaskBySessionID(t *testing.T) {
 	require.Equal(t, "I finished the change", summary.LastAssistantMessage)
 }
 
+func TestRepositoryIngestHookEvent_IgnoresNestedSessionEventsForEstablishedTaskSession(t *testing.T) {
+	repo := newTestRepository(t)
+	task := seedTask(t, repo, core.Task{
+		ID:           "task-1",
+		Slug:         "task-1",
+		DisplayName:  "task 1",
+		WorktreePath: "/tmp/repo-task-1",
+	})
+
+	_, err := repo.IngestHookEvent(context.Background(), core.HookEventInput{
+		Cwd:            task.WorktreePath,
+		EventName:      "SessionStart",
+		SessionID:      "sess-parent",
+		Model:          "gpt-5",
+		TranscriptPath: "/tmp/parent.jsonl",
+		StartSource:    "startup",
+		OccurredAt:     time.Date(2026, 4, 8, 10, 0, 0, 0, time.UTC),
+	})
+	require.NoError(t, err)
+
+	parentSummary, err := repo.IngestHookEvent(context.Background(), core.HookEventInput{
+		Cwd:        task.WorktreePath,
+		EventName:  "UserPromptSubmit",
+		SessionID:  "sess-parent",
+		TurnID:     "turn-parent",
+		PromptText: "fix the billing retry flow",
+		OccurredAt: time.Date(2026, 4, 8, 10, 1, 0, 0, time.UTC),
+	})
+	require.NoError(t, err)
+	require.NotNil(t, parentSummary)
+	require.Equal(t, "sess-parent", parentSummary.SessionID)
+	require.Equal(t, "fix the billing retry flow", parentSummary.LastPromptText)
+
+	nestedSummary, err := repo.IngestHookEvent(context.Background(), core.HookEventInput{
+		Cwd:            task.WorktreePath,
+		EventName:      "SessionStart",
+		SessionID:      "sess-child",
+		Model:          "gpt-5",
+		TranscriptPath: "/tmp/child.jsonl",
+		StartSource:    "startup",
+		OccurredAt:     time.Date(2026, 4, 8, 10, 2, 0, 0, time.UTC),
+	})
+	require.NoError(t, err)
+	require.NotNil(t, nestedSummary)
+
+	nestedSummary, err = repo.IngestHookEvent(context.Background(), core.HookEventInput{
+		Cwd:        task.WorktreePath,
+		EventName:  "UserPromptSubmit",
+		SessionID:  "sess-child",
+		TurnID:     "turn-child",
+		PromptText: "Implement Task 1 from the approved plan",
+		OccurredAt: time.Date(2026, 4, 8, 10, 2, 1, 0, time.UTC),
+	})
+	require.NoError(t, err)
+	require.NotNil(t, nestedSummary)
+
+	summaries, err := repo.ListHookSessionSummaries(context.Background(), []string{task.ID})
+	require.NoError(t, err)
+	require.Contains(t, summaries, task.ID)
+
+	summary := summaries[task.ID]
+	require.Equal(t, "sess-parent", summary.SessionID)
+	require.Equal(t, "turn-parent", summary.CurrentTurnID)
+	require.Equal(t, "fix the billing retry flow", summary.LastPromptText)
+	require.Equal(t, "/tmp/parent.jsonl", summary.TranscriptPath)
+	require.Equal(t, core.HookRuntimePhasePrompted, summary.RuntimePhase)
+}
+
 func TestRepositoryListHookEvents_OrdersLatestFirst(t *testing.T) {
 	repo := newTestRepository(t)
 	task := seedTask(t, repo, core.Task{
