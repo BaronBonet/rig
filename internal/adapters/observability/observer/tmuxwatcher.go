@@ -71,6 +71,30 @@ func (w *TMuxWatcher) HandleSessionActivity(ctx context.Context, sessionName str
 	return w.refreshTask(ctx, task)
 }
 
+func (w *TMuxWatcher) RefreshTaskByID(ctx context.Context, taskID string) error {
+	if w == nil || strings.TrimSpace(taskID) == "" {
+		return nil
+	}
+	if w.tasks == nil {
+		return fmt.Errorf("tmux watcher task lister not configured")
+	}
+
+	tasks, err := w.tasks.ListTasks(ctx)
+	if err != nil {
+		return err
+	}
+
+	target := strings.TrimSpace(taskID)
+	for _, task := range tasks {
+		if task == nil || strings.TrimSpace(task.ID) != target {
+			continue
+		}
+		return w.refreshTask(ctx, task)
+	}
+
+	return nil
+}
+
 func (w *TMuxWatcher) RefreshAll(ctx context.Context) error {
 	if w == nil {
 		return nil

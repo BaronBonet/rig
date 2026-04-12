@@ -64,7 +64,7 @@ func Serve(ctx context.Context, cfg ServerConfig) error {
 	defer hookListener.Close()
 
 	hookMux := http.NewServeMux()
-	publishingIngestor := newPublishingHookIngestor(cfg.HookIngestor, cfg.Hub)
+	publishingIngestor := newPublishingHookIngestor(cfg.HookIngestor, cfg.Hub, cfg.Watcher)
 	hookMux.Handle("/hook", hookhttp.NewHTTPHandler(publishingIngestor, cfg.Now))
 	hookMux.Handle("/claude-hook", claudehookhttp.NewHTTPHandler(publishingIngestor, cfg.Now))
 	hookServer := &http.Server{Handler: hookMux}
@@ -146,9 +146,14 @@ type publishingHookIngestor struct {
 	ingestor  core.HookEventIngestor
 	observers core.ObserverRuntimeRepository
 	hub       *Hub
+	watcher   *TMuxWatcher
 }
 
-func newPublishingHookIngestor(ingestor core.HookEventIngestor, hub *Hub) core.HookEventIngestor {
+func newPublishingHookIngestor(
+	ingestor core.HookEventIngestor,
+	hub *Hub,
+	watcher *TMuxWatcher,
+) core.HookEventIngestor {
 	var observers core.ObserverRuntimeRepository
 	if repo, ok := ingestor.(core.ObserverRuntimeRepository); ok {
 		observers = repo
@@ -158,6 +163,7 @@ func newPublishingHookIngestor(ingestor core.HookEventIngestor, hub *Hub) core.H
 		ingestor:  ingestor,
 		observers: observers,
 		hub:       hub,
+		watcher:   watcher,
 	}
 }
 
@@ -170,6 +176,9 @@ func (p *publishingHookIngestor) IngestHookEvent(
 		return summary, err
 	}
 	if summary != nil && p.hub != nil && p.observers != nil {
+		if p.watcher != nil && p.watcher.RefreshTaskByID(ctx, summary.TaskID) == nil {
+			return summary, nil
+		}
 		summaries, listErr := p.observers.ListObserverSummaries(ctx, []string{summary.TaskID})
 		if listErr == nil {
 			if observerSummary := summaries[summary.TaskID]; observerSummary != nil {

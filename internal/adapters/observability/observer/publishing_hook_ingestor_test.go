@@ -66,7 +66,7 @@ func TestPublishingHookIngestor_PublishesHookSessionWithObserverUpdate(t *testin
 		},
 	}
 
-	ingestor := newPublishingHookIngestor(repo, hub)
+	ingestor := newPublishingHookIngestor(repo, hub, nil)
 
 	summary, err := ingestor.IngestHookEvent(t.Context(), core.HookEventInput{
 		TaskID:    "task-1",

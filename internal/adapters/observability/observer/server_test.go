@@ -238,6 +238,133 @@ func TestObserverDropsUnmanagedHookEventsWithoutBroadcast(t *testing.T) {
 	}, 2*time.Second, 20*time.Millisecond)
 }
 
+func TestObserverHookEndpoint_StopRefreshesObserverStateImmediately(t *testing.T) {
+	socketPath := filepath.Join("/tmp", fmt.Sprintf("observer-%d.sock", time.Now().UnixNano()))
+	hookListener := mustListenTCP(t)
+	repo := mustCreateTaskRepository(t)
+	task := mustSeedTask(t, repo, core.Task{
+		ID:               "task-1",
+		Prompt:           "add observer hook ingest",
+		DisplayName:      "observer hook ingest",
+		Slug:             "observer-hook-ingest",
+		RepoRoot:         "/tmp/repo",
+		RepoName:         "repo",
+		BaseBranch:       "main",
+		BranchName:       "feat/observer-hook-ingest",
+		WorktreePath:     "/tmp/repo-observer-hook-ingest",
+		TmuxSession:      "repo-observer-hook-ingest",
+		Provider:         "codex",
+		Status:           core.TaskStatusRunning,
+		AgentWindowName:  "agent",
+		EditorWindowName: "editor",
+	})
+	now := time.Date(2026, 4, 12, 16, 0, 0, 0, time.UTC)
+	var snapshotCalls int
+	monitor := core.NewMockRuntimeMonitor(t)
+	monitor.EXPECT().Snapshot(mock.Anything, mock.MatchedBy(func(in *core.Task) bool {
+		return in != nil && in.ID == task.ID
+	})).RunAndReturn(func(context.Context, *core.Task) (core.RuntimeSnapshot, error) {
+		snapshotCalls++
+		if snapshotCalls == 1 {
+			return core.RuntimeSnapshot{
+				SessionName:       task.TmuxSession,
+				PaneID:            "%24",
+				ForegroundCommand: "codex",
+				HadAgentBinding:   true,
+				ObservedAt:        now,
+			}, nil
+		}
+		return core.RuntimeSnapshot{
+			SessionName:       task.TmuxSession,
+			PaneID:            "%24",
+			ForegroundCommand: "codex",
+			Content:           "› \n  gpt-5.4 high · 82% left\n",
+			HadAgentBinding:   true,
+			ObservedAt:        now.Add(2 * time.Second),
+		}, nil
+	}).Maybe()
+	monitor.EXPECT().Close().Return(nil).Once()
+
+	watcher := NewTMuxWatcher(TMuxWatcherConfig{
+		Tasks:   repo,
+		Monitor: monitor,
+		Repo:    repo,
+		Hooks:   repo,
+		Providers: map[string]core.ProviderClient{"codex": detectingTMuxWatcherProvider{
+			detect: func(snapshot core.RuntimeSnapshot) core.RuntimeState {
+				if snapshotCalls == 1 {
+					return core.RuntimeStateRunning
+				}
+				if strings.Contains(snapshot.Content, "›") {
+					return core.RuntimeStateNeedsInput
+				}
+				return core.RuntimeStateRunning
+			},
+		}},
+	})
+	hub := NewHub()
+	updates, release := mustSubscribeHub(t, hub)
+	defer release()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	done := make(chan error, 1)
+	go func() {
+		done <- Serve(ctx, ServerConfig{
+			SocketPath:      socketPath,
+			HookListenAddr:  hookListener.Addr().String(),
+			HookListener:    hookListener,
+			HookIngestor:    repo,
+			Watcher:         watcher,
+			Hub:             hub,
+			RefreshInterval: time.Hour,
+		})
+	}()
+
+	select {
+	case update := <-updates:
+		require.Equal(t, task.ID, update.TaskID)
+		require.Equal(t, core.DisplayStatusWorking, update.DisplayStatus)
+	case <-time.After(2 * time.Second):
+		t.Fatal("timed out waiting for initial watcher update")
+	}
+
+	req, err := http.NewRequest(
+		http.MethodPost,
+		"http://"+hookListener.Addr().String()+"/hook",
+		strings.NewReader(`{"cwd":"`+task.WorktreePath+`","session_id":"sess-1","hook_event_name":"Stop"}`),
+	)
+	require.NoError(t, err)
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("X-Codex-Hook-Event", "Stop")
+
+	resp, err := http.DefaultClient.Do(req)
+	require.NoError(t, err)
+	defer resp.Body.Close()
+	_, _ = io.Copy(io.Discard, resp.Body)
+	require.Equal(t, http.StatusAccepted, resp.StatusCode)
+
+	select {
+	case update := <-updates:
+		require.Equal(t, task.ID, update.TaskID)
+		require.Equal(t, core.DisplayStatusNeedsInput, update.DisplayStatus)
+	case <-time.After(2 * time.Second):
+		t.Fatal("timed out waiting for stop update")
+	}
+
+	cancel()
+	require.Eventually(t, func() bool {
+		select {
+		case err := <-done:
+			require.NoError(t, err)
+			return true
+		default:
+			return false
+		}
+	}, 2*time.Second, 20*time.Millisecond)
+}
+
 func TestServe_RefreshLoopPublishesTaskUpdatesFromWatcher(t *testing.T) {
 	socketPath := filepath.Join("/tmp", fmt.Sprintf("observer-%d.sock", time.Now().UnixNano()))
 	hookListener := mustListenTCP(t)

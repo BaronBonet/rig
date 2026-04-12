@@ -1009,10 +1009,10 @@ func TestCurrentTurnLLMActions_IgnoresEventsFromOtherSessions(t *testing.T) {
 			CommandText: "go test ./internal/adapters/handler/cli -count=1",
 		},
 		{
-			EventName:   "UserPromptSubmit",
-			SessionID:   "sess-parent",
-			TurnID:      "turn-parent",
-			PromptText:  "fix the billing retry flow",
+			EventName:  "UserPromptSubmit",
+			SessionID:  "sess-parent",
+			TurnID:     "turn-parent",
+			PromptText: "fix the billing retry flow",
 		},
 	}
 

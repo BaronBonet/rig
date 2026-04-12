@@ -6,11 +6,12 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"rig/internal/pkg/slug"
 	"slices"
 	"strings"
 	"sync"
 	"time"
+
+	"rig/internal/pkg/slug"
 )
 
 type DoctorResult struct {
