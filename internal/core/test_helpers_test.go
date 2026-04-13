@@ -35,15 +35,16 @@ type testServiceHarness struct {
 }
 
 type taskRepositoryState struct {
-	isAvailableErr error
-	createErr      error
-	updateErr      error
-	updateErrAt    int
-	updateCount    int
-	listTasks      []*Task
-	getTask        *Task
-	createdTask    *Task
-	updatedTask    *Task
+	isAvailableErr  error
+	createErr       error
+	updateErr       error
+	updateErrAt     int
+	updateCount     int
+	listTasks       []*Task
+	listTasksByRepo []*Task
+	getTask         *Task
+	createdTask     *Task
+	updatedTask     *Task
 }
 
 type repoClientState struct {
@@ -210,6 +211,15 @@ func wireTaskRepositoryMock(h *testServiceHarness) {
 
 		return tasks, nil
 	}).Maybe()
+	h.taskRepoMock.EXPECT().ListTasksByRepo(mock.Anything, mock.Anything).
+		RunAndReturn(func(_ context.Context, _ string) ([]*Task, error) {
+			tasks := make([]*Task, 0, len(h.taskRepo.listTasksByRepo))
+			for _, task := range h.taskRepo.listTasksByRepo {
+				tasks = append(tasks, cloneTask(task))
+			}
+
+			return tasks, nil
+		}).Maybe()
 }
 
 func wireRepoClientMock(h *testServiceHarness) {
