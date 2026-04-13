@@ -755,17 +755,18 @@ func (m model) listView() string {
 	}
 
 	// Header: "RIG" on left, keybindings on right
-	var modeHint string
-	if m.currentRepoRoot != "" {
-		if m.viewMode == viewModeRepo {
-			modeHint = mutedStyle.Render("[") + primaryStyle.Render("repo: "+m.currentRepoName) + mutedStyle.Render("]")
-		} else {
-			modeHint = mutedStyle.Render("[") + primaryStyle.Render("all repos") + mutedStyle.Render("]")
-		}
+	modeLabel := "all repos"
+	if m.viewMode == viewModeRepo && m.currentRepoRoot != "" {
+		modeLabel = "repo: " + m.currentRepoName
 	}
+	modeHint := mutedStyle.Render("[") + primaryStyle.Render(modeLabel) + mutedStyle.Render("]")
 	keybinds := "n new   r refresh   x clean   q quit"
 	if m.currentRepoRoot != "" {
-		keybinds = "a toggle repos   " + keybinds
+		toggleTarget := "all repos"
+		if m.viewMode == viewModeAll {
+			toggleTarget = "current repo"
+		}
+		keybinds = "a: " + toggleTarget + "   " + keybinds
 	}
 	b.WriteString(renderHeader(
 		headerLabelStyle.Render("RIG")+" "+modeHint,
@@ -1392,7 +1393,7 @@ func (m *model) selectTaskByIDOrSlug(key string) bool {
 		return false
 	}
 
-	for i, view := range m.taskViews {
+	for i, view := range m.visibleTaskViews() {
 		if view == nil || view.Task == nil {
 			continue
 		}
@@ -1400,12 +1401,6 @@ func (m *model) selectTaskByIDOrSlug(key string) bool {
 			m.selected = i
 			return true
 		}
-	}
-
-	if synthetic := m.syntheticCreationTaskView(); synthetic != nil && synthetic.Task != nil &&
-		strings.TrimSpace(selectedIDOrSlug(synthetic.Task)) == key {
-		m.selected = m.syntheticCreationRowIndex()
-		return true
 	}
 
 	return false
@@ -1825,11 +1820,21 @@ func (m model) renderFlatTaskList(b *strings.Builder, rows []*core.TaskView, tot
 }
 
 func (m model) renderGroupedTaskList(b *strings.Builder, rows []*core.TaskView, totalWidth int) {
-	groups := groupTaskViewsByRepo(rows)
+	actualRows := rows
+	synthetic := m.syntheticCreationTaskView()
+	if synthetic != nil && len(rows) > 0 {
+		last := rows[len(rows)-1]
+		if last != nil && last.Task != nil && synthetic.Task != nil &&
+			strings.TrimSpace(selectedIDOrSlug(last.Task)) == strings.TrimSpace(selectedIDOrSlug(synthetic.Task)) {
+			actualRows = rows[:len(rows)-1]
+		}
+	}
+
+	groups := groupTaskViewsByRepo(actualRows)
 
 	globalIndex := 0
 	for gi, group := range groups {
-		b.WriteString(normalRowStyle.Render(repoHeaderStyle.Render(group.repoName)) + "\n")
+		b.WriteString(repoHeaderRowStyle.Render(repoHeaderStyle.Render(group.repoName)) + "\n")
 
 		for _, view := range group.views {
 			if view == nil || view.Task == nil {
@@ -1842,6 +1847,13 @@ func (m model) renderGroupedTaskList(b *strings.Builder, rows []*core.TaskView, 
 		if gi < len(groups)-1 {
 			b.WriteString("\n")
 		}
+	}
+
+	if synthetic != nil {
+		if len(groups) > 0 {
+			b.WriteString("\n")
+		}
+		m.renderTaskRow(b, synthetic, globalIndex, totalWidth)
 	}
 }
 

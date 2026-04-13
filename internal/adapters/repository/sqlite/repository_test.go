@@ -282,13 +282,17 @@ func TestNewRepository_CreatesFreshDatabaseWithGooseMigrations(t *testing.T) {
 	require.NoError(t, tableErr)
 	require.False(t, exists)
 
+	exists, indexErr := testSchemaObjectExists(t, repo.db, "index", "idx_tasks_repo_root")
+	require.NoError(t, indexErr)
+	require.True(t, exists)
+
 	var versionID int64
 	var isApplied bool
 	require.NoError(t, repo.db.QueryRowContext(
 		context.Background(),
 		`select version_id, is_applied from goose_db_version order by id desc limit 1`,
 	).Scan(&versionID, &isApplied))
-	require.EqualValues(t, 3, versionID)
+	require.EqualValues(t, 4, versionID)
 	require.True(t, isApplied)
 }
 

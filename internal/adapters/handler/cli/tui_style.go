@@ -17,6 +17,7 @@ var (
 	colorMuted      = lipgloss.Color("#3d4050")
 	colorDivider    = lipgloss.Color("#2a2d3a")
 	colorAccent     = lipgloss.Color("#7c8af6")
+	colorRepoHeader = lipgloss.Color("#5867d8")
 	colorHealthy    = lipgloss.Color("#4aba7a")
 	colorWarning    = lipgloss.Color("#c4a24e")
 	colorError      = lipgloss.Color("#c05050")
@@ -102,8 +103,11 @@ var (
 				Bold(true)
 
 	repoHeaderStyle = lipgloss.NewStyle().
-				Foreground(colorAccent).
-				Bold(true)
+			Foreground(colorRepoHeader).
+			Bold(true)
+
+	repoHeaderRowStyle = lipgloss.NewStyle().
+				PaddingLeft(2)
 )
 
 // statusStyle returns the icon and style for a given task status.
