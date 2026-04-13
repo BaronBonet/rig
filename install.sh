@@ -16,6 +16,50 @@ require_cmd() {
 	command -v "$1" >/dev/null 2>&1 || fail "missing required command: $1"
 }
 
+github_token() {
+	if [ -n "${GH_TOKEN:-}" ]; then
+		printf '%s' "$GH_TOKEN"
+		return
+	fi
+
+	if [ -n "${GITHUB_TOKEN:-}" ]; then
+		printf '%s' "$GITHUB_TOKEN"
+		return
+	fi
+
+	printf '%s' ""
+}
+
+can_use_gh() {
+	command -v gh >/dev/null 2>&1 || return 1
+	gh auth status >/dev/null 2>&1
+}
+
+curl_fetch() {
+	url=$1
+	token="$(github_token)"
+
+	if [ -n "$token" ]; then
+		curl -fsSL -H "Authorization: Bearer $token" "$url"
+		return
+	fi
+
+	curl -fsSL "$url"
+}
+
+curl_download() {
+	url=$1
+	dest=$2
+	token="$(github_token)"
+
+	if [ -n "$token" ]; then
+		curl -fsSL -H "Authorization: Bearer $token" "$url" -o "$dest"
+		return
+	fi
+
+	curl -fsSL "$url" -o "$dest"
+}
+
 detect_goos() {
 	case "$(uname -s)" in
 	Darwin) echo "darwin" ;;
@@ -32,9 +76,29 @@ detect_goarch() {
 }
 
 latest_tag() {
-	tag="$(curl -fsSL "$AGENT_INSTALL_API_URL" | sed -n 's/.*"tag_name"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' | head -n 1)"
-	[ -n "$tag" ] || fail "could not resolve the latest GitHub release"
+	if can_use_gh; then
+		tag="$(gh api "repos/$AGENT_INSTALL_REPO/releases/latest" --jq .tag_name)"
+	else
+		tag="$(curl_fetch "$AGENT_INSTALL_API_URL" | sed -n 's/.*"tag_name"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' | head -n 1)"
+	fi
+
+	[ -n "$tag" ] || fail "could not resolve the latest GitHub release; authenticate with gh or set GH_TOKEN for private repos"
 	echo "$tag"
+}
+
+download_release_assets() {
+	version=$1
+	archive=$2
+	tmpdir=$3
+
+	if can_use_gh; then
+		gh release download "$version" -R "$AGENT_INSTALL_REPO" -p "$archive" -p checksums.txt -D "$tmpdir"
+		return
+	fi
+
+	download_base="$AGENT_INSTALL_DOWNLOAD_ROOT/$version"
+	curl_download "$download_base/$archive" "$tmpdir/$archive"
+	curl_download "$download_base/checksums.txt" "$tmpdir/checksums.txt"
 }
 
 detect_shell_rc() {
@@ -89,12 +153,10 @@ main() {
 	goarch="$(detect_goarch)"
 	version="$(latest_tag)"
 	archive="rig_${version}_${goos}_${goarch}.tar.gz"
-	download_base="$AGENT_INSTALL_DOWNLOAD_ROOT/$version"
 	tmpdir="$(mktemp -d)"
 	trap 'rm -rf "$tmpdir"' EXIT INT TERM
 
-	curl -fsSL "$download_base/$archive" -o "$tmpdir/$archive"
-	curl -fsSL "$download_base/checksums.txt" -o "$tmpdir/checksums.txt"
+	download_release_assets "$version" "$archive" "$tmpdir"
 
 	grep -F "  $archive" "$tmpdir/checksums.txt" >"$tmpdir/checksum.txt" || fail "missing checksum for $archive"
 	(
