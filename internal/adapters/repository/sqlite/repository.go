@@ -70,6 +70,13 @@ func NewRepository(cfg Config) (*Repository, error) {
 		return repo, nil
 	}
 
+	if err := repairLegacyTasksSchema(context.Background(), db); err != nil {
+		repo.initErr = err
+		_ = db.Close()
+		repo.db = nil
+		return repo, nil
+	}
+
 	repo.db = db
 	repo.queries = generated.New(db)
 	return repo, nil

@@ -292,6 +292,57 @@ func TestNewRepository_CreatesFreshDatabaseWithGooseMigrations(t *testing.T) {
 	require.True(t, isApplied)
 }
 
+func TestNewRepository_UpgradesLegacyTasksTableWithMissingMetadataColumns(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "state.db")
+
+	db, err := sql.Open("sqlite", path)
+	require.NoError(t, err)
+
+	_, err = db.ExecContext(context.Background(), `
+create table tasks (
+  id text primary key,
+  prompt text not null,
+  display_name text not null,
+  slug text not null unique,
+  repo_root text not null,
+  base_branch text not null,
+  branch_name text not null,
+  worktree_path text not null,
+  tmux_session text not null,
+  provider text not null,
+  status text not null,
+  worktree_exists integer not null,
+  branch_exists integer not null,
+  session_exists integer not null,
+  last_error text not null default '',
+  created_at text not null,
+  updated_at text not null,
+  last_reconciled_at text not null default ''
+);
+create table events (
+  id integer primary key autoincrement,
+  task_id text not null,
+  event_type text not null,
+  payload text not null,
+  created_at text not null
+);
+`)
+	require.NoError(t, err)
+	require.NoError(t, db.Close())
+
+	repo, err := NewRepository(Config{Path: path})
+	require.NoError(t, err)
+	require.NotNil(t, repo)
+
+	task := seedTask(t, repo, core.Task{ID: "legacy-task"})
+
+	got, err := repo.GetTask(context.Background(), task.ID)
+	require.NoError(t, err)
+	require.Equal(t, "repo", got.RepoName)
+	require.Equal(t, defaultAgentWindowName, got.AgentWindowName)
+	require.Equal(t, defaultEditorWindowName, got.EditorWindowName)
+}
+
 func TestNewRepository_ReopensInitializedDatabaseWithoutReapplyingMigrations(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "state.db")
 
