@@ -3,9 +3,11 @@ package main
 import (
 	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"runtime"
 	"strconv"
+	"strings"
 
 	claudeclient "rig/internal/adapters/client/claude"
 	codexclient "rig/internal/adapters/client/codex"
@@ -39,6 +41,11 @@ func main() {
 }
 
 func buildDependencies() (cli.Dependencies, error) {
+	cwd, err := os.Getwd()
+	if err != nil {
+		return cli.Dependencies{}, fmt.Errorf("get working directory: %w", err)
+	}
+
 	cfg, err := infrastructure.LoadConfig()
 	if err != nil {
 		return cli.Dependencies{}, err
@@ -103,6 +110,8 @@ func buildDependencies() (cli.Dependencies, error) {
 		ObserverFingerprint: observerFingerprint,
 		Stdout:              os.Stdout,
 		Stderr:              os.Stderr,
+		Cwd:                 cwd,
+		RepoRoot:            detectRepoRoot(cwd),
 		DefaultProvider:     cfg.Service.Provider,
 	}, nil
 }
@@ -114,6 +123,15 @@ func detectAgentSourceRoot() string {
 	}
 
 	return filepath.Clean(filepath.Join(filepath.Dir(file), "..", ".."))
+}
+
+func detectRepoRoot(cwd string) string {
+	cmd := exec.Command("git", "-C", cwd, "rev-parse", "--show-toplevel")
+	out, err := cmd.Output()
+	if err != nil {
+		return ""
+	}
+	return strings.TrimSpace(string(out))
 }
 
 func binaryFingerprint(path string) (string, error) {
