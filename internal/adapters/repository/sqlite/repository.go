@@ -141,6 +141,19 @@ func (r *Repository) ListTasks(ctx context.Context) ([]*core.Task, error) {
 	return tasksFromRows(rows), nil
 }
 
+func (r *Repository) ListTasksByRepo(ctx context.Context, repoRoot string) ([]*core.Task, error) {
+	if err := r.unavailableErr(); err != nil {
+		return nil, err
+	}
+
+	rows, err := r.queries.ListTasksByRepo(ctx, repoRoot)
+	if err != nil {
+		return nil, err
+	}
+
+	return tasksFromRows(rows), nil
+}
+
 func (r *Repository) ListObserverSummaries(
 	ctx context.Context,
 	taskIDs []string,

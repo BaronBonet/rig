@@ -53,3 +53,14 @@ select
   created_at, updated_at, last_reconciled_at
 from tasks
 order by created_at asc;
+
+-- name: ListTasksByRepo :many
+select
+  id, prompt, display_name, slug, repo_root, repo_name, base_branch, branch_name,
+  worktree_path, tmux_session, agent_window_name, editor_window_name,
+  provider, status, worktree_exists, branch_exists, session_exists,
+  agent_window_exists, editor_window_exists, last_error,
+  created_at, updated_at, last_reconciled_at
+from tasks
+where repo_root = ?
+order by created_at asc;
