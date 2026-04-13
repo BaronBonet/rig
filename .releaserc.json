@@ -26,7 +26,7 @@
     [
       "@semantic-release/exec",
       {
-        "publishCmd": "tmp=$(mktemp \"$PWD/.semantic-release-notes.XXXXXX\") && trap 'rm -f \"$tmp\"' EXIT && cat > \"$tmp\" <<'__SEMANTIC_RELEASE_NOTES_87A4F43A__'\n${nextRelease.notes}\n__SEMANTIC_RELEASE_NOTES_87A4F43A__\ngoreleaser release --clean --release-notes \"$tmp\""
+        "publishCmd": "tmp=$(mktemp -t semantic-release-notes) && trap 'rm -f \"$tmp\"' EXIT && cat > \"$tmp\" <<'__SEMANTIC_RELEASE_NOTES_87A4F43A__'\n${nextRelease.notes}\n__SEMANTIC_RELEASE_NOTES_87A4F43A__\ngoreleaser release --clean --release-notes \"$tmp\""
       }
     ]
   ]

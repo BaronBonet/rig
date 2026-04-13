@@ -1,6 +1,7 @@
 bin/
 dist/
 local/
+node_modules/
 .DS_Store
 *.db
 *.db-shm
