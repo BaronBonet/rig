@@ -28,6 +28,13 @@ const (
 	tuiModeNameConfirm    tuiMode = "name_confirm"
 )
 
+type viewMode int
+
+const (
+	viewModeRepo viewMode = iota
+	viewModeAll
+)
+
 // nolint:recvcheck // bubbletea requires value receivers for tea.Model; mutation helpers need pointer receivers.
 type model struct {
 	service            TaskService
@@ -40,6 +47,9 @@ type model struct {
 	taskViews          []*core.TaskView
 	tasks              []*core.Task
 	observerSocketPath string
+	currentRepoRoot    string
+	currentRepoName    string
+	viewMode           viewMode
 	hookUpdates        <-chan core.HookSessionSummary
 	observerUpdates    <-chan core.ObserverTaskUpdate
 	unsubscribeHooks   func()
@@ -140,6 +150,7 @@ const syntheticCreationTitle = "Creating task..."
 func newTUIModel(
 	service TaskService,
 	defaultCreationCwd string,
+	repoRoot string,
 	defaultProvider string,
 	observerSocketPath string,
 	initialErr error,
@@ -154,6 +165,16 @@ func newTUIModel(
 	nameInput.Prompt = titleStyle.Render("❯") + " "
 	nameInput.Placeholder = "Confirm or edit the suggested task name"
 
+	vm := viewModeAll
+	repoName := ""
+	if repoRoot != "" {
+		vm = viewModeRepo
+		parts := strings.Split(strings.TrimRight(repoRoot, "/"), "/")
+		if len(parts) > 0 {
+			repoName = parts[len(parts)-1]
+		}
+	}
+
 	return model{
 		service:            service,
 		err:                initialErr,
@@ -163,6 +184,9 @@ func newTUIModel(
 		nameInput:          nameInput,
 		defaultCreationCwd: emptyFallback(defaultCreationCwd, "."),
 		observerSocketPath: strings.TrimSpace(observerSocketPath),
+		currentRepoRoot:    repoRoot,
+		currentRepoName:    repoName,
+		viewMode:           vm,
 		provider:           emptyFallback(defaultProvider, "codex"),
 		promptProvider:     emptyFallback(defaultProvider, "codex"),
 		tasksRequestSeq:    1,
@@ -171,7 +195,7 @@ func newTUIModel(
 
 func (m model) Init() tea.Cmd {
 	return tea.Batch(
-		refreshTasksCmd(m.service, m.tasksRequestSeq),
+		refreshTasksCmd(m.service, m.tasksRequestSeq, m.viewMode, m.currentRepoRoot),
 		subscribeHookUpdatesCmd(m.service),
 		subscribeObserverUpdatesCmd(m.observerSocketPath),
 	)
@@ -549,6 +573,20 @@ func (m model) updateListKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		m.err = nil
 		m.busy = true
 		m.loading = true
+		return m, m.nextRefreshTasksCmd()
+	case "a":
+		if m.currentRepoRoot == "" {
+			return m, nil
+		}
+		if m.viewMode == viewModeRepo {
+			m.viewMode = viewModeAll
+		} else {
+			m.viewMode = viewModeRepo
+		}
+		m.err = nil
+		m.busy = true
+		m.loading = true
+		m.selected = 0
 		return m, m.nextRefreshTasksCmd()
 	default:
 		return m, nil
@@ -1665,7 +1703,7 @@ func (m model) syntheticCreationRowActionError() error {
 
 func (m *model) nextRefreshTasksCmd() tea.Cmd {
 	m.tasksRequestSeq++
-	return refreshTasksCmd(m.service, m.tasksRequestSeq)
+	return refreshTasksCmd(m.service, m.tasksRequestSeq, m.viewMode, m.currentRepoRoot)
 }
 
 func fetchPRStatusCmd(service TaskService, taskID, repoRoot, branch string) tea.Cmd {
@@ -1688,9 +1726,15 @@ func fetchRecentEventsCmd(service TaskService, taskID string) tea.Cmd {
 	})
 }
 
-func refreshTasksCmd(service TaskService, requestID int) tea.Cmd {
+func refreshTasksCmd(service TaskService, requestID int, vm viewMode, repoRoot string) tea.Cmd {
 	return safeCmd("refreshTasksCmd", func() tea.Msg {
-		views, err := service.ListTaskViews(context.Background())
+		var views []*core.TaskView
+		var err error
+		if vm == viewModeRepo && repoRoot != "" {
+			views, err = service.ListTaskViewsByRepo(context.Background(), repoRoot)
+		} else {
+			views, err = service.ListTaskViews(context.Background())
+		}
 		return tasksLoadedMsg{requestID: requestID, views: views, err: err}
 	})
 }

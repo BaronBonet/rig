@@ -174,7 +174,7 @@ func TestModelUpdate_StaleTasksLoadedDoesNotClearCreateInFlight(t *testing.T) {
 
 func TestModelUpdate_CreateFlowWithoutTasksUsesModelCwdFallback(t *testing.T) {
 	service := NewMockTaskService(t)
-	m := newTUIModel(service, "/tmp/fallback-repo", "codex", "", nil)
+	m := newTUIModel(service, "/tmp/fallback-repo", "", "codex", "", nil)
 	m.loading = false
 
 	m, _ = updateTUIModel(t, m, keyRunes("n"))
@@ -1607,7 +1607,7 @@ func TestModelUpdate_CleanupSuccessRefreshFailureRemovesTaskFromVisibleList(t *t
 }
 
 func TestModelView_ShowsLoadingBeforeInitialLoadCompletes(t *testing.T) {
-	m := newTUIModel(NewMockTaskService(t), "/tmp/default", "codex", "", nil)
+	m := newTUIModel(NewMockTaskService(t), "/tmp/default", "", "codex", "", nil)
 	require.Contains(t, stripANSI(m.View().Content), "Loading tasks")
 }
 
@@ -1624,7 +1624,7 @@ func TestModelInit_SubscribesToHookUpdates(t *testing.T) {
 		Return((<-chan core.HookSessionSummary)(hookUpdates), func() {}, nil).
 		Once()
 
-	cmd := newTUIModel(service, "/tmp/default", "codex", "", nil).Init()
+	cmd := newTUIModel(service, "/tmp/default", "", "codex", "", nil).Init()
 	require.NotNil(t, cmd)
 
 	msg := cmd()
@@ -1744,7 +1744,7 @@ func TestRefreshTasksCmd_ConvertsPanicsToErrorMessage(t *testing.T) {
 		Return(nil, nil).
 		Once()
 
-	cmd := refreshTasksCmd(service, 7)
+	cmd := refreshTasksCmd(service, 7, viewModeAll, "")
 
 	require.NotPanics(t, func() {
 		msg := cmd()
@@ -1816,6 +1816,7 @@ func newLoadedTUIModelWithProviderAndViews(
 	next, cmd := newTUIModel(
 		service,
 		"/tmp/default",
+		"",
 		provider,
 		"",
 		nil,
@@ -1855,7 +1856,7 @@ func stripANSI(s string) string {
 }
 
 func TestListViewShowsInitialError(t *testing.T) {
-	m := newTUIModel(NewMockTaskService(t), "/tmp/default", "codex", "", errors.New("observer unavailable"))
+	m := newTUIModel(NewMockTaskService(t), "/tmp/default", "", "codex", "", errors.New("observer unavailable"))
 	m.loading = false
 
 	view := stripANSI(m.listView())

@@ -27,6 +27,7 @@ type TaskService interface {
 	) (*core.Task, error)
 	ListTasks(ctx context.Context) ([]*core.Task, error)
 	ListTaskViews(ctx context.Context) ([]*core.TaskView, error)
+	ListTaskViewsByRepo(ctx context.Context, repoRoot string) ([]*core.TaskView, error)
 	SubscribeTaskHookUpdates(ctx context.Context) (<-chan core.HookSessionSummary, func(), error)
 	OpenTask(ctx context.Context, idOrSlug string) error
 	DeleteTaskResources(ctx context.Context, idOrSlug string) (*core.Task, error)
@@ -50,6 +51,7 @@ type Dependencies struct {
 	Stdout              io.Writer
 	Stderr              io.Writer
 	Cwd                 string
+	RepoRoot            string
 	DefaultProvider     string
 }
 
@@ -71,6 +73,7 @@ func NewRootCommand(deps Dependencies) *cobra.Command {
 				newTUIModel(
 					deps.Service,
 					deps.Cwd,
+					deps.RepoRoot,
 					deps.DefaultProvider,
 					deps.ObserverSocketPath,
 					startupErr,
