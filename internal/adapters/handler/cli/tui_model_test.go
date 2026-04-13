@@ -1864,6 +1864,126 @@ func TestListViewShowsInitialError(t *testing.T) {
 	require.Contains(t, view, "observer unavailable")
 }
 
+func TestListView_ShowsAllReposModeIndicatorOutsideRepo(t *testing.T) {
+	m := newLoadedTUIModel(t, NewMockTaskService(t), tuiTask("task-one"))
+
+	view := stripANSI(m.listView())
+
+	require.Contains(t, view, "[all repos]")
+	require.NotContains(t, view, "a toggle repos")
+}
+
+func TestListView_ShowsModeSpecificRepoToggleHint(t *testing.T) {
+	m := newTUIModel(NewMockTaskService(t), "/tmp/default", "/tmp/repo-a", "codex", "", nil)
+	m.loading = false
+	m.taskViews = taskViews(tuiTask("task-one"))
+	m.tasks = taskViewsToTasks(m.taskViews)
+
+	view := stripANSI(m.listView())
+	require.Contains(t, view, "[repo: repo-a]")
+	require.Contains(t, view, "a: all repos")
+
+	m.viewMode = viewModeAll
+
+	view = stripANSI(m.listView())
+	require.Contains(t, view, "[all repos]")
+	require.Contains(t, view, "a: current repo")
+}
+
+func TestRepoHeaderStyle_UsesDarkerAccent(t *testing.T) {
+	require.Equal(t, colorRepoHeader, repoHeaderStyle.GetForeground())
+	require.True(t, repoHeaderStyle.GetBold())
+	require.Zero(t, repoHeaderStyle.GetPaddingBottom())
+}
+
+func TestListView_GroupedAllReposAddsSpacingBetweenTasksWithinRepo(t *testing.T) {
+	service := NewMockTaskService(t)
+
+	first := tuiTask("first-task")
+	first.DisplayName = "first task"
+	first.RepoName = "repo-a"
+	first.RepoRoot = "/tmp/repo-a"
+	first.CreatedAt = time.Date(2026, time.April, 13, 10, 0, 0, 0, time.UTC)
+	first.UpdatedAt = first.CreatedAt
+
+	second := tuiTask("second-task")
+	second.DisplayName = "second task"
+	second.RepoName = "repo-a"
+	second.RepoRoot = "/tmp/repo-a"
+	second.CreatedAt = time.Date(2026, time.April, 13, 9, 0, 0, 0, time.UTC)
+	second.UpdatedAt = second.CreatedAt
+
+	other := tuiTask("other-task")
+	other.DisplayName = "other task"
+	other.RepoName = "repo-b"
+	other.RepoRoot = "/tmp/repo-b"
+	other.CreatedAt = time.Date(2026, time.April, 13, 8, 0, 0, 0, time.UTC)
+	other.UpdatedAt = other.CreatedAt
+
+	m := newLoadedTUIModelWithViews(t, service,
+		taskView(first, nil),
+		taskView(second, nil),
+		taskView(other, nil),
+	)
+
+	lines := strings.Split(stripANSI(m.listView()), "\n")
+	firstIndex := -1
+	for i, line := range lines {
+		if strings.Contains(line, "first task") {
+			firstIndex = i
+			break
+		}
+	}
+
+	require.NotEqual(t, -1, firstIndex)
+	require.Contains(t, lines[firstIndex+2], "second task")
+
+	secondIndex := -1
+	for i, line := range lines {
+		if strings.Contains(line, "second task") {
+			secondIndex = i
+			break
+		}
+	}
+
+	require.NotEqual(t, -1, secondIndex)
+	require.Equal(t, "", strings.TrimSpace(lines[secondIndex+2]))
+	require.Contains(t, lines[secondIndex+3], "repo-b")
+}
+
+func TestModelUpdate_TasksLoadedPreservesSelectionInGroupedAllReposView(t *testing.T) {
+	service := NewMockTaskService(t)
+
+	repoA := tuiTask("repo-a-task")
+	repoA.RepoName = "repo-a"
+	repoA.RepoRoot = "/tmp/repo-a"
+	repoA.CreatedAt = time.Date(2026, time.April, 13, 9, 0, 0, 0, time.UTC)
+	repoA.UpdatedAt = repoA.CreatedAt
+
+	repoB := tuiTask("repo-b-task")
+	repoB.RepoName = "repo-b"
+	repoB.RepoRoot = "/tmp/repo-b"
+	repoB.CreatedAt = time.Date(2026, time.April, 13, 10, 0, 0, 0, time.UTC)
+	repoB.UpdatedAt = repoB.CreatedAt
+
+	m := newLoadedTUIModelWithViews(t, service, taskView(repoA, nil), taskView(repoB, nil))
+	require.Equal(t, []string{"repo-b-task", "repo-a-task"}, taskSlugs(taskViewsToTasks(m.visibleTaskViews())))
+
+	m.selected = 1
+	require.Equal(t, "repo-a-task", m.selectedTask().Slug)
+
+	m, _ = updateTUIModel(t, m, tasksLoadedMsg{
+		requestID: 1,
+		views: []*core.TaskView{
+			taskView(repoA, nil),
+			taskView(repoB, nil),
+		},
+	})
+
+	require.Equal(t, "repo-a-task", m.selectedTask().Slug)
+	require.Equal(t, 1, m.selected)
+}
+
 func tuiTask(slug string) *core.Task {
 	return &core.Task{
 		ID:             slug + "-id",
