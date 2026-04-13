@@ -323,17 +323,53 @@ func (s *Service) ListTasks(ctx context.Context) ([]*Task, error) {
 	return reconciled, nil
 }
 
+func (s *Service) ListTasksByRepo(ctx context.Context, repoRoot string) ([]*Task, error) {
+	tasks, err := s.tasks.ListTasksByRepo(ctx, repoRoot)
+	if err != nil {
+		return nil, err
+	}
+
+	reconciled := make([]*Task, 0, len(tasks))
+	for _, task := range tasks {
+		nextTask, reconcileErr := s.reconcileTask(ctx, task)
+		if reconcileErr != nil {
+			return nil, reconcileErr
+		}
+		if err := s.enrichRuntimeState(ctx, nextTask); err != nil {
+			return nil, err
+		}
+
+		reconciled = append(reconciled, nextTask)
+	}
+
+	return reconciled, nil
+}
+
 func (s *Service) ListTaskViews(ctx context.Context) ([]*TaskView, error) {
 	tasks, err := s.ListTasks(ctx)
 	if err != nil {
 		return nil, err
 	}
 
+	return s.buildTaskViews(ctx, tasks)
+}
+
+func (s *Service) ListTaskViewsByRepo(ctx context.Context, repoRoot string) ([]*TaskView, error) {
+	tasks, err := s.ListTasksByRepo(ctx, repoRoot)
+	if err != nil {
+		return nil, err
+	}
+
+	return s.buildTaskViews(ctx, tasks)
+}
+
+func (s *Service) buildTaskViews(ctx context.Context, tasks []*Task) ([]*TaskView, error) {
 	views := make([]*TaskView, 0, len(tasks))
 	if len(tasks) == 0 {
 		return views, nil
 	}
 
+	var err error
 	var summaries map[string]*HookSessionSummary
 	var observerSummaries map[string]*ObserverSummary
 	if s.hooks != nil {
