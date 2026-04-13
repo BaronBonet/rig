@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -754,9 +755,21 @@ func (m model) listView() string {
 	}
 
 	// Header: "RIG" on left, keybindings on right
+	var modeHint string
+	if m.currentRepoRoot != "" {
+		if m.viewMode == viewModeRepo {
+			modeHint = mutedStyle.Render("[") + primaryStyle.Render("repo: "+m.currentRepoName) + mutedStyle.Render("]")
+		} else {
+			modeHint = mutedStyle.Render("[") + primaryStyle.Render("all repos") + mutedStyle.Render("]")
+		}
+	}
+	keybinds := "n new   r refresh   x clean   q quit"
+	if m.currentRepoRoot != "" {
+		keybinds = "a toggle repos   " + keybinds
+	}
 	b.WriteString(renderHeader(
-		headerLabelStyle.Render("RIG"),
-		mutedStyle.Render("n new   r refresh   x clean   q quit"),
+		headerLabelStyle.Render("RIG")+" "+modeHint,
+		mutedStyle.Render(keybinds),
 		totalWidth,
 	) + "\n")
 	b.WriteString(dividerStyle.Render(strings.Repeat("─", totalWidth)) + "\n")
@@ -782,51 +795,10 @@ func (m model) listView() string {
 	}
 
 	// Task rows — two lines per task
-	for i, view := range rows {
-		if view == nil || view.Task == nil {
-			continue
-		}
-		task := view.Task
-		stateText, stStyle := taskStateText(view)
-		elapsed := taskElapsed(view)
-
-		// Line 1: task name (flex) + status (fixed) + time (fixed)
-		statusCell := padRightVisible(stateText, colWidthStatus)
-		timeCell := padLeftVisible(elapsed, colWidthElapsed)
-		rightWidth := colWidthStatus + colWidthElapsed
-		nameWidth := totalWidth - rightWidth - 4 // 4 = padding from style
-		if nameWidth < 10 {
-			nameWidth = 10
-		}
-
-		// Line 2: agent (fixed 7) + PR text
-		agentName := emptyFallback(task.Provider, "-")
-		agentCell := padRight(agentName, colWidthAgent)
-		prText := m.prTextForTask(view)
-
-		nameStr := truncateStr(task.DisplayName, nameWidth)
-		namePad := padRight(nameStr, nameWidth)
-
-		if i == m.selected {
-			nameRendered := lipgloss.NewStyle().Foreground(colorAccent).Bold(true).Render(namePad)
-			timeRendered := primaryStyle.Render(timeCell)
-			line1 := nameRendered + stStyle.Render(statusCell) + timeRendered
-			line2 := providerStyle(task.Provider).Render(agentCell) + prText
-			b.WriteString(selectedRowStyle.Render(line1) + "\n")
-			b.WriteString(selectedRowStyle.Render(line2) + "\n")
-		} else {
-			nameRendered := dimStyle.Render(namePad)
-			timeRendered := dimStyle.Render(timeCell)
-			line1 := nameRendered + stStyle.Render(statusCell) + timeRendered
-			line2 := providerStyle(task.Provider).Render(agentCell) + prText
-			b.WriteString(normalRowStyle.Render(line1) + "\n")
-			b.WriteString(normalRowStyle.Render(line2) + "\n")
-		}
-
-		// Vertical spacing between tasks
-		if i < len(rows)-1 {
-			b.WriteString("\n")
-		}
+	if m.viewMode == viewModeAll {
+		m.renderGroupedTaskList(&b, rows, totalWidth)
+	} else {
+		m.renderFlatTaskList(&b, rows, totalWidth)
 	}
 
 	detail := m.selectedTaskDetailView()
@@ -1578,7 +1550,15 @@ func (m model) fetchRecentEventsForSelected() tea.Cmd {
 }
 
 func (m model) visibleTaskViews() []*core.TaskView {
-	rows := append([]*core.TaskView{}, m.taskViews...)
+	var rows []*core.TaskView
+	if m.viewMode == viewModeAll {
+		groups := groupTaskViewsByRepo(m.taskViews)
+		for _, group := range groups {
+			rows = append(rows, group.views...)
+		}
+	} else {
+		rows = append(rows, m.taskViews...)
+	}
 	if view := m.syntheticCreationTaskView(); view != nil {
 		rows = append(rows, view)
 	}
@@ -1748,6 +1728,121 @@ func filterVisibleTaskViews(views []*core.TaskView) []*core.TaskView {
 	}
 
 	return filtered
+}
+
+type repoGroup struct {
+	repoName       string
+	views          []*core.TaskView
+	latestActivity time.Time
+}
+
+func groupTaskViewsByRepo(views []*core.TaskView) []repoGroup {
+	groupMap := make(map[string]*repoGroup)
+	var order []string
+
+	for _, view := range views {
+		if view == nil || view.Task == nil {
+			continue
+		}
+		name := view.Task.RepoName
+		if name == "" {
+			name = "unknown"
+		}
+		g, ok := groupMap[name]
+		if !ok {
+			g = &repoGroup{repoName: name}
+			groupMap[name] = g
+			order = append(order, name)
+		}
+		g.views = append(g.views, view)
+		if view.Task.UpdatedAt.After(g.latestActivity) {
+			g.latestActivity = view.Task.UpdatedAt
+		}
+		if view.Task.CreatedAt.After(g.latestActivity) {
+			g.latestActivity = view.Task.CreatedAt
+		}
+	}
+
+	groups := make([]repoGroup, 0, len(order))
+	for _, name := range order {
+		groups = append(groups, *groupMap[name])
+	}
+
+	sort.Slice(groups, func(i, j int) bool {
+		return groups[i].latestActivity.After(groups[j].latestActivity)
+	})
+
+	return groups
+}
+
+func (m model) renderTaskRow(b *strings.Builder, view *core.TaskView, index int, totalWidth int) {
+	task := view.Task
+	stateText, stStyle := taskStateText(view)
+	elapsed := taskElapsed(view)
+
+	statusCell := padRightVisible(stateText, colWidthStatus)
+	timeCell := padLeftVisible(elapsed, colWidthElapsed)
+	rightWidth := colWidthStatus + colWidthElapsed
+	nameWidth := totalWidth - rightWidth - 4
+	if nameWidth < 10 {
+		nameWidth = 10
+	}
+
+	agentName := emptyFallback(task.Provider, "-")
+	agentCell := padRight(agentName, colWidthAgent)
+	prText := m.prTextForTask(view)
+
+	nameStr := truncateStr(task.DisplayName, nameWidth)
+	namePad := padRight(nameStr, nameWidth)
+
+	if index == m.selected {
+		nameRendered := lipgloss.NewStyle().Foreground(colorAccent).Bold(true).Render(namePad)
+		timeRendered := primaryStyle.Render(timeCell)
+		line1 := nameRendered + stStyle.Render(statusCell) + timeRendered
+		line2 := providerStyle(task.Provider).Render(agentCell) + prText
+		b.WriteString(selectedRowStyle.Render(line1) + "\n")
+		b.WriteString(selectedRowStyle.Render(line2) + "\n")
+	} else {
+		nameRendered := dimStyle.Render(namePad)
+		timeRendered := dimStyle.Render(timeCell)
+		line1 := nameRendered + stStyle.Render(statusCell) + timeRendered
+		line2 := providerStyle(task.Provider).Render(agentCell) + prText
+		b.WriteString(normalRowStyle.Render(line1) + "\n")
+		b.WriteString(normalRowStyle.Render(line2) + "\n")
+	}
+}
+
+func (m model) renderFlatTaskList(b *strings.Builder, rows []*core.TaskView, totalWidth int) {
+	for i, view := range rows {
+		if view == nil || view.Task == nil {
+			continue
+		}
+		m.renderTaskRow(b, view, i, totalWidth)
+		if i < len(rows)-1 {
+			b.WriteString("\n")
+		}
+	}
+}
+
+func (m model) renderGroupedTaskList(b *strings.Builder, rows []*core.TaskView, totalWidth int) {
+	groups := groupTaskViewsByRepo(rows)
+
+	globalIndex := 0
+	for gi, group := range groups {
+		b.WriteString(normalRowStyle.Render(repoHeaderStyle.Render(group.repoName)) + "\n")
+
+		for _, view := range group.views {
+			if view == nil || view.Task == nil {
+				continue
+			}
+			m.renderTaskRow(b, view, globalIndex, totalWidth)
+			globalIndex++
+		}
+
+		if gi < len(groups)-1 {
+			b.WriteString("\n")
+		}
+	}
 }
 
 func taskViewsToTasks(views []*core.TaskView) []*core.Task {

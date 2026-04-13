@@ -100,6 +100,10 @@ var (
 	headerLabelStyle = lipgloss.NewStyle().
 				Foreground(lipgloss.Color("#8b8fa3")).
 				Bold(true)
+
+	repoHeaderStyle = lipgloss.NewStyle().
+				Foreground(colorAccent).
+				Bold(true)
 )
 
 // statusStyle returns the icon and style for a given task status.
