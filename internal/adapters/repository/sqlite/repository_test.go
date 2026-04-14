@@ -482,6 +482,32 @@ func TestRepositoryIngestHookEvent_MapsTaskBySessionID(t *testing.T) {
 	require.Equal(t, "I finished the change", summary.LastAssistantMessage)
 }
 
+func TestRepositoryIngestHookEvent_UpdatesTaskProviderFromObservedSession(t *testing.T) {
+	repo := newTestRepository(t)
+	task := seedTask(t, repo, core.Task{
+		ID:           "task-1",
+		Slug:         "task-1",
+		DisplayName:  "task 1",
+		WorktreePath: "/tmp/repo-task-1",
+		Provider:     "codex",
+	})
+
+	_, err := repo.IngestHookEvent(context.Background(), core.HookEventInput{
+		Cwd:            task.WorktreePath,
+		EventName:      "SessionStart",
+		SessionID:      "sess-claude",
+		Model:          "claude-sonnet-4-5-20250929",
+		TranscriptPath: "/tmp/claude.jsonl",
+		StartSource:    "startup",
+		OccurredAt:     time.Date(2026, 4, 8, 10, 0, 0, 0, time.UTC),
+	})
+	require.NoError(t, err)
+
+	got, err := repo.GetTask(context.Background(), task.ID)
+	require.NoError(t, err)
+	require.Equal(t, "claude", got.Provider)
+}
+
 func TestRepositoryIngestHookEvent_IgnoresNestedSessionEventsForEstablishedTaskSession(t *testing.T) {
 	repo := newTestRepository(t)
 	task := seedTask(t, repo, core.Task{

@@ -859,6 +859,28 @@ func TestModelUpdate_ObserverTaskUpdatedDoesNotTriggerFullRefresh(t *testing.T) 
 	require.False(t, m.loading)
 }
 
+func TestModelUpdate_ObserverTaskUpdatedSwitchesDisplayedProvider(t *testing.T) {
+	service := NewMockTaskService(t)
+	task := tuiTask("billing-retry-flow")
+	task.Provider = "codex"
+	m := newLoadedTUIModelWithViews(t, service, taskViewWithObserver(task, nil, &core.ObserverSummary{
+		TaskID:        task.ID,
+		DisplayStatus: core.DisplayStatusWorking,
+		ProcessAlive:  true,
+	}))
+	updates := make(chan core.ObserverTaskUpdate)
+	m.observerUpdates = updates
+
+	m, cmd := updateTUIModel(t, m, observerTaskUpdatedMsg{update: core.ObserverTaskUpdate{
+		TaskID:          task.ID,
+		Provider:        "claude",
+		DisplayStatus:   core.DisplayStatusNeedsInput,
+		DisplayActivity: core.DisplayActivityCommand,
+	}})
+	require.NotNil(t, cmd)
+	require.Equal(t, "claude", m.selectedTaskView().Task.Provider)
+}
+
 func TestModelUpdate_HookTaskUpdatedDoesNotTriggerFullRefresh(t *testing.T) {
 	service := NewMockTaskService(t)
 	task := tuiTask("billing-retry-flow")
@@ -876,6 +898,22 @@ func TestModelUpdate_HookTaskUpdatedDoesNotTriggerFullRefresh(t *testing.T) {
 	require.Equal(t, "fix the billing retry flow", m.selectedTaskView().HookSession.LastPromptText)
 	require.Equal(t, "Updated the retry loop and tests", m.selectedTaskView().HookSession.LastAssistantMessage)
 	require.False(t, m.loading)
+}
+
+func TestModelUpdate_HookTaskUpdatedSwitchesDisplayedProviderFromModel(t *testing.T) {
+	service := NewMockTaskService(t)
+	task := tuiTask("billing-retry-flow")
+	task.Provider = "codex"
+	m := newLoadedTUIModelWithViews(t, service, taskView(task, nil))
+	updates := make(chan core.HookSessionSummary)
+	m.hookUpdates = updates
+
+	m, cmd := updateTUIModel(t, m, hookTaskUpdatedMsg{update: core.HookSessionSummary{
+		TaskID: task.ID,
+		Model:  "claude-sonnet-4-5-20250929",
+	}})
+	require.NotNil(t, cmd)
+	require.Equal(t, "claude", m.selectedTaskView().Task.Provider)
 }
 
 func TestModelUpdate_HookTaskUpdated_UserPromptSubmitReplacesPriorTurnPreview(t *testing.T) {

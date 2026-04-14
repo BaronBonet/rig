@@ -11,6 +11,7 @@ import (
 	"strings"
 	"text/template"
 
+	claudeclient "rig/internal/adapters/client/claude"
 	"rig/internal/core"
 )
 
@@ -32,7 +33,7 @@ func NewBootstrapper(agentExec string, sourceRoot string) *Bootstrapper {
 }
 
 func (b *Bootstrapper) BootstrapTaskWorkspace(_ context.Context, task *core.Task) error {
-	if task == nil || task.Provider != "codex" || strings.TrimSpace(task.WorktreePath) == "" {
+	if task == nil || strings.TrimSpace(task.WorktreePath) == "" {
 		return nil
 	}
 
@@ -40,27 +41,35 @@ func (b *Bootstrapper) BootstrapTaskWorkspace(_ context.Context, task *core.Task
 	hooksDir := filepath.Join(hooksRoot, "hooks")
 	hooksJSONPath := filepath.Join(hooksRoot, "hooks.json")
 	forwarderPath := filepath.Join(hooksDir, "forward-to-rig.sh")
-	if fileExists(hooksJSONPath) && fileExists(forwarderPath) {
-		return nil
-	}
 	if err := os.MkdirAll(hooksDir, 0o755); err != nil {
 		return err
 	}
 
-	rawHooks, err := b.renderHooksJSON()
-	if err != nil {
-		return err
+	if !fileExists(hooksJSONPath) {
+		rawHooks, err := b.renderHooksJSON()
+		if err != nil {
+			return err
+		}
+		if err := os.WriteFile(hooksJSONPath, rawHooks, 0o644); err != nil {
+			return err
+		}
 	}
-	if err := os.WriteFile(hooksJSONPath, rawHooks, 0o644); err != nil {
+
+	if !fileExists(forwarderPath) {
+		rawScript, err := b.renderForwarderScript()
+		if err != nil {
+			return err
+		}
+		if err := os.WriteFile(forwarderPath, rawScript, 0o755); err != nil {
+			return err
+		}
+	}
+
+	if err := b.bootstrapClaudeSettings(task.WorktreePath); err != nil {
 		return err
 	}
 
-	rawScript, err := b.renderForwarderScript()
-	if err != nil {
-		return err
-	}
-
-	return os.WriteFile(forwarderPath, rawScript, 0o755)
+	return nil
 }
 
 func (b *Bootstrapper) renderHooksJSON() ([]byte, error) {
@@ -145,4 +154,25 @@ func shellQuote(value string) string {
 func fileExists(path string) bool {
 	info, err := os.Stat(path)
 	return err == nil && !info.IsDir()
+}
+
+func (b *Bootstrapper) bootstrapClaudeSettings(worktreePath string) error {
+	settingsPath := filepath.Join(worktreePath, ".claude", "settings.local.json")
+	if fileExists(settingsPath) {
+		return nil
+	}
+
+	listenAddr := strings.TrimSpace(os.Getenv("AGENT_HOOK_LISTEN_ADDR"))
+	if listenAddr == "" {
+		listenAddr = "127.0.0.1:4123"
+	}
+
+	settings, err := claudeclient.BuildHookSettings(listenAddr)
+	if err != nil {
+		return err
+	}
+	if err := os.MkdirAll(filepath.Dir(settingsPath), 0o755); err != nil {
+		return err
+	}
+	return os.WriteFile(settingsPath, settings, 0o644)
 }

@@ -53,6 +53,7 @@ func (h *HTTPHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 func DecodeHookEventInput(now func() time.Time, body []byte) core.HookEventInput {
 	input := core.HookEventInput{
 		OccurredAt:     now().UTC(),
+		Provider:       "claude",
 		RawPayloadJSON: string(bytes.TrimSpace(body)),
 	}
 

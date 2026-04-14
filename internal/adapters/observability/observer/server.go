@@ -182,7 +182,7 @@ func (p *publishingHookIngestor) IngestHookEvent(
 		summaries, listErr := p.observers.ListObserverSummaries(ctx, []string{summary.TaskID})
 		if listErr == nil {
 			if observerSummary := summaries[summary.TaskID]; observerSummary != nil {
-				p.hub.Publish(observerTaskUpdateFromSummary(observerSummary, summary))
+				p.hub.Publish(observerTaskUpdateFromSummary(observerSummary, summary, ""))
 			}
 		}
 	}
@@ -192,6 +192,7 @@ func (p *publishingHookIngestor) IngestHookEvent(
 func observerTaskUpdateFromSummary(
 	summary *core.ObserverSummary,
 	hookSummary *core.HookSessionSummary,
+	provider string,
 ) core.ObserverTaskUpdate {
 	if summary == nil {
 		return core.ObserverTaskUpdate{}
@@ -205,9 +206,19 @@ func observerTaskUpdateFromSummary(
 
 	return core.ObserverTaskUpdate{
 		TaskID:          summary.TaskID,
+		Provider:        firstNonEmptyProvider(provider, core.InferProviderFromHookSession(hookSummary)),
 		DisplayStatus:   summary.DisplayStatus,
 		DisplayActivity: summary.DisplayActivity,
 		LastActivityAt:  summary.LastRuntimeObservedAt,
 		HookSession:     hookCopy,
 	}
+}
+
+func firstNonEmptyProvider(values ...string) string {
+	for _, value := range values {
+		if provider := core.NormalizeProvider(value); provider != "" {
+			return provider
+		}
+	}
+	return ""
 }

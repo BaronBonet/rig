@@ -406,13 +406,77 @@ func TestTMuxWatcher_OverrideWithHookPhase_ClaudeStopYieldsNeedsInput(t *testing
 	require.True(t, repo.lastUpsert.ProcessAlive)
 }
 
+func TestTMuxWatcher_RefreshAll_UpdatesTaskProviderFromStrongSnapshotSignal(t *testing.T) {
+	now := time.Date(2026, 4, 14, 10, 0, 0, 0, time.UTC)
+	task := &core.Task{
+		ID:              "task-1",
+		TmuxSession:     "repo_task-1",
+		AgentWindowName: "agent",
+		Provider:        "codex",
+		Status:          core.TaskStatusRunning,
+	}
+
+	monitor := core.NewMockRuntimeMonitor(t)
+	monitor.EXPECT().Snapshot(mock.Anything, task).Return(core.RuntimeSnapshot{
+		SessionName:       task.TmuxSession,
+		PaneID:            "%24",
+		ForegroundCommand: "claude",
+		Content:           "❯ continue the refactor\n",
+		ObservedAt:        now,
+	}, nil).Once()
+
+	tasks := &stubObserverTaskLister{tasks: []*core.Task{task}}
+	repo := &stubWatcherObserverRepository{}
+	hub := NewHub()
+	updates, release := hub.Subscribe(t.Context())
+	defer release()
+	watcher := NewTMuxWatcher(TMuxWatcherConfig{
+		Tasks:   tasks,
+		Monitor: monitor,
+		Repo:    repo,
+		Hub:     hub,
+		Providers: map[string]core.ProviderClient{
+			"codex":  stubTMuxWatcherProvider{runtimeState: core.RuntimeStateNeedsInput},
+			"claude": stubTMuxWatcherProvider{runtimeState: core.RuntimeStateNeedsInput},
+		},
+	})
+
+	require.NoError(t, watcher.RefreshAll(context.Background()))
+	require.NotNil(t, tasks.updatedTask)
+	require.Equal(t, "claude", tasks.updatedTask.Provider)
+	select {
+	case update := <-updates:
+		require.Equal(t, "claude", update.Provider)
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for observer task update")
+	}
+}
+
 type stubObserverTaskLister struct {
-	tasks []*core.Task
-	err   error
+	tasks       []*core.Task
+	err         error
+	updatedTask *core.Task
 }
 
 func (s stubObserverTaskLister) ListTasks(context.Context) ([]*core.Task, error) {
 	return s.tasks, s.err
+}
+
+func (s *stubObserverTaskLister) UpdateTask(_ context.Context, task *core.Task) error {
+	if s == nil || task == nil {
+		return nil
+	}
+	clone := *task
+	s.updatedTask = &clone
+	for i, existing := range s.tasks {
+		if existing == nil || existing.ID != task.ID {
+			continue
+		}
+		copied := *task
+		s.tasks[i] = &copied
+		break
+	}
+	return nil
 }
 
 type stubWatcherObserverRepository struct {
