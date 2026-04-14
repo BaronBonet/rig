@@ -40,31 +40,41 @@ func TestServiceDoctor_NotesMissingRepoConfigWhenRepoDetected(t *testing.T) {
 
 	result, err := svc.service.Doctor(t.Context(), "/tmp/repo")
 	require.NoError(t, err)
-	require.Contains(t, result.Notes, "config: rig.yaml not found")
+	require.Contains(t, result.Notes, "config: no .rig.yaml or rig.yaml found")
 	require.Empty(t, result.Failures)
 }
 
 func TestServiceDoctor_NotesLoadedEmptyRepoConfig(t *testing.T) {
 	svc := newTestService(t)
-	svc.configRepo.repoConfig = RepoConfig{Exists: true}
+	svc.configRepo.repoConfig = RepoConfig{Exists: true, ConfigFileName: "rig.yaml"}
 
 	result, err := svc.service.Doctor(t.Context(), "/tmp/repo")
 	require.NoError(t, err)
 	require.Contains(t, result.Notes, "config: loaded rig.yaml")
-	require.NotContains(t, result.Notes, "config: rig.yaml not found")
+	require.NotContains(t, result.Notes, "config: no .rig.yaml or rig.yaml found")
 	require.Empty(t, result.Failures)
+}
+
+func TestServiceDoctor_NotesLoadedHiddenRepoConfig(t *testing.T) {
+	svc := newTestService(t)
+	svc.configRepo.repoConfig = RepoConfig{Exists: true, ConfigFileName: ".rig.yaml"}
+
+	result, err := svc.service.Doctor(t.Context(), "/tmp/repo")
+	require.NoError(t, err)
+	require.Contains(t, result.Notes, "config: loaded .rig.yaml")
 }
 
 func TestServiceDoctor_ReportsValidSeedPathsAsNotes(t *testing.T) {
 	svc := newTestService(t)
 	svc.configRepo.repoConfig = RepoConfig{
-		Exists: true,
-		Seed:   SeedConfig{Copy: []string{".env", "local/"}},
+		Exists:         true,
+		ConfigFileName: ".rig.yaml",
+		Seed:           SeedConfig{Copy: []string{".env", "local/"}},
 	}
 
 	result, err := svc.service.Doctor(t.Context(), "/tmp/repo")
 	require.NoError(t, err)
-	require.Contains(t, result.Notes, "config: loaded rig.yaml")
+	require.Contains(t, result.Notes, "config: loaded .rig.yaml")
 	require.Contains(t, result.Notes, "config: seed path ok: .env")
 	require.Contains(t, result.Notes, "config: seed path ok: local/")
 	require.Equal(t, "/tmp/repo", svc.workspaceSeeder.validateRepoRoot)
@@ -84,7 +94,8 @@ func TestServiceDoctor_ReportsInvalidRepoConfigAsFailure(t *testing.T) {
 func TestServiceDoctor_ReportsValidSetupScriptAsNote(t *testing.T) {
 	svc := newTestService(t)
 	svc.configRepo.repoConfig = RepoConfig{
-		Exists: true,
+		Exists:         true,
+		ConfigFileName: ".rig.yaml",
 		Seed: SeedConfig{
 			SetupScript: "scripts/setup.sh",
 		},
@@ -99,7 +110,8 @@ func TestServiceDoctor_ReportsValidSetupScriptAsNote(t *testing.T) {
 func TestServiceDoctor_ReportsInvalidSetupScriptAsFailure(t *testing.T) {
 	svc := newTestService(t)
 	svc.configRepo.repoConfig = RepoConfig{
-		Exists: true,
+		Exists:         true,
+		ConfigFileName: ".rig.yaml",
 		Seed: SeedConfig{
 			SetupScript: "scripts/missing.sh",
 		},
@@ -114,14 +126,15 @@ func TestServiceDoctor_ReportsInvalidSetupScriptAsFailure(t *testing.T) {
 func TestServiceDoctor_ReportsInvalidSeedPathsAsFailure(t *testing.T) {
 	svc := newTestService(t)
 	svc.configRepo.repoConfig = RepoConfig{
-		Exists: true,
-		Seed:   SeedConfig{Copy: []string{".env"}},
+		Exists:         true,
+		ConfigFileName: ".rig.yaml",
+		Seed:           SeedConfig{Copy: []string{".env"}},
 	}
 	svc.workspaceSeeder.validateErr = errors.New("invalid seed path \".env\": not found")
 
 	result, err := svc.service.Doctor(t.Context(), "/tmp/repo")
 	require.NoError(t, err)
-	require.Contains(t, result.Notes, "config: loaded rig.yaml")
+	require.Contains(t, result.Notes, "config: loaded .rig.yaml")
 	require.Contains(t, result.Failures, "config: invalid seed path \".env\": not found")
 }
 

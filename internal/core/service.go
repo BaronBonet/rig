@@ -734,9 +734,13 @@ func (s *Service) Doctor(ctx context.Context, cwd string) (DoctorResult, error) 
 			if err != nil {
 				result.Failures = append(result.Failures, "config: "+err.Error())
 			} else if !repoConfig.Exists {
-				result.Notes = append(result.Notes, "config: rig.yaml not found")
+				result.Notes = append(result.Notes, "config: no .rig.yaml or rig.yaml found")
 			} else {
-				result.Notes = append(result.Notes, "config: loaded rig.yaml")
+				configFileName := repoConfig.ConfigFileName
+				if configFileName == "" {
+					configFileName = "rig.yaml"
+				}
+				result.Notes = append(result.Notes, "config: loaded "+configFileName)
 				if err := s.workspace.ValidateSeedPaths(ctx, repoCtx.Root, repoConfig.Seed.Copy); err != nil {
 					result.Failures = append(result.Failures, "config: "+err.Error())
 				} else {

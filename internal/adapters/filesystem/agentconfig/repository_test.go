@@ -33,7 +33,39 @@ seed:
 		cfg, err := repo.LoadRepoConfig(t.Context(), repoRoot)
 		require.NoError(t, err)
 		require.True(t, cfg.Exists)
+		require.Equal(t, "rig.yaml", cfg.ConfigFileName)
 		require.Equal(t, []string{".env", "local/", "nested/path///"}, cfg.Seed.Copy)
+	})
+
+	t.Run("hidden .rig.yaml is supported", func(t *testing.T) {
+		repoRoot := t.TempDir()
+		require.NoError(t, os.WriteFile(filepath.Join(repoRoot, ".rig.yaml"), []byte(`
+seed:
+  copy:
+    - .env
+  setup_script: scripts/setup.sh
+`), 0o644))
+
+		repo := NewLoader()
+
+		cfg, err := repo.LoadRepoConfig(t.Context(), repoRoot)
+		require.NoError(t, err)
+		require.True(t, cfg.Exists)
+		require.Equal(t, ".rig.yaml", cfg.ConfigFileName)
+		require.Equal(t, []string{".env"}, cfg.Seed.Copy)
+		require.Equal(t, "scripts/setup.sh", cfg.Seed.SetupScript)
+	})
+
+	t.Run("both .rig.yaml and rig.yaml returns an error", func(t *testing.T) {
+		repoRoot := t.TempDir()
+		require.NoError(t, os.WriteFile(filepath.Join(repoRoot, ".rig.yaml"), []byte("seed:\n"), 0o644))
+		require.NoError(t, os.WriteFile(filepath.Join(repoRoot, "rig.yaml"), []byte("seed:\n"), 0o644))
+
+		repo := NewLoader()
+
+		_, err := repo.LoadRepoConfig(t.Context(), repoRoot)
+		require.Error(t, err)
+		require.ErrorContains(t, err, "only one of .rig.yaml or rig.yaml may exist")
 	})
 
 	t.Run("empty file returns existing empty config", func(t *testing.T) {
@@ -56,6 +88,17 @@ seed:
 
 		_, err := repo.LoadRepoConfig(t.Context(), repoRoot)
 		require.Error(t, err)
+	})
+
+	t.Run("invalid hidden yaml returns an error mentioning .rig.yaml", func(t *testing.T) {
+		repoRoot := t.TempDir()
+		require.NoError(t, os.WriteFile(filepath.Join(repoRoot, ".rig.yaml"), []byte("seed:\n  copy: [\n"), 0o644))
+
+		repo := NewLoader()
+
+		_, err := repo.LoadRepoConfig(t.Context(), repoRoot)
+		require.Error(t, err)
+		require.ErrorContains(t, err, "parse .rig.yaml")
 	})
 
 	t.Run("null values return an error", func(t *testing.T) {

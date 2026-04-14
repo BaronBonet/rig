@@ -46,3 +46,18 @@ Check environment health:
 ```bash
 rig doctor
 ```
+
+Configure repository-specific workspace seeding with a `.rig.yaml` file in the repo root:
+
+```yaml
+seed:
+  copy:
+    - .env
+    - local/
+  setup_script: scripts/worktree-setup.sh
+```
+
+- `seed.copy` copies repo-relative files or directories into the new worktree.
+- `seed.setup_script` runs a repo-relative script inside the new worktree after copying completes.
+- Paths in `.rig.yaml` must be repo-relative. Absolute paths, `..`, and glob patterns are rejected.
+- `rig.yaml` is still supported for compatibility, but a repo must define only one of `.rig.yaml` or `rig.yaml`.

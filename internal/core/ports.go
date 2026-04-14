@@ -9,8 +9,9 @@ type RepoContext struct {
 }
 
 type RepoConfig struct {
-	Seed   SeedConfig
-	Exists bool
+	Seed           SeedConfig
+	Exists         bool
+	ConfigFileName string
 }
 
 type SeedConfig struct {

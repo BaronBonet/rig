@@ -13,6 +13,11 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
+const (
+	hiddenConfigName = ".rig.yaml"
+	legacyConfigName = "rig.yaml"
+)
+
 type Loader struct{}
 
 func NewLoader() *Loader {
@@ -20,35 +25,82 @@ func NewLoader() *Loader {
 }
 
 func (l *Loader) LoadRepoConfig(_ context.Context, repoRoot string) (core.RepoConfig, error) {
-	raw, err := os.ReadFile(filepath.Join(repoRoot, "rig.yaml"))
+	configName, raw, err := readRepoConfig(repoRoot)
 	if err != nil {
-		if errors.Is(err, os.ErrNotExist) {
-			return core.RepoConfig{}, nil
-		}
 		return core.RepoConfig{}, err
+	}
+	if configName == "" {
+		return core.RepoConfig{}, nil
 	}
 
 	var doc yaml.Node
 	if err := yaml.Unmarshal(raw, &doc); err != nil {
-		return core.RepoConfig{}, fmt.Errorf("parse rig.yaml: %w", err)
+		return core.RepoConfig{}, fmt.Errorf("parse %s: %w", configName, err)
 	}
-	if err := validateDuplicateKeys(&doc); err != nil {
+	if err := validateDuplicateKeys(&doc, configName); err != nil {
 		return core.RepoConfig{}, err
 	}
 
-	seed, err := parseSeed(&doc)
+	seed, err := parseSeed(&doc, configName)
 	if err != nil {
 		return core.RepoConfig{}, err
 	}
 
 	return core.RepoConfig{
-		Exists: true,
-		Seed:   seed,
+		Exists:         true,
+		ConfigFileName: configName,
+		Seed:           seed,
 	}, nil
 }
 
-func parseSeed(doc *yaml.Node) (core.SeedConfig, error) {
-	root, err := documentRoot(doc)
+func readRepoConfig(repoRoot string) (string, []byte, error) {
+	hiddenExists, err := fileExists(filepath.Join(repoRoot, hiddenConfigName))
+	if err != nil {
+		return "", nil, err
+	}
+	legacyExists, err := fileExists(filepath.Join(repoRoot, legacyConfigName))
+	if err != nil {
+		return "", nil, err
+	}
+
+	if hiddenExists && legacyExists {
+		return "", nil, fmt.Errorf("only one of %s or %s may exist", hiddenConfigName, legacyConfigName)
+	}
+
+	configName := ""
+	switch {
+	case hiddenExists:
+		configName = hiddenConfigName
+	case legacyExists:
+		configName = legacyConfigName
+	default:
+		return "", nil, nil
+	}
+
+	raw, err := os.ReadFile(filepath.Join(repoRoot, configName))
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return "", nil, nil
+		}
+		return "", nil, err
+	}
+
+	return configName, raw, nil
+}
+
+func fileExists(path string) (bool, error) {
+	_, err := os.Stat(path)
+	if err == nil {
+		return true, nil
+	}
+	if errors.Is(err, os.ErrNotExist) {
+		return false, nil
+	}
+	return false, err
+}
+
+func parseSeed(doc *yaml.Node, configName string) (core.SeedConfig, error) {
+	root, err := documentRoot(doc, configName)
 	if err != nil {
 		return core.SeedConfig{}, err
 	}
@@ -56,13 +108,13 @@ func parseSeed(doc *yaml.Node) (core.SeedConfig, error) {
 		return core.SeedConfig{}, nil
 	}
 	if root.Kind != yaml.MappingNode {
-		return core.SeedConfig{}, fmt.Errorf("invalid rig.yaml: root must be a mapping")
+		return core.SeedConfig{}, fmt.Errorf("invalid %s: root must be a mapping", configName)
 	}
-	if err := validateAllowedKeys(root, "rig.yaml", "seed"); err != nil {
+	if err := validateAllowedKeys(root, configName, configName, "seed"); err != nil {
 		return core.SeedConfig{}, err
 	}
 
-	seedNode, ok, err := lookupMapping(root, "seed")
+	seedNode, ok, err := lookupMapping(root, "seed", configName)
 	if err != nil {
 		return core.SeedConfig{}, err
 	}
@@ -70,18 +122,18 @@ func parseSeed(doc *yaml.Node) (core.SeedConfig, error) {
 		return core.SeedConfig{}, nil
 	}
 	if seedNode.Kind != yaml.MappingNode {
-		return core.SeedConfig{}, fmt.Errorf("invalid rig.yaml: seed must be a mapping")
+		return core.SeedConfig{}, fmt.Errorf("invalid %s: seed must be a mapping", configName)
 	}
-	if err := validateAllowedKeys(seedNode, "seed", "copy", "setup_script"); err != nil {
+	if err := validateAllowedKeys(seedNode, configName, "seed", "copy", "setup_script"); err != nil {
 		return core.SeedConfig{}, err
 	}
 
-	copyPaths, err := parseSeedCopy(seedNode)
+	copyPaths, err := parseSeedCopy(seedNode, configName)
 	if err != nil {
 		return core.SeedConfig{}, err
 	}
 
-	setupScript, err := parseSeedSetupScript(seedNode)
+	setupScript, err := parseSeedSetupScript(seedNode, configName)
 	if err != nil {
 		return core.SeedConfig{}, err
 	}
@@ -92,8 +144,8 @@ func parseSeed(doc *yaml.Node) (core.SeedConfig, error) {
 	}, nil
 }
 
-func parseSeedCopy(seedNode *yaml.Node) ([]string, error) {
-	copyNode, ok, err := lookupMapping(seedNode, "copy")
+func parseSeedCopy(seedNode *yaml.Node, configName string) ([]string, error) {
+	copyNode, ok, err := lookupMapping(seedNode, "copy", configName)
 	if err != nil {
 		return nil, err
 	}
@@ -101,21 +153,21 @@ func parseSeedCopy(seedNode *yaml.Node) ([]string, error) {
 		return nil, nil
 	}
 	if copyNode.Kind != yaml.SequenceNode {
-		return nil, fmt.Errorf("invalid rig.yaml: seed.copy must be a sequence")
+		return nil, fmt.Errorf("invalid %s: seed.copy must be a sequence", configName)
 	}
 
 	paths := make([]string, 0, len(copyNode.Content))
 	for i, item := range copyNode.Content {
 		if item.Kind != yaml.ScalarNode || item.Tag != "!!str" {
-			return nil, fmt.Errorf("invalid rig.yaml: seed.copy[%d] must be a string", i)
+			return nil, fmt.Errorf("invalid %s: seed.copy[%d] must be a string", configName, i)
 		}
 
 		path := item.Value
 		if path == "" {
-			return nil, fmt.Errorf("invalid rig.yaml: seed.copy[%d] must not be empty", i)
+			return nil, fmt.Errorf("invalid %s: seed.copy[%d] must not be empty", configName, i)
 		}
 		if err := validateSeedPath(path); err != nil {
-			return nil, fmt.Errorf("invalid rig.yaml: seed.copy[%d] %w", i, err)
+			return nil, fmt.Errorf("invalid %s: seed.copy[%d] %w", configName, i, err)
 		}
 
 		paths = append(paths, path)
@@ -124,8 +176,8 @@ func parseSeedCopy(seedNode *yaml.Node) ([]string, error) {
 	return paths, nil
 }
 
-func parseSeedSetupScript(seedNode *yaml.Node) (string, error) {
-	setupScriptNode, ok, err := lookupMapping(seedNode, "setup_script")
+func parseSeedSetupScript(seedNode *yaml.Node, configName string) (string, error) {
+	setupScriptNode, ok, err := lookupMapping(seedNode, "setup_script", configName)
 	if err != nil {
 		return "", err
 	}
@@ -133,30 +185,30 @@ func parseSeedSetupScript(seedNode *yaml.Node) (string, error) {
 		return "", nil
 	}
 	if setupScriptNode.Kind != yaml.ScalarNode || setupScriptNode.Tag != "!!str" {
-		return "", fmt.Errorf("invalid rig.yaml: seed.setup_script must be a string")
+		return "", fmt.Errorf("invalid %s: seed.setup_script must be a string", configName)
 	}
 	setupScript := setupScriptNode.Value
 	if setupScript != "" {
 		if err := validateSeedPath(setupScript); err != nil {
-			return "", fmt.Errorf("invalid rig.yaml: seed.setup_script %w", err)
+			return "", fmt.Errorf("invalid %s: seed.setup_script %w", configName, err)
 		}
 	}
 	return setupScript, nil
 }
 
-func documentRoot(doc *yaml.Node) (*yaml.Node, error) {
+func documentRoot(doc *yaml.Node, configName string) (*yaml.Node, error) {
 	if doc == nil || len(doc.Content) == 0 {
 		return nil, nil
 	}
 	if doc.Kind != yaml.DocumentNode {
-		return nil, fmt.Errorf("invalid rig.yaml: expected a document")
+		return nil, fmt.Errorf("invalid %s: expected a document", configName)
 	}
 	return doc.Content[0], nil
 }
 
-func lookupMapping(node *yaml.Node, key string) (*yaml.Node, bool, error) {
+func lookupMapping(node *yaml.Node, key string, configName string) (*yaml.Node, bool, error) {
 	if node.Kind != yaml.MappingNode {
-		return nil, false, fmt.Errorf("invalid rig.yaml: expected mapping node")
+		return nil, false, fmt.Errorf("invalid %s: expected mapping node", configName)
 	}
 	var matched *yaml.Node
 	for i := 0; i < len(node.Content); i += 2 {
@@ -164,7 +216,7 @@ func lookupMapping(node *yaml.Node, key string) (*yaml.Node, bool, error) {
 		valueNode := node.Content[i+1]
 		if keyNode.Kind == yaml.ScalarNode && keyNode.Tag == "!!str" && keyNode.Value == key {
 			if matched != nil {
-				return nil, false, fmt.Errorf("invalid rig.yaml: duplicate key %q", key)
+				return nil, false, fmt.Errorf("invalid %s: duplicate key %q", configName, key)
 			}
 			matched = valueNode
 		}
@@ -194,7 +246,7 @@ func validateSeedPath(path string) error {
 	return nil
 }
 
-func validateDuplicateKeys(node *yaml.Node) error {
+func validateDuplicateKeys(node *yaml.Node, configName string) error {
 	if node == nil {
 		return nil
 	}
@@ -204,18 +256,18 @@ func validateDuplicateKeys(node *yaml.Node) error {
 		for i := 0; i < len(node.Content); i += 2 {
 			keyNode := node.Content[i]
 			valueNode := node.Content[i+1]
-			keyName, err := canonicalKeyName(keyNode)
+			keyName, err := canonicalKeyName(keyNode, configName)
 			if err != nil {
 				return err
 			}
 			if _, ok := seen[keyName]; ok {
-				return fmt.Errorf("invalid rig.yaml: duplicate key %q", keyName)
+				return fmt.Errorf("invalid %s: duplicate key %q", configName, keyName)
 			}
 			seen[keyName] = struct{}{}
-			if err := validateDuplicateKeys(keyNode); err != nil {
+			if err := validateDuplicateKeys(keyNode, configName); err != nil {
 				return err
 			}
-			if err := validateDuplicateKeys(valueNode); err != nil {
+			if err := validateDuplicateKeys(valueNode, configName); err != nil {
 				return err
 			}
 		}
@@ -223,7 +275,7 @@ func validateDuplicateKeys(node *yaml.Node) error {
 	}
 
 	for _, child := range node.Content {
-		if err := validateDuplicateKeys(child); err != nil {
+		if err := validateDuplicateKeys(child, configName); err != nil {
 			return err
 		}
 	}
@@ -231,9 +283,9 @@ func validateDuplicateKeys(node *yaml.Node) error {
 	return nil
 }
 
-func canonicalKeyName(node *yaml.Node) (string, error) {
+func canonicalKeyName(node *yaml.Node, configName string) (string, error) {
 	if node == nil {
-		return "", fmt.Errorf("invalid rig.yaml: nil key")
+		return "", fmt.Errorf("invalid %s: nil key", configName)
 	}
 	if node.Kind == yaml.ScalarNode {
 		return node.Value, nil
@@ -241,12 +293,12 @@ func canonicalKeyName(node *yaml.Node) (string, error) {
 
 	encoded, err := yaml.Marshal(node)
 	if err != nil {
-		return "", fmt.Errorf("invalid rig.yaml: encode key: %w", err)
+		return "", fmt.Errorf("invalid %s: encode key: %w", configName, err)
 	}
 	return string(encoded), nil
 }
 
-func validateAllowedKeys(node *yaml.Node, scope string, allowed ...string) error {
+func validateAllowedKeys(node *yaml.Node, configName string, scope string, allowed ...string) error {
 	if node == nil || node.Kind != yaml.MappingNode {
 		return nil
 	}
@@ -258,12 +310,12 @@ func validateAllowedKeys(node *yaml.Node, scope string, allowed ...string) error
 
 	for i := 0; i < len(node.Content); i += 2 {
 		keyNode := node.Content[i]
-		keyName, err := canonicalKeyName(keyNode)
+		keyName, err := canonicalKeyName(keyNode, configName)
 		if err != nil {
 			return err
 		}
 		if _, ok := allowedSet[keyName]; !ok {
-			return fmt.Errorf("invalid %s: unknown key %q", scope, keyName)
+			return fmt.Errorf("invalid %s: %s has unknown key %q", configName, scope, keyName)
 		}
 	}
 
