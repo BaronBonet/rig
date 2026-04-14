@@ -27,6 +27,8 @@ import (
 	"rig/internal/pkg/execx"
 )
 
+var version = "dev"
+
 func main() {
 	deps, err := buildDependencies()
 	if err != nil {
@@ -113,6 +115,7 @@ func buildDependencies() (cli.Dependencies, error) {
 		Cwd:                 cwd,
 		RepoRoot:            detectRepoRoot(cwd),
 		DefaultProvider:     cfg.Service.Provider,
+		Version:             version,
 	}, nil
 }
 

@@ -33,6 +33,23 @@ func TestNewRootCommand_HelpOnlyIncludesDoctorSubcommand(t *testing.T) {
 	require.NotContains(t, output, "tui")
 }
 
+func TestNewRootCommand_VersionFlagPrintsConfiguredVersion(t *testing.T) {
+	out := &bytes.Buffer{}
+
+	cmd := NewRootCommand(Dependencies{
+		Stdout:  out,
+		Stderr:  out,
+		Version: "v9.9.9",
+	})
+	cmd.SetOut(out)
+	cmd.SetErr(out)
+	cmd.SetArgs([]string{"--version"})
+
+	err := cmd.Execute()
+	require.NoError(t, err)
+	require.Equal(t, "v9.9.9\n", out.String())
+}
+
 func TestNewRootCommand_RunsTUIWhenNoArgsProvided(t *testing.T) {
 	out := &bytes.Buffer{}
 	service := NewMockTaskService(t)

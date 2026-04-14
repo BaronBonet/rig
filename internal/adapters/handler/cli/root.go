@@ -53,6 +53,7 @@ type Dependencies struct {
 	Cwd                 string
 	RepoRoot            string
 	DefaultProvider     string
+	Version             string
 }
 
 func NewRootCommand(deps Dependencies) *cobra.Command {
@@ -85,6 +86,11 @@ func NewRootCommand(deps Dependencies) *cobra.Command {
 			_, err := program.Run()
 			return err
 		},
+	}
+
+	if version := strings.TrimSpace(deps.Version); version != "" {
+		cmd.Version = version
+		cmd.SetVersionTemplate("{{.Version}}\n")
 	}
 
 	if deps.Stdout != nil {
