@@ -128,13 +128,14 @@ func (r *Repository) RestoreLaunchRequest(
 
 func (r *Repository) withHookSettings(req core.LaunchRequest) (core.LaunchRequest, error) {
 	if r.hookListenAddr != "" {
-		settings, err := buildHookSettings(r.hookListenAddr)
+		settings, err := BuildHookSettings(r.hookListenAddr)
 		if err != nil {
 			return req, fmt.Errorf("build hook settings: %w", err)
 		}
-		req.SetupFiles = map[string][]byte{
-			".claude/settings.local.json": settings,
+		if req.SetupFiles == nil {
+			req.SetupFiles = make(map[string][]byte, 1)
 		}
+		req.SetupFiles[".claude/settings.local.json"] = settings
 	}
 
 	return req, nil
@@ -148,7 +149,7 @@ func (r *Repository) PromptMarker() string {
 	return "❯"
 }
 
-func buildHookSettings(listenAddr string) ([]byte, error) {
+func BuildHookSettings(listenAddr string) ([]byte, error) {
 	hookURL := "http://" + listenAddr + "/claude-hook"
 
 	hook := map[string]any{

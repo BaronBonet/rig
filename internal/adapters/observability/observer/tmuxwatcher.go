@@ -13,6 +13,10 @@ type observerTaskLister interface {
 	ListTasks(ctx context.Context) ([]*core.Task, error)
 }
 
+type observerTaskUpdater interface {
+	UpdateTask(ctx context.Context, task *core.Task) error
+}
+
 type TMuxWatcherConfig struct {
 	Tasks     observerTaskLister
 	Monitor   core.RuntimeMonitor
@@ -133,11 +137,6 @@ func (w *TMuxWatcher) refreshTask(ctx context.Context, task *core.Task) error {
 		return nil
 	}
 
-	provider := w.providers[task.Provider]
-	if provider == nil {
-		return nil
-	}
-
 	snapshot, err := w.monitor.Snapshot(ctx, task)
 	if err != nil {
 		return w.persistSummary(ctx, &core.ObserverSummary{
@@ -146,7 +145,20 @@ func (w *TMuxWatcher) refreshTask(ctx context.Context, task *core.Task) error {
 			DisplayActivity:       core.DisplayActivityNone,
 			ProcessAlive:          false,
 			LastRuntimeObservedAt: w.now().UTC(),
-		})
+		}, task.Provider)
+	}
+
+	hookSummary := w.lookupHookSessionSummary(ctx, task.ID)
+	if observedProvider := w.resolveObservedProvider(snapshot, hookSummary); observedProvider != "" &&
+		observedProvider != strings.TrimSpace(task.Provider) {
+		if err := w.persistTaskProvider(ctx, task, observedProvider); err != nil {
+			return err
+		}
+	}
+
+	provider := w.providers[task.Provider]
+	if provider == nil {
+		return nil
 	}
 
 	runtimeState := provider.DetectRuntimeState(snapshot)
@@ -155,7 +167,7 @@ func (w *TMuxWatcher) refreshTask(ctx context.Context, task *core.Task) error {
 	// hooks indicate the provider is actively working, override the
 	// tmux-based runtime state which may incorrectly detect a visible
 	// prompt as "needs input".
-	runtimeState = w.overrideWithHookPhase(ctx, task, snapshot, runtimeState)
+	runtimeState = w.overrideWithHookPhase(snapshot, hookSummary, runtimeState, task.Provider)
 
 	processAlive := runtimeState == core.RuntimeStateRunning || runtimeState == core.RuntimeStateNeedsInput
 	display := DeriveDisplayStatus(StatusInput{
@@ -177,7 +189,7 @@ func (w *TMuxWatcher) refreshTask(ctx context.Context, task *core.Task) error {
 		ProcessAlive:          processAlive,
 		LastRuntimeObservedAt: observedAt,
 	}
-	return w.persistSummary(ctx, summary)
+	return w.persistSummary(ctx, summary, task.Provider)
 }
 
 func (w *TMuxWatcher) findTaskBySession(ctx context.Context, sessionName string) (*core.Task, error) {
@@ -199,18 +211,31 @@ func (w *TMuxWatcher) findTaskBySession(ctx context.Context, sessionName string)
 	return nil, nil
 }
 
+func (w *TMuxWatcher) lookupHookSessionSummary(ctx context.Context, taskID string) *core.HookSessionSummary {
+	if strings.TrimSpace(taskID) == "" || w.hooks == nil {
+		return nil
+	}
+
+	summaries, err := w.hooks.ListHookSessionSummaries(ctx, []string{taskID})
+	if err != nil {
+		return nil
+	}
+
+	return summaries[taskID]
+}
+
 // hookStaleThreshold is a safety net: if no hook events arrive for this
 // long, stop trusting the hook phase and fall back to tmux detection.
 // This guards against hooks silently breaking.
 const hookStaleThreshold = 5 * time.Minute
 
 func (w *TMuxWatcher) overrideWithHookPhase(
-	ctx context.Context,
-	task *core.Task,
 	snapshot core.RuntimeSnapshot,
+	hs *core.HookSessionSummary,
 	rs core.RuntimeState,
+	provider string,
 ) core.RuntimeState {
-	if task == nil || w.hooks == nil {
+	if hs == nil {
 		return rs
 	}
 
@@ -220,13 +245,7 @@ func (w *TMuxWatcher) overrideWithHookPhase(
 		return rs
 	}
 
-	summaries, err := w.hooks.ListHookSessionSummaries(ctx, []string{task.ID})
-	if err != nil {
-		return rs
-	}
-
-	hs := summaries[task.ID]
-	if hs == nil || hs.LastActivityAt.IsZero() {
+	if hs.LastActivityAt.IsZero() {
 		return rs
 	}
 
@@ -237,7 +256,7 @@ func (w *TMuxWatcher) overrideWithHookPhase(
 		return rs
 	}
 
-	if task.Provider == "codex" {
+	if provider == "codex" {
 		switch hs.RuntimePhase {
 		case core.HookRuntimePhaseWaitingPermission:
 			return core.RuntimeStateNeedsInput
@@ -269,6 +288,42 @@ func (w *TMuxWatcher) overrideWithHookPhase(
 	return rs
 }
 
+func (w *TMuxWatcher) resolveObservedProvider(
+	snapshot core.RuntimeSnapshot,
+	hookSummary *core.HookSessionSummary,
+) string {
+	if w.isFreshHookSummary(snapshot, hookSummary) {
+		if provider := core.InferProviderFromHookSession(hookSummary); provider != "" {
+			return provider
+		}
+	}
+
+	return core.InferProviderFromRuntimeSnapshot(snapshot)
+}
+
+func (w *TMuxWatcher) isFreshHookSummary(snapshot core.RuntimeSnapshot, hs *core.HookSessionSummary) bool {
+	if hs == nil || hs.LastActivityAt.IsZero() {
+		return false
+	}
+	observedAt := snapshot.ObservedAt
+	if observedAt.IsZero() {
+		observedAt = w.now().UTC()
+	}
+	return observedAt.Sub(hs.LastActivityAt) <= hookStaleThreshold
+}
+
+func (w *TMuxWatcher) persistTaskProvider(ctx context.Context, task *core.Task, provider string) error {
+	updater, ok := w.tasks.(observerTaskUpdater)
+	if !ok || task == nil {
+		task.Provider = provider
+		return nil
+	}
+
+	task.Provider = provider
+	task.UpdatedAt = w.now().UTC()
+	return updater.UpdateTask(ctx, task)
+}
+
 func isForegroundCommandActivity(command string) bool {
 	command = strings.TrimSpace(strings.ToLower(command))
 	if command == "" {
@@ -283,12 +338,12 @@ func isForegroundCommandActivity(command string) bool {
 	}
 }
 
-func (w *TMuxWatcher) persistSummary(ctx context.Context, summary *core.ObserverSummary) error {
+func (w *TMuxWatcher) persistSummary(ctx context.Context, summary *core.ObserverSummary, provider string) error {
 	if err := w.repo.UpsertObserverSummary(ctx, summary); err != nil {
 		return err
 	}
 	if w.hub != nil {
-		w.hub.Publish(observerTaskUpdateFromSummary(summary, nil))
+		w.hub.Publish(observerTaskUpdateFromSummary(summary, nil, provider))
 	}
 	return nil
 }

@@ -1673,6 +1673,11 @@ func (m *model) applyHookSessionUpdate(update core.HookSessionSummary) {
 
 		copySummary := update
 		view.HookSession = &copySummary
+		if view.Task != nil {
+			if provider := core.InferProviderFromHookSession(&update); provider != "" {
+				view.Task.Provider = provider
+			}
+		}
 		return
 	}
 }
@@ -1695,6 +1700,13 @@ func (m *model) applyObserverTaskUpdate(update core.ObserverTaskUpdate) {
 			ProcessAlive:          update.DisplayStatus != core.DisplayStatusDisconnected,
 		}
 		view.Observer = copySummary
+		if view.Task != nil {
+			if provider := core.NormalizeProvider(update.Provider); provider != "" {
+				view.Task.Provider = provider
+			} else if provider := core.InferProviderFromHookSession(update.HookSession); provider != "" {
+				view.Task.Provider = provider
+			}
+		}
 		if update.HookSession != nil {
 			hookCopy := *update.HookSession
 			view.HookSession = &hookCopy

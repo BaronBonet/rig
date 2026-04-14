@@ -66,8 +66,25 @@ func TestBootstrapperWritesWorktreeLocalForwarderScript(t *testing.T) {
 	require.Contains(t, string(rawScript), `go run ./cmd/rig observer ingest "$event_name"`)
 }
 
-func TestBootstrapperBootstrapTaskWorkspace_NoopsForNonCodexTasks(t *testing.T) {
+func TestBootstrapperWritesClaudeSettingsAlongsideCodexHooks(t *testing.T) {
 	worktree := t.TempDir()
+	t.Setenv("AGENT_HOOK_LISTEN_ADDR", "127.0.0.1:4555")
+	bootstrapper := NewBootstrapper("/tmp/agent-bin", "/tmp/agent-src")
+
+	err := bootstrapper.BootstrapTaskWorkspace(t.Context(), &core.Task{
+		Provider:     "codex",
+		WorktreePath: worktree,
+	})
+	require.NoError(t, err)
+
+	rawSettings, err := os.ReadFile(filepath.Join(worktree, ".claude", "settings.local.json"))
+	require.NoError(t, err)
+	require.Contains(t, string(rawSettings), `http://127.0.0.1:4555/claude-hook`)
+}
+
+func TestBootstrapperBootstrapTaskWorkspace_AlsoBootstrapsClaudeTasks(t *testing.T) {
+	worktree := t.TempDir()
+	t.Setenv("AGENT_HOOK_LISTEN_ADDR", "127.0.0.1:4555")
 	bootstrapper := NewBootstrapper("/tmp/agent-bin", "/tmp/agent-src")
 
 	err := bootstrapper.BootstrapTaskWorkspace(t.Context(), &core.Task{
@@ -76,7 +93,8 @@ func TestBootstrapperBootstrapTaskWorkspace_NoopsForNonCodexTasks(t *testing.T) 
 	})
 	require.NoError(t, err)
 
-	_, statErr := os.Stat(filepath.Join(worktree, ".codex"))
-	require.Error(t, statErr)
-	require.True(t, os.IsNotExist(statErr))
+	_, err = os.Stat(filepath.Join(worktree, ".codex", "hooks.json"))
+	require.NoError(t, err)
+	_, err = os.Stat(filepath.Join(worktree, ".claude", "settings.local.json"))
+	require.NoError(t, err)
 }

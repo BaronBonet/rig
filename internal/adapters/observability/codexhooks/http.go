@@ -54,6 +54,7 @@ func DecodeHookEventInput(now func() time.Time, headerEventName string, body []b
 	input := core.HookEventInput{
 		OccurredAt:     now().UTC(),
 		EventName:      strings.TrimSpace(headerEventName),
+		Provider:       "codex",
 		RawPayloadJSON: string(bytes.TrimSpace(body)),
 	}
 

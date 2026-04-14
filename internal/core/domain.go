@@ -145,6 +145,7 @@ type HookSessionSummary struct {
 	LastPromptSubmittedAt time.Time
 	TaskID                string
 	SessionID             string
+	Provider              string
 	Model                 string
 	Cwd                   string
 	TranscriptPath        string
@@ -169,6 +170,7 @@ type ObserverSummary struct {
 
 type ObserverTaskUpdate struct {
 	TaskID          string              `json:"task_id"`
+	Provider        string              `json:"provider,omitempty"`
 	DisplayStatus   DisplayStatus       `json:"display_status"`
 	DisplayActivity DisplayActivity     `json:"display_activity"`
 	LastActivityAt  time.Time           `json:"last_activity_at"`
@@ -196,6 +198,7 @@ type HookEventInput struct {
 	SessionID            string
 	TurnID               string
 	EventName            string
+	Provider             string
 	RawPayloadJSON       string
 	LastAssistantMessage string
 	PromptText           string

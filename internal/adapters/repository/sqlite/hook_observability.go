@@ -21,6 +21,7 @@ type hookRecord struct {
 	SessionID            string
 	TurnID               string
 	EventName            string
+	Provider             string
 	RawPayloadJSON       string
 	LastAssistantMessage string
 	PromptText           string
@@ -146,6 +147,7 @@ func (r *Repository) IngestHookEvent(ctx context.Context, raw core.HookEventInpu
 		SessionID:            strings.TrimSpace(raw.SessionID),
 		TurnID:               strings.TrimSpace(raw.TurnID),
 		EventName:            strings.TrimSpace(raw.EventName),
+		Provider:             strings.TrimSpace(raw.Provider),
 		RawPayloadJSON:       strings.TrimSpace(raw.RawPayloadJSON),
 		LastAssistantMessage: strings.TrimSpace(raw.LastAssistantMessage),
 		PromptText:           strings.TrimSpace(raw.PromptText),
@@ -182,12 +184,25 @@ func (r *Repository) IngestHookEvent(ctx context.Context, raw core.HookEventInpu
 	if err != nil {
 		return nil, err
 	}
+	taskRow, err := qtx.GetTaskByIDOrSlug(ctx, taskID)
+	if err != nil {
+		return nil, err
+	}
+	task := taskFromRow(taskRow)
 	if err := qtx.InsertHookEvent(ctx, hookEventParamsFromRecord(record)); err != nil {
 		return nil, err
 	}
 
 	next := deriveHookSessionSummary(previous, record)
 	next.TaskID = taskID
+	if observedProvider := observedProviderFromHookRecord(record); observedProvider != "" &&
+		task != nil && strings.TrimSpace(task.Provider) != observedProvider {
+		task.Provider = observedProvider
+		task.UpdatedAt = time.Now().UTC()
+		if err := qtx.UpdateTask(ctx, updateTaskParams(task)); err != nil {
+			return nil, err
+		}
+	}
 	nextObserver := deriveObserverSummary(previousObserver, next)
 	if err := qtx.UpsertHookSessionSummary(ctx, hookSessionSummaryParams(next)); err != nil {
 		return nil, err
@@ -480,6 +495,9 @@ func deriveHookSessionSummary(previous *core.HookSessionSummary, event hookRecor
 	if event.SessionID != "" {
 		next.SessionID = event.SessionID
 	}
+	if provider := observedProviderFromHookRecord(event); provider != "" {
+		next.Provider = provider
+	}
 	if event.Model != "" {
 		next.Model = event.Model
 	}
@@ -545,6 +563,13 @@ func deriveHookSessionSummary(previous *core.HookSessionSummary, event hookRecor
 	}
 
 	return next
+}
+
+func observedProviderFromHookRecord(record hookRecord) string {
+	if provider := core.NormalizeProvider(record.Provider); provider != "" {
+		return provider
+	}
+	return core.InferProviderFromModel(record.Model)
 }
 
 func deriveObserverSummary(previous *core.ObserverSummary, hookSession *core.HookSessionSummary) *core.ObserverSummary {
