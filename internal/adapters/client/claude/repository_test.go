@@ -35,6 +35,20 @@ func TestRepositoryLaunchRequest_UsesBinaryPromptAndTaskPrompt(t *testing.T) {
 	}, launch)
 }
 
+func TestRepositoryLaunchRequest_OmitsInitialInputWhenTaskPromptIsEmpty(t *testing.T) {
+	repo := NewRepository(execx.NewMockRunner(t), Config{
+		Binary:         "claude",
+		HookListenAddr: "127.0.0.1:4000",
+	})
+
+	launch, err := repo.LaunchRequest(&core.Task{Prompt: ""})
+	require.NoError(t, err)
+	require.Equal(t, []string{"claude"}, launch.Command)
+	require.Equal(t, "❯", launch.Prompt)
+	require.Nil(t, launch.InitialInput)
+	require.Contains(t, launch.SetupFiles, ".claude/settings.local.json")
+}
+
 func TestRepositoryRestoreLaunchRequest_UsesResumeWithSessionID(t *testing.T) {
 	repo := NewRepository(execx.NewMockRunner(t), Config{Binary: "claude"})
 

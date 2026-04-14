@@ -109,7 +109,9 @@ type TaskWorkspaceBootstrapper interface {
 type RepoClient interface {
 	IsAvailable(ctx context.Context) error
 	DetectRepo(ctx context.Context, cwd string) (RepoContext, error)
+	IsBranchUsedByWorktree(ctx context.Context, repoRoot string, branchName string) (bool, error)
 	CreateTaskWorkspace(ctx context.Context, task *Task) error
+	CreateTaskWorkspaceFromBranch(ctx context.Context, task *Task) error
 	RemoveTaskWorkspace(ctx context.Context, task *Task) error
 	InspectTaskWorkspace(ctx context.Context, task *Task) (RepoResources, error)
 }
@@ -146,4 +148,5 @@ type SessionUsageReader interface {
 type PRStatusChecker interface {
 	IsAvailable(ctx context.Context) error
 	CheckPRStatus(ctx context.Context, repoRoot string, branchName string) (*PRStatus, error)
+	ListRepoPullRequests(ctx context.Context, repoRoot string) ([]RepoPullRequest, error)
 }

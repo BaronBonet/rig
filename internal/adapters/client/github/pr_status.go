@@ -41,6 +41,30 @@ func (c *PRStatusChecker) CheckPRStatus(
 	return parsePROutput(result.Stdout), nil
 }
 
+func (c *PRStatusChecker) ListRepoPullRequests(
+	ctx context.Context,
+	repoRoot string,
+) ([]core.RepoPullRequest, error) {
+	result, err := c.runner.Run(
+		ctx,
+		repoRoot,
+		"gh",
+		"pr",
+		"list",
+		"--state",
+		"open",
+		"--json",
+		"number,title,headRefName,isDraft",
+		"--jq",
+		".[] | [.number, .title, .headRefName, .isDraft] | @tsv",
+	)
+	if err != nil {
+		return nil, err
+	}
+
+	return parsePRListOutput(result.Stdout), nil
+}
+
 func parsePROutput(output string) *core.PRStatus {
 	lines := strings.Split(strings.TrimSpace(output), "\n")
 	if len(lines) < 2 {
@@ -68,4 +92,35 @@ func parsePROutput(output string) *core.PRStatus {
 	default:
 		return &core.PRStatus{State: core.PRStateNone}
 	}
+}
+
+func parsePRListOutput(output string) []core.RepoPullRequest {
+	lines := strings.Split(strings.TrimSpace(output), "\n")
+	prs := make([]core.RepoPullRequest, 0, len(lines))
+	for _, line := range lines {
+		line = strings.TrimSpace(line)
+		if line == "" {
+			continue
+		}
+
+		fields := strings.Split(line, "\t")
+		if len(fields) < 4 {
+			continue
+		}
+
+		number, _ := strconv.Atoi(strings.TrimSpace(fields[0]))
+		state := core.PRStateOpen
+		if strings.TrimSpace(strings.ToLower(fields[3])) == "true" {
+			state = core.PRStateDraft
+		}
+
+		prs = append(prs, core.RepoPullRequest{
+			Number:     number,
+			Title:      strings.TrimSpace(fields[1]),
+			BranchName: strings.TrimSpace(fields[2]),
+			State:      state,
+		})
+	}
+
+	return prs
 }

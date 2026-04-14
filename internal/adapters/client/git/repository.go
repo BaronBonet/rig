@@ -60,6 +60,23 @@ func (r *Repository) BranchExists(ctx context.Context, repoRoot, branch string) 
 	return true, nil
 }
 
+func (r *Repository) IsBranchUsedByWorktree(ctx context.Context, repoRoot string, branchName string) (bool, error) {
+	result, err := r.runner.Run(ctx, repoRoot, "git", "worktree", "list", "--porcelain")
+	if err != nil {
+		return false, err
+	}
+
+	target := "refs/heads/" + strings.TrimSpace(branchName)
+	for _, line := range strings.Split(result.Stdout, "\n") {
+		line = strings.TrimSpace(line)
+		if strings.HasPrefix(line, "branch ") && strings.TrimSpace(strings.TrimPrefix(line, "branch ")) == target {
+			return true, nil
+		}
+	}
+
+	return false, nil
+}
+
 func (r *Repository) CreateWorktree(ctx context.Context, in core.CreateWorktreeInput) error {
 	_, err := r.runner.Run(
 		ctx,
@@ -82,6 +99,19 @@ func (r *Repository) CreateTaskWorkspace(ctx context.Context, task *core.Task) e
 		BranchName:   task.BranchName,
 		WorktreePath: task.WorktreePath,
 	})
+}
+
+func (r *Repository) CreateTaskWorkspaceFromBranch(ctx context.Context, task *core.Task) error {
+	_, err := r.runner.Run(
+		ctx,
+		task.RepoRoot,
+		"git",
+		"worktree",
+		"add",
+		task.WorktreePath,
+		task.BranchName,
+	)
+	return err
 }
 
 func (r *Repository) InspectTaskWorkspace(ctx context.Context, task *core.Task) (core.RepoResources, error) {

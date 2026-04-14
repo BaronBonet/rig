@@ -50,12 +50,14 @@ type taskRepositoryState struct {
 type repoClientState struct {
 	isAvailableErr error
 	detectRepoErr  error
+	branchInUseErr error
 	createErr      error
 	inspectErr     error
 	removeErr      error
 	removeHook     func(*Task)
 	repoContext    RepoContext
 	repoResources  RepoResources
+	branchInUse    map[string]bool
 	createdTask    *Task
 	removedTasks   []*Task
 }
@@ -234,7 +236,26 @@ func wireRepoClientMock(h *testServiceHarness) {
 
 			return h.repoClient.repoContext, nil
 		}).Maybe()
+	h.repoClientMock.EXPECT().IsBranchUsedByWorktree(mock.Anything, mock.Anything, mock.Anything).
+		RunAndReturn(func(_ context.Context, _ string, branchName string) (bool, error) {
+			if h.repoClient.branchInUseErr != nil {
+				return false, h.repoClient.branchInUseErr
+			}
+
+			return h.repoClient.branchInUse[branchName], nil
+		}).Maybe()
 	h.repoClientMock.EXPECT().CreateTaskWorkspace(mock.Anything, mock.Anything).
+		RunAndReturn(func(_ context.Context, task *Task) error {
+			h.repoClient.createdTask = cloneTask(task)
+			if h.repoClient.createErr != nil {
+				return h.repoClient.createErr
+			}
+
+			h.repoClient.repoResources.WorktreeExists = true
+			h.repoClient.repoResources.BranchExists = true
+			return nil
+		}).Maybe()
+	h.repoClientMock.EXPECT().CreateTaskWorkspaceFromBranch(mock.Anything, mock.Anything).
 		RunAndReturn(func(_ context.Context, task *Task) error {
 			h.repoClient.createdTask = cloneTask(task)
 			if h.repoClient.createErr != nil {

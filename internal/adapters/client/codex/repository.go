@@ -116,10 +116,15 @@ func (r *Repository) BuildLaunchCommand(task *core.Task) ([]string, error) {
 }
 
 func (r *Repository) LaunchRequest(task *core.Task) (core.LaunchRequest, error) {
+	var initialInput []string
+	if strings.TrimSpace(task.Prompt) != "" {
+		initialInput = []string{task.Prompt}
+	}
+
 	return core.LaunchRequest{
 		Command:      []string{r.binary},
 		Prompt:       r.PromptMarker(),
-		InitialInput: []string{task.Prompt},
+		InitialInput: initialInput,
 	}, nil
 }
 

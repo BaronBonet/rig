@@ -27,6 +27,7 @@ const (
 	tuiModeCleanupConfirm tuiMode = "cleanup_confirm"
 	tuiModePromptInput    tuiMode = "prompt_input"
 	tuiModeNameConfirm    tuiMode = "name_confirm"
+	tuiModePRPicker       tuiMode = "pr_picker"
 )
 
 type viewMode int
@@ -71,6 +72,10 @@ type model struct {
 	progressCh         <-chan taskProgressMsg
 	tasksRequestSeq    int
 	creationTask       *core.Task
+	prPickerRepoRoot   string
+	prPickerRepoName   string
+	prPickerRows       []core.RepoPullRequest
+	prPickerSelected   int
 }
 
 type tasksLoadedMsg struct {
@@ -82,6 +87,13 @@ type tasksLoadedMsg struct {
 type prStatusLoadedMsg struct {
 	taskID string
 	status *core.PRStatus
+}
+
+type repoPRsLoadedMsg struct {
+	repoRoot string
+	repoName string
+	prs      []core.RepoPullRequest
+	err      error
 }
 
 type observerSubscriptionReadyMsg struct {
@@ -416,6 +428,23 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 		}
 		return m, nil
+	case repoPRsLoadedMsg:
+		m.busy = false
+		m.err = msg.err
+		if msg.err != nil {
+			return m, nil
+		}
+		m.prPickerRepoRoot = msg.repoRoot
+		m.prPickerRepoName = msg.repoName
+		m.prPickerRows = append([]core.RepoPullRequest(nil), msg.prs...)
+		if m.prPickerSelected >= len(m.prPickerRows) {
+			if len(m.prPickerRows) == 0 {
+				m.prPickerSelected = 0
+			} else {
+				m.prPickerSelected = len(m.prPickerRows) - 1
+			}
+		}
+		return m, nil
 	case taskProgressMsg:
 		if msg.task != nil {
 			m.creationTask = cloneTaskSnapshot(msg.task)
@@ -469,6 +498,8 @@ func (m model) View() tea.View {
 		body = m.promptInputView()
 	case tuiModeNameConfirm:
 		body = m.nameConfirmView()
+	case tuiModePRPicker:
+		body = m.prPickerView()
 	default:
 		body = m.listView()
 	}
@@ -494,12 +525,18 @@ func (m model) updateKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		return m.updatePromptInputKey(msg)
 	case tuiModeNameConfirm:
 		return m.updateNameConfirmKey(msg)
+	case tuiModePRPicker:
+		return m.updatePRPickerKey(msg)
 	default:
 		return m.updateListKey(msg)
 	}
 }
 
 func (m model) updateListKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
+	if msg.Code == 'p' && msg.Mod == tea.ModCtrl {
+		return m.openPRPicker()
+	}
+
 	switch msg.String() {
 	case "q":
 		if m.blockedByActiveCreation("Task creation is still in progress") {
@@ -621,6 +658,10 @@ func (m model) updateCleanupConfirmKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd)
 }
 
 func (m model) updatePromptInputKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
+	if msg.Code == 'p' && msg.Mod == tea.ModCtrl {
+		return m.openPRPicker()
+	}
+
 	switch msg.Code {
 	case tea.KeyEscape:
 		m.mode = tuiModeList
@@ -701,6 +742,61 @@ func (m model) updateNameConfirmKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	var cmd tea.Cmd
 	m.nameInput, cmd = m.nameInput.Update(msg)
 	return m, cmd
+}
+
+func (m model) updatePRPickerKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
+	switch msg.String() {
+	case "esc":
+		m.mode = tuiModeList
+		m.busy = false
+		m.err = nil
+		return m, nil
+	case "j", "down":
+		if m.prPickerSelected < len(m.prPickerRows)-1 {
+			m.prPickerSelected++
+		}
+		return m, nil
+	case "k", "up":
+		if m.prPickerSelected > 0 {
+			m.prPickerSelected--
+		}
+		return m, nil
+	case "enter":
+		if m.prPickerSelected < 0 || m.prPickerSelected >= len(m.prPickerRows) {
+			return m, nil
+		}
+
+		selectedPR := m.prPickerRows[m.prPickerSelected]
+		if selectedPR.HasExistingTask {
+			m.err = fmt.Errorf("PR already has workspace")
+			return m, nil
+		}
+
+		m.err = nil
+		m.busy = true
+		m.createInFlight = true
+		m.creationFailed = false
+		m.mode = tuiModeList
+		m.creationTask = nil
+		m.creationProgress = core.TaskProgressWorktreeCreating
+		m.creationSteps = []string{progressStepLabel(core.TaskProgressWorktreeCreating)}
+		m.shimmerTick = 0
+		input := core.CreateTaskFromPRInput{
+			RepoRoot: m.prPickerRepoRoot,
+			PR:       selectedPR,
+			Provider: emptyFallback(m.provider, "codex"),
+		}
+		m.selected = m.syntheticCreationRowIndex()
+		progressCh, createCmd := createTaskFromPRCmd(m.service, input)
+		m.progressCh = progressCh
+		return m, tea.Batch(
+			createCmd,
+			waitForProgressCmd(progressCh),
+			tea.Tick(shimmerTickInterval, func(time.Time) tea.Msg { return shimmerTickMsg{} }),
+		)
+	default:
+		return m, nil
+	}
 }
 
 // Two-line row column widths.
@@ -1226,7 +1322,8 @@ func (m model) promptInputView() string {
 	}
 
 	// Instruction
-	b.WriteString(dimStyle.Render("Enter task prompt. Tab to switch provider.") + "\n\n")
+	b.WriteString(dimStyle.Render("Enter task prompt. Tab to switch provider.") + "\n")
+	b.WriteString(dimStyle.Render("Use Ctrl+P to create a task from a PR.") + "\n\n")
 
 	// Provider toggle
 	selectedProvider := emptyFallback(m.promptProvider, m.provider)
@@ -1254,6 +1351,75 @@ func (m model) promptInputView() string {
 	b.WriteString(
 		keybindStyle.Render("enter") + mutedStyle.Render(" submit · ") +
 			keybindStyle.Render("esc") + mutedStyle.Render(" cancel"),
+	)
+
+	return b.String()
+}
+
+func (m model) prPickerView() string {
+	totalWidth := m.width
+	if totalWidth < 40 {
+		totalWidth = 72
+	}
+
+	var b strings.Builder
+	header := "PRs"
+	if strings.TrimSpace(m.prPickerRepoName) != "" {
+		header = "PRs: " + m.prPickerRepoName
+	}
+
+	b.WriteString(renderHeader(
+		headerLabelStyle.Render("RIG"),
+		mutedStyle.Render(header),
+		totalWidth,
+	) + "\n")
+	b.WriteString(dividerStyle.Render(strings.Repeat("─", totalWidth)) + "\n")
+
+	if m.err != nil {
+		b.WriteString(errorStyle.Render("Error: "+m.err.Error()) + "\n\n")
+	}
+
+	if m.busy && len(m.prPickerRows) == 0 {
+		b.WriteString(dimStyle.Render("Loading pull requests..."))
+		return b.String()
+	}
+
+	if len(m.prPickerRows) == 0 {
+		b.WriteString(dimStyle.Render("No open pull requests found.") + "\n\n")
+		b.WriteString(keybindStyle.Render("esc") + mutedStyle.Render(" back"))
+		return b.String()
+	}
+
+	for i, pr := range m.prPickerRows {
+		title := fmt.Sprintf("#%d %s", pr.Number, pr.Title)
+		state := string(pr.State)
+		if state == "" {
+			state = string(core.PRStateOpen)
+		}
+		detail := fmt.Sprintf("%s  %s", state, pr.BranchName)
+		if pr.HasExistingTask {
+			detail += "  already has workspace"
+		}
+
+		line1 := title
+		line2 := detail
+		if i == m.prPickerSelected {
+			b.WriteString(selectedRowStyle.Render(primaryStyle.Bold(true).Render(line1)) + "\n")
+			b.WriteString(selectedRowStyle.Render(dimStyle.Render(line2)) + "\n")
+		} else {
+			b.WriteString(normalRowStyle.Render(primaryStyle.Render(line1)) + "\n")
+			b.WriteString(normalRowStyle.Render(dimStyle.Render(line2)) + "\n")
+		}
+
+		if i < len(m.prPickerRows)-1 {
+			b.WriteString("\n")
+		}
+	}
+
+	b.WriteString("\n\n")
+	b.WriteString(
+		keybindStyle.Render("enter") + mutedStyle.Render(" create · ") +
+			keybindStyle.Render("esc") + mutedStyle.Render(" back"),
 	)
 
 	return b.String()
@@ -1315,6 +1481,30 @@ func (m model) nameConfirmView() string {
 	}
 
 	return b.String()
+}
+
+func (m model) openPRPicker() (tea.Model, tea.Cmd) {
+	if m.blockedByActiveCreation("Task creation already in progress") {
+		return m, nil
+	}
+
+	repoRoot, repoName := m.selectedRepoContext()
+	if repoRoot == "" {
+		m.err = fmt.Errorf("No repository selected for pull request picker")
+		return m, nil
+	}
+
+	m.err = nil
+	m.busy = true
+	m.mode = tuiModePRPicker
+	m.prPickerRepoRoot = repoRoot
+	m.prPickerRepoName = repoName
+	m.prPickerRows = nil
+	m.prPickerSelected = 0
+	m.promptInput.Blur()
+	m.nameInput.Blur()
+
+	return m, loadRepoPRsCmd(m.service, repoRoot, repoName)
 }
 
 func (m model) confirmationView() string {
@@ -1714,6 +1904,18 @@ func refreshTasksCmd(service TaskService, requestID int, vm viewMode, repoRoot s
 	})
 }
 
+func loadRepoPRsCmd(service TaskService, repoRoot string, repoName string) tea.Cmd {
+	return safeCmd("loadRepoPRsCmd", func() tea.Msg {
+		prs, err := service.ListRepoPullRequests(context.Background(), repoRoot)
+		return repoPRsLoadedMsg{
+			repoRoot: repoRoot,
+			repoName: repoName,
+			prs:      prs,
+			err:      err,
+		}
+	})
+}
+
 func filterVisibleTaskViews(views []*core.TaskView) []*core.TaskView {
 	filtered := make([]*core.TaskView, 0, len(views))
 	for _, view := range views {
@@ -1963,6 +2165,35 @@ func createTaskCmd(service TaskService, input core.NewTaskInput) (<-chan taskPro
 	return progressCh, cmd
 }
 
+func createTaskFromPRCmd(service TaskService, input core.CreateTaskFromPRInput) (<-chan taskProgressMsg, tea.Cmd) {
+	progressCh := make(chan taskProgressMsg, 8)
+
+	cmd := func() (msg tea.Msg) {
+		defer close(progressCh)
+		defer func() {
+			if r := recover(); r != nil {
+				msg = asyncErrMsg{err: fmt.Errorf("createTaskFromPRCmd panicked: %v", r)}
+			}
+		}()
+
+		task, err := service.CreateTaskFromPRWithProgress(
+			context.Background(),
+			input,
+			core.CreateTaskOptions{OpenSession: false},
+			func(p core.TaskProgress) {
+				progressCh <- taskProgressMsg{
+					step:    p.Step,
+					message: p.Message,
+					task:    cloneTaskSnapshot(p.Task),
+				}
+			},
+		)
+		return createFinishedMsg{task: task, err: err}
+	}
+
+	return progressCh, cmd
+}
+
 func waitForProgressCmd(ch <-chan taskProgressMsg) tea.Cmd {
 	if ch == nil {
 		return nil
@@ -2011,6 +2242,17 @@ func (m model) creationCwd() string {
 	}
 
 	return m.defaultCreationCwd
+}
+
+func (m model) selectedRepoContext() (string, string) {
+	task := m.selectedTask()
+	if task != nil && strings.TrimSpace(task.RepoRoot) != "" {
+		return task.RepoRoot, task.RepoName
+	}
+	if strings.TrimSpace(m.currentRepoRoot) != "" {
+		return m.currentRepoRoot, m.currentRepoName
+	}
+	return "", ""
 }
 
 func emptyFallback(value string, fallback string) string {

@@ -31,7 +31,7 @@ xattr -d com.apple.quarantine ~/.local/bin/rig
 - `git`
 - `tmux`
 - `codex` and/or `claude` (at least one LLM provider)
-- `gh` (optional — needed for PR status checks and private-repo installs)
+- `gh` (optional — needed for PR-backed task creation, PR status checks, and private-repo installs)
 
 ## Usage
 

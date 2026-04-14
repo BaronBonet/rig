@@ -299,7 +299,11 @@ func resolveNestedSymlink(root, sourceRoot, linkPath string) (string, fs.FileInf
 		return "", nil, fmt.Errorf("source %q contains a symlink at %q: %w", sourceRoot, linkPath, err)
 	}
 	if err := ensureResolvedPathWithinRoot(root, resolved); err != nil {
-		return "", nil, fmt.Errorf("source %q contains a symlink at %q resolving outside repo root", sourceRoot, linkPath)
+		return "", nil, fmt.Errorf(
+			"source %q contains a symlink at %q resolving outside repo root",
+			sourceRoot,
+			linkPath,
+		)
 	}
 	info, err := os.Stat(linkPath)
 	if err != nil {
