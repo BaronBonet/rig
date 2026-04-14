@@ -58,6 +58,7 @@ seed:
 ```
 
 - `seed.copy` copies repo-relative files or directories into the new worktree.
+- Symlinks inside copied directories are followed only when they resolve within the repo root; symlinks that resolve outside the repo are rejected.
 - `seed.setup_script` runs a repo-relative script inside the new worktree after copying completes.
 - Paths in `.rig.yaml` must be repo-relative. Absolute paths, `..`, and glob patterns are rejected.
 - `rig.yaml` is still supported for compatibility, but a repo must define only one of `.rig.yaml` or `rig.yaml`.
