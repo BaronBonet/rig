@@ -99,7 +99,7 @@ func TestRepositorySeedWorkspaceRejectsMissingSource(t *testing.T) {
 	require.ErrorContains(t, err, "missing.txt")
 }
 
-func TestRepositorySeedWorkspaceRejectsExistingDestination(t *testing.T) {
+func TestRepositorySeedWorkspaceOverwritesExistingDestination(t *testing.T) {
 	repoRoot := t.TempDir()
 	worktreePath := t.TempDir()
 
@@ -113,8 +113,11 @@ func TestRepositorySeedWorkspaceRejectsExistingDestination(t *testing.T) {
 		WorktreePath:  worktreePath,
 		RelativePaths: []string{".env"},
 	}, nil)
-	require.Error(t, err)
-	require.ErrorContains(t, err, "already exists")
+	require.NoError(t, err)
+
+	got, err := os.ReadFile(filepath.Join(worktreePath, ".env"))
+	require.NoError(t, err)
+	require.Equal(t, "API_KEY=1\n", string(got))
 }
 
 func TestRepositorySeedWorkspaceRejectsSymlinks(t *testing.T) {

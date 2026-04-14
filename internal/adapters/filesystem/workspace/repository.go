@@ -153,7 +153,7 @@ func seedPath(worktreePath string, path preparedSeedPath) error {
 	if err := ensurePathComponentsSafe(worktreePath, dest, true, "destination"); err != nil {
 		return err
 	}
-	if err := ensureMissing(dest); err != nil {
+	if err := removeExisting(dest); err != nil {
 		return err
 	}
 
@@ -186,9 +186,9 @@ func validateRelativePath(path string) (string, error) {
 	return cleaned, nil
 }
 
-func ensureMissing(path string) error {
+func removeExisting(path string) error {
 	if _, err := os.Lstat(path); err == nil {
-		return fmt.Errorf("destination %q already exists", path)
+		return os.RemoveAll(path)
 	} else if !errors.Is(err, os.ErrNotExist) {
 		return err
 	}
@@ -334,7 +334,7 @@ func copyDirectoryContents(root, sourceRoot, source, dest string, seen map[strin
 	if err != nil {
 		return err
 	}
-	if err := ensureMissing(dest); err != nil {
+	if err := removeExisting(dest); err != nil {
 		return err
 	}
 	if err := os.MkdirAll(filepath.Dir(dest), 0o755); err != nil {
@@ -388,7 +388,7 @@ func copyDirectoryContents(root, sourceRoot, source, dest string, seen map[strin
 }
 
 func copyFile(source, dest string, info fs.FileInfo) error {
-	if err := ensureMissing(dest); err != nil {
+	if err := removeExisting(dest); err != nil {
 		return err
 	}
 	if err := os.MkdirAll(filepath.Dir(dest), 0o755); err != nil {
