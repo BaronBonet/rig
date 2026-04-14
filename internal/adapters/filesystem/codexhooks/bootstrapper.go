@@ -38,6 +38,11 @@ func (b *Bootstrapper) BootstrapTaskWorkspace(_ context.Context, task *core.Task
 
 	hooksRoot := filepath.Join(task.WorktreePath, ".codex")
 	hooksDir := filepath.Join(hooksRoot, "hooks")
+	hooksJSONPath := filepath.Join(hooksRoot, "hooks.json")
+	forwarderPath := filepath.Join(hooksDir, "forward-to-rig.sh")
+	if fileExists(hooksJSONPath) && fileExists(forwarderPath) {
+		return nil
+	}
 	if err := os.MkdirAll(hooksDir, 0o755); err != nil {
 		return err
 	}
@@ -46,7 +51,7 @@ func (b *Bootstrapper) BootstrapTaskWorkspace(_ context.Context, task *core.Task
 	if err != nil {
 		return err
 	}
-	if err := os.WriteFile(filepath.Join(hooksRoot, "hooks.json"), rawHooks, 0o644); err != nil {
+	if err := os.WriteFile(hooksJSONPath, rawHooks, 0o644); err != nil {
 		return err
 	}
 
@@ -55,7 +60,7 @@ func (b *Bootstrapper) BootstrapTaskWorkspace(_ context.Context, task *core.Task
 		return err
 	}
 
-	return os.WriteFile(filepath.Join(hooksDir, "forward-to-rig.sh"), rawScript, 0o755)
+	return os.WriteFile(forwarderPath, rawScript, 0o755)
 }
 
 func (b *Bootstrapper) renderHooksJSON() ([]byte, error) {
@@ -135,4 +140,9 @@ func shellQuote(value string) string {
 	}
 
 	return "'" + strings.ReplaceAll(value, "'", `'\''`) + "'"
+}
+
+func fileExists(path string) bool {
+	info, err := os.Stat(path)
+	return err == nil && !info.IsDir()
 }

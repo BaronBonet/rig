@@ -1,12 +1,22 @@
 package core
 
 import (
+	"context"
 	"errors"
 	"testing"
 	"time"
 
 	"github.com/stretchr/testify/require"
 )
+
+type recordingBootstrapper struct {
+	calls []*Task
+}
+
+func (b *recordingBootstrapper) BootstrapTaskWorkspace(_ context.Context, task *Task) error {
+	b.calls = append(b.calls, cloneTask(task))
+	return nil
+}
 
 func TestServiceListTasks_MarksMissingTmuxSessionAsBroken(t *testing.T) {
 	worktree := t.TempDir()
@@ -94,4 +104,36 @@ func TestServiceListTasks_SnapshotErrorIsBestEffort(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, tasks, 1)
 	require.Equal(t, RuntimeStateNone, tasks[0].RuntimeState)
+}
+
+func TestServiceListTasks_RebootstrapsExistingCodexWorkspace(t *testing.T) {
+	worktree := t.TempDir()
+	svc := newTestService(t)
+	bootstrap := &recordingBootstrapper{}
+	svc.service.bootstrap = bootstrap
+	svc.taskRepo.listTasks = []*Task{{
+		ID:               "task-1",
+		Slug:             "billing-retry-flow",
+		RepoRoot:         "/tmp/repo",
+		BranchName:       "feat/billing-retry-flow",
+		WorktreePath:     worktree,
+		TmuxSession:      "repo-billing-retry-flow",
+		AgentWindowName:  "agent",
+		EditorWindowName: "editor",
+		Provider:         "codex",
+		Status:           TaskStatusRunning,
+	}}
+	svc.repoClient.repoResources = RepoResources{WorktreeExists: true, BranchExists: true}
+	svc.sessionClient.sessionResources = SessionResources{
+		SessionExists:      true,
+		AgentWindowExists:  true,
+		EditorWindowExists: true,
+	}
+
+	_, err := svc.service.ListTasks(t.Context())
+
+	require.NoError(t, err)
+	require.Len(t, bootstrap.calls, 1)
+	require.Equal(t, worktree, bootstrap.calls[0].WorktreePath)
+	require.Equal(t, "codex", bootstrap.calls[0].Provider)
 }
