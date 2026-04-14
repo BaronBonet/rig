@@ -771,6 +771,9 @@ func (s *Service) reconcileTask(ctx context.Context, task *Task) (*Task, error) 
 	}
 	reconciled.WorktreeExists = repoResources.WorktreeExists
 	reconciled.BranchExists = repoResources.BranchExists
+	if reconciled.WorktreeExists && s.bootstrap != nil {
+		_ = s.bootstrap.BootstrapTaskWorkspace(ctx, &reconciled)
+	}
 
 	sessionResources, err := s.session.InspectTaskSession(ctx, &reconciled)
 	if err != nil {
