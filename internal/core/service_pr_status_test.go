@@ -17,6 +17,10 @@ func (s stubPRStatusChecker) CheckPRStatus(ctx context.Context, repoRoot string,
 	return s(ctx, repoRoot, branchName)
 }
 
+func (s stubPRStatusChecker) ListRepoPullRequests(context.Context, string) ([]RepoPullRequest, error) {
+	return nil, nil
+}
+
 func TestService_GetPRStatus_FetchesAndCaches(t *testing.T) {
 	h := newTestService(t)
 	prChecker := NewMockPRStatusChecker(t)

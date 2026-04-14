@@ -27,6 +27,12 @@ type NewTaskInput struct {
 	Provider             string
 }
 
+type CreateTaskFromPRInput struct {
+	RepoRoot string
+	PR       RepoPullRequest
+	Provider string
+}
+
 type CreateTaskOptions struct {
 	OpenSession bool
 }
@@ -242,6 +248,170 @@ func (s *Service) CreateTaskWithProgress(
 		if err := s.bootstrap.BootstrapTaskWorkspace(ctx, task); err != nil {
 			return s.markBroken(ctx, task, fmt.Errorf("prepare workspace: %w", err))
 		}
+	}
+
+	emitTaskProgress(progress, TaskProgress{
+		Step:    TaskProgressTmuxStarting,
+		Message: "Starting tmux session...",
+		Task:    cloneTask(task),
+	})
+	providerRepo := s.resolveProvider(task.Provider)
+	if providerRepo == nil {
+		return s.markBroken(ctx, task, fmt.Errorf("build launch request: provider %q unavailable", task.Provider))
+	}
+	launch, err := providerRepo.LaunchRequest(task)
+	if err != nil {
+		return s.markBroken(ctx, task, fmt.Errorf("build launch request: %w", err))
+	}
+
+	if err := writeSetupFiles(task.WorktreePath, launch.SetupFiles); err != nil {
+		return s.markBroken(ctx, task, fmt.Errorf("write setup files: %w", err))
+	}
+
+	emitTaskProgress(progress, TaskProgress{
+		Step:    TaskProgressAgentLaunching,
+		Message: fmt.Sprintf("Launching %s...", task.Provider),
+		Task:    cloneTask(task),
+	})
+
+	if err := s.session.StartTaskSession(ctx, task, launch); err != nil {
+		return s.markBroken(ctx, task, fmt.Errorf("start task session: %w", err))
+	}
+
+	task.SessionExists = true
+	task.AgentWindowExists = true
+	task.EditorWindowExists = true
+	task.Status = TaskStatusRunning
+	task.UpdatedAt = time.Now().UTC()
+	if err := s.tasks.UpdateTask(ctx, task); err != nil {
+		return task, err
+	}
+
+	emitTaskProgress(progress, TaskProgress{
+		Step:    TaskProgressTaskCreated,
+		Message: fmt.Sprintf("Created task %s in session %s", task.DisplayName, task.TmuxSession),
+		Task:    cloneTask(task),
+	})
+
+	if options.OpenSession {
+		emitTaskProgress(progress, TaskProgress{
+			Step:    TaskProgressSessionOpening,
+			Message: "Opening tmux session...",
+			Task:    cloneTask(task),
+		})
+		if err := s.session.OpenTaskSession(ctx, task); err != nil {
+			return s.markBroken(ctx, task, fmt.Errorf("open task session: %w", err))
+		}
+	}
+
+	return task, nil
+}
+
+func (s *Service) ListRepoPullRequests(ctx context.Context, repoRoot string) ([]RepoPullRequest, error) {
+	if s.prChecker == nil {
+		return nil, fmt.Errorf("pr listing unavailable")
+	}
+
+	prs, err := s.prChecker.ListRepoPullRequests(ctx, repoRoot)
+	if err != nil {
+		return nil, err
+	}
+
+	existingTasks, err := s.tasks.ListTasks(ctx)
+	if err != nil {
+		return nil, err
+	}
+
+	annotated := make([]RepoPullRequest, 0, len(prs))
+	for _, pr := range prs {
+		inUseByTask := existingTaskForBranch(existingTasks, repoRoot, pr.BranchName) != nil
+		inUseByWorktree, err := s.repo.IsBranchUsedByWorktree(ctx, repoRoot, pr.BranchName)
+		if err != nil {
+			return nil, err
+		}
+		pr.HasExistingTask = inUseByTask || inUseByWorktree
+		annotated = append(annotated, pr)
+	}
+
+	return annotated, nil
+}
+
+func (s *Service) CreateTaskFromPRWithProgress(
+	ctx context.Context,
+	input CreateTaskFromPRInput,
+	options CreateTaskOptions,
+	progress func(TaskProgress),
+) (*Task, error) {
+	repoCtx, err := s.repo.DetectRepo(ctx, input.RepoRoot)
+	if err != nil {
+		return nil, err
+	}
+
+	existingTasks, err := s.tasks.ListTasks(ctx)
+	if err != nil {
+		return nil, err
+	}
+	if existingTaskForBranch(existingTasks, repoCtx.Root, input.PR.BranchName) != nil {
+		return nil, fmt.Errorf("PR already has workspace")
+	}
+	inUseByWorktree, err := s.repo.IsBranchUsedByWorktree(ctx, repoCtx.Root, input.PR.BranchName)
+	if err != nil {
+		return nil, err
+	}
+	if inUseByWorktree {
+		return nil, fmt.Errorf("PR already has workspace")
+	}
+
+	provider := input.Provider
+	if provider == "" {
+		provider = s.cfg.Provider
+	}
+
+	existingSlugs := make(map[string]struct{}, len(existingTasks))
+	for _, task := range existingTasks {
+		existingSlugs[task.Slug] = struct{}{}
+	}
+
+	now := time.Now().UTC()
+	displayName := prDisplayName(input.PR)
+	taskSlug := slug.EnsureUnique(slug.FromDisplayName(displayName), existingSlugs)
+	task := &Task{
+		ID:               fmt.Sprintf("%d", now.UnixNano()),
+		Prompt:           "",
+		DisplayName:      displayName,
+		Slug:             taskSlug,
+		RepoRoot:         repoCtx.Root,
+		RepoName:         repoCtx.Name,
+		BaseBranch:       repoCtx.BaseBranch,
+		BranchName:       input.PR.BranchName,
+		WorktreePath:     filepath.Join(filepath.Dir(repoCtx.Root), repoCtx.Name+"-"+taskSlug),
+		TmuxSession:      repoCtx.Name + "_" + taskSlug,
+		AgentWindowName:  "agent",
+		EditorWindowName: "editor",
+		Provider:         provider,
+		Status:           TaskStatusCreating,
+		CreatedAt:        now,
+		UpdatedAt:        now,
+	}
+
+	if err := s.tasks.CreateTask(ctx, task); err != nil {
+		return nil, err
+	}
+
+	emitTaskProgress(progress, TaskProgress{
+		Step:    TaskProgressWorktreeCreating,
+		Message: "Creating worktree...",
+		Task:    cloneTask(task),
+	})
+	if err := s.repo.CreateTaskWorkspaceFromBranch(ctx, task); err != nil {
+		return s.markBroken(ctx, task, fmt.Errorf("create worktree: %w", err))
+	}
+
+	task.WorktreeExists = true
+	task.BranchExists = true
+	task.UpdatedAt = time.Now().UTC()
+	if err := s.tasks.UpdateTask(ctx, task); err != nil {
+		return task, err
 	}
 
 	emitTaskProgress(progress, TaskProgress{
@@ -923,6 +1093,28 @@ func fallbackDisplayName(prompt string) string {
 	}
 
 	return strings.Join(words, " ")
+}
+
+func prDisplayName(pr RepoPullRequest) string {
+	title := strings.TrimSpace(pr.Title)
+	if title == "" {
+		return fmt.Sprintf("PR #%d", pr.Number)
+	}
+
+	return fmt.Sprintf("PR #%d %s", pr.Number, title)
+}
+
+func existingTaskForBranch(tasks []*Task, repoRoot string, branch string) *Task {
+	for _, task := range tasks {
+		if task == nil {
+			continue
+		}
+		if task.RepoRoot == repoRoot && task.BranchName == branch {
+			return task
+		}
+	}
+
+	return nil
 }
 
 func emitTaskProgress(progress func(TaskProgress), event TaskProgress) {

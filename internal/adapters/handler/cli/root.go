@@ -25,9 +25,16 @@ type TaskService interface {
 		options core.CreateTaskOptions,
 		progress func(core.TaskProgress),
 	) (*core.Task, error)
+	CreateTaskFromPRWithProgress(
+		ctx context.Context,
+		input core.CreateTaskFromPRInput,
+		options core.CreateTaskOptions,
+		progress func(core.TaskProgress),
+	) (*core.Task, error)
 	ListTasks(ctx context.Context) ([]*core.Task, error)
 	ListTaskViews(ctx context.Context) ([]*core.TaskView, error)
 	ListTaskViewsByRepo(ctx context.Context, repoRoot string) ([]*core.TaskView, error)
+	ListRepoPullRequests(ctx context.Context, repoRoot string) ([]core.RepoPullRequest, error)
 	SubscribeTaskHookUpdates(ctx context.Context) (<-chan core.HookSessionSummary, func(), error)
 	OpenTask(ctx context.Context, idOrSlug string) error
 	DeleteTaskResources(ctx context.Context, idOrSlug string) (*core.Task, error)

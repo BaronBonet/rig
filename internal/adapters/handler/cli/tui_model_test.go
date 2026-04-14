@@ -2124,6 +2124,15 @@ func TestPromptInputView_NoShimmerWhenNotBusy(t *testing.T) {
 	require.NotContains(t, view, "Generating name...")
 }
 
+func TestPromptInputView_ShowsPRShortcutHint(t *testing.T) {
+	m := newLoadedTUIModel(t, NewMockTaskService(t), tuiTask("task-one"))
+
+	m.mode = tuiModePromptInput
+
+	view := stripANSI(m.promptInputView())
+	require.Contains(t, view, "Ctrl+P to create a task from a PR")
+}
+
 func TestPromptInputView_ShowsFixedProviderOrder(t *testing.T) {
 	m := newLoadedTUIModelWithProvider(t, NewMockTaskService(t), "claude", tuiTask("task-one"))
 	m.mode = tuiModePromptInput

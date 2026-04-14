@@ -34,6 +34,17 @@ func TestRepositoryLaunchRequest_UsesBinaryPromptAndTaskPrompt(t *testing.T) {
 	}, launch)
 }
 
+func TestRepositoryLaunchRequest_OmitsInitialInputWhenTaskPromptIsEmpty(t *testing.T) {
+	repo := NewRepository(execx.NewMockRunner(t), Config{Binary: "codex"})
+
+	launch, err := repo.LaunchRequest(&core.Task{Prompt: ""})
+	require.NoError(t, err)
+	require.Equal(t, core.LaunchRequest{
+		Command: []string{"codex"},
+		Prompt:  "›",
+	}, launch)
+}
+
 func TestRepositoryRestoreLaunchRequest_UsesResumeWithSessionID(t *testing.T) {
 	repo := NewRepository(execx.NewMockRunner(t), Config{Binary: "codex"})
 

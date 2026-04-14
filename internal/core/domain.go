@@ -72,6 +72,14 @@ type PRStatus struct {
 	Number int
 }
 
+type RepoPullRequest struct {
+	Number          int
+	Title           string
+	BranchName      string
+	State           PRState
+	HasExistingTask bool
+}
+
 type DisplayState struct {
 	Primary  DisplayStatus   `json:"primary"`
 	Activity DisplayActivity `json:"activity"`

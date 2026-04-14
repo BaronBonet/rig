@@ -66,6 +66,46 @@ func TestRepositoryCreateTaskWorkspace_UsesTaskFields(t *testing.T) {
 	require.NoError(t, err)
 }
 
+func TestRepositoryCreateTaskWorkspaceFromBranch_UsesExistingBranch(t *testing.T) {
+	runner := execx.NewMockRunner(t)
+	runner.EXPECT().
+		Run(
+			mock.Anything,
+			"/tmp/repo",
+			"git",
+			"worktree",
+			"add",
+			"/tmp/repo-auth-rewrite",
+			"feat/auth-rewrite",
+		).
+		Return(execx.Result{}, nil).
+		Once()
+	repo := NewRepository(runner)
+
+	err := repo.CreateTaskWorkspaceFromBranch(context.Background(), &core.Task{
+		RepoRoot:     "/tmp/repo",
+		BranchName:   "feat/auth-rewrite",
+		WorktreePath: "/tmp/repo-auth-rewrite",
+	})
+	require.NoError(t, err)
+}
+
+func TestRepositoryIsBranchUsedByWorktree_ReturnsTrueWhenBranchIsCheckedOutElsewhere(t *testing.T) {
+	runner := execx.NewMockRunner(t)
+	runner.EXPECT().
+		Run(mock.Anything, "/tmp/repo", "git", "worktree", "list", "--porcelain").
+		Return(execx.Result{
+			Stdout: "worktree /tmp/repo\nHEAD abcdef\nbranch refs/heads/main\n\n" +
+				"worktree /tmp/repo-auth\nHEAD 123456\nbranch refs/heads/feat/auth\n",
+		}, nil).
+		Once()
+	repo := NewRepository(runner)
+
+	used, err := repo.IsBranchUsedByWorktree(context.Background(), "/tmp/repo", "feat/auth")
+	require.NoError(t, err)
+	require.True(t, used)
+}
+
 func TestRepositoryInspectTaskWorkspace_ReturnsWorktreeAndBranchPresence(t *testing.T) {
 	worktreePath := filepath.Join(t.TempDir(), "repo-billing-retry-flow")
 	require.NoError(t, os.Mkdir(worktreePath, 0o755))
