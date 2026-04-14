@@ -124,15 +124,7 @@ func validateSource(path preparedSeedPath) error {
 	}
 
 	if info.IsDir() {
-		return filepath.WalkDir(path.Source, func(walkPath string, d fs.DirEntry, walkErr error) error {
-			if walkErr != nil {
-				return walkErr
-			}
-			if d.Type()&os.ModeSymlink != 0 {
-				return fmt.Errorf("source %q contains a symlink at %q", path.Source, walkPath)
-			}
-			return nil
-		})
+		return validateDirectoryContents(path.Root, path.Source, path.Source, make(map[string]struct{}))
 	}
 
 	return nil
@@ -166,7 +158,7 @@ func seedPath(worktreePath string, path preparedSeedPath) error {
 	}
 
 	if info.IsDir() {
-		return copyDirectory(path.Source, dest)
+		return copyDirectory(path.Root, path.Source, dest)
 	}
 
 	return copyFile(path.Source, dest, info)
@@ -214,6 +206,14 @@ func ensurePathWithinRoot(root, path string) error {
 	return nil
 }
 
+func ensureResolvedPathWithinRoot(root, path string) error {
+	resolvedRoot, err := filepath.EvalSymlinks(root)
+	if err != nil {
+		return err
+	}
+	return ensurePathWithinRoot(resolvedRoot, path)
+}
+
 func ensurePathComponentsSafe(root, path string, allowMissingLeaf bool, label string) error {
 	rel, err := filepath.Rel(root, path)
 	if err != nil {
@@ -248,12 +248,88 @@ func ensurePathComponentsSafe(root, path string, allowMissingLeaf bool, label st
 	return nil
 }
 
-func copyDirectory(source, dest string) error {
-	sourceInfo, err := os.Lstat(source)
+func validateDirectoryContents(root, sourceRoot, dir string, seen map[string]struct{}) error {
+	resolvedDir, err := filepath.EvalSymlinks(dir)
 	if err != nil {
 		return err
 	}
+	if err := ensureResolvedPathWithinRoot(root, resolvedDir); err != nil {
+		return fmt.Errorf("source %q contains a symlink at %q resolving outside repo root", sourceRoot, dir)
+	}
+	if _, ok := seen[resolvedDir]; ok {
+		return fmt.Errorf("source %q contains a symlink cycle at %q", sourceRoot, dir)
+	}
+	seen[resolvedDir] = struct{}{}
+	defer delete(seen, resolvedDir)
 
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return err
+	}
+	for _, entry := range entries {
+		path := filepath.Join(dir, entry.Name())
+		info, err := os.Lstat(path)
+		if err != nil {
+			return err
+		}
+		if info.Mode()&os.ModeSymlink != 0 {
+			resolved, resolvedInfo, err := resolveNestedSymlink(root, sourceRoot, path)
+			if err != nil {
+				return err
+			}
+			if resolvedInfo.IsDir() {
+				if err := validateDirectoryContents(root, sourceRoot, resolved, seen); err != nil {
+					return err
+				}
+			}
+			continue
+		}
+		if info.IsDir() {
+			if err := validateDirectoryContents(root, sourceRoot, path, seen); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
+
+func resolveNestedSymlink(root, sourceRoot, linkPath string) (string, fs.FileInfo, error) {
+	resolved, err := filepath.EvalSymlinks(linkPath)
+	if err != nil {
+		return "", nil, fmt.Errorf("source %q contains a symlink at %q: %w", sourceRoot, linkPath, err)
+	}
+	if err := ensureResolvedPathWithinRoot(root, resolved); err != nil {
+		return "", nil, fmt.Errorf("source %q contains a symlink at %q resolving outside repo root", sourceRoot, linkPath)
+	}
+	info, err := os.Stat(linkPath)
+	if err != nil {
+		return "", nil, fmt.Errorf("source %q contains a symlink at %q: %w", sourceRoot, linkPath, err)
+	}
+	return resolved, info, nil
+}
+
+func copyDirectory(root, source, dest string) error {
+	return copyDirectoryContents(root, source, source, dest, make(map[string]struct{}))
+}
+
+func copyDirectoryContents(root, sourceRoot, source, dest string, seen map[string]struct{}) error {
+	resolvedSource, err := filepath.EvalSymlinks(source)
+	if err != nil {
+		return err
+	}
+	if err := ensureResolvedPathWithinRoot(root, resolvedSource); err != nil {
+		return fmt.Errorf("source %q contains a symlink at %q resolving outside repo root", sourceRoot, source)
+	}
+	if _, ok := seen[resolvedSource]; ok {
+		return fmt.Errorf("source %q contains a symlink cycle at %q", sourceRoot, source)
+	}
+	seen[resolvedSource] = struct{}{}
+	defer delete(seen, resolvedSource)
+
+	sourceInfo, err := os.Stat(source)
+	if err != nil {
+		return err
+	}
 	if err := ensureMissing(dest); err != nil {
 		return err
 	}
@@ -267,40 +343,44 @@ func copyDirectory(source, dest string) error {
 		return err
 	}
 
-	return filepath.WalkDir(source, func(path string, d fs.DirEntry, walkErr error) error {
-		if walkErr != nil {
-			return walkErr
-		}
-		if path == source {
-			return nil
-		}
-		if d.Type()&os.ModeSymlink != 0 {
-			return fmt.Errorf("source %q contains a symlink at %q", source, path)
-		}
-
-		rel, err := filepath.Rel(source, path)
+	entries, err := os.ReadDir(source)
+	if err != nil {
+		return err
+	}
+	for _, entry := range entries {
+		path := filepath.Join(source, entry.Name())
+		target := filepath.Join(dest, entry.Name())
+		info, err := os.Lstat(path)
 		if err != nil {
 			return err
 		}
-		target := filepath.Join(dest, rel)
-
-		info, err := d.Info()
-		if err != nil {
-			return err
+		if info.Mode()&os.ModeSymlink != 0 {
+			resolved, resolvedInfo, err := resolveNestedSymlink(root, sourceRoot, path)
+			if err != nil {
+				return err
+			}
+			if resolvedInfo.IsDir() {
+				if err := copyDirectoryContents(root, sourceRoot, resolved, target, seen); err != nil {
+					return err
+				}
+				continue
+			}
+			if err := copyFile(resolved, target, resolvedInfo); err != nil {
+				return err
+			}
+			continue
 		}
-
 		if info.IsDir() {
-			if err := ensureMissing(target); err != nil {
+			if err := copyDirectoryContents(root, sourceRoot, path, target, seen); err != nil {
 				return err
 			}
-			if err := os.Mkdir(target, info.Mode().Perm()); err != nil {
-				return err
-			}
-			return os.Chmod(target, info.Mode().Perm())
+			continue
 		}
-
-		return copyFile(path, target, info)
-	})
+		if err := copyFile(path, target, info); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func copyFile(source, dest string, info fs.FileInfo) error {

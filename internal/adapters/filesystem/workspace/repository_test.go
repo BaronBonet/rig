@@ -191,7 +191,7 @@ func TestRepositorySeedWorkspaceRejectsSymlinkedDestinationParent(t *testing.T) 
 	require.True(t, os.IsNotExist(statErr))
 }
 
-func TestRepositorySeedWorkspaceRejectsNestedDirectorySymlinkWithoutMutatingDestination(t *testing.T) {
+func TestRepositorySeedWorkspaceFollowsNestedDirectorySymlinkWithinRepo(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip("symlink behavior depends on local privileges on Windows")
 	}
@@ -209,8 +209,42 @@ func TestRepositorySeedWorkspaceRejectsNestedDirectorySymlinkWithoutMutatingDest
 		WorktreePath:  worktreePath,
 		RelativePaths: []string{"local/"},
 	}, nil)
+	require.NoError(t, err)
+
+	body, readErr := os.ReadFile(filepath.Join(worktreePath, "local", "nested", "link.json"))
+	require.NoError(t, readErr)
+	require.JSONEq(t, `{"ok":true}`, string(body))
+
+	info, statErr := os.Lstat(filepath.Join(worktreePath, "local", "nested", "link.json"))
+	require.NoError(t, statErr)
+	require.Zero(t, info.Mode()&os.ModeSymlink)
+}
+
+func TestRepositorySeedWorkspaceRejectsNestedDirectorySymlinkEscapingRepo(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("symlink behavior depends on local privileges on Windows")
+	}
+
+	repoRoot := t.TempDir()
+	worktreePath := t.TempDir()
+	outsideRoot := t.TempDir()
+	require.NoError(t, os.MkdirAll(filepath.Join(repoRoot, "local", "nested"), 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(outsideRoot, "secret.json"), []byte(`{"secret":true}`), 0o600))
+	require.NoError(
+		t,
+		os.Symlink(filepath.Join(outsideRoot, "secret.json"), filepath.Join(repoRoot, "local", "nested", "link.json")),
+	)
+
+	repo := NewSeeder()
+
+	err := repo.SeedWorkspace(context.Background(), core.SeedWorkspaceInput{
+		RepoRoot:      repoRoot,
+		WorktreePath:  worktreePath,
+		RelativePaths: []string{"local/"},
+	}, nil)
 	require.Error(t, err)
-	require.ErrorContains(t, err, "symlink")
+	require.ErrorContains(t, err, "outside repo root")
+
 	_, statErr := os.Stat(filepath.Join(worktreePath, "local"))
 	require.Error(t, statErr)
 	require.True(t, os.IsNotExist(statErr))
