@@ -1,9 +1,9 @@
 package main
 
 import (
+	"context"
 	"fmt"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"runtime"
 	"strconv"
@@ -129,12 +129,11 @@ func detectAgentSourceRoot() string {
 }
 
 func detectRepoRoot(cwd string) string {
-	cmd := exec.Command("git", "-C", cwd, "rev-parse", "--show-toplevel")
-	out, err := cmd.Output()
+	repo, err := gitclient.NewRepository(execx.ExecRunner{}).DetectRepo(context.Background(), cwd)
 	if err != nil {
 		return ""
 	}
-	return strings.TrimSpace(string(out))
+	return strings.TrimSpace(repo.Root)
 }
 
 func binaryFingerprint(path string) (string, error) {

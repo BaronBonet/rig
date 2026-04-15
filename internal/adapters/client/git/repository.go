@@ -31,8 +31,11 @@ func (r *Repository) DetectRepo(ctx context.Context, cwd string) (core.RepoConte
 	}
 
 	root := strings.TrimSpace(rootResult.Stdout)
+	if primaryRoot, ok := primaryWorktreeRoot(root, loadWorktreeList(ctx, r, cwd)); ok {
+		root = primaryRoot
+	}
 
-	branchResult, err := r.runner.Run(ctx, cwd, "git", "branch", "--show-current")
+	branchResult, err := r.runner.Run(ctx, root, "git", "branch", "--show-current")
 	if err != nil {
 		return core.RepoContext{}, err
 	}
@@ -42,6 +45,33 @@ func (r *Repository) DetectRepo(ctx context.Context, cwd string) (core.RepoConte
 		Name:       filepath.Base(root),
 		BaseBranch: strings.TrimSpace(branchResult.Stdout),
 	}, nil
+}
+
+func loadWorktreeList(ctx context.Context, r *Repository, cwd string) string {
+	result, err := r.runner.Run(ctx, cwd, "git", "worktree", "list", "--porcelain")
+	if err != nil {
+		return ""
+	}
+
+	return result.Stdout
+}
+
+func primaryWorktreeRoot(currentRoot string, worktreeList string) (string, bool) {
+	for _, line := range strings.Split(worktreeList, "\n") {
+		line = strings.TrimSpace(line)
+		if !strings.HasPrefix(line, "worktree ") {
+			continue
+		}
+
+		root := strings.TrimSpace(strings.TrimPrefix(line, "worktree "))
+		if root == "" || root == currentRoot {
+			return "", false
+		}
+
+		return root, true
+	}
+
+	return "", false
 }
 
 func (r *Repository) BranchExists(ctx context.Context, repoRoot, branch string) (bool, error) {

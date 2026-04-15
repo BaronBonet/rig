@@ -20,12 +20,44 @@ func TestRepositoryDetectRepo_ParsesTopLevelAndBranch(t *testing.T) {
 		Return(execx.Result{Stdout: "/tmp/repo\n"}, nil).
 		Once()
 	runner.EXPECT().
+		Run(mock.Anything, "/tmp/repo", "git", "worktree", "list", "--porcelain").
+		Return(execx.Result{
+			Stdout: "worktree /tmp/repo\nHEAD abcdef\nbranch refs/heads/main\n",
+		}, nil).
+		Once()
+	runner.EXPECT().
 		Run(mock.Anything, "/tmp/repo", "git", "branch", "--show-current").
 		Return(execx.Result{Stdout: "main\n"}, nil).
 		Once()
 	repo := NewRepository(runner)
 
 	repoCtx, err := repo.DetectRepo(context.Background(), "/tmp/repo")
+	require.NoError(t, err)
+	require.Equal(t, "/tmp/repo", repoCtx.Root)
+	require.Equal(t, "main", repoCtx.BaseBranch)
+	require.Equal(t, "repo", repoCtx.Name)
+}
+
+func TestRepositoryDetectRepo_UsesPrimaryWorktreeWhenCalledFromLinkedWorktree(t *testing.T) {
+	runner := execx.NewMockRunner(t)
+	runner.EXPECT().
+		Run(mock.Anything, "/tmp/repo-auth", "git", "rev-parse", "--show-toplevel").
+		Return(execx.Result{Stdout: "/tmp/repo-auth\n"}, nil).
+		Once()
+	runner.EXPECT().
+		Run(mock.Anything, "/tmp/repo-auth", "git", "worktree", "list", "--porcelain").
+		Return(execx.Result{
+			Stdout: "worktree /tmp/repo\nHEAD abcdef\nbranch refs/heads/main\n\n" +
+				"worktree /tmp/repo-auth\nHEAD 123456\nbranch refs/heads/feat/auth\n",
+		}, nil).
+		Once()
+	runner.EXPECT().
+		Run(mock.Anything, "/tmp/repo", "git", "branch", "--show-current").
+		Return(execx.Result{Stdout: "main\n"}, nil).
+		Once()
+	repo := NewRepository(runner)
+
+	repoCtx, err := repo.DetectRepo(context.Background(), "/tmp/repo-auth")
 	require.NoError(t, err)
 	require.Equal(t, "/tmp/repo", repoCtx.Root)
 	require.Equal(t, "main", repoCtx.BaseBranch)
