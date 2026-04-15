@@ -2,6 +2,7 @@ package tmux
 
 import (
 	"bufio"
+	"context"
 	"fmt"
 	"io"
 	"os/exec"
@@ -11,7 +12,7 @@ import (
 )
 
 type controlPipe interface {
-	SendCommand(command string) (string, error)
+	SendCommand(ctx context.Context, command string) (string, error)
 	LastOutputAt() time.Time
 	Close() error
 }
@@ -83,7 +84,11 @@ type controlResponse struct {
 	err    error
 }
 
-func (p *execControlPipe) SendCommand(command string) (string, error) {
+func (p *execControlPipe) SendCommand(ctx context.Context, command string) (string, error) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+
 	p.sendMu.Lock()
 	defer p.sendMu.Unlock()
 
@@ -100,6 +105,9 @@ func (p *execControlPipe) SendCommand(command string) (string, error) {
 	select {
 	case response := <-responseCh:
 		return response.output, response.err
+	case <-ctx.Done():
+		p.clearPendingResponse(responseCh)
+		return "", ctx.Err()
 	case <-time.After(p.timeout):
 		p.clearPendingResponse(responseCh)
 		return "", fmt.Errorf("tmux control command timed out: %s", command)

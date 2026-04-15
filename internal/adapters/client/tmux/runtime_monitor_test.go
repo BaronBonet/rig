@@ -302,11 +302,11 @@ func newMockControlPipe(
 	t.Helper()
 
 	pipe := NewMockcontrolPipe(t)
-	pipe.On("SendCommand", mock.Anything).Return(
-		func(command string) string {
+	pipe.On("SendCommand", mock.Anything, mock.Anything).Return(
+		func(_ context.Context, command string) string {
 			return output[command]
 		},
-		func(command string) error {
+		func(_ context.Context, command string) error {
 			if errors == nil {
 				return nil
 			}

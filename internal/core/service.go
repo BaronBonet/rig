@@ -19,6 +19,8 @@ type DoctorResult struct {
 	Failures []string
 }
 
+const runtimeSnapshotTimeout = 250 * time.Millisecond
+
 type NewTaskInput struct {
 	Cwd                  string
 	Prompt               string
@@ -1021,6 +1023,9 @@ func (s *Service) enrichRuntimeState(ctx context.Context, task *Task) error {
 	if task == nil {
 		return nil
 	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
 
 	task.RuntimeState = RuntimeStateNone
 	task.RuntimeStateUpdatedAt = time.Time{}
@@ -1037,7 +1042,10 @@ func (s *Service) enrichRuntimeState(ctx context.Context, task *Task) error {
 		return nil
 	}
 
-	snapshot, err := s.session.SnapshotTaskSession(ctx, task)
+	snapshotCtx, cancel := context.WithTimeout(ctx, runtimeSnapshotTimeout)
+	defer cancel()
+
+	snapshot, err := s.session.SnapshotTaskSession(snapshotCtx, task)
 	if err != nil {
 		// Runtime snapshots are best-effort enrichment; task listing should still work without them.
 		return nil

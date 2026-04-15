@@ -106,6 +106,45 @@ func TestServiceListTasks_SnapshotErrorIsBestEffort(t *testing.T) {
 	require.Equal(t, RuntimeStateNone, tasks[0].RuntimeState)
 }
 
+func TestServiceListTasks_RuntimeSnapshotTimeoutIsBestEffort(t *testing.T) {
+	worktree := t.TempDir()
+	svc := newTestService(t)
+	svc.taskRepo.listTasks = []*Task{{
+		ID:               "task-1",
+		Slug:             "billing-retry-flow",
+		RepoRoot:         "/tmp/repo",
+		BranchName:       "feat/billing-retry-flow",
+		WorktreePath:     worktree,
+		TmuxSession:      "repo-billing-retry-flow",
+		AgentWindowName:  "agent",
+		EditorWindowName: "editor",
+		Provider:         "codex",
+		Status:           TaskStatusRunning,
+	}}
+	svc.repoClient.repoResources = RepoResources{WorktreeExists: true, BranchExists: true}
+	svc.sessionClient.sessionResources = SessionResources{
+		SessionExists:      true,
+		AgentWindowExists:  true,
+		EditorWindowExists: true,
+	}
+	svc.sessionClient.snapshotHook = func(ctx context.Context, _ *Task) (RuntimeSnapshot, error) {
+		select {
+		case <-ctx.Done():
+			return RuntimeSnapshot{}, ctx.Err()
+		case <-time.After(500 * time.Millisecond):
+			return RuntimeSnapshot{ForegroundCommand: "codex"}, nil
+		}
+	}
+
+	start := time.Now()
+	tasks, err := svc.service.ListTasks(t.Context())
+
+	require.NoError(t, err)
+	require.Len(t, tasks, 1)
+	require.Equal(t, RuntimeStateNone, tasks[0].RuntimeState)
+	require.Less(t, time.Since(start), 400*time.Millisecond)
+}
+
 func TestServiceListTasks_RebootstrapsExistingCodexWorkspace(t *testing.T) {
 	worktree := t.TempDir()
 	svc := newTestService(t)

@@ -77,6 +77,7 @@ type sessionClientState struct {
 	sessionResources SessionResources
 	snapshot         RuntimeSnapshot
 	snapshotErr      error
+	snapshotHook     func(context.Context, *Task) (RuntimeSnapshot, error)
 }
 
 type providerClientState struct {
@@ -330,7 +331,10 @@ func wireSessionClientMock(h *testServiceHarness) {
 			return h.sessionClient.sessionResources, h.sessionClient.inspectErr
 		}).Maybe()
 	h.sessionClientMock.EXPECT().SnapshotTaskSession(mock.Anything, mock.Anything).
-		RunAndReturn(func(context.Context, *Task) (RuntimeSnapshot, error) {
+		RunAndReturn(func(ctx context.Context, task *Task) (RuntimeSnapshot, error) {
+			if h.sessionClient.snapshotHook != nil {
+				return h.sessionClient.snapshotHook(ctx, task)
+			}
 			return h.sessionClient.snapshot, h.sessionClient.snapshotErr
 		}).Maybe()
 }

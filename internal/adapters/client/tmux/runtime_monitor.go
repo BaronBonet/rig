@@ -52,7 +52,7 @@ func (m *RuntimeMonitor) Snapshot(ctx context.Context, task *core.Task) (core.Ru
 		return core.RuntimeSnapshot{}, err
 	}
 
-	paneID, command, hadAgentBinding, err := m.resolvePaneBinding(task, pipe)
+	paneID, command, hadAgentBinding, err := m.resolvePaneBinding(ctx, task, pipe)
 	if err != nil {
 		m.evictSession(task.TmuxSession)
 		return core.RuntimeSnapshot{}, err
@@ -61,7 +61,7 @@ func (m *RuntimeMonitor) Snapshot(ctx context.Context, task *core.Task) (core.Ru
 		return core.RuntimeSnapshot{}, err
 	}
 
-	content, err := pipe.SendCommand(fmt.Sprintf("capture-pane -t %s -p -e", paneID))
+	content, err := pipe.SendCommand(ctx, fmt.Sprintf("capture-pane -t %s -p -e", paneID))
 	if err != nil {
 		m.evictSession(task.TmuxSession)
 		return core.RuntimeSnapshot{}, err
@@ -125,7 +125,11 @@ func (m *RuntimeMonitor) pipeForSession(session string) (controlPipe, error) {
 	return pipe, nil
 }
 
-func (m *RuntimeMonitor) resolvePaneBinding(task *core.Task, pipe controlPipe) (string, string, bool, error) {
+func (m *RuntimeMonitor) resolvePaneBinding(
+	ctx context.Context,
+	task *core.Task,
+	pipe controlPipe,
+) (string, string, bool, error) {
 	sessionKey := task.TmuxSession
 	windowName := windowOrDefault(task.AgentWindowName, "agent")
 	listCommand := paneListCommand(task.TmuxSession, windowName)
@@ -134,7 +138,7 @@ func (m *RuntimeMonitor) resolvePaneBinding(task *core.Task, pipe controlPipe) (
 	bound := m.boundPanes[sessionKey]
 	m.mu.Unlock()
 	if bound != nil && strings.TrimSpace(bound.paneID) != "" {
-		output, err := pipe.SendCommand(listCommand)
+		output, err := pipe.SendCommand(ctx, listCommand)
 		if err != nil {
 			return "", "", false, err
 		}
@@ -158,7 +162,7 @@ func (m *RuntimeMonitor) resolvePaneBinding(task *core.Task, pipe controlPipe) (
 		m.mu.Unlock()
 	}
 
-	output, err := pipe.SendCommand(listCommand)
+	output, err := pipe.SendCommand(ctx, listCommand)
 	if err != nil {
 		return "", "", false, err
 	}

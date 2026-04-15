@@ -2,6 +2,7 @@ package tmux
 
 import (
 	"bufio"
+	"context"
 	"io"
 	"strings"
 	"sync"
@@ -28,7 +29,7 @@ func TestExecControlPipeSendCommand_ReturnsPromptErrorOnErrorTerminator(t *testi
 
 	errCh := make(chan error, 1)
 	go func() {
-		_, err := pipe.SendCommand("list-panes -t =session:agent -F #{pane_id}")
+		_, err := pipe.SendCommand(context.Background(), "list-panes -t =session:agent -F #{pane_id}")
 		errCh <- err
 	}()
 
@@ -68,7 +69,10 @@ func TestExecControlPipeSendCommand_WaitsForInitialAttachHandshake(t *testing.T)
 	resultCh := make(chan string, 1)
 	errCh := make(chan error, 1)
 	go func() {
-		result, err := pipe.SendCommand(`list-panes -t =session:agent -F "#{pane_id}\t#{pane_current_command}"`)
+		result, err := pipe.SendCommand(
+			context.Background(),
+			`list-panes -t =session:agent -F "#{pane_id}\t#{pane_current_command}"`,
+		)
 		if err != nil {
 			errCh <- err
 			return
@@ -144,7 +148,7 @@ func TestExecControlPipeSendCommand_SerializesOverlappingCommands(t *testing.T) 
 	}()
 
 	go func() {
-		result, err := pipe.SendCommand("first")
+		result, err := pipe.SendCommand(context.Background(), "first")
 		if err != nil {
 			errCh <- err
 			return
@@ -152,7 +156,7 @@ func TestExecControlPipeSendCommand_SerializesOverlappingCommands(t *testing.T) 
 		resultCh <- result
 	}()
 	go func() {
-		result, err := pipe.SendCommand("second")
+		result, err := pipe.SendCommand(context.Background(), "second")
 		if err != nil {
 			errCh <- err
 			return
@@ -176,4 +180,35 @@ func TestExecControlPipeSendCommand_SerializesOverlappingCommands(t *testing.T) 
 	require.ElementsMatch(t, []string{"first", "second"}, commands)
 	mu.Unlock()
 	require.ElementsMatch(t, []string{"response-first", "response-second"}, results)
+}
+
+func TestExecControlPipeSendCommand_RespectsContextCancellation(t *testing.T) {
+	stdinR, stdinW := io.Pipe()
+	stdoutR, stdoutW := io.Pipe()
+	defer stdinR.Close()
+	defer stdinW.Close()
+	defer stdoutR.Close()
+	defer stdoutW.Close()
+
+	pipe := &execControlPipe{
+		stdin:   stdinW,
+		stdout:  stdoutR,
+		stderr:  io.NopCloser(strings.NewReader("")),
+		timeout: 5 * time.Second,
+	}
+	go pipe.scan()
+
+	go func() {
+		reader := bufio.NewReader(stdinR)
+		_, _ = reader.ReadString('\n')
+	}()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
+	defer cancel()
+
+	start := time.Now()
+	_, err := pipe.SendCommand(ctx, "list-panes -t =session:agent -F #{pane_id}")
+
+	require.ErrorIs(t, err, context.DeadlineExceeded)
+	require.Less(t, time.Since(start), time.Second)
 }
