@@ -130,6 +130,64 @@ func TestDeriveHookSessionSummary_UserPromptSubmitSetsLastPromptSubmittedAt(t *t
 	require.Equal(t, ts, summary.LastPromptSubmittedAt)
 }
 
+func TestDeriveObserverSummary_CodexPromptedOverridesStaleDisconnectedState(t *testing.T) {
+	ts := time.Date(2026, 4, 15, 12, 30, 0, 0, time.UTC)
+
+	summary := deriveObserverSummary(&core.ObserverSummary{
+		TaskID:                "task-1",
+		DisplayStatus:         core.DisplayStatusDisconnected,
+		DisplayActivity:       core.DisplayActivityNone,
+		ProcessAlive:          false,
+		LastRuntimeObservedAt: ts.Add(-2 * time.Minute),
+	}, &core.HookSessionSummary{
+		TaskID:         "task-1",
+		Model:          "gpt-5.4",
+		RuntimePhase:   core.HookRuntimePhasePrompted,
+		LastEventName:  "UserPromptSubmit",
+		LastActivityAt: ts,
+	})
+
+	require.Equal(t, "task-1", summary.TaskID)
+	require.Equal(t, core.DisplayStatusWorking, summary.DisplayStatus)
+	require.Equal(t, core.DisplayActivityNone, summary.DisplayActivity)
+	require.True(t, summary.ProcessAlive)
+	require.Equal(t, ts, summary.LastRuntimeObservedAt)
+}
+
+func TestDeriveObserverSummary_CodexRunningCommandSetsCommandActivity(t *testing.T) {
+	ts := time.Date(2026, 4, 15, 12, 31, 0, 0, time.UTC)
+
+	summary := deriveObserverSummary(nil, &core.HookSessionSummary{
+		TaskID:         "task-1",
+		Model:          "gpt-5.4",
+		RuntimePhase:   core.HookRuntimePhaseRunningCommand,
+		LastEventName:  "PreToolUse",
+		LastActivityAt: ts,
+	})
+
+	require.Equal(t, core.DisplayStatusWorking, summary.DisplayStatus)
+	require.Equal(t, core.DisplayActivityCommand, summary.DisplayActivity)
+	require.True(t, summary.ProcessAlive)
+	require.Equal(t, ts, summary.LastRuntimeObservedAt)
+}
+
+func TestDeriveObserverSummary_StopYieldsNeedsInput(t *testing.T) {
+	ts := time.Date(2026, 4, 15, 12, 32, 0, 0, time.UTC)
+
+	summary := deriveObserverSummary(nil, &core.HookSessionSummary{
+		TaskID:         "task-1",
+		Model:          "gpt-5.4",
+		RuntimePhase:   core.HookRuntimePhaseIdle,
+		LastEventName:  "Stop",
+		LastActivityAt: ts,
+	})
+
+	require.Equal(t, core.DisplayStatusNeedsInput, summary.DisplayStatus)
+	require.Equal(t, core.DisplayActivityNone, summary.DisplayActivity)
+	require.True(t, summary.ProcessAlive)
+	require.Equal(t, ts, summary.LastRuntimeObservedAt)
+}
+
 func TestTrimPreview_NormalizesWhitespaceAndTruncates(t *testing.T) {
 	long := "  line one\n\tline two  " + repeatString("x", hookPreviewMaxLen)
 
