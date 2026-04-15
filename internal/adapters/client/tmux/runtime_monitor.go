@@ -143,18 +143,29 @@ func (m *RuntimeMonitor) resolvePaneBinding(
 			return "", "", false, err
 		}
 		if paneID, command, ok := findPane(output, bound.paneID); ok {
-			hadAgentBinding := false
 			if isAgentCommand(command) {
 				m.mu.Lock()
 				bound.hadAgent = true
-				hadAgentBinding = true
 				m.mu.Unlock()
-			} else {
-				m.mu.Lock()
-				hadAgentBinding = bound.hadAgent
-				m.mu.Unlock()
+				return paneID, command, true, nil
 			}
-			return paneID, command, hadAgentBinding, nil
+
+			panes, agentPanes := parsePanes(output)
+			if len(agentPanes) == 1 {
+				m.mu.Lock()
+				bound.paneID = agentPanes[0].id
+				bound.hadAgent = true
+				m.mu.Unlock()
+				return agentPanes[0].id, agentPanes[0].command, true, nil
+			}
+
+			hadAgentBinding := false
+			m.mu.Lock()
+			hadAgentBinding = bound.hadAgent
+			m.mu.Unlock()
+			if len(panes) > 0 {
+				return paneID, command, hadAgentBinding, nil
+			}
 		}
 
 		m.mu.Lock()

@@ -137,8 +137,12 @@ func (w *TMuxWatcher) refreshTask(ctx context.Context, task *core.Task) error {
 		return nil
 	}
 
+	hookSummary := w.lookupHookSessionSummary(ctx, task.ID)
 	snapshot, err := w.monitor.Snapshot(ctx, task)
 	if err != nil {
+		if summary := w.summaryFromHookOnSnapshotFailure(task, hookSummary); summary != nil {
+			return w.persistSummary(ctx, summary, task.Provider)
+		}
 		return w.persistSummary(ctx, &core.ObserverSummary{
 			TaskID:                task.ID,
 			DisplayStatus:         core.DisplayStatusDisconnected,
@@ -148,7 +152,6 @@ func (w *TMuxWatcher) refreshTask(ctx context.Context, task *core.Task) error {
 		}, task.Provider)
 	}
 
-	hookSummary := w.lookupHookSessionSummary(ctx, task.ID)
 	if observedProvider := w.resolveObservedProvider(snapshot, hookSummary); observedProvider != "" &&
 		observedProvider != strings.TrimSpace(task.Provider) {
 		if err := w.persistTaskProvider(ctx, task, observedProvider); err != nil {
@@ -239,9 +242,25 @@ func (w *TMuxWatcher) overrideWithHookPhase(
 		return rs
 	}
 
-	// If tmux says the process isn't running at all, trust tmux —
-	// the agent has exited regardless of what hooks last reported.
-	if rs == core.RuntimeStateNone || rs == core.RuntimeStateFinished {
+	// A provider-emitted Stop means the session is ready for the next prompt.
+	// For Codex, keep honoring that even if the pane has returned to a shell or
+	// the hook is older than the general freshness window.
+	if provider == "codex" && hs.RuntimePhase == core.HookRuntimePhaseIdle && hs.LastEventName == "Stop" {
+		return core.RuntimeStateNeedsInput
+	}
+
+	// If tmux can't see a provider process at all, trust tmux for
+	// non-Codex providers. Codex can transiently fail to surface a
+	// detectable process between turns even while fresh hooks still
+	// prove the session is live.
+	if rs == core.RuntimeStateNone && provider != "codex" {
+		return rs
+	}
+
+	// For non-Codex providers, a finished snapshot remains authoritative.
+	// Codex can briefly return the pane to a shell while fresh hooks still
+	// prove the turn is active, so allow fresh Codex hooks to override below.
+	if rs == core.RuntimeStateFinished && provider != "codex" {
 		return rs
 	}
 
@@ -263,7 +282,7 @@ func (w *TMuxWatcher) overrideWithHookPhase(
 		case core.HookRuntimePhasePrompted, core.HookRuntimePhaseRunningCommand:
 			return core.RuntimeStateRunning
 		case core.HookRuntimePhaseIdle:
-			if hs.LastEventName == "Stop" || rs == core.RuntimeStateNeedsInput {
+			if rs == core.RuntimeStateNeedsInput {
 				return rs
 			}
 			return core.RuntimeStateRunning
@@ -286,6 +305,67 @@ func (w *TMuxWatcher) overrideWithHookPhase(
 	}
 
 	return rs
+}
+
+func (w *TMuxWatcher) summaryFromHookOnSnapshotFailure(
+	task *core.Task,
+	hs *core.HookSessionSummary,
+) *core.ObserverSummary {
+	if task == nil || hs == nil {
+		return nil
+	}
+
+	display, alive := w.displayStateFromHookWithoutSnapshot(task.Provider, hs)
+	if display.Primary == "" {
+		return nil
+	}
+
+	return &core.ObserverSummary{
+		TaskID:                task.ID,
+		DisplayStatus:         display.Primary,
+		DisplayActivity:       display.Activity,
+		ProcessAlive:          alive,
+		LastRuntimeObservedAt: w.now().UTC(),
+	}
+}
+
+func (w *TMuxWatcher) displayStateFromHookWithoutSnapshot(
+	provider string,
+	hs *core.HookSessionSummary,
+) (core.DisplayState, bool) {
+	if hs == nil {
+		return core.DisplayState{}, false
+	}
+
+	if provider == "codex" && hs.RuntimePhase == core.HookRuntimePhaseIdle && hs.LastEventName == "Stop" {
+		return core.DisplayState{Primary: core.DisplayStatusNeedsInput}, true
+	}
+
+	if hs.LastActivityAt.IsZero() {
+		return core.DisplayState{}, false
+	}
+
+	if w.now().UTC().Sub(hs.LastActivityAt) > hookStaleThreshold {
+		return core.DisplayState{}, false
+	}
+
+	switch hs.RuntimePhase {
+	case core.HookRuntimePhaseWaitingPermission:
+		return core.DisplayState{Primary: core.DisplayStatusNeedsInput}, true
+	case core.HookRuntimePhasePrompted:
+		return core.DisplayState{Primary: core.DisplayStatusWorking}, true
+	case core.HookRuntimePhaseRunningCommand:
+		return core.DisplayState{Primary: core.DisplayStatusWorking, Activity: core.DisplayActivityCommand}, true
+	case core.HookRuntimePhaseIdle:
+		if hs.LastEventName == "Stop" {
+			return core.DisplayState{Primary: core.DisplayStatusNeedsInput}, true
+		}
+		if provider == "codex" || provider == "claude" {
+			return core.DisplayState{Primary: core.DisplayStatusWorking}, true
+		}
+	}
+
+	return core.DisplayState{}, false
 }
 
 func (w *TMuxWatcher) resolveObservedProvider(

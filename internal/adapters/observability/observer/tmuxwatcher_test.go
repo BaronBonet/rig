@@ -82,6 +82,94 @@ func TestTMuxWatcher_RefreshAllMarksTaskDisconnectedWhenSnapshotFails(t *testing
 	require.Equal(t, now, repo.lastUpsert.LastRuntimeObservedAt)
 }
 
+func TestTMuxWatcher_RefreshAllUsesCodexStopHookWhenSnapshotFails(t *testing.T) {
+	now := time.Date(2026, 4, 15, 14, 35, 0, 0, time.UTC)
+	task := &core.Task{
+		ID:              "task-1",
+		TmuxSession:     "repo_task-1",
+		AgentWindowName: "agent",
+		Provider:        "codex",
+		Status:          core.TaskStatusRunning,
+	}
+
+	monitor := core.NewMockRuntimeMonitor(t)
+	monitor.EXPECT().Snapshot(mock.Anything, task).Return(core.RuntimeSnapshot{}, errors.New("control pipe failed")).Once()
+
+	repo := &stubWatcherObserverRepository{}
+	hooks := &stubHookObservabilityRepository{
+		summaries: map[string]*core.HookSessionSummary{
+			task.ID: {
+				TaskID:         task.ID,
+				Provider:       "codex",
+				RuntimePhase:   core.HookRuntimePhaseIdle,
+				LastEventName:  "Stop",
+				LastActivityAt: now.Add(-30 * time.Second),
+			},
+		},
+	}
+	watcher := NewTMuxWatcher(TMuxWatcherConfig{
+		Tasks:     stubObserverTaskLister{tasks: []*core.Task{task}},
+		Monitor:   monitor,
+		Repo:      repo,
+		Hooks:     hooks,
+		Providers: map[string]core.ProviderClient{"codex": stubTMuxWatcherProvider{}},
+		Now:       func() time.Time { return now },
+	})
+
+	err := watcher.RefreshAll(context.Background())
+	require.NoError(t, err)
+	require.NotNil(t, repo.lastUpsert)
+	require.Equal(t, task.ID, repo.lastUpsert.TaskID)
+	require.Equal(t, core.DisplayStatusNeedsInput, repo.lastUpsert.DisplayStatus)
+	require.Equal(t, core.DisplayActivityNone, repo.lastUpsert.DisplayActivity)
+	require.True(t, repo.lastUpsert.ProcessAlive)
+	require.Equal(t, now, repo.lastUpsert.LastRuntimeObservedAt)
+}
+
+func TestTMuxWatcher_RefreshAllUsesFreshHookActivityWhenSnapshotFails(t *testing.T) {
+	now := time.Date(2026, 4, 15, 14, 36, 0, 0, time.UTC)
+	task := &core.Task{
+		ID:              "task-1",
+		TmuxSession:     "repo_task-1",
+		AgentWindowName: "agent",
+		Provider:        "codex",
+		Status:          core.TaskStatusRunning,
+	}
+
+	monitor := core.NewMockRuntimeMonitor(t)
+	monitor.EXPECT().Snapshot(mock.Anything, task).Return(core.RuntimeSnapshot{}, errors.New("control pipe failed")).Once()
+
+	repo := &stubWatcherObserverRepository{}
+	hooks := &stubHookObservabilityRepository{
+		summaries: map[string]*core.HookSessionSummary{
+			task.ID: {
+				TaskID:         task.ID,
+				Provider:       "codex",
+				RuntimePhase:   core.HookRuntimePhaseRunningCommand,
+				LastEventName:  "PreToolUse",
+				LastActivityAt: now.Add(-2 * time.Second),
+			},
+		},
+	}
+	watcher := NewTMuxWatcher(TMuxWatcherConfig{
+		Tasks:     stubObserverTaskLister{tasks: []*core.Task{task}},
+		Monitor:   monitor,
+		Repo:      repo,
+		Hooks:     hooks,
+		Providers: map[string]core.ProviderClient{"codex": stubTMuxWatcherProvider{}},
+		Now:       func() time.Time { return now },
+	})
+
+	err := watcher.RefreshAll(context.Background())
+	require.NoError(t, err)
+	require.NotNil(t, repo.lastUpsert)
+	require.Equal(t, task.ID, repo.lastUpsert.TaskID)
+	require.Equal(t, core.DisplayStatusWorking, repo.lastUpsert.DisplayStatus)
+	require.Equal(t, core.DisplayActivityCommand, repo.lastUpsert.DisplayActivity)
+	require.True(t, repo.lastUpsert.ProcessAlive)
+	require.Equal(t, now, repo.lastUpsert.LastRuntimeObservedAt)
+}
+
 func TestTMuxWatcher_RefreshAllMarksTaskDisconnectedWhenProviderFinished(t *testing.T) {
 	now := time.Date(2026, 4, 9, 12, 10, 0, 0, time.UTC)
 	task := &core.Task{
@@ -304,6 +392,147 @@ func TestTMuxWatcher_OverrideWithHookPhase_CodexStopUsesPromptFallbackForNeedsIn
 
 	require.NoError(t, watcher.RefreshAll(context.Background()))
 	require.Equal(t, core.DisplayStatusNeedsInput, repo.lastUpsert.DisplayStatus)
+}
+
+func TestTMuxWatcher_OverrideWithHookPhase_CodexFreshPromptOverridesFinishedShell(t *testing.T) {
+	now := time.Date(2026, 4, 10, 10, 40, 0, 0, time.UTC)
+	task := &core.Task{
+		ID:              "task-1",
+		TmuxSession:     "repo_task-1",
+		AgentWindowName: "agent",
+		Provider:        "codex",
+		Status:          core.TaskStatusRunning,
+	}
+
+	monitor := core.NewMockRuntimeMonitor(t)
+	monitor.EXPECT().Snapshot(mock.Anything, task).Return(core.RuntimeSnapshot{
+		SessionName:       task.TmuxSession,
+		PaneID:            "%24",
+		ForegroundCommand: "zsh",
+		HadAgentBinding:   true,
+		ObservedAt:        now,
+	}, nil).Once()
+
+	hooks := &stubHookObservabilityRepository{
+		summaries: map[string]*core.HookSessionSummary{
+			task.ID: {
+				TaskID:         task.ID,
+				RuntimePhase:   core.HookRuntimePhasePrompted,
+				LastEventName:  "UserPromptSubmit",
+				LastActivityAt: now.Add(-1 * time.Second),
+			},
+		},
+	}
+
+	repo := &stubWatcherObserverRepository{}
+	watcher := NewTMuxWatcher(TMuxWatcherConfig{
+		Tasks:   stubObserverTaskLister{tasks: []*core.Task{task}},
+		Monitor: monitor,
+		Repo:    repo,
+		Hooks:   hooks,
+		Providers: map[string]core.ProviderClient{
+			"codex": stubTMuxWatcherProvider{runtimeState: core.RuntimeStateFinished},
+		},
+	})
+
+	require.NoError(t, watcher.RefreshAll(context.Background()))
+	require.NotNil(t, repo.lastUpsert)
+	require.Equal(t, core.DisplayStatusWorking, repo.lastUpsert.DisplayStatus)
+	require.True(t, repo.lastUpsert.ProcessAlive)
+}
+
+func TestTMuxWatcher_OverrideWithHookPhase_CodexFreshPostToolUseOverridesMissingProcess(t *testing.T) {
+	now := time.Date(2026, 4, 15, 13, 55, 0, 0, time.UTC)
+	task := &core.Task{
+		ID:              "task-1",
+		TmuxSession:     "repo_task-1",
+		AgentWindowName: "agent",
+		Provider:        "codex",
+		Status:          core.TaskStatusRunning,
+	}
+
+	monitor := core.NewMockRuntimeMonitor(t)
+	monitor.EXPECT().Snapshot(mock.Anything, task).Return(core.RuntimeSnapshot{
+		SessionName:       task.TmuxSession,
+		PaneID:            "%24",
+		ForegroundCommand: "",
+		ObservedAt:        now,
+	}, nil).Once()
+
+	hooks := &stubHookObservabilityRepository{
+		summaries: map[string]*core.HookSessionSummary{
+			task.ID: {
+				TaskID:         task.ID,
+				Provider:       "codex",
+				RuntimePhase:   core.HookRuntimePhaseIdle,
+				LastEventName:  "PostToolUse",
+				LastActivityAt: now.Add(-2 * time.Second),
+			},
+		},
+	}
+
+	repo := &stubWatcherObserverRepository{}
+	watcher := NewTMuxWatcher(TMuxWatcherConfig{
+		Tasks:   stubObserverTaskLister{tasks: []*core.Task{task}},
+		Monitor: monitor,
+		Repo:    repo,
+		Hooks:   hooks,
+		Providers: map[string]core.ProviderClient{
+			"codex": stubTMuxWatcherProvider{runtimeState: core.RuntimeStateNone},
+		},
+	})
+
+	require.NoError(t, watcher.RefreshAll(context.Background()))
+	require.NotNil(t, repo.lastUpsert)
+	require.Equal(t, core.DisplayStatusWorking, repo.lastUpsert.DisplayStatus)
+	require.True(t, repo.lastUpsert.ProcessAlive)
+}
+
+func TestTMuxWatcher_OverrideWithHookPhase_CodexFinishedShellAfterStopYieldsNeedsInput(t *testing.T) {
+	now := time.Date(2026, 4, 15, 12, 31, 50, 0, time.UTC)
+	task := &core.Task{
+		ID:              "task-1",
+		TmuxSession:     "repo_task-1",
+		AgentWindowName: "agent",
+		Provider:        "codex",
+		Status:          core.TaskStatusRunning,
+	}
+
+	monitor := core.NewMockRuntimeMonitor(t)
+	monitor.EXPECT().Snapshot(mock.Anything, task).Return(core.RuntimeSnapshot{
+		SessionName:       task.TmuxSession,
+		PaneID:            "%24",
+		ForegroundCommand: "zsh",
+		HadAgentBinding:   true,
+		ObservedAt:        now,
+	}, nil).Once()
+
+	hooks := &stubHookObservabilityRepository{
+		summaries: map[string]*core.HookSessionSummary{
+			task.ID: {
+				TaskID:         task.ID,
+				RuntimePhase:   core.HookRuntimePhaseIdle,
+				LastEventName:  "Stop",
+				LastActivityAt: now.Add(-7 * time.Minute),
+			},
+		},
+	}
+
+	repo := &stubWatcherObserverRepository{}
+	watcher := NewTMuxWatcher(TMuxWatcherConfig{
+		Tasks:   stubObserverTaskLister{tasks: []*core.Task{task}},
+		Monitor: monitor,
+		Repo:    repo,
+		Hooks:   hooks,
+		Providers: map[string]core.ProviderClient{
+			"codex": stubTMuxWatcherProvider{runtimeState: core.RuntimeStateFinished},
+		},
+	})
+
+	require.NoError(t, watcher.RefreshAll(context.Background()))
+	require.NotNil(t, repo.lastUpsert)
+	require.Equal(t, core.DisplayStatusNeedsInput, repo.lastUpsert.DisplayStatus)
+	require.True(t, repo.lastUpsert.ProcessAlive)
 }
 
 func TestTMuxWatcher_OverrideWithHookPhase_ClaudeIdlePostToolUseOverridesToRunning(t *testing.T) {

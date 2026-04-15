@@ -577,14 +577,43 @@ func deriveObserverSummary(previous *core.ObserverSummary, hookSession *core.Hoo
 	if hookSession != nil {
 		next.TaskID = firstNonEmpty(next.TaskID, hookSession.TaskID)
 	}
-
-	if hookSession != nil && hookSession.RuntimePhase == core.HookRuntimePhaseRunningCommand {
-		next.DisplayActivity = core.DisplayActivityCommand
+	if hookSession == nil {
 		return next
 	}
 
-	next.DisplayActivity = core.DisplayActivityNone
+	status, activity, alive := displayStateFromHookSession(hookSession)
+	next.DisplayStatus = status
+	next.DisplayActivity = activity
+	next.ProcessAlive = alive
+	next.LastRuntimeObservedAt = hookSession.LastActivityAt
 	return next
+}
+
+func displayStateFromHookSession(
+	hookSession *core.HookSessionSummary,
+) (core.DisplayStatus, core.DisplayActivity, bool) {
+	if hookSession == nil {
+		return "", core.DisplayActivityNone, false
+	}
+
+	provider := core.InferProviderFromHookSession(hookSession)
+	switch hookSession.RuntimePhase {
+	case core.HookRuntimePhaseWaitingPermission:
+		return core.DisplayStatusNeedsInput, core.DisplayActivityNone, true
+	case core.HookRuntimePhasePrompted:
+		return core.DisplayStatusWorking, core.DisplayActivityNone, true
+	case core.HookRuntimePhaseRunningCommand:
+		return core.DisplayStatusWorking, core.DisplayActivityCommand, true
+	case core.HookRuntimePhaseIdle:
+		if hookSession.LastEventName == "Stop" {
+			return core.DisplayStatusNeedsInput, core.DisplayActivityNone, true
+		}
+		if provider == "codex" || provider == "claude" {
+			return core.DisplayStatusWorking, core.DisplayActivityNone, true
+		}
+	}
+
+	return "", core.DisplayActivityNone, false
 }
 
 func cloneObserverSummary(summary *core.ObserverSummary) *core.ObserverSummary {

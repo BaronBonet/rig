@@ -292,6 +292,39 @@ func TestRuntimeMonitorSnapshot_BindsActiveShellPaneAsFinishedFallback(t *testin
 	require.Equal(t, "zsh", snapshot.ForegroundCommand)
 }
 
+func TestRuntimeMonitorSnapshot_RebindsFromStaleShellPaneToUniqueCodexPane(t *testing.T) {
+	output := map[string]string{
+		paneListCommand("repo-billing-retry-flow", "agent"): "%24\tzsh\t1\n%31\tzsh\t0",
+		"capture-pane -t %24 -p -e":                         "done\n",
+	}
+	pipe := newMockControlPipe(t, output, nil, nil, nil)
+	monitor := NewRuntimeMonitorWithFactory(newMockControlPipeFactory(t, map[string]controlPipe{
+		"repo-billing-retry-flow": pipe,
+	}, nil, nil), time.Now)
+
+	first, err := monitor.Snapshot(context.Background(), &core.Task{
+		TmuxSession:     "repo-billing-retry-flow",
+		AgentWindowName: "agent",
+	})
+	require.NoError(t, err)
+	require.Equal(t, "%24", first.PaneID)
+	require.True(t, first.HadAgentBinding)
+	require.Equal(t, "zsh", first.ForegroundCommand)
+
+	output[paneListCommand("repo-billing-retry-flow", "agent")] = "%24\tzsh\t0\n%31\tcodex-aarch64-a\t1"
+	output["capture-pane -t %31 -p -e"] = "› review my changes\n"
+
+	second, err := monitor.Snapshot(context.Background(), &core.Task{
+		TmuxSession:     "repo-billing-retry-flow",
+		AgentWindowName: "agent",
+	})
+	require.NoError(t, err)
+	require.Equal(t, "%31", second.PaneID)
+	require.True(t, second.HadAgentBinding)
+	require.Equal(t, "codex", second.ForegroundCommand)
+	require.Equal(t, "› review my changes\n", second.Content)
+}
+
 func newMockControlPipe(
 	t *testing.T,
 	output map[string]string,
