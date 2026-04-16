@@ -43,13 +43,43 @@ func TestModelUpdate_XEntersConfirmationMode(t *testing.T) {
 	require.Nil(t, cmd)
 }
 
-func TestModelUpdate_NEntersPromptEntryMode(t *testing.T) {
+func TestModelUpdate_AEntersPromptEntryMode(t *testing.T) {
 	m := newLoadedTUIModel(t, NewMockTaskService(t), tuiTask("task-one"))
 
-	m, cmd := updateTUIModel(t, m, keyRunes("n"))
+	m, cmd := updateTUIModel(t, m, keyRunes("a"))
 	require.Equal(t, tuiModePromptInput, m.mode)
 	require.True(t, m.promptInput.Focused())
 	require.Nil(t, cmd)
+}
+
+func TestModelUpdate_NDoesNotEnterPromptEntryMode(t *testing.T) {
+	m := newLoadedTUIModel(t, NewMockTaskService(t), tuiTask("task-one"))
+
+	m, cmd := updateTUIModel(t, m, keyRunes("n"))
+	require.Equal(t, tuiModeList, m.mode)
+	require.Nil(t, cmd)
+}
+
+func TestModelUpdate_STogglesRepoViewAndRefreshes(t *testing.T) {
+	service := NewMockTaskService(t)
+	m := newTUIModel(service, "/tmp/default", "/tmp/repo-a", "codex", "", nil)
+	m.loading = false
+	m.taskViews = taskViews(tuiTask("task-one"))
+	m.tasks = taskViewsToTasks(m.taskViews)
+
+	service.EXPECT().
+		ListTaskViews(mock.Anything).
+		Return(taskViews(tuiTask("task-one")), nil).
+		Once()
+	m, cmd := updateTUIModel(t, m, keyRunes("s"))
+	require.NotNil(t, cmd)
+	require.Equal(t, viewModeAll, m.viewMode)
+	require.True(t, m.busy)
+	require.True(t, m.loading)
+
+	msg := cmd()
+	_, ok := msg.(tasksLoadedMsg)
+	require.True(t, ok)
 }
 
 func TestModelUpdate_PromptSubmitStartsBackgroundCreationAndReturnsToListMode(t *testing.T) {
@@ -60,7 +90,7 @@ func TestModelUpdate_PromptSubmitStartsBackgroundCreationAndReturnsToListMode(t 
 	other.RepoRoot = "/tmp/other-repo"
 	m := newLoadedTUIModel(t, service, existing, other)
 
-	m, _ = updateTUIModel(t, m, keyRunes("n"))
+	m, _ = updateTUIModel(t, m, keyRunes("a"))
 	m.promptInput.SetValue("add billing retry flow")
 
 	service.EXPECT().
@@ -156,7 +186,7 @@ func TestModelUpdate_StaleTasksLoadedDoesNotClearCreateInFlight(t *testing.T) {
 	existing.RepoRoot = "/tmp/repo"
 	m := newLoadedTUIModel(t, service, existing)
 
-	m, _ = updateTUIModel(t, m, keyRunes("n"))
+	m, _ = updateTUIModel(t, m, keyRunes("a"))
 	m.promptInput.SetValue("add billing retry flow")
 
 	m, _ = updateTUIModel(t, m, tea.KeyPressMsg{Code: tea.KeyEnter})
@@ -177,7 +207,7 @@ func TestModelUpdate_CreateFlowWithoutTasksUsesModelCwdFallback(t *testing.T) {
 	m := newTUIModel(service, "/tmp/fallback-repo", "", "codex", "", nil)
 	m.loading = false
 
-	m, _ = updateTUIModel(t, m, keyRunes("n"))
+	m, _ = updateTUIModel(t, m, keyRunes("a"))
 	m.promptInput.SetValue("add billing retry flow")
 
 	service.EXPECT().
@@ -213,7 +243,7 @@ func TestModelUpdate_CreateFlowUsesConfiguredDefaultProvider(t *testing.T) {
 	existing.RepoRoot = "/tmp/repo"
 	m := newLoadedTUIModelWithProvider(t, service, "claude", existing)
 
-	m, _ = updateTUIModel(t, m, keyRunes("n"))
+	m, _ = updateTUIModel(t, m, keyRunes("a"))
 	m.promptInput.SetValue("add billing retry flow")
 
 	service.EXPECT().
@@ -245,7 +275,7 @@ func TestModelUpdate_CreateFlowUsesConfiguredDefaultProvider(t *testing.T) {
 func TestModelUpdate_PromptTabMovesHighlightWithoutChangingCommittedProvider(t *testing.T) {
 	m := newLoadedTUIModelWithProvider(t, NewMockTaskService(t), "codex", tuiTask("existing-task"))
 
-	m, _ = updateTUIModel(t, m, keyRunes("n"))
+	m, _ = updateTUIModel(t, m, keyRunes("a"))
 	require.Equal(t, "codex", m.provider)
 	require.Equal(t, "codex", m.promptProvider)
 
@@ -261,7 +291,7 @@ func TestModelUpdate_PromptSubmitUsesHighlightedProvider(t *testing.T) {
 	existing.RepoRoot = "/tmp/repo"
 	m := newLoadedTUIModelWithProvider(t, service, "codex", existing)
 
-	m, _ = updateTUIModel(t, m, keyRunes("n"))
+	m, _ = updateTUIModel(t, m, keyRunes("a"))
 	m.promptInput.SetValue("add billing retry flow")
 	m, _ = updateTUIModel(t, m, tea.KeyPressMsg{Code: tea.KeyTab})
 
@@ -294,7 +324,7 @@ func TestModelUpdate_CreateFailureKeepsSyntheticRowVisibleAndRendersError(t *tes
 	existing.RepoRoot = "/tmp/repo"
 	m := newLoadedTUIModel(t, service, existing)
 
-	m, _ = updateTUIModel(t, m, keyRunes("n"))
+	m, _ = updateTUIModel(t, m, keyRunes("a"))
 	m.promptInput.SetValue("add billing retry flow")
 
 	service.EXPECT().
@@ -335,7 +365,7 @@ func TestModelUpdate_CreateFailureKeepsSyntheticRowVisibleButAllowsRecoveryActio
 	existing.RepoRoot = "/tmp/repo"
 	m := newLoadedTUIModel(t, service, existing)
 
-	m, _ = updateTUIModel(t, m, keyRunes("n"))
+	m, _ = updateTUIModel(t, m, keyRunes("a"))
 	m.promptInput.SetValue("add billing retry flow")
 
 	service.EXPECT().
@@ -359,7 +389,7 @@ func TestModelUpdate_CreateFailureKeepsSyntheticRowVisibleButAllowsRecoveryActio
 	require.False(t, m.createInFlight)
 	require.Contains(t, stripANSI(m.View().Content), "Creating task...")
 
-	m, cmd := updateTUIModel(t, m, keyRunes("n"))
+	m, cmd := updateTUIModel(t, m, keyRunes("a"))
 	require.Nil(t, cmd)
 	require.Equal(t, tuiModePromptInput, m.mode)
 	require.True(t, m.promptInput.Focused())
@@ -371,7 +401,7 @@ func TestModelUpdate_CreateFailureWithPersistedTaskReturnsToListModeAndPreserves
 	existing.RepoRoot = "/tmp/repo"
 	m := newLoadedTUIModel(t, service, existing)
 
-	m, _ = updateTUIModel(t, m, keyRunes("n"))
+	m, _ = updateTUIModel(t, m, keyRunes("a"))
 	m.promptInput.SetValue("add billing retry flow")
 
 	service.EXPECT().
@@ -596,14 +626,14 @@ func TestModelUpdate_BackgroundCreationKeepsListNavigationInteractive(t *testing
 func TestModelUpdate_NewTaskIsBlockedWhileBackgroundCreationExists(t *testing.T) {
 	m := newLoadedTUIModel(t, NewMockTaskService(t), tuiTask("existing-task"))
 
-	m, _ = updateTUIModel(t, m, keyRunes("n"))
+	m, _ = updateTUIModel(t, m, keyRunes("a"))
 	m.promptInput.SetValue("add billing retry flow")
 	m, createCmd := updateTUIModel(t, m, tea.KeyPressMsg{Code: tea.KeyEnter})
 	require.NotNil(t, createCmd)
 	require.True(t, m.busy)
 	require.Equal(t, tuiModeList, m.mode)
 
-	m, cmd := updateTUIModel(t, m, keyRunes("n"))
+	m, cmd := updateTUIModel(t, m, keyRunes("a"))
 	require.Nil(t, cmd)
 	require.Equal(t, tuiModeList, m.mode)
 	require.Contains(t, stripANSI(m.View().Content), "Task creation already in progress")
@@ -614,7 +644,7 @@ func TestModelUpdate_NewTaskWhileOtherBusyStateDoesNotReportCreateInProgressErro
 	m.busy = true
 	m.createInFlight = false
 
-	m, cmd := updateTUIModel(t, m, keyRunes("n"))
+	m, cmd := updateTUIModel(t, m, keyRunes("a"))
 	require.Nil(t, cmd)
 	require.Equal(t, tuiModeList, m.mode)
 	require.Nil(t, m.err)
@@ -696,7 +726,7 @@ func TestModelUpdate_RetryFromFailedSyntheticRowPreservesOriginalCreationRepo(t 
 	m.creationTask = cloneTaskSnapshot(tuiTask("billing-retry-flow"))
 	m.selected = m.syntheticCreationRowIndex()
 
-	m, cmd := updateTUIModel(t, m, keyRunes("n"))
+	m, cmd := updateTUIModel(t, m, keyRunes("a"))
 	require.Nil(t, cmd)
 	require.Equal(t, tuiModePromptInput, m.mode)
 	require.Equal(t, "/tmp/repo-a", m.createInput.Cwd)
@@ -722,7 +752,7 @@ func TestModelUpdate_QIsBlockedWhileBackgroundCreationIsActive(t *testing.T) {
 func TestModelUpdate_PromptModeEscapeReturnsToListMode(t *testing.T) {
 	m := newLoadedTUIModel(t, NewMockTaskService(t), tuiTask("existing-task"))
 
-	m, _ = updateTUIModel(t, m, keyRunes("n"))
+	m, _ = updateTUIModel(t, m, keyRunes("a"))
 	m, cmd := updateTUIModel(t, m, tea.KeyPressMsg{Code: tea.KeyEscape})
 	require.Equal(t, tuiModeList, m.mode)
 	require.Nil(t, cmd)
@@ -1112,7 +1142,7 @@ func TestModelUpdate_MainListViewRendersHeaderAndTaskRows(t *testing.T) {
 	view := stripANSI(m.View().Content)
 
 	require.Contains(t, view, "RIG")
-	require.Contains(t, view, "n new")
+	require.Contains(t, view, "a new")
 	require.Contains(t, view, "q quit")
 	require.Contains(t, view, "billing retry flow")
 	require.Contains(t, view, "running")
@@ -1919,13 +1949,14 @@ func TestListView_ShowsModeSpecificRepoToggleHint(t *testing.T) {
 
 	view := stripANSI(m.listView())
 	require.Contains(t, view, "[repo: repo-a]")
-	require.Contains(t, view, "a: all repos")
+	require.Contains(t, view, "s: all repos")
 
 	m.viewMode = viewModeAll
 
 	view = stripANSI(m.listView())
 	require.Contains(t, view, "[all repos]")
-	require.Contains(t, view, "a: current repo")
+	require.Contains(t, view, "s: current repo")
+	require.Contains(t, view, "a new")
 }
 
 func TestRepoHeaderStyle_UsesDarkerAccent(t *testing.T) {

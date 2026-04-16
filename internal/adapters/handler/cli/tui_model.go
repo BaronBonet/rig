@@ -592,7 +592,7 @@ func (m model) updateListKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 
 		m.mode = tuiModeCleanupConfirm
 		return m, nil
-	case "n":
+	case "a":
 		if m.blockedByActiveCreation("Task creation already in progress") {
 			return m, nil
 		}
@@ -612,7 +612,7 @@ func (m model) updateListKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		m.busy = true
 		m.loading = true
 		return m, m.nextRefreshTasksCmd()
-	case "a":
+	case "s":
 		if m.currentRepoRoot == "" {
 			return m, nil
 		}
@@ -856,13 +856,13 @@ func (m model) listView() string {
 		modeLabel = "repo: " + m.currentRepoName
 	}
 	modeHint := mutedStyle.Render("[") + primaryStyle.Render(modeLabel) + mutedStyle.Render("]")
-	keybinds := "n new   r refresh   x clean   q quit"
+	keybinds := "a new   r refresh   x clean   q quit"
 	if m.currentRepoRoot != "" {
 		toggleTarget := "all repos"
 		if m.viewMode == viewModeAll {
 			toggleTarget = "current repo"
 		}
-		keybinds = "a: " + toggleTarget + "   " + keybinds
+		keybinds = "s: " + toggleTarget + "   " + keybinds
 	}
 	b.WriteString(renderHeader(
 		headerLabelStyle.Render("RIG")+" "+modeHint,
