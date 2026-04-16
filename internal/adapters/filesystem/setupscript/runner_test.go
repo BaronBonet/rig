@@ -120,6 +120,8 @@ func TestRunner_RunSetupScript(t *testing.T) {
 		})
 
 		require.Error(t, err)
+		require.ErrorContains(t, err, "exit status 1")
+		require.ErrorContains(t, err, "about to fail")
 		require.Contains(t, lines, "about to fail")
 	})
 

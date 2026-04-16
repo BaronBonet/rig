@@ -363,6 +363,16 @@ func copyDirectoryContents(root, sourceRoot, source, dest string, seen map[strin
 			if err != nil {
 				return err
 			}
+			linkTarget, err := os.Readlink(path)
+			if err != nil {
+				return err
+			}
+			if !filepath.IsAbs(linkTarget) {
+				if err := copySymlink(linkTarget, target); err != nil {
+					return err
+				}
+				continue
+			}
 			if resolvedInfo.IsDir() {
 				if err := copyDirectoryContents(root, sourceRoot, resolved, target, seen); err != nil {
 					return err
@@ -385,6 +395,16 @@ func copyDirectoryContents(root, sourceRoot, source, dest string, seen map[strin
 		}
 	}
 	return nil
+}
+
+func copySymlink(linkTarget, dest string) error {
+	if err := removeExisting(dest); err != nil {
+		return err
+	}
+	if err := os.MkdirAll(filepath.Dir(dest), 0o755); err != nil {
+		return err
+	}
+	return os.Symlink(linkTarget, dest)
 }
 
 func copyFile(source, dest string, info fs.FileInfo) error {

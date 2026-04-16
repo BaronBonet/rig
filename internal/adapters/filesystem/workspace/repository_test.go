@@ -194,7 +194,7 @@ func TestRepositorySeedWorkspaceRejectsSymlinkedDestinationParent(t *testing.T) 
 	require.True(t, os.IsNotExist(statErr))
 }
 
-func TestRepositorySeedWorkspaceFollowsNestedDirectorySymlinkWithinRepo(t *testing.T) {
+func TestRepositorySeedWorkspacePreservesNestedDirectorySymlinkWithinRepo(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip("symlink behavior depends on local privileges on Windows")
 	}
@@ -220,7 +220,11 @@ func TestRepositorySeedWorkspaceFollowsNestedDirectorySymlinkWithinRepo(t *testi
 
 	info, statErr := os.Lstat(filepath.Join(worktreePath, "local", "nested", "link.json"))
 	require.NoError(t, statErr)
-	require.Zero(t, info.Mode()&os.ModeSymlink)
+	require.NotZero(t, info.Mode()&os.ModeSymlink)
+
+	target, targetErr := os.Readlink(filepath.Join(worktreePath, "local", "nested", "link.json"))
+	require.NoError(t, targetErr)
+	require.Equal(t, "../config.json", target)
 }
 
 func TestRepositorySeedWorkspaceRejectsNestedDirectorySymlinkEscapingRepo(t *testing.T) {
