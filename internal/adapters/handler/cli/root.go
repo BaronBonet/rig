@@ -18,19 +18,7 @@ import (
 
 type TaskService interface {
 	Doctor(ctx context.Context, cwd string) (core.DoctorResult, error)
-	SuggestTaskName(ctx context.Context, prompt string, provider string) (core.TaskSuggestion, error)
-	CreateTaskWithProgress(
-		ctx context.Context,
-		input core.NewTaskInput,
-		options core.CreateTaskOptions,
-		progress func(core.TaskProgress),
-	) (*core.Task, error)
-	CreateTaskFromPRWithProgress(
-		ctx context.Context,
-		input core.CreateTaskFromPRInput,
-		options core.CreateTaskOptions,
-		progress func(core.TaskProgress),
-	) (*core.Task, error)
+	CreateTask(ctx context.Context, input core.CreateTaskInput) (*core.Task, error)
 	ListTasks(ctx context.Context) ([]*core.Task, error)
 	ListTaskViews(ctx context.Context) ([]*core.TaskView, error)
 	ListTaskViewsByRepo(ctx context.Context, repoRoot string) ([]*core.TaskView, error)

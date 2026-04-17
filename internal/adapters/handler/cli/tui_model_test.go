@@ -94,15 +94,13 @@ func TestModelUpdate_PromptSubmitStartsBackgroundCreationAndReturnsToListMode(t 
 	m.promptInput.SetValue("add billing retry flow")
 
 	service.EXPECT().
-		CreateTaskWithProgress(
+		CreateTask(
 			mock.Anything,
-			core.NewTaskInput{
+			core.CreateTaskInput{
 				Cwd:      "/tmp/repo",
 				Prompt:   "add billing retry flow",
 				Provider: "codex",
 			},
-			core.CreateTaskOptions{OpenSession: false},
-			mock.Anything,
 		).
 		Return(tuiTask("billing-retry-flow"), nil).
 		Once()
@@ -111,8 +109,6 @@ func TestModelUpdate_PromptSubmitStartsBackgroundCreationAndReturnsToListMode(t 
 	require.Equal(t, tuiModeList, m.mode)
 	require.True(t, m.busy)
 	require.True(t, m.createInFlight)
-	require.Equal(t, core.TaskProgressNaming, m.creationProgress)
-	require.Equal(t, []string{"Generating name..."}, m.creationSteps)
 	require.Equal(t, "add billing retry flow", m.createInput.Prompt)
 	require.Equal(t, "codex", m.createInput.Provider)
 	require.Equal(t, "/tmp/repo", m.createInput.Cwd)
@@ -125,59 +121,6 @@ func TestModelUpdate_PromptSubmitStartsBackgroundCreationAndReturnsToListMode(t 
 	require.False(t, m.busy)
 	require.False(t, m.createInFlight)
 	require.Equal(t, "billing-retry-flow", m.selectedTask().Slug)
-}
-
-func TestModelUpdate_TaskProgressNameSelectedPreservesTaskSnapshot(t *testing.T) {
-	service := NewMockTaskService(t)
-	selectedTask := tuiTask("billing-retry-flow")
-	input := core.NewTaskInput{
-		Cwd:      "/tmp/repo",
-		Prompt:   "add billing retry flow",
-		Provider: "codex",
-	}
-
-	service.EXPECT().
-		CreateTaskWithProgress(
-			mock.Anything,
-			input,
-			core.CreateTaskOptions{OpenSession: false},
-			mock.Anything,
-		).
-		RunAndReturn(func(_ context.Context, gotInput core.NewTaskInput, _ core.CreateTaskOptions, progress func(core.TaskProgress)) (*core.Task, error) {
-			require.Equal(t, input, gotInput)
-			selectedTask.DisplayName = "Billing retry flow"
-			selectedTask.BranchName = "feat/billing-retry-flow"
-			progress(core.TaskProgress{
-				Step:    core.TaskProgressNameSelected,
-				Message: "Selected name: Billing retry flow",
-				Task:    selectedTask,
-			})
-			selectedTask.DisplayName = "mutated after send"
-			selectedTask.Slug = "mutated-after-send"
-			selectedTask.BranchName = "mutated-after-send"
-			return selectedTask, nil
-		})
-
-	progressCh, createCmd := createTaskCmd(service, input)
-	createMsg := createCmd()
-	require.IsType(t, createFinishedMsg{}, createMsg)
-
-	progressMsg := executeBatchUntil[taskProgressMsg](t, waitForProgressCmd(progressCh))
-	require.Equal(t, core.TaskProgressNameSelected, progressMsg.step)
-	require.Equal(t, "Selected name: Billing retry flow", progressMsg.message)
-	require.NotNil(t, progressMsg.task)
-	require.NotSame(t, selectedTask, progressMsg.task)
-	require.Equal(t, "Billing retry flow", progressMsg.task.DisplayName)
-	require.Equal(t, "billing-retry-flow", progressMsg.task.Slug)
-	require.Equal(t, "feat/billing-retry-flow", progressMsg.task.BranchName)
-
-	m := newLoadedTUIModel(t, NewMockTaskService(t), tuiTask("existing-task"))
-	m, _ = updateTUIModel(t, m, progressMsg)
-	require.NotNil(t, m.creationTask)
-	require.NotSame(t, progressMsg.task, m.creationTask)
-	require.Equal(t, "Billing retry flow", m.creationTask.DisplayName)
-	require.Equal(t, "billing-retry-flow", m.creationTask.Slug)
-	require.Equal(t, "feat/billing-retry-flow", m.creationTask.BranchName)
 }
 
 func TestModelUpdate_StaleTasksLoadedDoesNotClearCreateInFlight(t *testing.T) {
@@ -211,15 +154,13 @@ func TestModelUpdate_CreateFlowWithoutTasksUsesModelCwdFallback(t *testing.T) {
 	m.promptInput.SetValue("add billing retry flow")
 
 	service.EXPECT().
-		CreateTaskWithProgress(
+		CreateTask(
 			mock.Anything,
-			core.NewTaskInput{
+			core.CreateTaskInput{
 				Cwd:      "/tmp/fallback-repo",
 				Prompt:   "add billing retry flow",
 				Provider: "codex",
 			},
-			core.CreateTaskOptions{OpenSession: false},
-			mock.Anything,
 		).
 		Return(tuiTask("billing-retry-flow"), nil).
 		Once()
@@ -247,15 +188,13 @@ func TestModelUpdate_CreateFlowUsesConfiguredDefaultProvider(t *testing.T) {
 	m.promptInput.SetValue("add billing retry flow")
 
 	service.EXPECT().
-		CreateTaskWithProgress(
+		CreateTask(
 			mock.Anything,
-			core.NewTaskInput{
+			core.CreateTaskInput{
 				Cwd:      "/tmp/repo",
 				Prompt:   "add billing retry flow",
 				Provider: "claude",
 			},
-			core.CreateTaskOptions{OpenSession: false},
-			mock.Anything,
 		).
 		Return(tuiTask("billing-retry-flow"), nil).
 		Once()
@@ -296,15 +235,13 @@ func TestModelUpdate_PromptSubmitUsesHighlightedProvider(t *testing.T) {
 	m, _ = updateTUIModel(t, m, tea.KeyPressMsg{Code: tea.KeyTab})
 
 	service.EXPECT().
-		CreateTaskWithProgress(
+		CreateTask(
 			mock.Anything,
-			core.NewTaskInput{
+			core.CreateTaskInput{
 				Cwd:      "/tmp/repo",
 				Prompt:   "add billing retry flow",
 				Provider: "claude",
 			},
-			core.CreateTaskOptions{OpenSession: false},
-			mock.Anything,
 		).
 		Return(tuiTask("billing-retry-flow"), nil).
 		Once()
@@ -328,15 +265,13 @@ func TestModelUpdate_CreateFailureKeepsSyntheticRowVisibleAndRendersError(t *tes
 	m.promptInput.SetValue("add billing retry flow")
 
 	service.EXPECT().
-		CreateTaskWithProgress(
+		CreateTask(
 			mock.Anything,
-			core.NewTaskInput{
+			core.CreateTaskInput{
 				Cwd:      "/tmp/repo",
 				Prompt:   "add billing retry flow",
 				Provider: "codex",
 			},
-			core.CreateTaskOptions{OpenSession: false},
-			mock.Anything,
 		).
 		Return(nil, errors.New("create failed")).
 		Once()
@@ -369,15 +304,13 @@ func TestModelUpdate_CreateFailureKeepsSyntheticRowVisibleButAllowsRecoveryActio
 	m.promptInput.SetValue("add billing retry flow")
 
 	service.EXPECT().
-		CreateTaskWithProgress(
+		CreateTask(
 			mock.Anything,
-			core.NewTaskInput{
+			core.CreateTaskInput{
 				Cwd:      "/tmp/repo",
 				Prompt:   "add billing retry flow",
 				Provider: "codex",
 			},
-			core.CreateTaskOptions{OpenSession: false},
-			mock.Anything,
 		).
 		Return(nil, errors.New("create failed")).
 		Once()
@@ -405,15 +338,13 @@ func TestModelUpdate_CreateFailureWithPersistedTaskReturnsToListModeAndPreserves
 	m.promptInput.SetValue("add billing retry flow")
 
 	service.EXPECT().
-		CreateTaskWithProgress(
+		CreateTask(
 			mock.Anything,
-			core.NewTaskInput{
+			core.CreateTaskInput{
 				Cwd:      "/tmp/repo",
 				Prompt:   "add billing retry flow",
 				Provider: "codex",
 			},
-			core.CreateTaskOptions{OpenSession: false},
-			mock.Anything,
 		).
 		Return(tuiTask("billing-retry-flow"), errors.New("create failed after persist")).
 		Once()
@@ -442,7 +373,7 @@ func TestModelUpdate_CreateFailureWithInvisiblePersistedTaskKeepsFailureVisible(
 
 	m := newLoadedTUIModel(t, NewMockTaskService(t), tuiTask("existing-task"))
 	m.createInFlight = true
-	m.createInput = core.NewTaskInput{
+	m.createInput = core.CreateTaskInput{
 		Cwd:      "/tmp/repo",
 		Prompt:   "add billing retry flow",
 		Provider: "codex",
@@ -474,7 +405,7 @@ func TestModelUpdate_CreateFinishedKeepsSelectionOnPersistedTaskWithoutOpening(t
 	created.DisplayName = "billing retry flow"
 	m := newLoadedTUIModel(t, service, alpha, omega)
 	m.createInFlight = true
-	m.createInput = core.NewTaskInput{
+	m.createInput = core.CreateTaskInput{
 		Prompt:   "add billing retry flow",
 		Provider: "codex",
 	}
@@ -492,7 +423,7 @@ func TestModelUpdate_CreateFinishedKeepsSelectionOnPersistedTaskWithoutOpening(t
 func TestModelUpdate_TasksLoadedKeepsSyntheticRowWhileCreateRemainsInFlight(t *testing.T) {
 	m := newLoadedTUIModel(t, NewMockTaskService(t), tuiTask("existing-task"))
 	m.createInFlight = true
-	m.createInput = core.NewTaskInput{
+	m.createInput = core.CreateTaskInput{
 		Prompt:   "add billing retry flow",
 		Provider: "codex",
 	}
@@ -521,7 +452,7 @@ func TestModelUpdate_CreateFailureWithPersistedTaskRefreshKeepsSelectionOnPersis
 	created.DisplayName = "billing retry flow"
 	m := newLoadedTUIModel(t, service, alpha, omega)
 	m.createInFlight = true
-	m.createInput = core.NewTaskInput{
+	m.createInput = core.CreateTaskInput{
 		Prompt:   "add billing retry flow",
 		Provider: "codex",
 	}
@@ -547,7 +478,7 @@ func TestModelUpdate_AsyncErrorKeepsSyntheticRowVisibleAndRendersError(t *testin
 	m := newLoadedTUIModel(t, NewMockTaskService(t), tuiTask("existing-task"))
 	m.createInFlight = true
 	m.busy = true
-	m.createInput = core.NewTaskInput{
+	m.createInput = core.CreateTaskInput{
 		Prompt:   "add billing retry flow",
 		Provider: "codex",
 	}
@@ -574,7 +505,7 @@ func TestModelUpdate_SyntheticRowBlocksOpenAndCleanupActions(t *testing.T) {
 	m := newLoadedTUIModel(t, NewMockTaskService(t), tuiTask("existing-task"))
 	m.createInFlight = true
 	m.busy = true
-	m.createInput = core.NewTaskInput{
+	m.createInput = core.CreateTaskInput{
 		Prompt:   "add billing retry flow",
 		Provider: "codex",
 	}
@@ -606,7 +537,7 @@ func TestModelUpdate_BackgroundCreationKeepsListNavigationInteractive(t *testing
 	m := newLoadedTUIModel(t, NewMockTaskService(t), tuiTask("task-one"), tuiTask("task-two"))
 	m.createInFlight = true
 	m.busy = true
-	m.createInput = core.NewTaskInput{
+	m.createInput = core.CreateTaskInput{
 		Prompt:   "add billing retry flow",
 		Provider: "codex",
 	}
@@ -718,7 +649,7 @@ func TestModelUpdate_RetryFromFailedSyntheticRowPreservesOriginalCreationRepo(t 
 
 	m := newLoadedTUIModel(t, NewMockTaskService(t), original, other)
 	m.creationFailed = true
-	m.createInput = core.NewTaskInput{
+	m.createInput = core.CreateTaskInput{
 		Cwd:      "/tmp/repo-a",
 		Prompt:   "add billing retry flow",
 		Provider: "codex",
@@ -736,7 +667,7 @@ func TestModelUpdate_QIsBlockedWhileBackgroundCreationIsActive(t *testing.T) {
 	m := newLoadedTUIModel(t, NewMockTaskService(t), tuiTask("existing-task"))
 	m.busy = true
 	m.createInFlight = true
-	m.createInput = core.NewTaskInput{
+	m.createInput = core.CreateTaskInput{
 		Prompt:   "add billing retry flow",
 		Provider: "codex",
 	}
@@ -1285,7 +1216,7 @@ func TestModelView_ProviderBadgeCoexistsWithRuntimeBadge(t *testing.T) {
 func TestModelView_ListShowsSyntheticCreatingRow(t *testing.T) {
 	m := newLoadedTUIModel(t, NewMockTaskService(t), tuiTask("existing-task"))
 	m.createInFlight = true
-	m.createInput = core.NewTaskInput{
+	m.createInput = core.CreateTaskInput{
 		Prompt:   "add billing retry flow",
 		Provider: "codex",
 	}
@@ -1300,37 +1231,10 @@ func TestModelView_ListShowsSyntheticCreatingRow(t *testing.T) {
 	require.Contains(t, view, "Generating name...")
 }
 
-func TestModelUpdate_TaskProgressNameSelectedRenamesCreatingRow(t *testing.T) {
-	m := newLoadedTUIModel(t, NewMockTaskService(t), tuiTask("existing-task"))
-	m.createInFlight = true
-	m.createInput = core.NewTaskInput{
-		Prompt:   "add billing retry flow",
-		Provider: "codex",
-	}
-	m.creationProgress = core.TaskProgressNaming
-	m.creationSteps = []string{"Generating name..."}
-	m.selected = len(m.tasks)
-
-	task := tuiTask("billing-retry-flow")
-	task.DisplayName = "billing retry flow"
-	task.Status = core.TaskStatusCreating
-	task.Provider = "codex"
-
-	m, _ = updateTUIModel(t, m, taskProgressMsg{
-		step: core.TaskProgressNameSelected,
-		task: task,
-	})
-
-	require.NotNil(t, m.creationTask)
-	require.Equal(t, "billing retry flow", m.creationTask.DisplayName)
-	require.Equal(t, "billing retry flow", m.selectedTask().DisplayName)
-	require.Contains(t, stripANSI(m.listView()), "billing retry flow")
-}
-
 func TestModelView_DetailPanelShowsSyntheticCreationProgress(t *testing.T) {
 	m := newLoadedTUIModel(t, NewMockTaskService(t), tuiTask("existing-task"))
 	m.createInFlight = true
-	m.createInput = core.NewTaskInput{
+	m.createInput = core.CreateTaskInput{
 		Prompt:   "add billing retry flow",
 		Provider: "codex",
 	}
@@ -1354,7 +1258,7 @@ func TestModelUpdate_RefreshDoesNotDuplicatePersistedSyntheticTask(t *testing.T)
 	persisted.DisplayName = "billing retry flow"
 	m := newLoadedTUIModel(t, NewMockTaskService(t), persisted)
 	m.createInFlight = true
-	m.createInput = core.NewTaskInput{
+	m.createInput = core.CreateTaskInput{
 		Prompt:   "add billing retry flow",
 		Provider: "codex",
 	}

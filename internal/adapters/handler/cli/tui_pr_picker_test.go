@@ -67,20 +67,20 @@ func TestModelUpdate_PRPickerEnterCreatesTaskFromSelectedPR(t *testing.T) {
 	}
 
 	service.EXPECT().
-		CreateTaskFromPRWithProgress(
+		CreateTask(
 			mock.Anything,
-			core.CreateTaskFromPRInput{
-				RepoRoot: "/tmp/repo",
-				PR: core.RepoPullRequest{
-					Number:     42,
-					Title:      "Auth rewrite",
-					BranchName: "feat/auth",
-					State:      core.PRStateDraft,
-				},
+			core.CreateTaskInput{
+				Cwd:      "/tmp/repo",
 				Provider: "codex",
+				Source: core.CreateTaskSource{
+					PullRequest: &core.RepoPullRequest{
+						Number:     42,
+						Title:      "Auth rewrite",
+						BranchName: "feat/auth",
+						State:      core.PRStateDraft,
+					},
+				},
 			},
-			core.CreateTaskOptions{OpenSession: false},
-			mock.Anything,
 		).
 		Return(tuiTask("pr-42-auth-rewrite"), nil).
 		Once()

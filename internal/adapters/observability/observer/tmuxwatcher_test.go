@@ -93,7 +93,10 @@ func TestTMuxWatcher_RefreshAllUsesCodexStopHookWhenSnapshotFails(t *testing.T) 
 	}
 
 	monitor := core.NewMockRuntimeMonitor(t)
-	monitor.EXPECT().Snapshot(mock.Anything, task).Return(core.RuntimeSnapshot{}, errors.New("control pipe failed")).Once()
+	monitor.EXPECT().
+		Snapshot(mock.Anything, task).
+		Return(core.RuntimeSnapshot{}, errors.New("control pipe failed")).
+		Once()
 
 	repo := &stubWatcherObserverRepository{}
 	hooks := &stubHookObservabilityRepository{
@@ -137,7 +140,10 @@ func TestTMuxWatcher_RefreshAllUsesFreshHookActivityWhenSnapshotFails(t *testing
 	}
 
 	monitor := core.NewMockRuntimeMonitor(t)
-	monitor.EXPECT().Snapshot(mock.Anything, task).Return(core.RuntimeSnapshot{}, errors.New("control pipe failed")).Once()
+	monitor.EXPECT().
+		Snapshot(mock.Anything, task).
+		Return(core.RuntimeSnapshot{}, errors.New("control pipe failed")).
+		Once()
 
 	repo := &stubWatcherObserverRepository{}
 	hooks := &stubHookObservabilityRepository{
