@@ -55,15 +55,20 @@ func buildDependencies() (cli.Dependencies, error) {
 
 	runner := execx.ExecRunner{}
 	providers := map[string]core.ProviderClient{
-		"codex":  codexclient.NewRepository(runner, cfg.Codex),
-		"claude": claudeclient.NewRepository(runner, cfg.Claude),
+		"codex": codexclient.NewRepository(runner, codexclient.Config{
+			Binary: cfg.CodexBinary,
+		}),
+		"claude": claudeclient.NewRepository(runner, claudeclient.Config{
+			Binary:         cfg.ClaudeBinary,
+			HookListenAddr: cfg.HookListenAddr,
+		}),
 	}
 	agentClients := map[string]core.AgentClient{
 		"codex":  providers["codex"],
 		"claude": providers["claude"],
 	}
 
-	taskRepo, err := sqliterepo.NewRepository(cfg.SQLite)
+	taskRepo, err := sqliterepo.NewRepository(sqliterepo.Config{Path: cfg.SQLitePath})
 	if err != nil {
 		return cli.Dependencies{}, err
 	}
@@ -90,24 +95,18 @@ func buildDependencies() (cli.Dependencies, error) {
 			detectAgentSourceRoot(),
 		),
 		setupscriptfs.NewRunner(),
-		cfg.Service,
+		core.Config{Provider: cfg.Provider},
 	)
 	service.SetSessionUsageReader(sessionusagefs.NewRepository())
 	service.SetPRStatusChecker(ghclient.NewPRStatusChecker(runner))
 
 	taskService := core.NewTaskService(core.TaskServiceDependencies{
-		Tasks:         taskRepo,
-		Workspace:     gitclient.NewRepository(runner),
-		Runtime:       tmuxclient.NewRepository(runner),
-		Agents:        agentClients,
-		ProjectConfig: agentconfigfs.NewLoader(),
-		Seeder:        workspacefs.NewSeeder(),
-		Bootstrap: codexhooksfs.NewBootstrapper(
-			agentExec,
-			detectAgentSourceRoot(),
-		),
-		SetupRunner: setupscriptfs.NewRunner(),
-		Config:      cfg.Service,
+		Tasks:    taskRepo,
+		Repo:     gitclient.NewRepository(runner),
+		Session:  tmuxclient.NewRepository(runner),
+		Agents:   agentClients,
+		Preparer: workspacefs.NewPreparer(agentExec, detectAgentSourceRoot()),
+		Config:   core.Config{Provider: cfg.Provider},
 	})
 	appService := core.NewAppService(taskService, service)
 
@@ -123,19 +122,19 @@ func buildDependencies() (cli.Dependencies, error) {
 		Service:      appService,
 		HookIngestor: taskRepo,
 		ObserverProcess: observer.NewProcessManager(observer.ProcessConfig{
-			SocketPath:          cfg.Observer.SocketPath,
+			SocketPath:          cfg.ObserverSocketPath,
 			ExecPath:            agentExec,
 			ExpectedFingerprint: observerFingerprint,
 		}),
 		ObserverWatcher:     observerWatcher,
-		HookListenAddr:      cfg.Hooks.ListenAddr,
-		ObserverSocketPath:  cfg.Observer.SocketPath,
+		HookListenAddr:      cfg.HookListenAddr,
+		ObserverSocketPath:  cfg.ObserverSocketPath,
 		ObserverFingerprint: observerFingerprint,
 		Stdout:              os.Stdout,
 		Stderr:              os.Stderr,
 		Cwd:                 cwd,
 		RepoRoot:            detectRepoRoot(cwd),
-		DefaultProvider:     cfg.Service.Provider,
+		DefaultProvider:     cfg.Provider,
 		Version:             version,
 	}, nil
 }

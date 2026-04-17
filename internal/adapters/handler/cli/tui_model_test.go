@@ -689,18 +689,6 @@ func TestModelUpdate_PromptModeEscapeReturnsToListMode(t *testing.T) {
 	require.Nil(t, cmd)
 }
 
-func TestModelUpdate_NameConfirmModeEscapeReturnsToListMode(t *testing.T) {
-	m := newLoadedTUIModel(t, NewMockTaskService(t), tuiTask("existing-task"))
-	m.mode = tuiModeNameConfirm
-	m.createInput.Prompt = "add billing retry flow"
-	m.createInput.Provider = "codex"
-	m.nameInput.SetValue("billing retry flow")
-
-	m, cmd := updateTUIModel(t, m, tea.KeyPressMsg{Code: tea.KeyEscape})
-	require.Equal(t, tuiModeList, m.mode)
-	require.Nil(t, cmd)
-}
-
 func TestModelUpdate_ConfirmationCancelKeysDismissWithoutQuitting(t *testing.T) {
 	tests := []struct {
 		name string
@@ -2030,47 +2018,6 @@ func executeBatchUntil[T tea.Msg](t *testing.T, cmd tea.Cmd) T {
 	return *new(T)
 }
 
-func TestNameConfirmView_ShowsCheckmarkRecap(t *testing.T) {
-	m := newLoadedTUIModel(t, NewMockTaskService(t), tuiTask("task-one"))
-
-	m.mode = tuiModeNameConfirm
-	m.createInput.Prompt = "add dark mode toggle to settings page"
-	m.provider = "codex"
-	m.nameInput.SetValue("dark-mode-settings-toggle")
-
-	view := stripANSI(m.nameConfirmView())
-
-	require.Contains(t, view, "RIG")
-	require.Contains(t, view, "new task")
-	require.Contains(t, view, "✔")
-	require.Contains(t, view, "add dark mode toggle to settings page")
-	require.Contains(t, view, "codex")
-	require.Contains(t, view, "Name:")
-	require.Contains(t, view, "enter")
-	require.Contains(t, view, "create")
-}
-
-func TestNameConfirmView_ShowsProgressStepsDuringCreation(t *testing.T) {
-	m := newLoadedTUIModel(t, NewMockTaskService(t), tuiTask("task-one"))
-
-	m.mode = tuiModeNameConfirm
-	m.createInput.Prompt = "add dark mode toggle"
-	m.provider = "codex"
-	m.nameInput.SetValue("dark-mode-toggle")
-	m.busy = true
-	m.creationProgress = core.TaskProgressAgentLaunching
-	m.creationSteps = []string{"Creating worktree...", "Starting session...", "Launching agent..."}
-	m.shimmerTick = 5
-
-	view := stripANSI(m.nameConfirmView())
-
-	// Completed steps should show checkmarks.
-	require.Contains(t, view, "Creating worktree...")
-	require.Contains(t, view, "Starting session...")
-	// Active step should be visible.
-	require.Contains(t, view, "Launching agent...")
-}
-
 func TestPromptInputView_ShowsShimmerDuringNameSuggestion(t *testing.T) {
 	m := newLoadedTUIModel(t, NewMockTaskService(t), tuiTask("task-one"))
 
@@ -2114,18 +2061,6 @@ func TestPromptInputView_ShowsFixedProviderOrder(t *testing.T) {
 	view := stripANSI(m.promptInputView())
 	require.Contains(t, view, "provider  codex / claude")
 	require.NotContains(t, view, "provider  claude / codex")
-}
-
-func TestNameConfirmView_ShowsSubmittedProviderInsteadOfCommittedDefault(t *testing.T) {
-	m := newLoadedTUIModelWithProvider(t, NewMockTaskService(t), "codex", tuiTask("task-one"))
-	m.mode = tuiModeNameConfirm
-	m.createInput.Prompt = "add dark mode toggle to settings page"
-	m.createInput.Provider = "claude"
-	m.nameInput.SetValue("dark-mode-settings-toggle")
-
-	view := stripANSI(m.nameConfirmView())
-	require.Contains(t, view, "provider: claude")
-	require.NotContains(t, view, "provider: codex")
 }
 
 func TestCompactCount_FormatsTokenCounts(t *testing.T) {

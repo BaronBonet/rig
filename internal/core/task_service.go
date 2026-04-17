@@ -10,45 +10,36 @@ import (
 )
 
 type TaskServiceDependencies struct {
-	Tasks         TaskStore
-	Workspace     WorkspaceClient
-	Runtime       RuntimeClient
-	Agents        map[string]AgentClient
-	ProjectConfig ProjectConfigRepository
-	Seeder        WorkspaceSeeder
-	Bootstrap     TaskWorkspaceBootstrapper
-	SetupRunner   SetupScriptRunner
-	Config        Config
+	Tasks    TaskStore
+	Repo     RepoClient
+	Session  SessionClient
+	Agents   map[string]AgentClient
+	Preparer WorkspacePreparer
+	Config   Config
 }
 
 type taskService struct {
-	tasks         TaskStore
-	workspace     WorkspaceClient
-	runtime       RuntimeClient
-	agents        map[string]AgentClient
-	projectConfig ProjectConfigRepository
-	seeder        WorkspaceSeeder
-	bootstrap     TaskWorkspaceBootstrapper
-	setupRunner   SetupScriptRunner
-	cfg           Config
+	tasks    TaskStore
+	repo     RepoClient
+	session  SessionClient
+	agents   map[string]AgentClient
+	preparer WorkspacePreparer
+	cfg      Config
 }
 
 func NewTaskService(deps TaskServiceDependencies) TaskService {
 	return &taskService{
-		tasks:         deps.Tasks,
-		workspace:     deps.Workspace,
-		runtime:       deps.Runtime,
-		agents:        deps.Agents,
-		projectConfig: deps.ProjectConfig,
-		seeder:        deps.Seeder,
-		bootstrap:     deps.Bootstrap,
-		setupRunner:   deps.SetupRunner,
-		cfg:           deps.Config,
+		tasks:    deps.Tasks,
+		repo:     deps.Repo,
+		session:  deps.Session,
+		agents:   deps.Agents,
+		preparer: deps.Preparer,
+		cfg:      deps.Config,
 	}
 }
 
 func (s *taskService) CreateTask(ctx context.Context, input CreateTaskInput) (*Task, error) {
-	repoCtx, err := s.workspace.DetectRepo(ctx, input.Cwd)
+	repoCtx, err := s.repo.DetectRepo(ctx, input.Cwd)
 	if err != nil {
 		return nil, err
 	}
@@ -65,14 +56,10 @@ type CreateTaskSource struct {
 }
 
 type CreateTaskInput struct {
-	Cwd    string
-	Prompt string
-	// TODO: create task outputs the confirmedDisplay Name so we dont need this
-	ConfirmedDisplayName string
-	// TODO: create task also create the branch type/name so we dont need this
-	ConfirmedBranchType string
-	Provider            string
-	Source              CreateTaskSource
+	Cwd      string
+	Prompt   string
+	Provider string
+	Source   CreateTaskSource
 }
 
 func (s *taskService) createTaskFromPrompt(
@@ -80,21 +67,6 @@ func (s *taskService) createTaskFromPrompt(
 	repoCtx RepoContext,
 	input CreateTaskInput,
 ) (*Task, error) {
-	repoConfig, err := s.loadRepoConfig(ctx, repoCtx.Root)
-	if err != nil {
-		return nil, err
-	}
-	if len(repoConfig.Seed.Copy) > 0 && s.seeder != nil {
-		if err := s.seeder.ValidateSeedPaths(ctx, repoCtx.Root, repoConfig.Seed.Copy); err != nil {
-			return nil, fmt.Errorf("seed workspace: %w", err)
-		}
-	}
-	if repoConfig.Seed.SetupScript != "" && s.setupRunner != nil {
-		if err := s.setupRunner.ValidateSetupScript(ctx, repoCtx.Root, repoConfig.Seed.SetupScript); err != nil {
-			return nil, fmt.Errorf("setup script: %w", err)
-		}
-	}
-
 	displayName, branchType, err := s.resolveTaskName(ctx, input)
 	if err != nil {
 		return nil, err
@@ -110,7 +82,7 @@ func (s *taskService) createTaskFromPrompt(
 	if err := s.tasks.CreateTask(ctx, task); err != nil {
 		return nil, err
 	}
-	if err := s.workspace.CreateTaskWorkspace(ctx, task); err != nil {
+	if err := s.repo.CreateTaskWorkspace(ctx, task); err != nil {
 		return s.markBroken(ctx, task, fmt.Errorf("create worktree: %w", err))
 	}
 
@@ -121,28 +93,8 @@ func (s *taskService) createTaskFromPrompt(
 		return task, err
 	}
 
-	if len(repoConfig.Seed.Copy) > 0 && s.seeder != nil {
-		if err := s.seeder.SeedWorkspace(ctx, SeedWorkspaceInput{
-			RepoRoot:      task.RepoRoot,
-			WorktreePath:  task.WorktreePath,
-			RelativePaths: repoConfig.Seed.Copy,
-		}, nil); err != nil {
-			return s.markBroken(ctx, task, fmt.Errorf("seed workspace: %w", err))
-		}
-	}
-
-	if repoConfig.Seed.SetupScript != "" && s.setupRunner != nil {
-		if err := s.setupRunner.RunSetupScript(ctx, RunSetupScriptInput{
-			RepoRoot:     task.RepoRoot,
-			WorktreePath: task.WorktreePath,
-			ScriptPath:   repoConfig.Seed.SetupScript,
-		}, nil); err != nil {
-			return s.markBroken(ctx, task, fmt.Errorf("setup script: %w", err))
-		}
-	}
-
-	if s.bootstrap != nil {
-		if err := s.bootstrap.BootstrapTaskWorkspace(ctx, task); err != nil {
+	if s.preparer != nil {
+		if err := s.preparer.PrepareTaskWorkspace(ctx, task, repoCtx.Root); err != nil {
 			return s.markBroken(ctx, task, fmt.Errorf("prepare workspace: %w", err))
 		}
 	}
@@ -168,7 +120,7 @@ func (s *taskService) createTaskFromPullRequest(
 		return nil, fmt.Errorf("PR already has workspace")
 	}
 
-	inUseByWorktree, err := s.workspace.IsBranchUsedByWorktree(ctx, repoCtx.Root, pr.BranchName)
+	inUseByWorktree, err := s.repo.IsBranchUsedByWorktree(ctx, repoCtx.Root, pr.BranchName)
 	if err != nil {
 		return nil, err
 	}
@@ -188,7 +140,7 @@ func (s *taskService) createTaskFromPullRequest(
 	if err := s.tasks.CreateTask(ctx, task); err != nil {
 		return nil, err
 	}
-	if err := s.workspace.CreateTaskWorkspaceFromBranch(ctx, task); err != nil {
+	if err := s.repo.CreateTaskWorkspaceFromBranch(ctx, task); err != nil {
 		return s.markBroken(ctx, task, fmt.Errorf("create worktree: %w", err))
 	}
 
@@ -202,18 +154,7 @@ func (s *taskService) createTaskFromPullRequest(
 	return s.startTaskRuntime(ctx, task)
 }
 
-func (s *taskService) loadRepoConfig(ctx context.Context, repoRoot string) (RepoConfig, error) {
-	if s.projectConfig == nil {
-		return RepoConfig{}, nil
-	}
-	return s.projectConfig.LoadRepoConfig(ctx, repoRoot)
-}
-
 func (s *taskService) resolveTaskName(ctx context.Context, input CreateTaskInput) (string, string, error) {
-	if strings.TrimSpace(input.ConfirmedDisplayName) != "" {
-		return strings.TrimSpace(input.ConfirmedDisplayName), input.ConfirmedBranchType, nil
-	}
-
 	agent := s.resolveAgent(input.Provider)
 	if agent == nil {
 		return fallbackDisplayName(input.Prompt), "feat", nil
@@ -255,7 +196,7 @@ func (s *taskService) startTaskRuntime(ctx context.Context, task *Task) (*Task, 
 	if err := writeSetupFiles(task.WorktreePath, launch.SetupFiles); err != nil {
 		return s.markBroken(ctx, task, fmt.Errorf("write setup files: %w", err))
 	}
-	if err := s.runtime.StartTaskSession(ctx, task, launch); err != nil {
+	if err := s.session.StartTaskSession(ctx, task, launch); err != nil {
 		return s.markBroken(ctx, task, fmt.Errorf("start task session: %w", err))
 	}
 
