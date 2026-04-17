@@ -94,51 +94,32 @@ func (r *Repository) BuildLaunchCommand(task *core.Task) ([]string, error) {
 	return []string{r.binary, task.Prompt}, nil
 }
 
-func (r *Repository) LaunchRequest(task *core.Task) (core.LaunchRequest, error) {
+func (r *Repository) BuildTaskSessionLaunchSpec(task *core.Task) (core.TaskSessionLaunchSpec, error) {
 	var initialInput []string
 	if strings.TrimSpace(task.Prompt) != "" {
 		initialInput = []string{task.Prompt}
 	}
 
-	req := core.LaunchRequest{
+	return core.TaskSessionLaunchSpec{
 		Command:      []string{r.binary},
-		Prompt:       "❯",
+		ReadyMarker:  "❯",
 		InitialInput: initialInput,
-	}
-
-	return r.withHookSettings(req)
+	}, nil
 }
 
-func (r *Repository) RestoreLaunchRequest(
+func (r *Repository) RestoreTaskSessionLaunchSpec(
 	_ *core.Task,
 	hookSession *core.HookSessionSummary,
-) (core.LaunchRequest, error) {
+) (core.TaskSessionLaunchSpec, error) {
 	command := []string{r.binary, "--resume"}
 	if hookSession != nil && strings.TrimSpace(hookSession.SessionID) != "" {
 		command = append(command, strings.TrimSpace(hookSession.SessionID))
 	}
 
-	req := core.LaunchRequest{
-		Command: command,
-		Prompt:  "❯",
-	}
-
-	return r.withHookSettings(req)
-}
-
-func (r *Repository) withHookSettings(req core.LaunchRequest) (core.LaunchRequest, error) {
-	if r.hookListenAddr != "" {
-		settings, err := BuildHookSettings(r.hookListenAddr)
-		if err != nil {
-			return req, fmt.Errorf("build hook settings: %w", err)
-		}
-		if req.SetupFiles == nil {
-			req.SetupFiles = make(map[string][]byte, 1)
-		}
-		req.SetupFiles[".claude/settings.local.json"] = settings
-	}
-
-	return req, nil
+	return core.TaskSessionLaunchSpec{
+		Command:     command,
+		ReadyMarker: "❯",
+	}, nil
 }
 
 func (r *Repository) DetectRuntimeState(snapshot core.RuntimeSnapshot) core.RuntimeState {

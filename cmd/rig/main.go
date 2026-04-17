@@ -101,12 +101,12 @@ func buildDependencies() (cli.Dependencies, error) {
 	service.SetPRStatusChecker(ghclient.NewPRStatusChecker(runner))
 
 	taskService := core.NewTaskService(core.TaskServiceDependencies{
-		Tasks:    taskRepo,
-		Repo:     gitclient.NewRepository(runner),
-		Session:  tmuxclient.NewRepository(runner),
-		Agents:   agentClients,
-		Preparer: workspacefs.NewPreparer(agentExec, detectAgentSourceRoot()),
-		Config:   core.Config{Provider: cfg.Provider},
+		Tasks:           taskRepo,
+		GitWorktree:     gitclient.NewRepository(runner),
+		TmuxSession:     tmuxclient.NewRepository(runner),
+		Agents:          agentClients,
+		Preparer:        workspacefs.NewPreparer(agentExec, detectAgentSourceRoot()),
+		DefaultProvider: cfg.Provider,
 	})
 	appService := core.NewAppService(taskService, service)
 

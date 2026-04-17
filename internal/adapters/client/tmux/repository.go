@@ -122,7 +122,7 @@ func (r *Repository) CreateSession(ctx context.Context, in core.CreateSessionInp
 	return err
 }
 
-func (r *Repository) StartTaskSession(ctx context.Context, task *core.Task, launch core.LaunchRequest) error {
+func (r *Repository) StartTaskSession(ctx context.Context, task *core.Task, launch core.TaskSessionLaunchSpec) error {
 	if err := r.CreateSession(ctx, core.CreateSessionInput{
 		SessionName:      task.TmuxSession,
 		WorkingDir:       task.WorktreePath,
@@ -140,7 +140,7 @@ func (r *Repository) StartTaskSession(ctx context.Context, task *core.Task, laun
 		return nil
 	}
 
-	if err := r.waitForPrompt(ctx, task.TmuxSession, task.AgentWindowName, launch.Prompt); err != nil {
+	if err := r.waitForPrompt(ctx, task.TmuxSession, task.AgentWindowName, launch.ReadyMarker); err != nil {
 		return err
 	}
 

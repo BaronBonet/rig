@@ -126,11 +126,6 @@ var validBranchTypes = map[string]bool{
 	"build":    true,
 }
 
-type TaskSuggestion struct {
-	Name       string `json:"name"`
-	BranchType string `json:"branch_type"`
-}
-
 func (s TaskSuggestion) BranchTypeOrDefault() string {
 	if s.BranchType != "" && validBranchTypes[s.BranchType] {
 		return s.BranchType
