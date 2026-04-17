@@ -2,6 +2,10 @@ package core
 
 import "context"
 
+type TaskService interface {
+	CreateTask(ctx context.Context, input CreateTaskInput) (*Task, error)
+}
+
 type RepoContext struct {
 	Root       string
 	Name       string

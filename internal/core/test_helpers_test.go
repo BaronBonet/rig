@@ -36,7 +36,8 @@ type testServiceHarness struct {
 
 type testTaskServiceHarness struct {
 	*testServiceHarness
-	service TaskService
+	service  TaskService
+	preparer workspacePreparerState
 }
 
 type taskRepositoryState struct {
@@ -125,6 +126,33 @@ type setupScriptRunnerState struct {
 	ranBeforeSession bool
 }
 
+type workspacePreparerState struct {
+	prepareErr          error
+	called              bool
+	repoRoot            string
+	worktreePath        string
+	calledBeforeSession bool
+	preparedDisplayName string
+	preparedBranchName  string
+}
+
+type recordingWorkspacePreparer struct {
+	state   *workspacePreparerState
+	session *sessionClientState
+}
+
+func (p *recordingWorkspacePreparer) PrepareTaskWorkspace(_ context.Context, task *Task, repoRoot string) error {
+	p.state.called = true
+	p.state.repoRoot = repoRoot
+	if task != nil {
+		p.state.worktreePath = task.WorktreePath
+		p.state.preparedDisplayName = task.DisplayName
+		p.state.preparedBranchName = task.BranchName
+	}
+	p.state.calledBeforeSession = p.session.startedTask == nil
+	return p.state.prepareErr
+}
+
 func newTestService(t *testing.T) *testServiceHarness {
 	t.Helper()
 
@@ -181,19 +209,16 @@ func newTestTaskService(t *testing.T) *testTaskServiceHarness {
 	t.Helper()
 
 	base := newTestService(t)
-	return &testTaskServiceHarness{
-		testServiceHarness: base,
-		service: NewTaskService(TaskServiceDependencies{
-			Tasks:         base.taskRepoMock,
-			Workspace:     base.repoClientMock,
-			Runtime:       base.sessionClientMock,
-			Agents:        map[string]AgentClient{"codex": base.providerRepoMock},
-			ProjectConfig: base.configRepoMock,
-			Seeder:        base.workspaceSeederMock,
-			SetupRunner:   base.setupRunnerMock,
-			Config:        Config{Provider: "codex"},
-		}),
-	}
+	h := &testTaskServiceHarness{testServiceHarness: base}
+	h.service = NewTaskService(TaskServiceDependencies{
+		Tasks:    base.taskRepoMock,
+		Repo:     base.repoClientMock,
+		Session:  base.sessionClientMock,
+		Agents:   map[string]AgentClient{"codex": base.providerRepoMock},
+		Preparer: &recordingWorkspacePreparer{state: &h.preparer, session: &base.sessionClient},
+		Config:   Config{Provider: "codex"},
+	})
+	return h
 }
 
 func wireTaskRepositoryMock(h *testServiceHarness) {

@@ -55,6 +55,10 @@ func TestTaskServiceCreateTask_CreatesWorkspaceSessionAndPersistsTask(t *testing
 	require.Equal(t, TaskStatusRunning, task.Status)
 	require.Equal(t, "/tmp/repo-billing-retry-flow", svc.repoClient.createdTask.WorktreePath)
 	require.Equal(t, "repo_billing-retry-flow", svc.sessionClient.startedTask.TmuxSession)
+	require.True(t, svc.preparer.called)
+	require.True(t, svc.preparer.calledBeforeSession)
+	require.Equal(t, "/tmp/repo", svc.preparer.repoRoot)
+	require.Equal(t, "/tmp/repo-billing-retry-flow", svc.preparer.worktreePath)
 	require.Equal(t, LaunchRequest{
 		Command:      []string{"codex"},
 		Prompt:       "›",
@@ -62,19 +66,23 @@ func TestTaskServiceCreateTask_CreatesWorkspaceSessionAndPersistsTask(t *testing
 	}, svc.sessionClient.startedLaunch)
 }
 
-func TestTaskServiceCreateTask_UsesConfirmedDisplayNameWhenProvided(t *testing.T) {
+func TestTaskServiceCreateTask_PersistsBrokenTaskWhenWorkspacePreparationFails(t *testing.T) {
 	svc := newTestTaskService(t)
+	svc.providerRepo.suggestedName = "billing retry flow"
+	svc.preparer.prepareErr = errors.New("setup script failed")
 
 	task, err := svc.service.CreateTask(t.Context(), CreateTaskInput{
-		Cwd:                  "/tmp/repo",
-		Prompt:               "ignored for naming",
-		ConfirmedDisplayName: "billing retry flow",
-		ConfirmedBranchType:  "fix",
+		Cwd:    "/tmp/repo",
+		Prompt: "add billing retry flow",
 	})
 
-	require.NoError(t, err)
-	require.Equal(t, "billing retry flow", task.DisplayName)
-	require.Equal(t, "fix/billing-retry-flow", task.BranchName)
+	require.Error(t, err)
+	require.True(t, svc.preparer.called)
+	require.Nil(t, svc.sessionClient.startedTask)
+	require.Equal(t, TaskStatusBroken, task.Status)
+	require.Contains(t, task.LastError, "prepare workspace")
+	require.Contains(t, task.LastError, "setup script failed")
+	require.Equal(t, TaskStatusBroken, svc.taskRepo.updatedTask.Status)
 }
 
 func TestTaskServiceCreateTask_RejectsDuplicatePullRequestBranchBeforePersist(t *testing.T) {
@@ -111,9 +119,8 @@ func TestTaskServiceCreateTask_PersistsBrokenTaskWhenRuntimeLaunchFails(t *testi
 	svc.sessionClient.startErr = errors.New("tmux failed")
 
 	task, err := svc.service.CreateTask(t.Context(), CreateTaskInput{
-		Cwd:                  "/tmp/repo",
-		Prompt:               "add billing retry flow",
-		ConfirmedDisplayName: "billing retry flow",
+		Cwd:    "/tmp/repo",
+		Prompt: "add billing retry flow",
 	})
 
 	require.Error(t, err)

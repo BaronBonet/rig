@@ -5,31 +5,16 @@ import (
 	"os"
 	"path/filepath"
 
-	"rig/internal/adapters/repository/sqlite"
-	"rig/internal/core"
-
 	"github.com/caarlos0/env/v11"
-
-	claudeclient "rig/internal/adapters/client/claude"
-	codexclient "rig/internal/adapters/client/codex"
 )
 
-// TODO: this is way to complicated, move the adapter specific stuff to their own repos
 type Config struct {
-	Service  core.Config
-	SQLite   sqlite.Config
-	Codex    codexclient.Config
-	Claude   claudeclient.Config
-	Hooks    HookConfig
-	Observer ObserverConfig
-}
-
-type HookConfig struct {
-	ListenAddr string
-}
-
-type ObserverConfig struct {
-	SocketPath string
+	Provider           string
+	SQLitePath         string
+	CodexBinary        string
+	ClaudeBinary       string
+	HookListenAddr     string
+	ObserverSocketPath string
 }
 
 type envConfig struct {
@@ -58,25 +43,12 @@ func LoadConfig() (*Config, error) {
 	}
 
 	return &Config{
-		Service: core.Config{
-			Provider: raw.Provider,
-		},
-		SQLite: sqlite.Config{
-			Path: raw.SQLitePath,
-		},
-		Codex: codexclient.Config{
-			Binary: raw.CodexBinary,
-		},
-		Claude: claudeclient.Config{
-			Binary:         raw.ClaudeBinary,
-			HookListenAddr: raw.HookListen,
-		},
-		Hooks: HookConfig{
-			ListenAddr: raw.HookListen,
-		},
-		Observer: ObserverConfig{
-			SocketPath: raw.ObserverSock,
-		},
+		Provider:           raw.Provider,
+		SQLitePath:         raw.SQLitePath,
+		CodexBinary:        raw.CodexBinary,
+		ClaudeBinary:       raw.ClaudeBinary,
+		HookListenAddr:     raw.HookListen,
+		ObserverSocketPath: raw.ObserverSock,
 	}, nil
 }
 

@@ -18,10 +18,10 @@ func TestLoadConfig_DefaultsAndOverrides(t *testing.T) {
 	cfg, err := LoadConfig()
 	require.NoError(t, err)
 
-	require.Equal(t, "claude", cfg.Service.Provider)
-	require.Equal(t, filepath.Join(home, "custom.db"), cfg.SQLite.Path)
-	require.Equal(t, "codex-custom", cfg.Codex.Binary)
-	require.Equal(t, "claude-custom", cfg.Claude.Binary)
+	require.Equal(t, "claude", cfg.Provider)
+	require.Equal(t, filepath.Join(home, "custom.db"), cfg.SQLitePath)
+	require.Equal(t, "codex-custom", cfg.CodexBinary)
+	require.Equal(t, "claude-custom", cfg.ClaudeBinary)
 }
 
 func TestLoadConfig_DefaultSQLitePathWhenUnset(t *testing.T) {
@@ -31,7 +31,7 @@ func TestLoadConfig_DefaultSQLitePathWhenUnset(t *testing.T) {
 	cfg, err := LoadConfig()
 	require.NoError(t, err)
 
-	require.Equal(t, filepath.Join(home, ".local", "share", "agent", "state.db"), cfg.SQLite.Path)
+	require.Equal(t, filepath.Join(home, ".local", "share", "agent", "state.db"), cfg.SQLitePath)
 }
 
 func TestLoadConfig_RejectsUnknownProvider(t *testing.T) {

@@ -13,7 +13,6 @@ import (
 	"rig/internal/core"
 
 	"charm.land/bubbles/v2/textarea"
-	"charm.land/bubbles/v2/textinput"
 	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
 )
@@ -26,7 +25,6 @@ const (
 	tuiModeList           tuiMode = "list"
 	tuiModeCleanupConfirm tuiMode = "cleanup_confirm"
 	tuiModePromptInput    tuiMode = "prompt_input"
-	tuiModeNameConfirm    tuiMode = "name_confirm"
 	tuiModePRPicker       tuiMode = "pr_picker"
 )
 
@@ -57,7 +55,6 @@ type model struct {
 	unsubscribeHooks   func()
 	unsubscribeUpdates func()
 	promptInput        textarea.Model
-	nameInput          textinput.Model
 	selected           int
 	width              int
 	loading            bool
@@ -161,10 +158,6 @@ func newTUIModel(
 	promptInput.SetHeight(4)
 	promptInput.Focus()
 
-	nameInput := textinput.New()
-	nameInput.Prompt = titleStyle.Render("❯") + " "
-	nameInput.Placeholder = "Confirm or edit the suggested task name"
-
 	vm := viewModeAll
 	repoName := ""
 	if repoRoot != "" {
@@ -181,7 +174,6 @@ func newTUIModel(
 		loading:            true,
 		mode:               tuiModeList,
 		promptInput:        promptInput,
-		nameInput:          nameInput,
 		defaultCreationCwd: emptyFallback(defaultCreationCwd, "."),
 		observerSocketPath: strings.TrimSpace(observerSocketPath),
 		currentRepoRoot:    repoRoot,
@@ -212,10 +204,6 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		case tuiModePromptInput:
 			var cmd tea.Cmd
 			m.promptInput, cmd = m.promptInput.Update(msg)
-			return m, cmd
-		case tuiModeNameConfirm:
-			var cmd tea.Cmd
-			m.nameInput, cmd = m.nameInput.Update(msg)
 			return m, cmd
 		}
 		return m, nil
@@ -443,8 +431,6 @@ func (m model) View() tea.View {
 		body = m.confirmationView()
 	case tuiModePromptInput:
 		body = m.promptInputView()
-	case tuiModeNameConfirm:
-		body = m.nameConfirmView()
 	case tuiModePRPicker:
 		body = m.prPickerView()
 	default:
@@ -470,8 +456,6 @@ func (m model) updateKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		return m.updateCleanupConfirmKey(msg)
 	case tuiModePromptInput:
 		return m.updatePromptInputKey(msg)
-	case tuiModeNameConfirm:
-		return m.updateNameConfirmKey(msg)
 	case tuiModePRPicker:
 		return m.updatePRPickerKey(msg)
 	default:
@@ -551,7 +535,6 @@ func (m model) updateListKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		m.promptProvider = m.provider
 		m.promptInput.Reset()
 		m.promptInput.Focus()
-		m.nameInput.Blur()
 		return m, nil
 	case "r":
 		m.service.InvalidatePRCache()
@@ -649,39 +632,6 @@ func (m model) updatePromptInputKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 
 	var cmd tea.Cmd
 	m.promptInput, cmd = m.promptInput.Update(msg)
-	return m, cmd
-}
-
-func (m model) updateNameConfirmKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
-	switch msg.Code {
-	case tea.KeyEscape:
-		m.mode = tuiModeList
-		m.nameInput.Blur()
-		return m, nil
-	case tea.KeyEnter:
-		name := strings.TrimSpace(m.nameInput.Value())
-		if name == "" {
-			return m, nil
-		}
-
-		m.err = nil
-		m.busy = true
-		m.nameInput.Blur()
-		m.creationProgress = core.TaskProgressWorktreeCreating
-		m.creationFailed = false
-		m.creationSteps = []string{progressStepLabel(core.TaskProgressWorktreeCreating)}
-		m.shimmerTick = 0
-		input := m.createInput
-		input.ConfirmedDisplayName = name
-		input.Provider = emptyFallback(m.createInput.Provider, m.provider)
-		return m, tea.Batch(
-			createTaskCmd(m.service, input),
-			tea.Tick(shimmerTickInterval, func(time.Time) tea.Msg { return shimmerTickMsg{} }),
-		)
-	}
-
-	var cmd tea.Cmd
-	m.nameInput, cmd = m.nameInput.Update(msg)
 	return m, cmd
 }
 
@@ -1365,64 +1315,6 @@ func (m model) prPickerView() string {
 	return b.String()
 }
 
-func (m model) nameConfirmView() string {
-	totalWidth := m.width
-	if totalWidth < 40 {
-		totalWidth = 72
-	}
-
-	var b strings.Builder
-
-	// Header
-	b.WriteString(renderHeader(
-		headerLabelStyle.Render("RIG"),
-		mutedStyle.Render("new task"),
-		totalWidth,
-	) + "\n")
-	b.WriteString(dividerStyle.Render(strings.Repeat("─", totalWidth)) + "\n")
-
-	if m.err != nil {
-		b.WriteString(errorStyle.Render("Error: "+m.err.Error()) + "\n\n")
-	}
-
-	// Checkmark recap: completed prompt and provider.
-	b.WriteString(healthyStyle.Render(iconCheckmark) + " " + mutedStyle.Render(m.createInput.Prompt) + "\n")
-	b.WriteString(
-		healthyStyle.Render(iconCheckmark) + " " +
-			mutedStyle.Render("provider: ") +
-			providerStyle(emptyFallback(m.createInput.Provider, m.provider)).
-				Render(emptyFallback(m.createInput.Provider, m.provider)) + "\n",
-	)
-
-	if m.busy && len(m.creationSteps) > 0 {
-		// Name is confirmed — show it as a completed step.
-		b.WriteString(healthyStyle.Render(iconCheckmark) + " " + mutedStyle.Render("name: "+m.nameInput.Value()) + "\n")
-		b.WriteString("\n")
-
-		// Render completed creation steps and active shimmer step.
-		for i, label := range m.creationSteps {
-			if i == len(m.creationSteps)-1 && m.creationProgress != core.TaskProgressTaskCreated {
-				// Active (last) step gets shimmer.
-				b.WriteString(warningStyle.Render("●") + " " + renderShimmer(label, m.shimmerTick) + "\n")
-			} else {
-				// Completed steps get checkmarks.
-				b.WriteString(healthyStyle.Render(iconCheckmark) + " " + mutedStyle.Render(label) + "\n")
-			}
-		}
-	} else {
-		// Name input is active — show editable input.
-		b.WriteString("\n")
-		b.WriteString(warningStyle.Render("▸ Name: ") + m.nameInput.View() + "\n")
-		b.WriteString("\n")
-		b.WriteString(
-			keybindStyle.Render("enter") + mutedStyle.Render(" create · ") +
-				keybindStyle.Render("esc") + mutedStyle.Render(" cancel"),
-		)
-	}
-
-	return b.String()
-}
-
 func (m model) openPRPicker() (tea.Model, tea.Cmd) {
 	if m.blockedByActiveCreation("Task creation already in progress") {
 		return m, nil
@@ -1442,7 +1334,6 @@ func (m model) openPRPicker() (tea.Model, tea.Cmd) {
 	m.prPickerRows = nil
 	m.prPickerSelected = 0
 	m.promptInput.Blur()
-	m.nameInput.Blur()
 
 	return m, loadRepoPRsCmd(m.service, repoRoot, repoName)
 }
