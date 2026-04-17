@@ -34,6 +34,11 @@ type testServiceHarness struct {
 	setupRunner     setupScriptRunnerState
 }
 
+type testTaskServiceHarness struct {
+	*testServiceHarness
+	service TaskService
+}
+
 type taskRepositoryState struct {
 	isAvailableErr  error
 	createErr       error
@@ -170,6 +175,25 @@ func newTestService(t *testing.T) *testServiceHarness {
 	)
 
 	return h
+}
+
+func newTestTaskService(t *testing.T) *testTaskServiceHarness {
+	t.Helper()
+
+	base := newTestService(t)
+	return &testTaskServiceHarness{
+		testServiceHarness: base,
+		service: NewTaskService(TaskServiceDependencies{
+			Tasks:         base.taskRepoMock,
+			Workspace:     base.repoClientMock,
+			Runtime:       base.sessionClientMock,
+			Agents:        map[string]AgentClient{"codex": base.providerRepoMock},
+			ProjectConfig: base.configRepoMock,
+			Seeder:        base.workspaceSeederMock,
+			SetupRunner:   base.setupRunnerMock,
+			Config:        Config{Provider: "codex"},
+		}),
+	}
 }
 
 func wireTaskRepositoryMock(h *testServiceHarness) {

@@ -41,7 +41,7 @@ const (
 type model struct {
 	service            TaskService
 	err                error
-	createInput        core.NewTaskInput
+	createInput        core.CreateTaskInput
 	provider           string
 	promptProvider     string
 	defaultCreationCwd string
@@ -69,7 +69,6 @@ type model struct {
 	recentEvents       []core.HookEvent
 	recentEventsTaskID string
 	shimmerTick        int
-	progressCh         <-chan taskProgressMsg
 	tasksRequestSeq    int
 	creationTask       *core.Task
 	prPickerRepoRoot   string
@@ -129,21 +128,9 @@ type openFinishedMsg struct {
 	err error
 }
 
-type suggestNameFinishedMsg struct {
-	err        error
-	prompt     string
-	suggestion core.TaskSuggestion
-}
-
 type createFinishedMsg struct {
 	task *core.Task
 	err  error
-}
-
-type taskProgressMsg struct {
-	step    core.TaskProgressStep
-	message string
-	task    *core.Task
 }
 
 type recentEventsMsg struct {
@@ -353,28 +340,8 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 		m.loading = true
 		return m, m.nextRefreshTasksCmd()
-	case suggestNameFinishedMsg:
-		m.busy = false
-		m.creationProgress = ""
-		m.shimmerTick = 0
-		m.err = msg.err
-		if msg.err != nil {
-			m.mode = tuiModePromptInput
-			m.promptInput.Focus()
-			return m, nil
-		}
-
-		m.createInput.Prompt = msg.prompt
-		m.createInput.ConfirmedBranchType = msg.suggestion.BranchType
-		m.nameInput.SetValue(msg.suggestion.Name)
-		m.nameInput.CursorEnd()
-		m.nameInput.Focus()
-		m.promptInput.Blur()
-		m.mode = tuiModeNameConfirm
-		return m, nil
 	case createFinishedMsg:
 		m.busy = false
-		m.progressCh = nil
 		m.err = msg.err
 		if msg.err != nil {
 			if msg.task != nil {
@@ -445,25 +412,6 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 		}
 		return m, nil
-	case taskProgressMsg:
-		if msg.task != nil {
-			m.creationTask = cloneTaskSnapshot(msg.task)
-		}
-		m.creationProgress = msg.step
-		if label := progressStepLabel(msg.step); label != "" {
-			// Avoid duplicating the initial step that was seeded when
-			// entering the creation phase.
-			if len(m.creationSteps) == 0 || m.creationSteps[len(m.creationSteps)-1] != label {
-				m.creationSteps = append(m.creationSteps, label)
-			}
-		}
-		m.shimmerTick = 0
-		var cmds []tea.Cmd
-		if m.progressCh != nil {
-			cmds = append(cmds, waitForProgressCmd(m.progressCh))
-		}
-		cmds = append(cmds, tea.Tick(shimmerTickInterval, func(time.Time) tea.Msg { return shimmerTickMsg{} }))
-		return m, tea.Batch(cmds...)
 	case shimmerTickMsg:
 		if m.creationProgress == "" {
 			return m, nil
@@ -476,7 +424,6 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.busy = false
 		m.creationProgress = ""
 		m.shimmerTick = 0
-		m.progressCh = nil
 		if m.createInFlight {
 			m.markCreationFailed()
 			return m, nil
@@ -600,7 +547,7 @@ func (m model) updateListKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		m.err = nil
 		m.creationFailed = false
 		m.mode = tuiModePromptInput
-		m.createInput = core.NewTaskInput{Cwd: creationCwd}
+		m.createInput = core.CreateTaskInput{Cwd: creationCwd}
 		m.promptProvider = m.provider
 		m.promptInput.Reset()
 		m.promptInput.Focus()
@@ -683,22 +630,19 @@ func (m model) updatePromptInputKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		m.creationFailed = false
 		m.mode = tuiModeList
 		m.creationTask = nil
-		m.creationProgress = core.TaskProgressNaming
-		m.creationSteps = []string{progressStepLabel(core.TaskProgressNaming)}
+		m.creationProgress = core.TaskProgressWorktreeCreating
+		m.creationSteps = []string{progressStepLabel(core.TaskProgressWorktreeCreating)}
 		m.shimmerTick = 0
 		m.provider = selectedProvider
-		m.createInput = core.NewTaskInput{
+		m.createInput = core.CreateTaskInput{
 			Cwd:      m.creationCwd(),
 			Prompt:   prompt,
 			Provider: selectedProvider,
 		}
 		m.selected = m.syntheticCreationRowIndex()
 		m.promptInput.Blur()
-		progressCh, createCmd := createTaskCmd(m.service, m.createInput)
-		m.progressCh = progressCh
 		return m, tea.Batch(
-			createCmd,
-			waitForProgressCmd(progressCh),
+			createTaskCmd(m.service, m.createInput),
 			tea.Tick(shimmerTickInterval, func(time.Time) tea.Msg { return shimmerTickMsg{} }),
 		)
 	}
@@ -730,11 +674,8 @@ func (m model) updateNameConfirmKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		input := m.createInput
 		input.ConfirmedDisplayName = name
 		input.Provider = emptyFallback(m.createInput.Provider, m.provider)
-		progressCh, createCmd := createTaskCmd(m.service, input)
-		m.progressCh = progressCh
 		return m, tea.Batch(
-			createCmd,
-			waitForProgressCmd(progressCh),
+			createTaskCmd(m.service, input),
 			tea.Tick(shimmerTickInterval, func(time.Time) tea.Msg { return shimmerTickMsg{} }),
 		)
 	}
@@ -781,17 +722,16 @@ func (m model) updatePRPickerKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		m.creationProgress = core.TaskProgressWorktreeCreating
 		m.creationSteps = []string{progressStepLabel(core.TaskProgressWorktreeCreating)}
 		m.shimmerTick = 0
-		input := core.CreateTaskFromPRInput{
-			RepoRoot: m.prPickerRepoRoot,
-			PR:       selectedPR,
+		input := core.CreateTaskInput{
+			Cwd:      m.prPickerRepoRoot,
 			Provider: emptyFallback(m.provider, "codex"),
+			Source: core.CreateTaskSource{
+				PullRequest: &selectedPR,
+			},
 		}
 		m.selected = m.syntheticCreationRowIndex()
-		progressCh, createCmd := createTaskFromPRCmd(m.service, input)
-		m.progressCh = progressCh
 		return m, tea.Batch(
-			createCmd,
-			waitForProgressCmd(progressCh),
+			createTaskCmd(m.service, input),
 			tea.Tick(shimmerTickInterval, func(time.Time) tea.Msg { return shimmerTickMsg{} }),
 		)
 	default:
@@ -2141,82 +2081,17 @@ func waitForObserverUpdateCmd(updates <-chan core.ObserverTaskUpdate) tea.Cmd {
 	})
 }
 
-func suggestTaskNameCmd(service TaskService, prompt string, provider string) tea.Cmd {
-	return safeCmd("suggestTaskNameCmd", func() tea.Msg {
-		suggestion, err := service.SuggestTaskName(context.Background(), prompt, provider)
-		return suggestNameFinishedMsg{prompt: prompt, suggestion: suggestion, err: err}
-	})
-}
-
-func createTaskCmd(service TaskService, input core.NewTaskInput) (<-chan taskProgressMsg, tea.Cmd) {
-	progressCh := make(chan taskProgressMsg, 8)
-
-	cmd := func() (msg tea.Msg) {
-		defer close(progressCh)
+func createTaskCmd(service TaskService, input core.CreateTaskInput) tea.Cmd {
+	return func() (msg tea.Msg) {
 		defer func() {
 			if r := recover(); r != nil {
 				msg = asyncErrMsg{err: fmt.Errorf("createTaskCmd panicked: %v", r)}
 			}
 		}()
 
-		task, err := service.CreateTaskWithProgress(
-			context.Background(),
-			input,
-			core.CreateTaskOptions{OpenSession: false},
-			func(p core.TaskProgress) {
-				progressCh <- taskProgressMsg{
-					step:    p.Step,
-					message: p.Message,
-					task:    cloneTaskSnapshot(p.Task),
-				}
-			},
-		)
+		task, err := service.CreateTask(context.Background(), input)
 		return createFinishedMsg{task: task, err: err}
 	}
-
-	return progressCh, cmd
-}
-
-func createTaskFromPRCmd(service TaskService, input core.CreateTaskFromPRInput) (<-chan taskProgressMsg, tea.Cmd) {
-	progressCh := make(chan taskProgressMsg, 8)
-
-	cmd := func() (msg tea.Msg) {
-		defer close(progressCh)
-		defer func() {
-			if r := recover(); r != nil {
-				msg = asyncErrMsg{err: fmt.Errorf("createTaskFromPRCmd panicked: %v", r)}
-			}
-		}()
-
-		task, err := service.CreateTaskFromPRWithProgress(
-			context.Background(),
-			input,
-			core.CreateTaskOptions{OpenSession: false},
-			func(p core.TaskProgress) {
-				progressCh <- taskProgressMsg{
-					step:    p.Step,
-					message: p.Message,
-					task:    cloneTaskSnapshot(p.Task),
-				}
-			},
-		)
-		return createFinishedMsg{task: task, err: err}
-	}
-
-	return progressCh, cmd
-}
-
-func waitForProgressCmd(ch <-chan taskProgressMsg) tea.Cmd {
-	if ch == nil {
-		return nil
-	}
-	return safeCmd("waitForProgressCmd", func() tea.Msg {
-		msg, ok := <-ch
-		if !ok {
-			return nil
-		}
-		return msg
-	})
 }
 
 func safeCmd(name string, fn func() tea.Msg) tea.Cmd {
