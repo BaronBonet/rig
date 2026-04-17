@@ -79,7 +79,7 @@ type sessionClientState struct {
 	startedTask      *Task
 	openedTask       *Task
 	deletedTasks     []*Task
-	startedLaunch    LaunchRequest
+	startedLaunch    TaskSessionLaunchSpec
 	sessionResources SessionResources
 	snapshot         RuntimeSnapshot
 	snapshotErr      error
@@ -92,7 +92,7 @@ type providerClientState struct {
 	suggestedName       string
 	suggestedSuggestion TaskSuggestion
 	launchErr           error
-	launchRequest       LaunchRequest
+	launchRequest       TaskSessionLaunchSpec
 	runtimeState        RuntimeState
 }
 
@@ -211,12 +211,12 @@ func newTestTaskService(t *testing.T) *testTaskServiceHarness {
 	base := newTestService(t)
 	h := &testTaskServiceHarness{testServiceHarness: base}
 	h.service = NewTaskService(TaskServiceDependencies{
-		Tasks:    base.taskRepoMock,
-		Repo:     base.repoClientMock,
-		Session:  base.sessionClientMock,
-		Agents:   map[string]AgentClient{"codex": base.providerRepoMock},
-		Preparer: &recordingWorkspacePreparer{state: &h.preparer, session: &base.sessionClient},
-		Config:   Config{Provider: "codex"},
+		Tasks:           base.taskRepoMock,
+		GitWorktree:     base.repoClientMock,
+		TmuxSession:     base.sessionClientMock,
+		Agents:          map[string]AgentClient{"codex": base.providerRepoMock},
+		Preparer:        &recordingWorkspacePreparer{state: &h.preparer, session: &base.sessionClient},
+		DefaultProvider: "codex",
 	})
 	return h
 }
@@ -340,7 +340,7 @@ func wireSessionClientMock(h *testServiceHarness) {
 		return h.sessionClient.isAvailableErr
 	}).Maybe()
 	h.sessionClientMock.EXPECT().StartTaskSession(mock.Anything, mock.Anything, mock.Anything).
-		RunAndReturn(func(_ context.Context, task *Task, launch LaunchRequest) error {
+		RunAndReturn(func(_ context.Context, task *Task, launch TaskSessionLaunchSpec) error {
 			h.sessionClient.startedTask = cloneTask(task)
 			h.sessionClient.startedLaunch = launch
 			if h.sessionClient.startHook != nil {
@@ -402,17 +402,17 @@ func wireProviderClientMock(h *testServiceHarness) {
 			}
 			return TaskSuggestion{Name: h.providerRepo.suggestedName, BranchType: "feat"}, nil
 		}).Maybe()
-	h.providerRepoMock.EXPECT().LaunchRequest(mock.Anything).RunAndReturn(func(task *Task) (LaunchRequest, error) {
+	h.providerRepoMock.EXPECT().BuildTaskSessionLaunchSpec(mock.Anything).RunAndReturn(func(task *Task) (TaskSessionLaunchSpec, error) {
 		if h.providerRepo.launchErr != nil {
-			return LaunchRequest{}, h.providerRepo.launchErr
+			return TaskSessionLaunchSpec{}, h.providerRepo.launchErr
 		}
-		if hasCustomLaunchRequest(h.providerRepo.launchRequest) {
+		if hasCustomLaunchSpec(h.providerRepo.launchRequest) {
 			return h.providerRepo.launchRequest, nil
 		}
 
-		return LaunchRequest{
+		return TaskSessionLaunchSpec{
 			Command:      []string{"codex"},
-			Prompt:       "›",
+			ReadyMarker:  "›",
 			InitialInput: []string{task.Prompt},
 		}, nil
 	}).Maybe()
@@ -480,8 +480,8 @@ func wireSetupScriptRunnerMock(h *testServiceHarness) {
 		}).Maybe()
 }
 
-func hasCustomLaunchRequest(req LaunchRequest) bool {
-	return len(req.Command) > 0 || len(req.InitialInput) > 0 || req.Prompt != ""
+func hasCustomLaunchSpec(req TaskSessionLaunchSpec) bool {
+	return len(req.Command) > 0 || len(req.InitialInput) > 0 || req.ReadyMarker != ""
 }
 
 func (h *testServiceHarness) existingTask(id string) *Task {

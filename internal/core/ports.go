@@ -2,16 +2,6 @@ package core
 
 import "context"
 
-type TaskService interface {
-	CreateTask(ctx context.Context, input CreateTaskInput) (*Task, error)
-}
-
-type RepoContext struct {
-	Root       string
-	Name       string
-	BaseBranch string
-}
-
 type RepoConfig struct {
 	Seed           SeedConfig
 	Exists         bool
@@ -21,13 +11,6 @@ type RepoConfig struct {
 type SeedConfig struct {
 	Copy        []string
 	SetupScript string
-}
-
-type LaunchRequest struct {
-	Command      []string
-	Prompt       string
-	InitialInput []string
-	SetupFiles   map[string][]byte // relative path -> content, written to worktree before launch
 }
 
 type RepoResources struct {
@@ -120,15 +103,6 @@ type RepoClient interface {
 	InspectTaskWorkspace(ctx context.Context, task *Task) (RepoResources, error)
 }
 
-type SessionClient interface {
-	IsAvailable(ctx context.Context) error
-	StartTaskSession(ctx context.Context, task *Task, launch LaunchRequest) error
-	OpenTaskSession(ctx context.Context, task *Task) error
-	DeleteTaskSession(ctx context.Context, task *Task) error
-	InspectTaskSession(ctx context.Context, task *Task) (SessionResources, error)
-	SnapshotTaskSession(ctx context.Context, task *Task) (RuntimeSnapshot, error)
-}
-
 type RuntimeMonitor interface {
 	Snapshot(ctx context.Context, task *Task) (RuntimeSnapshot, error)
 	Close() error
@@ -137,12 +111,12 @@ type RuntimeMonitor interface {
 type ProviderClient interface {
 	IsAvailable(ctx context.Context) error
 	SuggestTaskName(ctx context.Context, prompt string) (TaskSuggestion, error)
-	LaunchRequest(task *Task) (LaunchRequest, error)
+	BuildTaskSessionLaunchSpec(task *Task) (TaskSessionLaunchSpec, error)
 	DetectRuntimeState(snapshot RuntimeSnapshot) RuntimeState
 }
 
 type RestoreLaunchProvider interface {
-	RestoreLaunchRequest(task *Task, hookSession *HookSessionSummary) (LaunchRequest, error)
+	RestoreTaskSessionLaunchSpec(task *Task, hookSession *HookSessionSummary) (TaskSessionLaunchSpec, error)
 }
 
 type SessionUsageReader interface {

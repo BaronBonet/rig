@@ -10,36 +10,36 @@ import (
 )
 
 type TaskServiceDependencies struct {
-	Tasks    TaskStore
-	Repo     RepoClient
-	Session  SessionClient
-	Agents   map[string]AgentClient
-	Preparer WorkspacePreparer
-	Config   Config
+	Tasks           TaskStore
+	GitWorktree     GitWorktreeClient
+	TmuxSession     TmuxSessionClient
+	Agents          map[string]AgentClient
+	Preparer        WorkspacePreparer
+	DefaultProvider string
 }
 
 type taskService struct {
-	tasks    TaskStore
-	repo     RepoClient
-	session  SessionClient
-	agents   map[string]AgentClient
-	preparer WorkspacePreparer
-	cfg      Config
+	tasks           TaskStore
+	gitWorktree     GitWorktreeClient
+	tmuxSession     TmuxSessionClient
+	agents          map[string]AgentClient
+	preparer        WorkspacePreparer
+	defaultProvider string
 }
 
 func NewTaskService(deps TaskServiceDependencies) TaskService {
 	return &taskService{
-		tasks:    deps.Tasks,
-		repo:     deps.Repo,
-		session:  deps.Session,
-		agents:   deps.Agents,
-		preparer: deps.Preparer,
-		cfg:      deps.Config,
+		tasks:           deps.Tasks,
+		gitWorktree:     deps.GitWorktree,
+		tmuxSession:     deps.TmuxSession,
+		agents:          deps.Agents,
+		preparer:        deps.Preparer,
+		defaultProvider: deps.DefaultProvider,
 	}
 }
 
 func (s *taskService) CreateTask(ctx context.Context, input CreateTaskInput) (*Task, error) {
-	repoCtx, err := s.repo.DetectRepo(ctx, input.Cwd)
+	repoCtx, err := s.gitWorktree.DetectRepo(ctx, input.Cwd)
 	if err != nil {
 		return nil, err
 	}
@@ -53,13 +53,6 @@ func (s *taskService) CreateTask(ctx context.Context, input CreateTaskInput) (*T
 
 type CreateTaskSource struct {
 	PullRequest *RepoPullRequest
-}
-
-type CreateTaskInput struct {
-	Cwd      string
-	Prompt   string
-	Provider string
-	Source   CreateTaskSource
 }
 
 func (s *taskService) createTaskFromPrompt(
@@ -76,13 +69,13 @@ func (s *taskService) createTaskFromPrompt(
 	if err != nil {
 		return nil, err
 	}
-	task := newTaskRecord(repoCtx, existingTasks, input.Provider, s.cfg.Provider, displayName, branchType, "")
+	task := newTaskRecord(repoCtx, existingTasks, input.Provider, s.defaultProvider, displayName, branchType, "")
 	task.Prompt = input.Prompt
 
 	if err := s.tasks.CreateTask(ctx, task); err != nil {
 		return nil, err
 	}
-	if err := s.repo.CreateTaskWorkspace(ctx, task); err != nil {
+	if err := s.gitWorktree.CreateTaskWorkspace(ctx, task); err != nil {
 		return s.markBroken(ctx, task, fmt.Errorf("create worktree: %w", err))
 	}
 
@@ -120,7 +113,7 @@ func (s *taskService) createTaskFromPullRequest(
 		return nil, fmt.Errorf("PR already has workspace")
 	}
 
-	inUseByWorktree, err := s.repo.IsBranchUsedByWorktree(ctx, repoCtx.Root, pr.BranchName)
+	inUseByWorktree, err := s.gitWorktree.IsBranchUsedByWorktree(ctx, repoCtx.Root, pr.BranchName)
 	if err != nil {
 		return nil, err
 	}
@@ -132,7 +125,7 @@ func (s *taskService) createTaskFromPullRequest(
 		repoCtx,
 		existingTasks,
 		input.Provider,
-		s.cfg.Provider,
+		s.defaultProvider,
 		prDisplayName(*pr),
 		"",
 		pr.BranchName,
@@ -140,7 +133,7 @@ func (s *taskService) createTaskFromPullRequest(
 	if err := s.tasks.CreateTask(ctx, task); err != nil {
 		return nil, err
 	}
-	if err := s.repo.CreateTaskWorkspaceFromBranch(ctx, task); err != nil {
+	if err := s.gitWorktree.CreateTaskWorkspaceFromBranch(ctx, task); err != nil {
 		return s.markBroken(ctx, task, fmt.Errorf("create worktree: %w", err))
 	}
 
@@ -174,7 +167,7 @@ func (s *taskService) resolveAgent(name string) AgentClient {
 			return agent
 		}
 	}
-	if agent, ok := s.agents[s.cfg.Provider]; ok {
+	if agent, ok := s.agents[s.defaultProvider]; ok {
 		return agent
 	}
 	for _, agent := range s.agents {
@@ -186,17 +179,14 @@ func (s *taskService) resolveAgent(name string) AgentClient {
 func (s *taskService) startTaskRuntime(ctx context.Context, task *Task) (*Task, error) {
 	agent := s.resolveAgent(task.Provider)
 	if agent == nil {
-		return s.markBroken(ctx, task, fmt.Errorf("build launch request: provider %q unavailable", task.Provider))
+		return s.markBroken(ctx, task, fmt.Errorf("build task session launch spec: provider %q unavailable", task.Provider))
 	}
 
-	launch, err := agent.LaunchRequest(task)
+	launch, err := agent.BuildTaskSessionLaunchSpec(task)
 	if err != nil {
-		return s.markBroken(ctx, task, fmt.Errorf("build launch request: %w", err))
+		return s.markBroken(ctx, task, fmt.Errorf("build task session launch spec: %w", err))
 	}
-	if err := writeSetupFiles(task.WorktreePath, launch.SetupFiles); err != nil {
-		return s.markBroken(ctx, task, fmt.Errorf("write setup files: %w", err))
-	}
-	if err := s.session.StartTaskSession(ctx, task, launch); err != nil {
+	if err := s.tmuxSession.StartTaskSession(ctx, task, launch); err != nil {
 		return s.markBroken(ctx, task, fmt.Errorf("start task session: %w", err))
 	}
 

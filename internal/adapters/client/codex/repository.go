@@ -115,31 +115,31 @@ func (r *Repository) BuildLaunchCommand(task *core.Task) ([]string, error) {
 	return []string{r.binary, task.Prompt}, nil
 }
 
-func (r *Repository) LaunchRequest(task *core.Task) (core.LaunchRequest, error) {
+func (r *Repository) BuildTaskSessionLaunchSpec(task *core.Task) (core.TaskSessionLaunchSpec, error) {
 	var initialInput []string
 	if strings.TrimSpace(task.Prompt) != "" {
 		initialInput = []string{task.Prompt}
 	}
 
-	return core.LaunchRequest{
+	return core.TaskSessionLaunchSpec{
 		Command:      []string{r.binary},
-		Prompt:       r.PromptMarker(),
+		ReadyMarker:  r.PromptMarker(),
 		InitialInput: initialInput,
 	}, nil
 }
 
-func (r *Repository) RestoreLaunchRequest(
+func (r *Repository) RestoreTaskSessionLaunchSpec(
 	_ *core.Task,
 	hookSession *core.HookSessionSummary,
-) (core.LaunchRequest, error) {
+) (core.TaskSessionLaunchSpec, error) {
 	command := []string{r.binary, "resume"}
 	if hookSession != nil && strings.TrimSpace(hookSession.SessionID) != "" {
 		command = append(command, strings.TrimSpace(hookSession.SessionID))
 	}
 
-	return core.LaunchRequest{
-		Command: command,
-		Prompt:  r.PromptMarker(),
+	return core.TaskSessionLaunchSpec{
+		Command:     command,
+		ReadyMarker: r.PromptMarker(),
 	}, nil
 }
 

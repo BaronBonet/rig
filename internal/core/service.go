@@ -44,7 +44,7 @@ type Service struct {
 	hooks       HookObservabilityRepository
 	observers   ObserverRuntimeRepository
 	repo        RepoClient
-	session     SessionClient
+	session     TmuxSessionClient
 	providers   map[string]ProviderClient
 	repoConfig  RepoConfigLoader
 	workspace   WorkspaceSeeder
@@ -259,15 +259,11 @@ func (s *Service) CreateTaskWithProgress(
 	})
 	providerRepo := s.resolveProvider(task.Provider)
 	if providerRepo == nil {
-		return s.markBroken(ctx, task, fmt.Errorf("build launch request: provider %q unavailable", task.Provider))
+		return s.markBroken(ctx, task, fmt.Errorf("build task session launch spec: provider %q unavailable", task.Provider))
 	}
-	launch, err := providerRepo.LaunchRequest(task)
+	launch, err := providerRepo.BuildTaskSessionLaunchSpec(task)
 	if err != nil {
-		return s.markBroken(ctx, task, fmt.Errorf("build launch request: %w", err))
-	}
-
-	if err := writeSetupFiles(task.WorktreePath, launch.SetupFiles); err != nil {
-		return s.markBroken(ctx, task, fmt.Errorf("write setup files: %w", err))
+		return s.markBroken(ctx, task, fmt.Errorf("build task session launch spec: %w", err))
 	}
 
 	emitTaskProgress(progress, TaskProgress{
@@ -423,15 +419,11 @@ func (s *Service) CreateTaskFromPRWithProgress(
 	})
 	providerRepo := s.resolveProvider(task.Provider)
 	if providerRepo == nil {
-		return s.markBroken(ctx, task, fmt.Errorf("build launch request: provider %q unavailable", task.Provider))
+		return s.markBroken(ctx, task, fmt.Errorf("build task session launch spec: provider %q unavailable", task.Provider))
 	}
-	launch, err := providerRepo.LaunchRequest(task)
+	launch, err := providerRepo.BuildTaskSessionLaunchSpec(task)
 	if err != nil {
-		return s.markBroken(ctx, task, fmt.Errorf("build launch request: %w", err))
-	}
-
-	if err := writeSetupFiles(task.WorktreePath, launch.SetupFiles); err != nil {
-		return s.markBroken(ctx, task, fmt.Errorf("write setup files: %w", err))
+		return s.markBroken(ctx, task, fmt.Errorf("build task session launch spec: %w", err))
 	}
 
 	emitTaskProgress(progress, TaskProgress{
@@ -685,14 +677,9 @@ func (s *Service) restoreTaskSession(ctx context.Context, task *Task) error {
 	}
 
 	hookSession := s.lookupHookSessionSummary(ctx, task.ID)
-	launch, err := restoreLaunchRequest(providerRepo, task, hookSession)
+	launch, err := restoreTaskSessionLaunchSpec(providerRepo, task, hookSession)
 	if err != nil {
-		_, markErr := s.markBroken(ctx, task, fmt.Errorf("build launch request: %w", err))
-		return markErr
-	}
-
-	if err := writeSetupFiles(task.WorktreePath, launch.SetupFiles); err != nil {
-		_, markErr := s.markBroken(ctx, task, fmt.Errorf("write setup files: %w", err))
+		_, markErr := s.markBroken(ctx, task, fmt.Errorf("build task session launch spec: %w", err))
 		return markErr
 	}
 
@@ -714,16 +701,16 @@ func (s *Service) restoreTaskSession(ctx context.Context, task *Task) error {
 	return nil
 }
 
-func restoreLaunchRequest(
+func restoreTaskSessionLaunchSpec(
 	providerRepo ProviderClient,
 	task *Task,
 	hookSession *HookSessionSummary,
-) (LaunchRequest, error) {
+) (TaskSessionLaunchSpec, error) {
 	if restorer, ok := providerRepo.(RestoreLaunchProvider); ok {
-		return restorer.RestoreLaunchRequest(task, hookSession)
+		return restorer.RestoreTaskSessionLaunchSpec(task, hookSession)
 	}
 
-	return providerRepo.LaunchRequest(task)
+	return providerRepo.BuildTaskSessionLaunchSpec(task)
 }
 
 func (s *Service) lookupHookSessionSummary(ctx context.Context, taskID string) *HookSessionSummary {
@@ -847,7 +834,7 @@ func NewService(
 	hooks HookObservabilityRepository,
 	observers ObserverRuntimeRepository,
 	repo RepoClient,
-	session SessionClient,
+	session TmuxSessionClient,
 	providers map[string]ProviderClient,
 	repoConfig RepoConfigLoader,
 	workspace WorkspaceSeeder,
