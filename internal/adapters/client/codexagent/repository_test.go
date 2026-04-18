@@ -12,7 +12,7 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func TestRepositoryBuildTaskSessionLaunchSpec_UsesBinaryPromptAndTaskPrompt(t *testing.T) {
+func TestRepositoryBuildTaskSessionLaunchSpec_StartsCodexAndPrefillsTaskPrompt(t *testing.T) {
 	repo := New(execx.NewMockRunner(t), Config{Binary: "codex"}, HookForwardingConfig{})
 
 	launch, err := repo.BuildTaskSessionLaunchSpec(&core.Task{Prompt: "add billing retry flow"})
@@ -20,7 +20,7 @@ func TestRepositoryBuildTaskSessionLaunchSpec_UsesBinaryPromptAndTaskPrompt(t *t
 	require.Equal(t, core.TaskSessionLaunchSpec{
 		Command:      []string{"codex"},
 		ReadyMarker:  "›",
-		InitialInput: []string{"add billing retry flow"},
+		PrefillInput: []string{"add billing retry flow"},
 	}, launch)
 }
 
@@ -35,13 +35,15 @@ func TestRepositoryBuildWorkspaceBootstrapSpec_RendersCodexHooksAndForwarderScri
 	spec, err := repo.BuildWorkspaceBootstrapSpec(&core.Task{})
 	require.NoError(t, err)
 	require.Len(t, spec.Files, 2)
-	require.Equal(t, ".codex/hooks/hooks.json", spec.Files[0].Path)
+	require.Equal(t, ".codex/hooks.json", spec.Files[0].Path)
 	require.Equal(t, os.FileMode(0o644), spec.Files[0].FileMode)
 	require.Contains(t, string(spec.Files[0].Content), `"SessionStart"`)
+	require.Contains(t, string(spec.Files[0].Content), `"PermissionRequest"`)
 	require.Equal(t, ".codex/hooks/forward-to-rig.sh", spec.Files[1].Path)
 	require.Equal(t, os.FileMode(0o755), spec.Files[1].FileMode)
 	require.Contains(t, string(spec.Files[1].Content), "/tmp/rig-bin")
 	require.Contains(t, string(spec.Files[1].Content), "/tmp/source")
+	require.Contains(t, string(spec.Files[1].Content), "RIG_DEBUG_MODE=status-ingest")
 }
 
 func TestRepositorySuggestTaskName_DelegatesToCodexProposal(t *testing.T) {

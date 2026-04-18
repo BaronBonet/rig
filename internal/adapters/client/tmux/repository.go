@@ -136,7 +136,7 @@ func (r *Repository) StartTaskSession(ctx context.Context, task *core.Task, laun
 		return err
 	}
 
-	if len(launch.InitialInput) == 0 {
+	if len(launch.PrefillInput) == 0 {
 		return nil
 	}
 
@@ -144,7 +144,7 @@ func (r *Repository) StartTaskSession(ctx context.Context, task *core.Task, laun
 		return err
 	}
 
-	return r.TypeInWindow(ctx, task.TmuxSession, "agent", launch.InitialInput)
+	return r.TypeInWindow(ctx, task.TmuxSession, "agent", launch.PrefillInput)
 }
 
 func (r *Repository) OpenTaskSession(ctx context.Context, task *core.Task) error {

@@ -178,7 +178,7 @@ func (c *recordingAgentClient) BuildTaskSessionLaunchSpec(task *Task) (TaskSessi
 	return TaskSessionLaunchSpec{
 		Command:      []string{"codex"},
 		ReadyMarker:  "›",
-		InitialInput: []string{task.Prompt},
+		PrefillInput: []string{task.Prompt},
 	}, nil
 }
 
@@ -452,7 +452,7 @@ func wireProviderClientMock(h *testServiceHarness) {
 		return TaskSessionLaunchSpec{
 			Command:      []string{"codex"},
 			ReadyMarker:  "›",
-			InitialInput: []string{task.Prompt},
+			PrefillInput: []string{task.Prompt},
 		}, nil
 	}).Maybe()
 	h.providerRepoMock.EXPECT().DetectRuntimeState(mock.Anything).RunAndReturn(func(RuntimeSnapshot) RuntimeState {
@@ -520,7 +520,7 @@ func wireSetupScriptRunnerMock(h *testServiceHarness) {
 }
 
 func hasCustomLaunchSpec(req TaskSessionLaunchSpec) bool {
-	return len(req.Command) > 0 || len(req.InitialInput) > 0 || req.ReadyMarker != ""
+	return len(req.Command) > 0 || len(req.PrefillInput) > 0 || req.ReadyMarker != ""
 }
 
 func (h *testServiceHarness) existingTask(id string) *Task {

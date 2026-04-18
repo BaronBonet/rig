@@ -73,7 +73,7 @@ func TestTaskServiceCreateTask_CreatesWorkspaceSessionAndPersistsTask(t *testing
 	require.Equal(t, TaskSessionLaunchSpec{
 		Command:      []string{"codex"},
 		ReadyMarker:  "›",
-		InitialInput: []string{"add billing retry flow"},
+		PrefillInput: []string{"add billing retry flow"},
 	}, svc.sessionClient.startedLaunch)
 }
 

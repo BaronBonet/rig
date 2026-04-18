@@ -47,6 +47,25 @@ type WorkspaceBootstrapFile struct {
 	FileMode os.FileMode
 }
 
+// TaskStatusPhase is the small application-facing runtime status model used by
+// the first hook-driven status stream slice.
+type TaskStatusPhase string
+
+const (
+	TaskStatusPhaseWorking         TaskStatusPhase = "working"
+	TaskStatusPhaseWaitingForInput TaskStatusPhase = "waiting_for_input"
+)
+
+// TaskStatusUpdate is the live status message published by the observer
+// process. It is intentionally separate from the durable Task record.
+type TaskStatusUpdate struct {
+	TaskID       string
+	Provider     AgentProvider
+	Phase        TaskStatusPhase
+	RawEventName string
+	ObservedAt   time.Time
+}
+
 // AgentProvider identifies the supported interactive coding agent backing a
 // task.
 type AgentProvider string
@@ -67,10 +86,11 @@ type TaskSessionLaunchSpec struct {
 	Command []string
 	// ReadyMarker is the terminal prompt marker emitted by the agent when it is
 	// ready to receive interactive input. The tmux session client waits for this
-	// marker before typing InitialInput into the window.
+	// marker before typing PrefillInput into the window.
 	ReadyMarker string
-	// InitialInput is the text sent to the interactive agent after the command
-	// has started and the ReadyMarker has appeared. For create-task, this is the
-	// task prompt that gets pasted into the fresh agent session.
-	InitialInput []string
+	// PrefillInput is the text typed into the interactive agent after the
+	// command has started and the ReadyMarker has appeared. For create-task,
+	// this is the drafted task prompt that is placed into the fresh agent
+	// session without being submitted.
+	PrefillInput []string
 }

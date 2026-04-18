@@ -13,11 +13,12 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func TestRepositoryStartTaskSession_LaunchesCommandAndTypesInitialInput(t *testing.T) {
+func TestRepositoryStartTaskSession_LaunchesCommandAndPrefillsInputWithoutSubmitting(t *testing.T) {
 	runner := execx.NewMockRunner(t)
-	repo := newRepository(runner)
+	repo := New(runner).(*repository)
 	repo.now = func() time.Time { return time.Unix(0, 0) }
-	repo.sleep = func(time.Duration) {}
+	var slept time.Duration
+	repo.sleep = func(d time.Duration) { slept = d }
 
 	mock.InOrder(
 		expectTmuxRun(runner, execx.Result{}, nil,
@@ -43,15 +44,16 @@ func TestRepositoryStartTaskSession_LaunchesCommandAndTypesInitialInput(t *testi
 	}, core.TaskSessionLaunchSpec{
 		Command:      []string{"codex"},
 		ReadyMarker:  "›",
-		InitialInput: []string{"fix billing retry flow"},
+		PrefillInput: []string{"fix billing retry flow"},
 	})
 
 	require.NoError(t, err)
+	require.Equal(t, promptSubmitDelay, slept)
 }
 
 func TestRepositoryStartTaskSession_CleansUpSessionWhenEditorWindowCreationFails(t *testing.T) {
 	runner := execx.NewMockRunner(t)
-	repo := newRepository(runner)
+	repo := New(runner).(*repository)
 
 	mock.InOrder(
 		expectTmuxRun(runner, execx.Result{}, nil,
