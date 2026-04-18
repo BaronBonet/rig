@@ -145,7 +145,6 @@ func TestServiceOpenTask_RestoresMissingTmuxSessionWhenWorkspaceStillExists(t *t
 	require.True(t, svc.taskRepo.updatedTask.SessionExists)
 	require.True(t, svc.taskRepo.updatedTask.AgentWindowExists)
 	require.True(t, svc.taskRepo.updatedTask.EditorWindowExists)
-	require.Empty(t, svc.taskRepo.updatedTask.LastError)
 	require.NotNil(t, provider.seenHookSession)
 	require.Equal(t, "sess-1", provider.seenHookSession.SessionID)
 

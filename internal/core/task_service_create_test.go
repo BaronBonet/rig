@@ -77,6 +77,57 @@ func TestTaskServiceCreateTask_CreatesWorkspaceSessionAndPersistsTask(t *testing
 	}, svc.sessionClient.startedLaunch)
 }
 
+func TestTaskServiceCreateTask_FailsWhenRequestedProviderIsUnavailable(t *testing.T) {
+	svc := newTestTaskService(t)
+
+	task, err := svc.service.CreateTask(t.Context(), CreateTaskInput{
+		Cwd:      "/tmp/repo",
+		Prompt:   "add billing retry flow",
+		Provider: "claude",
+	})
+
+	require.Nil(t, task)
+	require.EqualError(t, err, `agent provider "claude" unavailable`)
+	require.Nil(t, svc.taskRepo.createdTask)
+	require.Nil(t, svc.repoClient.createdTask)
+	require.False(t, svc.preparer.called)
+	require.Nil(t, svc.sessionClient.startedTask)
+}
+
+func TestTaskServiceCreateTask_FailsWhenTaskNameSuggestionFails(t *testing.T) {
+	svc := newTestTaskService(t)
+	svc.providerRepo.suggestErr = errors.New("codex unavailable")
+
+	task, err := svc.service.CreateTask(t.Context(), CreateTaskInput{
+		Cwd:    "/tmp/repo",
+		Prompt: "add billing retry flow",
+	})
+
+	require.Nil(t, task)
+	require.EqualError(t, err, "suggest task name: codex unavailable")
+	require.Nil(t, svc.taskRepo.createdTask)
+	require.Nil(t, svc.repoClient.createdTask)
+	require.False(t, svc.preparer.called)
+	require.Nil(t, svc.sessionClient.startedTask)
+}
+
+func TestTaskServiceCreateTask_FailsWhenTaskNameSuggestionIsEmpty(t *testing.T) {
+	svc := newTestTaskService(t)
+	svc.providerRepo.suggestedSuggestion = TaskSuggestion{Name: "", BranchType: "feat"}
+
+	task, err := svc.service.CreateTask(t.Context(), CreateTaskInput{
+		Cwd:    "/tmp/repo",
+		Prompt: "add billing retry flow",
+	})
+
+	require.Nil(t, task)
+	require.EqualError(t, err, "suggest task name: empty task name")
+	require.Nil(t, svc.taskRepo.createdTask)
+	require.Nil(t, svc.repoClient.createdTask)
+	require.False(t, svc.preparer.called)
+	require.Nil(t, svc.sessionClient.startedTask)
+}
+
 func TestTaskServiceCreateTask_PersistsBrokenTaskWhenWorkspaceBootstrapSpecFails(t *testing.T) {
 	svc := newTestTaskService(t)
 	svc.providerRepo.suggestedName = "billing retry flow"
@@ -92,8 +143,7 @@ func TestTaskServiceCreateTask_PersistsBrokenTaskWhenWorkspaceBootstrapSpecFails
 	require.False(t, svc.preparer.called)
 	require.Nil(t, svc.sessionClient.startedTask)
 	require.Equal(t, TaskStatusBroken, task.Status)
-	require.Contains(t, task.LastError, "build workspace bootstrap spec")
-	require.Contains(t, task.LastError, "bootstrap failed")
+	require.EqualError(t, err, "build workspace bootstrap spec: bootstrap failed")
 	require.Equal(t, TaskStatusBroken, svc.taskRepo.updatedTask.Status)
 }
 
@@ -117,8 +167,7 @@ func TestTaskServiceCreateTask_PersistsBrokenTaskWhenWorkspacePreparationFails(t
 	require.Equal(t, svc.providerRepo.bootstrapSpec, svc.preparer.bootstrapSpec)
 	require.Nil(t, svc.sessionClient.startedTask)
 	require.Equal(t, TaskStatusBroken, task.Status)
-	require.Contains(t, task.LastError, "prepare workspace")
-	require.Contains(t, task.LastError, "setup script failed")
+	require.EqualError(t, err, "prepare workspace: setup script failed")
 	require.Equal(t, TaskStatusBroken, svc.taskRepo.updatedTask.Status)
 }
 
@@ -161,6 +210,6 @@ func TestTaskServiceCreateTask_PersistsBrokenTaskWhenRuntimeLaunchFails(t *testi
 
 	require.Error(t, err)
 	require.Equal(t, TaskStatusBroken, task.Status)
-	require.Contains(t, task.LastError, "tmux failed")
+	require.EqualError(t, err, "start task session: tmux failed")
 	require.Equal(t, TaskStatusBroken, svc.taskRepo.updatedTask.Status)
 }

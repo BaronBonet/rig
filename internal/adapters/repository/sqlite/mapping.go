@@ -19,7 +19,6 @@ func taskFromRow(row generated.Task) *core.Task {
 		TmuxSession:  row.TmuxSession,
 		Provider:     core.AgentProvider(row.Provider),
 		Status:       core.TaskStatus(row.Status),
-		LastError:    row.LastError,
 		CreatedAt:    parseTime(row.CreatedAt),
 		UpdatedAt:    parseTime(row.UpdatedAt),
 	}
@@ -39,7 +38,6 @@ func tasksFromRows(rows []generated.Task) []*core.Task {
 			TmuxSession:  row.TmuxSession,
 			Provider:     core.AgentProvider(row.Provider),
 			Status:       core.TaskStatus(row.Status),
-			LastError:    row.LastError,
 			CreatedAt:    parseTime(row.CreatedAt),
 			UpdatedAt:    parseTime(row.UpdatedAt),
 		})
@@ -303,7 +301,6 @@ func createTaskParams(task *core.Task) generated.CreateTaskParams {
 		SessionExists:      0,
 		AgentWindowExists:  0,
 		EditorWindowExists: 0,
-		LastError:          task.LastError,
 		CreatedAt:          formatTime(task.CreatedAt),
 		UpdatedAt:          formatTime(task.UpdatedAt),
 		LastReconciledAt:   "",
@@ -331,7 +328,6 @@ func updateTaskParams(task *core.Task) generated.UpdateTaskParams {
 		SessionExists:      params.SessionExists,
 		AgentWindowExists:  params.AgentWindowExists,
 		EditorWindowExists: params.EditorWindowExists,
-		LastError:          params.LastError,
 		CreatedAt:          params.CreatedAt,
 		UpdatedAt:          params.UpdatedAt,
 		LastReconciledAt:   params.LastReconciledAt,

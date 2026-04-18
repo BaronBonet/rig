@@ -59,16 +59,17 @@ func (s *taskService) createTaskFromPrompt(
 	repoCtx RepoContext,
 	input CreateTaskInput,
 ) (*Task, error) {
-	displayName, branchType, err := s.resolveTaskName(ctx, input)
+	agent, err := s.agentFor(input.Provider)
 	if err != nil {
 		return nil, err
 	}
 
-	existingTasks, err := s.tasks.ListTasks(ctx)
+	suggestion, err := s.suggestTaskName(ctx, agent, input.Prompt)
 	if err != nil {
 		return nil, err
 	}
-	task := newTaskRecord(repoCtx, existingTasks, input.Provider, s.defaultProvider, displayName, branchType, "")
+
+	task := newPromptTaskRecord(repoCtx, input.Provider, s.defaultProvider, suggestion.Name, suggestion.BranchType)
 	task.Prompt = input.Prompt
 
 	if err := s.tasks.CreateTask(ctx, task); err != nil {
@@ -88,10 +89,8 @@ func (s *taskService) createTaskFromPrompt(
 		return s.markBroken(ctx, task, fmt.Errorf("build workspace bootstrap spec: %w", err))
 	}
 
-	if s.preparer != nil {
-		if err := s.preparer.PrepareTaskWorkspace(ctx, task, repoCtx.Root, bootstrapSpec); err != nil {
-			return s.markBroken(ctx, task, fmt.Errorf("prepare workspace: %w", err))
-		}
+	if err := s.preparer.PrepareTaskWorkspace(ctx, task, repoCtx.Root, bootstrapSpec); err != nil {
+		return s.markBroken(ctx, task, fmt.Errorf("prepare workspace: %w", err))
 	}
 
 	return s.startTaskRuntime(ctx, task)
@@ -123,13 +122,11 @@ func (s *taskService) createTaskFromPullRequest(
 		return nil, fmt.Errorf("PR already has workspace")
 	}
 
-	task := newTaskRecord(
+	task := newPullRequestTaskRecord(
 		repoCtx,
-		existingTasks,
 		input.Provider,
 		s.defaultProvider,
 		prDisplayName(*pr),
-		"",
 		pr.BranchName,
 	)
 	if err := s.tasks.CreateTask(ctx, task); err != nil {
@@ -147,39 +144,37 @@ func (s *taskService) createTaskFromPullRequest(
 	return s.startTaskRuntime(ctx, task)
 }
 
-func (s *taskService) resolveTaskName(ctx context.Context, input CreateTaskInput) (string, string, error) {
-	agent := s.resolveAgent(input.Provider)
-	if agent == nil {
-		return fallbackDisplayName(input.Prompt), "feat", nil
+func (s *taskService) suggestTaskName(ctx context.Context, agent AgentClient, prompt string) (TaskSuggestion, error) {
+	suggestion, err := agent.SuggestTaskName(ctx, prompt)
+	if err != nil {
+		return TaskSuggestion{}, fmt.Errorf("suggest task name: %w", err)
 	}
 
-	suggestion, err := agent.SuggestTaskName(ctx, input.Prompt)
-	if err != nil || strings.TrimSpace(suggestion.Name) == "" {
-		return fallbackDisplayName(input.Prompt), "feat", nil
+	suggestion.Name = strings.TrimSpace(suggestion.Name)
+	if suggestion.Name == "" {
+		return TaskSuggestion{}, fmt.Errorf("suggest task name: empty task name")
 	}
 
-	return strings.TrimSpace(suggestion.Name), suggestion.BranchType, nil
+	return suggestion, nil
 }
 
-func (s *taskService) resolveAgent(name string) AgentClient {
-	if name != "" {
-		if agent, ok := s.agents[name]; ok {
-			return agent
-		}
+func (s *taskService) agentFor(provider string) (AgentClient, error) {
+	if provider == "" {
+		provider = string(s.defaultProvider)
 	}
-	if agent, ok := s.agents[string(s.defaultProvider)]; ok {
-		return agent
+
+	agent, ok := s.agents[provider]
+	if !ok {
+		return nil, fmt.Errorf("agent provider %q unavailable", provider)
 	}
-	for _, agent := range s.agents {
-		return agent
-	}
-	return nil
+
+	return agent, nil
 }
 
 func (s *taskService) startTaskRuntime(ctx context.Context, task *Task) (*Task, error) {
-	agent := s.resolveAgent(string(task.Provider))
-	if agent == nil {
-		return s.markBroken(ctx, task, fmt.Errorf("build task session launch spec: provider %q unavailable", task.Provider))
+	agent, err := s.agentFor(string(task.Provider))
+	if err != nil {
+		return s.markBroken(ctx, task, err)
 	}
 
 	launch, err := agent.BuildTaskSessionLaunchSpec(task)
@@ -200,9 +195,9 @@ func (s *taskService) startTaskRuntime(ctx context.Context, task *Task) (*Task, 
 }
 
 func (s *taskService) buildWorkspaceBootstrapSpec(ctx context.Context, task *Task) (WorkspaceBootstrapSpec, error) {
-	agent := s.resolveAgent(string(task.Provider))
-	if agent == nil {
-		return WorkspaceBootstrapSpec{}, fmt.Errorf("provider %q unavailable", task.Provider)
+	agent, err := s.agentFor(string(task.Provider))
+	if err != nil {
+		return WorkspaceBootstrapSpec{}, err
 	}
 
 	return agent.BuildWorkspaceBootstrapSpec(task)
@@ -210,7 +205,6 @@ func (s *taskService) buildWorkspaceBootstrapSpec(ctx context.Context, task *Tas
 
 func (s *taskService) markBroken(ctx context.Context, task *Task, failure error) (*Task, error) {
 	task.Status = TaskStatusBroken
-	task.LastError = failure.Error()
 	task.UpdatedAt = time.Now().UTC()
 	if err := s.tasks.UpdateTask(ctx, task); err != nil {
 		return task, err
@@ -218,13 +212,40 @@ func (s *taskService) markBroken(ctx context.Context, task *Task, failure error)
 	return task, failure
 }
 
-func newTaskRecord(
+func newPromptTaskRecord(
 	repoCtx RepoContext,
-	existingTasks []*Task,
 	provider string,
 	defaultProvider AgentProvider,
 	displayName string,
 	branchType string,
+) *Task {
+	if provider == "" {
+		provider = string(defaultProvider)
+	}
+
+	now := time.Now().UTC()
+	taskID := fmt.Sprintf("%d", now.UnixNano())
+
+	return &Task{
+		ID:           taskID,
+		DisplayName:  displayName,
+		RepoRoot:     repoCtx.Root,
+		RepoName:     repoCtx.Name,
+		BranchName:   branchNameForTask(taskID, branchType),
+		WorktreePath: filepath.Join(filepath.Dir(repoCtx.Root), repoCtx.Name+"-"+taskID),
+		TmuxSession:  repoCtx.Name + "_" + taskID,
+		Provider:     AgentProvider(provider),
+		Status:       TaskStatusCreating,
+		CreatedAt:    now,
+		UpdatedAt:    now,
+	}
+}
+
+func newPullRequestTaskRecord(
+	repoCtx RepoContext,
+	provider string,
+	defaultProvider AgentProvider,
+	displayName string,
 	branchName string,
 ) *Task {
 	if provider == "" {
@@ -233,16 +254,13 @@ func newTaskRecord(
 
 	now := time.Now().UTC()
 	taskID := fmt.Sprintf("%d", now.UnixNano())
-	if branchName == "" {
-		branchName = TaskSuggestion{BranchType: branchType}.BranchTypeOrDefault() + "/" + taskID
-	}
 
 	return &Task{
 		ID:           taskID,
 		DisplayName:  displayName,
 		RepoRoot:     repoCtx.Root,
 		RepoName:     repoCtx.Name,
-		BranchName:   branchName,
+		BranchName:   strings.TrimSpace(branchName),
 		WorktreePath: filepath.Join(filepath.Dir(repoCtx.Root), repoCtx.Name+"-"+taskID),
 		TmuxSession:  repoCtx.Name + "_" + taskID,
 		Provider:     AgentProvider(provider),
@@ -250,6 +268,10 @@ func newTaskRecord(
 		CreatedAt:    now,
 		UpdatedAt:    now,
 	}
+}
+
+func branchNameForTask(taskID string, branchType string) string {
+	return TaskSuggestion{BranchType: branchType}.BranchTypeOrDefault() + "/" + taskID
 }
 
 func existingTaskForBranch(tasks []*Task, repoRoot string, branchName string) *Task {
@@ -270,18 +292,4 @@ func prDisplayName(pr RepoPullRequest) string {
 		return title
 	}
 	return strings.TrimSpace(pr.BranchName)
-}
-
-func fallbackDisplayName(prompt string) string {
-	prompt = strings.TrimSpace(prompt)
-	if prompt == "" {
-		return "task"
-	}
-
-	fields := strings.Fields(prompt)
-	if len(fields) > 6 {
-		fields = fields[:6]
-	}
-
-	return strings.Join(fields, " ")
 }
