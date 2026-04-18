@@ -133,7 +133,7 @@ func (r *Repository) BuildTaskSessionLaunchSpec(task *core.Task) (core.TaskSessi
 	return core.TaskSessionLaunchSpec{
 		Command:      []string{r.binary},
 		ReadyMarker:  "❯",
-		InitialInput: initialInput,
+		PrefillInput: initialInput,
 	}, nil
 }
 

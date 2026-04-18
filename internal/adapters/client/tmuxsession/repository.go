@@ -9,6 +9,8 @@ import (
 	"time"
 )
 
+const promptSubmitDelay = 500 * time.Millisecond
+
 type repository struct {
 	runner execx.Runner
 	now    func() time.Time
@@ -32,7 +34,7 @@ func (r *repository) StartTaskSession(ctx context.Context, task *core.Task, laun
 		return err
 	}
 
-	if len(launch.InitialInput) == 0 {
+	if len(launch.PrefillInput) == 0 {
 		return nil
 	}
 
@@ -40,7 +42,7 @@ func (r *repository) StartTaskSession(ctx context.Context, task *core.Task, laun
 		return err
 	}
 
-	return r.typeInWindow(ctx, task.TmuxSession, "agent", launch.InitialInput)
+	return r.typeInWindow(ctx, task.TmuxSession, "agent", launch.PrefillInput)
 }
 
 func (r *repository) OpenTaskSession(context.Context, *core.Task) error {
@@ -78,6 +80,8 @@ func (r *repository) createSession(ctx context.Context, sessionName, workingDir 
 	if err != nil {
 		return err
 	}
+
+	r.sleep(promptSubmitDelay)
 
 	_, err = r.runner.Run(
 		ctx,

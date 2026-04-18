@@ -97,7 +97,7 @@ func TestServiceOpenTask_RestoresMissingTmuxSessionWhenWorkspaceStillExists(t *t
 		launchRequest: LaunchRequest{
 			Command:      []string{"codex"},
 			Prompt:       "›",
-			InitialInput: []string{"fix billing retry flow"},
+			PrefillInput: []string{"fix billing retry flow"},
 		},
 		restoreLaunchRequest: LaunchRequest{
 			Command: []string{"codex", "resume", "sess-1"},

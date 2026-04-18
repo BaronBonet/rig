@@ -3,9 +3,9 @@ package codex
 import (
 	"bytes"
 	"context"
+	_ "embed"
 	"encoding/json"
 	"fmt"
-	_ "embed"
 	"os"
 	"path/filepath"
 	"strings"
@@ -169,7 +169,7 @@ func (r *Repository) BuildTaskSessionLaunchSpec(task *core.Task) (core.TaskSessi
 	return core.TaskSessionLaunchSpec{
 		Command:      []string{r.binary},
 		ReadyMarker:  r.PromptMarker(),
-		InitialInput: initialInput,
+		PrefillInput: initialInput,
 	}, nil
 }
 

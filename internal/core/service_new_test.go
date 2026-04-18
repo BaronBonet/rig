@@ -64,7 +64,7 @@ func TestServiceCreateTaskWithProgress_CreatesWorktreeSessionAndPersistsTask(t *
 	require.Equal(t, LaunchRequest{
 		Command:      []string{"codex"},
 		Prompt:       "›",
-		InitialInput: []string{"add billing retry flow"},
+		PrefillInput: []string{"add billing retry flow"},
 	}, svc.sessionClient.startedLaunch)
 	require.Equal(t, "billing retry flow", svc.taskRepo.createdTask.DisplayName)
 	require.Equal(t, "repo", svc.taskRepo.createdTask.RepoName)
@@ -93,7 +93,7 @@ func TestCreateTask_UsesSessionClientLaunchRequest(t *testing.T) {
 	svc.providerRepo.launchRequest = LaunchRequest{
 		Command:      []string{"codex"},
 		Prompt:       "›",
-		InitialInput: []string{"ship it"},
+		PrefillInput: []string{"ship it"},
 	}
 
 	_, err := svc.service.CreateTaskWithProgress(t.Context(), NewTaskInput{
@@ -130,7 +130,7 @@ func TestServiceCreateTaskWithProgress_EmitsEventsAndOpensSession(t *testing.T) 
 	svc.providerRepo.launchRequest = LaunchRequest{
 		Command:      []string{"codex"},
 		Prompt:       "›",
-		InitialInput: []string{"add billing retry flow"},
+		PrefillInput: []string{"add billing retry flow"},
 	}
 
 	var events []TaskProgress
@@ -160,7 +160,7 @@ func TestServiceCreateTaskWithProgress_DoesNotOpenSessionWhenDisabled(t *testing
 	svc.providerRepo.launchRequest = LaunchRequest{
 		Command:      []string{"codex"},
 		Prompt:       "›",
-		InitialInput: []string{"add billing retry flow"},
+		PrefillInput: []string{"add billing retry flow"},
 	}
 
 	task, err := svc.service.CreateTaskWithProgress(t.Context(), NewTaskInput{

@@ -13,7 +13,7 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func TestRepository_StartTaskSession_LaunchesCommandAndTypesInitialInput(t *testing.T) {
+func TestRepository_StartTaskSession_LaunchesCommandAndTypesPrefillInput(t *testing.T) {
 	runner := execx.NewMockRunner(t)
 	repo := NewRepository(runner)
 	repo.now = func() time.Time { return time.Unix(0, 0) }
@@ -45,7 +45,7 @@ func TestRepository_StartTaskSession_LaunchesCommandAndTypesInitialInput(t *test
 	}, core.LaunchRequest{
 		Command:      []string{"codex"},
 		Prompt:       "›",
-		InitialInput: []string{"fix billing retry flow"},
+		PrefillInput: []string{"fix billing retry flow"},
 	})
 
 	require.NoError(t, err)

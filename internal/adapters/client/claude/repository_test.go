@@ -32,11 +32,11 @@ func TestRepositoryBuildTaskSessionLaunchSpec_UsesBinaryPromptAndTaskPrompt(t *t
 	require.Equal(t, core.TaskSessionLaunchSpec{
 		Command:      []string{"claude"},
 		ReadyMarker:  "❯",
-		InitialInput: []string{"add billing retry flow"},
+		PrefillInput: []string{"add billing retry flow"},
 	}, launch)
 }
 
-func TestRepositoryBuildTaskSessionLaunchSpec_OmitsInitialInputWhenTaskPromptIsEmpty(t *testing.T) {
+func TestRepositoryBuildTaskSessionLaunchSpec_OmitsPrefillInputWhenTaskPromptIsEmpty(t *testing.T) {
 	repo := NewRepository(execx.NewMockRunner(t), Config{Binary: "claude"})
 
 	launch, err := repo.BuildTaskSessionLaunchSpec(&core.Task{Prompt: ""})

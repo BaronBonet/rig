@@ -88,7 +88,7 @@ func (r *repository) BuildWorkspaceBootstrapSpec(_ *core.Task) (core.WorkspaceBo
 	return core.WorkspaceBootstrapSpec{
 		Files: []core.WorkspaceBootstrapFile{
 			{
-				Path:     filepath.Join(".codex", "hooks", "hooks.json"),
+				Path:     filepath.Join(".codex", "hooks.json"),
 				Content:  hooksJSON,
 				FileMode: 0o644,
 			},
@@ -102,15 +102,15 @@ func (r *repository) BuildWorkspaceBootstrapSpec(_ *core.Task) (core.WorkspaceBo
 }
 
 func (r *repository) BuildTaskSessionLaunchSpec(task *core.Task) (core.TaskSessionLaunchSpec, error) {
-	var initialInput []string
+	var prefillInput []string
 	if strings.TrimSpace(task.Prompt) != "" {
-		initialInput = []string{task.Prompt}
+		prefillInput = []string{task.Prompt}
 	}
 
 	return core.TaskSessionLaunchSpec{
 		Command:      []string{r.binary},
 		ReadyMarker:  readyMarker,
-		InitialInput: initialInput,
+		PrefillInput: prefillInput,
 	}, nil
 }
 
@@ -171,6 +171,9 @@ func (r *repository) renderHooksJSON() ([]byte, error) {
 			},
 			"PreToolUse": {
 				{Matcher: "Bash", Hooks: []hookCommand{{Type: "command", Command: r.commandForEvent("PreToolUse")}}},
+			},
+			"PermissionRequest": {
+				{Hooks: []hookCommand{{Type: "command", Command: r.commandForEvent("PermissionRequest")}}},
 			},
 			"PostToolUse": {
 				{Matcher: "Bash", Hooks: []hookCommand{{Type: "command", Command: r.commandForEvent("PostToolUse")}}},
