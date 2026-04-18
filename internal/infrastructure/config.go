@@ -4,70 +4,55 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"rig/internal/core"
+
+	claudeclient "rig/internal/adapters/client/claude"
+	codexagent "rig/internal/adapters/client/codexagent"
+	sqliterepo "rig/internal/adapters/repository/sqlite"
 
 	"github.com/caarlos0/env/v11"
 )
 
-type Config struct {
-	Provider           string
-	SQLitePath         string
-	CodexBinary        string
-	ClaudeBinary       string
-	HookListenAddr     string
-	ObserverSocketPath string
+type ApplicationConfig struct {
+	Provider core.AgentProvider `env:"AGENT_PROVIDER" envDefault:"codex"`
+	SQLite   sqliterepo.Config
+	Codex    codexagent.Config
+	Claude   claudeclient.Config
+	Observer ObserverConfig
 }
 
-type envConfig struct {
-	Provider     string `env:"AGENT_PROVIDER"             envDefault:"codex"`
-	SQLitePath   string `env:"AGENT_SQLITE_PATH"`
-	CodexBinary  string `env:"AGENT_CODEX_BINARY"         envDefault:"codex"`
-	ClaudeBinary string `env:"AGENT_CLAUDE_BINARY"        envDefault:"claude"`
-	HookListen   string `env:"AGENT_HOOK_LISTEN_ADDR"     envDefault:"127.0.0.1:4123"`
-	ObserverSock string `env:"AGENT_OBSERVER_SOCKET_PATH"`
+type ObserverConfig struct {
+	SocketPath string `env:"AGENT_OBSERVER_SOCKET_PATH"`
 }
 
-func LoadConfig() (*Config, error) {
-	raw := envConfig{}
-	if err := env.Parse(&raw); err != nil {
+// LoadConfig loads the application configuration from environment variables.
+func LoadConfig() (*ApplicationConfig, error) {
+	config := ApplicationConfig{
+		SQLite: sqliterepo.Config{
+			Path: sqliterepo.DefaultSQLitePath(),
+		},
+		Observer: ObserverConfig{
+			SocketPath: defaultObserverSocketPath(),
+		},
+	}
+
+	if err := env.Parse(&config); err != nil {
+		return nil, err
+	}
+	if err := validateProvider(config.Provider); err != nil {
 		return nil, err
 	}
 
-	if raw.SQLitePath == "" {
-		raw.SQLitePath = defaultSQLitePath()
-	}
-	if raw.ObserverSock == "" {
-		raw.ObserverSock = defaultObserverSocketPath()
-	}
-	if err := validateProvider(raw.Provider); err != nil {
-		return nil, err
-	}
-
-	return &Config{
-		Provider:           raw.Provider,
-		SQLitePath:         raw.SQLitePath,
-		CodexBinary:        raw.CodexBinary,
-		ClaudeBinary:       raw.ClaudeBinary,
-		HookListenAddr:     raw.HookListen,
-		ObserverSocketPath: raw.ObserverSock,
-	}, nil
+	return &config, nil
 }
 
-func validateProvider(provider string) error {
+func validateProvider(provider core.AgentProvider) error {
 	switch provider {
-	case "codex", "claude":
+	case core.AgentProviderCodex, core.AgentProviderClaude:
 		return nil
 	default:
 		return fmt.Errorf("invalid AGENT_PROVIDER %q: expected codex or claude", provider)
 	}
-}
-
-func defaultSQLitePath() string {
-	home, err := os.UserHomeDir()
-	if err != nil || home == "" {
-		return ".agent/state.db"
-	}
-
-	return filepath.Join(home, ".local", "share", "agent", "state.db")
 }
 
 func defaultObserverSocketPath() string {

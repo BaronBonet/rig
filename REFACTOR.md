@@ -17,6 +17,13 @@ The target shape is:
 - fewer public methods
 - fewer implementation details exposed in `core`
 
+Additional working rules:
+
+- constructors for adapters that implement a core port should be named `New`
+- those constructors should return the port interface, not the concrete adapter struct
+- adapter-specific config types should live with the adapter package itself
+- runtime wiring values that are not real operator config should stay in composition code, not infrastructure config
+
 The goal is to make the code easier to trace, easier to reason about, and easier to extend without carrying forward legacy abstraction debt.
 
 ## Current Refactor Strategy
@@ -78,3 +85,5 @@ Until further notice:
 - treat `cmd/debug/main.go` as the active execution path
 - do not preserve legacy complexity just to keep old paths alive
 - only bring `cmd/rig/main.go` along when it is cheap or useful
+- prefer smaller, more direct boundaries over “helpful” extra abstractions
+- when a package exists to satisfy a core port, expose it through that port at construction time

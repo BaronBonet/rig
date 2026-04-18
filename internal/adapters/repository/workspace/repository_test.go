@@ -49,7 +49,7 @@ func TestRepositoryPrepareTaskWorkspaceWritesBootstrapFilesAndRunsSetup(t *testi
 	require.NoError(t, os.WriteFile(filepath.Join(repoRoot, ".env"), []byte("API_KEY=1\n"), 0o600))
 	require.NoError(t, os.WriteFile(filepath.Join(repoRoot, "setup.sh"), []byte("#!/bin/sh\nset -eu\nprintf setup-ran > \"$PWD/setup-ran.txt\"\n"), 0o755))
 
-	preparer := NewPreparer()
+	preparer := New()
 	err := preparer.PrepareTaskWorkspace(context.Background(), &core.Task{
 		WorktreePath: worktreePath,
 		RepoRoot:     repoRoot,
@@ -64,7 +64,7 @@ func TestRepositoryPrepareTaskWorkspaceWritesBootstrapFilesAndRunsSetup(t *testi
 			Content:  []byte("{\"hooks\":{}}\n"),
 			FileMode: 0o600,
 		},
-		}})
+	}})
 	require.NoError(t, err)
 
 	envBody, err := os.ReadFile(filepath.Join(worktreePath, ".env"))

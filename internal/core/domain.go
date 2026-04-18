@@ -3,7 +3,7 @@ package core
 import "time"
 
 type Config struct {
-	Provider string
+	Provider AgentProvider
 }
 
 type TaskStatus string

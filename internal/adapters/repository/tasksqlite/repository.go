@@ -7,15 +7,15 @@ import (
 	"rig/internal/core"
 )
 
-type Repository struct {
+type repository struct {
 	repo *sqliterepo.Repository
 }
 
-func FromRepository(repo *sqliterepo.Repository) *Repository {
-	return &Repository{repo: repo}
+func FromRepository(repo *sqliterepo.Repository) core.TaskStore {
+	return &repository{repo: repo}
 }
 
-func NewRepository(cfg sqliterepo.Config) (*Repository, error) {
+func New(cfg sqliterepo.Config) (core.TaskStore, error) {
 	repo, err := sqliterepo.NewRepository(cfg)
 	if err != nil {
 		return nil, err
@@ -24,18 +24,18 @@ func NewRepository(cfg sqliterepo.Config) (*Repository, error) {
 	return FromRepository(repo), nil
 }
 
-func (r *Repository) CreateTask(ctx context.Context, task *core.Task) error {
+func (r *repository) CreateTask(ctx context.Context, task *core.Task) error {
 	return r.repo.CreateTask(ctx, task)
 }
 
-func (r *Repository) UpdateTask(ctx context.Context, task *core.Task) error {
+func (r *repository) UpdateTask(ctx context.Context, task *core.Task) error {
 	return r.repo.UpdateTask(ctx, task)
 }
 
-func (r *Repository) GetTask(context.Context, string) (*core.Task, error) {
+func (r *repository) GetTask(context.Context, string) (*core.Task, error) {
 	panic("tasksqlite.Repository.GetTask not implemented")
 }
 
-func (r *Repository) ListTasks(ctx context.Context) ([]*core.Task, error) {
+func (r *repository) ListTasks(ctx context.Context) ([]*core.Task, error) {
 	return r.repo.ListTasks(ctx)
 }

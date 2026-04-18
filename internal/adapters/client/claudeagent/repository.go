@@ -8,22 +8,22 @@ import (
 	"rig/internal/pkg/execx"
 )
 
-type Repository struct {
+type repository struct {
 	repo *claudeclient.Repository
 }
 
-func NewRepository(runner execx.Runner, cfg claudeclient.Config) *Repository {
-	return &Repository{repo: claudeclient.NewRepository(runner, cfg)}
+func New(runner execx.Runner, cfg claudeclient.Config) core.AgentClient {
+	return &repository{repo: claudeclient.NewRepository(runner, cfg)}
 }
 
-func (r *Repository) SuggestTaskName(ctx context.Context, prompt string) (core.TaskSuggestion, error) {
+func (r *repository) SuggestTaskName(ctx context.Context, prompt string) (core.TaskSuggestion, error) {
 	return r.repo.SuggestTaskName(ctx, prompt)
 }
 
-func (r *Repository) BuildWorkspaceBootstrapSpec(task *core.Task) (core.WorkspaceBootstrapSpec, error) {
+func (r *repository) BuildWorkspaceBootstrapSpec(task *core.Task) (core.WorkspaceBootstrapSpec, error) {
 	return r.repo.BuildWorkspaceBootstrapSpec(task)
 }
 
-func (r *Repository) BuildTaskSessionLaunchSpec(task *core.Task) (core.TaskSessionLaunchSpec, error) {
+func (r *repository) BuildTaskSessionLaunchSpec(task *core.Task) (core.TaskSessionLaunchSpec, error) {
 	return r.repo.BuildTaskSessionLaunchSpec(task)
 }

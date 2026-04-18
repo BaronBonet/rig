@@ -221,7 +221,7 @@ func newTestTaskService(t *testing.T) *testTaskServiceHarness {
 		TmuxSession:     base.sessionClientMock,
 		Agents:          map[string]AgentClient{"codex": base.providerRepoMock},
 		Preparer:        &recordingWorkspacePreparer{state: &h.preparer, session: &base.sessionClient},
-		DefaultProvider: "codex",
+		DefaultProvider: AgentProviderCodex,
 	})
 	return h
 }

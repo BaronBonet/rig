@@ -28,10 +28,6 @@ type Repository struct {
 	observerSubscribers      map[int]*observerSubscriber
 }
 
-type Config struct {
-	Path string
-}
-
 const (
 	defaultAgentWindowName  = "agent"
 	defaultEditorWindowName = "editor"
