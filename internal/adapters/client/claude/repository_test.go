@@ -1,6 +1,7 @@
 package claude
 
 import (
+	"os"
 	"testing"
 	"time"
 
@@ -23,54 +24,41 @@ func TestRepositoryBuildLaunchCommand_IncludesPrompt(t *testing.T) {
 	require.Equal(t, "add billing retry flow", cmd[len(cmd)-1])
 }
 
-func TestRepositoryLaunchRequest_UsesBinaryPromptAndTaskPrompt(t *testing.T) {
+func TestRepositoryBuildTaskSessionLaunchSpec_UsesBinaryPromptAndTaskPrompt(t *testing.T) {
 	repo := NewRepository(execx.NewMockRunner(t), Config{Binary: "claude"})
 
-	launch, err := repo.LaunchRequest(&core.Task{Prompt: "add billing retry flow"})
+	launch, err := repo.BuildTaskSessionLaunchSpec(&core.Task{Prompt: "add billing retry flow"})
 	require.NoError(t, err)
-	require.Equal(t, core.LaunchRequest{
+	require.Equal(t, core.TaskSessionLaunchSpec{
 		Command:      []string{"claude"},
-		Prompt:       "❯",
+		ReadyMarker:  "❯",
 		InitialInput: []string{"add billing retry flow"},
 	}, launch)
 }
 
-func TestRepositoryLaunchRequest_OmitsInitialInputWhenTaskPromptIsEmpty(t *testing.T) {
+func TestRepositoryBuildTaskSessionLaunchSpec_OmitsInitialInputWhenTaskPromptIsEmpty(t *testing.T) {
+	repo := NewRepository(execx.NewMockRunner(t), Config{Binary: "claude"})
+
+	launch, err := repo.BuildTaskSessionLaunchSpec(&core.Task{Prompt: ""})
+	require.NoError(t, err)
+	require.Equal(t, core.TaskSessionLaunchSpec{
+		Command:     []string{"claude"},
+		ReadyMarker: "❯",
+	}, launch)
+}
+
+func TestRepositoryBuildWorkspaceBootstrapSpec_RendersClaudeSettings(t *testing.T) {
 	repo := NewRepository(execx.NewMockRunner(t), Config{
 		Binary:         "claude",
 		HookListenAddr: "127.0.0.1:4000",
 	})
 
-	launch, err := repo.LaunchRequest(&core.Task{Prompt: ""})
+	spec, err := repo.BuildWorkspaceBootstrapSpec(&core.Task{})
 	require.NoError(t, err)
-	require.Equal(t, []string{"claude"}, launch.Command)
-	require.Equal(t, "❯", launch.Prompt)
-	require.Nil(t, launch.InitialInput)
-	require.Contains(t, launch.SetupFiles, ".claude/settings.local.json")
-}
-
-func TestRepositoryRestoreLaunchRequest_UsesResumeWithSessionID(t *testing.T) {
-	repo := NewRepository(execx.NewMockRunner(t), Config{Binary: "claude"})
-
-	launch, err := repo.RestoreLaunchRequest(&core.Task{Prompt: "add billing retry flow"}, &core.HookSessionSummary{
-		SessionID: "sess-1",
-	})
-	require.NoError(t, err)
-	require.Equal(t, core.LaunchRequest{
-		Command: []string{"claude", "--resume", "sess-1"},
-		Prompt:  "❯",
-	}, launch)
-}
-
-func TestRepositoryRestoreLaunchRequest_FallsBackToGenericResumeWithoutSessionID(t *testing.T) {
-	repo := NewRepository(execx.NewMockRunner(t), Config{Binary: "claude"})
-
-	launch, err := repo.RestoreLaunchRequest(&core.Task{Prompt: "add billing retry flow"}, nil)
-	require.NoError(t, err)
-	require.Equal(t, core.LaunchRequest{
-		Command: []string{"claude", "--resume"},
-		Prompt:  "❯",
-	}, launch)
+	require.Len(t, spec.Files, 1)
+	require.Equal(t, ".claude/settings.local.json", spec.Files[0].Path)
+	require.Equal(t, os.FileMode(0o644), spec.Files[0].FileMode)
+	require.Contains(t, string(spec.Files[0].Content), "127.0.0.1:4000")
 }
 
 func TestRepositorySuggestTaskName_DelegatesToClaudeProposal(t *testing.T) {

@@ -18,7 +18,7 @@ type testServiceHarness struct {
 	repoClientMock *MockRepoClient
 	repoClient     repoClientState
 
-	sessionClientMock *MockSessionClient
+	sessionClientMock *MockTmuxSessionClient
 	sessionClient     sessionClientState
 
 	providerRepoMock *MockProviderClient
@@ -91,6 +91,9 @@ type providerClientState struct {
 	suggestErr          error
 	suggestedName       string
 	suggestedSuggestion TaskSuggestion
+	bootstrapErr        error
+	bootstrapSpec       WorkspaceBootstrapSpec
+	bootstrapRequest    *Task
 	launchErr           error
 	launchRequest       TaskSessionLaunchSpec
 	runtimeState        RuntimeState
@@ -131,6 +134,7 @@ type workspacePreparerState struct {
 	called              bool
 	repoRoot            string
 	worktreePath        string
+	bootstrapSpec       WorkspaceBootstrapSpec
 	calledBeforeSession bool
 	preparedDisplayName string
 	preparedBranchName  string
@@ -141,9 +145,10 @@ type recordingWorkspacePreparer struct {
 	session *sessionClientState
 }
 
-func (p *recordingWorkspacePreparer) PrepareTaskWorkspace(_ context.Context, task *Task, repoRoot string) error {
+func (p *recordingWorkspacePreparer) PrepareTaskWorkspace(_ context.Context, task *Task, repoRoot string, bootstrapSpec WorkspaceBootstrapSpec) error {
 	p.state.called = true
 	p.state.repoRoot = repoRoot
+	p.state.bootstrapSpec = bootstrapSpec
 	if task != nil {
 		p.state.worktreePath = task.WorktreePath
 		p.state.preparedDisplayName = task.DisplayName
@@ -159,7 +164,7 @@ func newTestService(t *testing.T) *testServiceHarness {
 	h := &testServiceHarness{
 		taskRepoMock:        NewMockTaskRepository(t),
 		repoClientMock:      NewMockRepoClient(t),
-		sessionClientMock:   NewMockSessionClient(t),
+		sessionClientMock:   NewMockTmuxSessionClient(t),
 		providerRepoMock:    NewMockProviderClient(t),
 		configRepoMock:      NewMockRepoConfigLoader(t),
 		workspaceSeederMock: NewMockWorkspaceSeeder(t),
@@ -336,9 +341,6 @@ func wireRepoClientMock(h *testServiceHarness) {
 }
 
 func wireSessionClientMock(h *testServiceHarness) {
-	h.sessionClientMock.EXPECT().IsAvailable(mock.Anything).RunAndReturn(func(context.Context) error {
-		return h.sessionClient.isAvailableErr
-	}).Maybe()
 	h.sessionClientMock.EXPECT().StartTaskSession(mock.Anything, mock.Anything, mock.Anything).
 		RunAndReturn(func(_ context.Context, task *Task, launch TaskSessionLaunchSpec) error {
 			h.sessionClient.startedTask = cloneTask(task)
@@ -402,6 +404,13 @@ func wireProviderClientMock(h *testServiceHarness) {
 			}
 			return TaskSuggestion{Name: h.providerRepo.suggestedName, BranchType: "feat"}, nil
 		}).Maybe()
+	h.providerRepoMock.EXPECT().BuildWorkspaceBootstrapSpec(mock.Anything).RunAndReturn(func(task *Task) (WorkspaceBootstrapSpec, error) {
+		h.providerRepo.bootstrapRequest = cloneTask(task)
+		if h.providerRepo.bootstrapErr != nil {
+			return WorkspaceBootstrapSpec{}, h.providerRepo.bootstrapErr
+		}
+		return h.providerRepo.bootstrapSpec, nil
+	}).Maybe()
 	h.providerRepoMock.EXPECT().BuildTaskSessionLaunchSpec(mock.Anything).RunAndReturn(func(task *Task) (TaskSessionLaunchSpec, error) {
 		if h.providerRepo.launchErr != nil {
 			return TaskSessionLaunchSpec{}, h.providerRepo.launchErr
@@ -486,20 +495,16 @@ func hasCustomLaunchSpec(req TaskSessionLaunchSpec) bool {
 
 func (h *testServiceHarness) existingTask(id string) *Task {
 	task := &Task{
-		ID:               id,
-		Prompt:           "fix the failing test",
-		DisplayName:      "failing test",
-		Slug:             "failing-test",
-		RepoRoot:         "/tmp/repo",
-		RepoName:         "repo",
-		BaseBranch:       "main",
-		BranchName:       "feat/failing-test",
-		WorktreePath:     "/tmp/repo-failing-test",
-		TmuxSession:      "repo_failing-test",
-		AgentWindowName:  "agent",
-		EditorWindowName: "editor",
-		Provider:         "codex",
-		Status:           TaskStatusRunning,
+		ID:           id,
+		Prompt:       "fix the failing test",
+		DisplayName:  "failing test",
+		RepoRoot:     "/tmp/repo",
+		RepoName:     "repo",
+		BranchName:   "feat/failing-test",
+		WorktreePath: "/tmp/repo-failing-test",
+		TmuxSession:  "repo_failing-test",
+		Provider:     AgentProviderCodex,
+		Status:       TaskStatusRunning,
 	}
 
 	h.taskRepo.listTasks = []*Task{task}

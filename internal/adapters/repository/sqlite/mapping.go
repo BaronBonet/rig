@@ -9,29 +9,19 @@ import (
 
 func taskFromRow(row generated.Task) *core.Task {
 	return &core.Task{
-		ID:                 row.ID,
-		Prompt:             row.Prompt,
-		DisplayName:        row.DisplayName,
-		Slug:               row.Slug,
-		RepoRoot:           row.RepoRoot,
-		RepoName:           row.RepoName,
-		BaseBranch:         row.BaseBranch,
-		BranchName:         row.BranchName,
-		WorktreePath:       row.WorktreePath,
-		TmuxSession:        row.TmuxSession,
-		AgentWindowName:    row.AgentWindowName,
-		EditorWindowName:   row.EditorWindowName,
-		Provider:           row.Provider,
-		Status:             core.TaskStatus(row.Status),
-		WorktreeExists:     row.WorktreeExists == 1,
-		BranchExists:       row.BranchExists == 1,
-		SessionExists:      row.SessionExists == 1,
-		AgentWindowExists:  row.AgentWindowExists == 1,
-		EditorWindowExists: row.EditorWindowExists == 1,
-		LastError:          row.LastError,
-		CreatedAt:          parseTime(row.CreatedAt),
-		UpdatedAt:          parseTime(row.UpdatedAt),
-		LastReconciledAt:   parseTime(row.LastReconciledAt),
+		ID:           row.ID,
+		Prompt:       row.Prompt,
+		DisplayName:  row.DisplayName,
+		RepoRoot:     row.RepoRoot,
+		RepoName:     row.RepoName,
+		BranchName:   row.BranchName,
+		WorktreePath: row.WorktreePath,
+		TmuxSession:  row.TmuxSession,
+		Provider:     core.AgentProvider(row.Provider),
+		Status:       core.TaskStatus(row.Status),
+		LastError:    row.LastError,
+		CreatedAt:    parseTime(row.CreatedAt),
+		UpdatedAt:    parseTime(row.UpdatedAt),
 	}
 }
 
@@ -39,29 +29,19 @@ func tasksFromRows(rows []generated.Task) []*core.Task {
 	tasks := make([]*core.Task, 0, len(rows))
 	for _, row := range rows {
 		tasks = append(tasks, &core.Task{
-			ID:                 row.ID,
-			Prompt:             row.Prompt,
-			DisplayName:        row.DisplayName,
-			Slug:               row.Slug,
-			RepoRoot:           row.RepoRoot,
-			RepoName:           row.RepoName,
-			BaseBranch:         row.BaseBranch,
-			BranchName:         row.BranchName,
-			WorktreePath:       row.WorktreePath,
-			TmuxSession:        row.TmuxSession,
-			AgentWindowName:    row.AgentWindowName,
-			EditorWindowName:   row.EditorWindowName,
-			Provider:           row.Provider,
-			Status:             core.TaskStatus(row.Status),
-			WorktreeExists:     row.WorktreeExists == 1,
-			BranchExists:       row.BranchExists == 1,
-			SessionExists:      row.SessionExists == 1,
-			AgentWindowExists:  row.AgentWindowExists == 1,
-			EditorWindowExists: row.EditorWindowExists == 1,
-			LastError:          row.LastError,
-			CreatedAt:          parseTime(row.CreatedAt),
-			UpdatedAt:          parseTime(row.UpdatedAt),
-			LastReconciledAt:   parseTime(row.LastReconciledAt),
+			ID:           row.ID,
+			Prompt:       row.Prompt,
+			DisplayName:  row.DisplayName,
+			RepoRoot:     row.RepoRoot,
+			RepoName:     row.RepoName,
+			BranchName:   row.BranchName,
+			WorktreePath: row.WorktreePath,
+			TmuxSession:  row.TmuxSession,
+			Provider:     core.AgentProvider(row.Provider),
+			Status:       core.TaskStatus(row.Status),
+			LastError:    row.LastError,
+			CreatedAt:    parseTime(row.CreatedAt),
+			UpdatedAt:    parseTime(row.UpdatedAt),
 		})
 	}
 	return tasks
@@ -295,30 +275,38 @@ func observerSummaryParams(summary *core.ObserverSummary, updatedAt time.Time) g
 }
 
 func createTaskParams(task *core.Task) generated.CreateTaskParams {
+	storageSlug := task.ID
+	if storageSlug == "" {
+		storageSlug = task.BranchName
+	}
+	if storageSlug == "" {
+		storageSlug = task.DisplayName
+	}
+
 	return generated.CreateTaskParams{
 		ID:                 task.ID,
 		Prompt:             task.Prompt,
 		DisplayName:        task.DisplayName,
-		Slug:               task.Slug,
+		Slug:               storageSlug,
 		RepoRoot:           task.RepoRoot,
 		RepoName:           task.RepoName,
-		BaseBranch:         task.BaseBranch,
+		BaseBranch:         "",
 		BranchName:         task.BranchName,
 		WorktreePath:       task.WorktreePath,
 		TmuxSession:        task.TmuxSession,
-		AgentWindowName:    task.AgentWindowName,
-		EditorWindowName:   task.EditorWindowName,
-		Provider:           task.Provider,
+		AgentWindowName:    defaultAgentWindowName,
+		EditorWindowName:   defaultEditorWindowName,
+		Provider:           string(task.Provider),
 		Status:             string(task.Status),
-		WorktreeExists:     int64(boolToInt(task.WorktreeExists)),
-		BranchExists:       int64(boolToInt(task.BranchExists)),
-		SessionExists:      int64(boolToInt(task.SessionExists)),
-		AgentWindowExists:  int64(boolToInt(task.AgentWindowExists)),
-		EditorWindowExists: int64(boolToInt(task.EditorWindowExists)),
+		WorktreeExists:     0,
+		BranchExists:       0,
+		SessionExists:      0,
+		AgentWindowExists:  0,
+		EditorWindowExists: 0,
 		LastError:          task.LastError,
 		CreatedAt:          formatTime(task.CreatedAt),
 		UpdatedAt:          formatTime(task.UpdatedAt),
-		LastReconciledAt:   formatTime(task.LastReconciledAt),
+		LastReconciledAt:   "",
 	}
 }
 

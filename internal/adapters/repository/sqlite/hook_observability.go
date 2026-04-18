@@ -196,8 +196,8 @@ func (r *Repository) IngestHookEvent(ctx context.Context, raw core.HookEventInpu
 	next := deriveHookSessionSummary(previous, record)
 	next.TaskID = taskID
 	if observedProvider := observedProviderFromHookRecord(record); observedProvider != "" &&
-		task != nil && strings.TrimSpace(task.Provider) != observedProvider {
-		task.Provider = observedProvider
+		task != nil && strings.TrimSpace(string(task.Provider)) != observedProvider {
+		task.Provider = core.AgentProvider(observedProvider)
 		task.UpdatedAt = time.Now().UTC()
 		if err := qtx.UpdateTask(ctx, updateTaskParams(task)); err != nil {
 			return nil, err

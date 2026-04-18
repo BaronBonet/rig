@@ -20,8 +20,8 @@ type TaskStore interface {
 	CreateTask(ctx context.Context, task *Task) error
 	// UpdateTask persists changes to an existing task record.
 	UpdateTask(ctx context.Context, task *Task) error
-	// GetTask loads a task by ID or slug.
-	GetTask(ctx context.Context, idOrSlug string) (*Task, error)
+	// GetTask loads a task by ID.
+	GetTask(ctx context.Context, id string) (*Task, error)
 	// ListTasks returns all known tasks.
 	ListTasks(ctx context.Context) ([]*Task, error)
 }
@@ -31,6 +31,9 @@ type TaskStore interface {
 type AgentClient interface {
 	// SuggestTaskName derives a task display name and branch type from a prompt.
 	SuggestTaskName(ctx context.Context, prompt string) (TaskSuggestion, error)
+	// BuildWorkspaceBootstrapSpec describes the provider-specific files that
+	// should be written into the task workspace before launch.
+	BuildWorkspaceBootstrapSpec(task *Task) (WorkspaceBootstrapSpec, error)
 	// BuildTaskSessionLaunchSpec describes how the provider's CLI should be
 	// started inside the task's tmux session.
 	BuildTaskSessionLaunchSpec(task *Task) (TaskSessionLaunchSpec, error)
@@ -79,5 +82,5 @@ type TmuxSessionClient interface {
 type WorkspacePreparer interface {
 	// PrepareTaskWorkspace loads repo configuration and applies any local
 	// workspace setup needed for the task.
-	PrepareTaskWorkspace(ctx context.Context, task *Task, repoRoot string) error
+	PrepareTaskWorkspace(ctx context.Context, task *Task, repoRoot string, bootstrapSpec WorkspaceBootstrapSpec) error
 }
