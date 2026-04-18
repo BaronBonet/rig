@@ -1,45 +1,61 @@
 package core
 
-import "time"
+import (
+	"os"
+	"time"
+)
 
-type TmpTask struct {
-	CreatedAt             time.Time    `json:"created_at"`
-	UpdatedAt             time.Time    `json:"updated_at"`
-	LastReconciledAt      time.Time    `json:"last_reconciled_at"`
-	RuntimeStateUpdatedAt time.Time    `json:"runtime_state_updated_at"`
-	ID                    string       `json:"id"`
-	Prompt                string       `json:"prompt"`
-	DisplayName           string       `json:"display_name"`
-	Slug                  string       `json:"slug"`
-	RepoRoot              string       `json:"repo_root"`
-	RepoName              string       `json:"repo_name"`
-	BaseBranch            string       `json:"base_branch"`
-	BranchName            string       `json:"branch_name"`
-	WorktreePath          string       `json:"worktree_path"`
-	TmuxSession           string       `json:"tmux_session"`
-	AgentWindowName       string       `json:"agent_window_name"`
-	EditorWindowName      string       `json:"editor_window_name"`
-	Provider              string       `json:"provider"`
-	Status                TaskStatus   `json:"status"`
-	RuntimeState          RuntimeState `json:"runtime_state"`
-	LastError             string       `json:"last_error"`
-	WorktreeExists        bool         `json:"worktree_exists"`
-	BranchExists          bool         `json:"branch_exists"`
-	SessionExists         bool         `json:"session_exists"`
-	AgentWindowExists     bool         `json:"agent_window_exists"`
-	EditorWindowExists    bool         `json:"editor_window_exists"`
+// Task is the durable business record for a task.
+//
+// It intentionally excludes live runtime observations and derived existence
+// checks. Those belong in separate runtime/read-side types rather than on the
+// core task record itself.
+type Task struct {
+	CreatedAt    time.Time
+	UpdatedAt    time.Time
+	ID           string
+	Prompt       string
+	DisplayName  string
+	RepoRoot     string
+	RepoName     string
+	BranchName   string
+	WorktreePath string
+	TmuxSession  string
+	Provider     AgentProvider
+	Status       TaskStatus
+	LastError    string
 }
 
 type RepoContext struct {
+	// Root is the canonical absolute path to the repository root on disk.
 	Root       string
 	Name       string
 	BaseBranch string
 }
 
 type TaskSuggestion struct {
-	Name       string `json:"name"`
-	BranchType string `json:"branch_type"`
+	Name       string
+	BranchType string
 }
+
+type WorkspaceBootstrapSpec struct {
+	Files []WorkspaceBootstrapFile
+}
+
+type WorkspaceBootstrapFile struct {
+	Path     string
+	Content  []byte
+	FileMode os.FileMode
+}
+
+// AgentProvider identifies the supported interactive coding agent backing a
+// task.
+type AgentProvider string
+
+const (
+	AgentProviderCodex  AgentProvider = "codex"
+	AgentProviderClaude AgentProvider = "claude"
+)
 
 // TaskSessionLaunchSpec is the handoff from an agent client to the tmux
 // session client for starting an interactive agent session.

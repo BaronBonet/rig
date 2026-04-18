@@ -69,7 +69,7 @@ func (m *RuntimeMonitor) Snapshot(ctx context.Context, task *core.Task) (core.Ru
 
 	return core.RuntimeSnapshot{
 		SessionName:       task.TmuxSession,
-		WindowName:        windowOrDefault(task.AgentWindowName, "agent"),
+		WindowName:        "agent",
 		PaneID:            paneID,
 		HadAgentBinding:   hadAgentBinding,
 		ForegroundCommand: command,
@@ -131,7 +131,7 @@ func (m *RuntimeMonitor) resolvePaneBinding(
 	pipe controlPipe,
 ) (string, string, bool, error) {
 	sessionKey := task.TmuxSession
-	windowName := windowOrDefault(task.AgentWindowName, "agent")
+	windowName := "agent"
 	listCommand := paneListCommand(task.TmuxSession, windowName)
 
 	m.mu.Lock()

@@ -1,11 +1,15 @@
 package codex
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
+	_ "embed"
 	"os"
+	"path/filepath"
 	"strings"
+	"text/template"
 	"unicode"
 
 	"rig/internal/core"
@@ -13,13 +17,22 @@ import (
 	"rig/internal/pkg/prompts"
 )
 
+//go:embed forward-to-rig.sh.tmpl
+var forwarderScriptTemplateText string
+
+var forwarderScriptTemplate = template.Must(template.New("forward-to-rig.sh").Parse(forwarderScriptTemplateText))
+
 type Repository struct {
-	runner execx.Runner
-	binary string
+	runner        execx.Runner
+	binary        string
+	rigBinaryPath string
+	sourceRoot    string
 }
 
 type Config struct {
-	Binary string
+	Binary        string
+	RigBinaryPath string
+	SourceRoot    string
 }
 
 func NewRepository(runner execx.Runner, cfg Config) *Repository {
@@ -28,8 +41,10 @@ func NewRepository(runner execx.Runner, cfg Config) *Repository {
 	}
 
 	return &Repository{
-		runner: runner,
-		binary: cfg.Binary,
+		runner:        runner,
+		binary:        cfg.Binary,
+		rigBinaryPath: strings.TrimSpace(cfg.RigBinaryPath),
+		sourceRoot:    strings.TrimSpace(cfg.SourceRoot),
 	}
 }
 
@@ -93,6 +108,33 @@ func (r *Repository) SuggestTaskName(ctx context.Context, prompt string) (core.T
 	return r.ProposeTaskName(ctx, prompt)
 }
 
+func (r *Repository) BuildWorkspaceBootstrapSpec(_ *core.Task) (core.WorkspaceBootstrapSpec, error) {
+	hooksJSON, err := r.renderHooksJSON()
+	if err != nil {
+		return core.WorkspaceBootstrapSpec{}, err
+	}
+
+	forwarderScript, err := r.renderForwarderScript()
+	if err != nil {
+		return core.WorkspaceBootstrapSpec{}, err
+	}
+
+	return core.WorkspaceBootstrapSpec{
+		Files: []core.WorkspaceBootstrapFile{
+			{
+				Path:     filepath.Join(".codex", "hooks", "hooks.json"),
+				Content:  hooksJSON,
+				FileMode: 0o644,
+			},
+			{
+				Path:     filepath.Join(".codex", "hooks", "forward-to-rig.sh"),
+				Content:  forwarderScript,
+				FileMode: 0o755,
+			},
+		},
+	}, nil
+}
+
 func parseCodexSuggestion(raw string) (core.TaskSuggestion, bool) {
 	lines := strings.Split(raw, "\n")
 	for i := len(lines) - 1; i >= 0; i-- {
@@ -104,6 +146,9 @@ func parseCodexSuggestion(raw string) (core.TaskSuggestion, bool) {
 		if err := json.Unmarshal([]byte(line), &suggestion); err == nil && suggestion.Name != "" {
 			suggestion.Name = normalizeCodexTitle(suggestion.Name)
 			if suggestion.Name != "" {
+				if suggestion.BranchType == "" {
+					suggestion.BranchType = "feat"
+				}
 				return suggestion, true
 			}
 		}
@@ -149,6 +194,77 @@ func (r *Repository) DetectRuntimeState(snapshot core.RuntimeSnapshot) core.Runt
 
 func (r *Repository) PromptMarker() string {
 	return "›"
+}
+
+func (r *Repository) renderHooksJSON() ([]byte, error) {
+	config := hookConfig{
+		Hooks: map[string][]hookRule{
+			"SessionStart": {
+				{
+					Matcher: "startup|resume",
+					Hooks:   []hookCommand{{Type: "command", Command: r.commandForEvent("SessionStart")}},
+				},
+			},
+			"PreToolUse": {
+				{Matcher: "Bash", Hooks: []hookCommand{{Type: "command", Command: r.commandForEvent("PreToolUse")}}},
+			},
+			"PostToolUse": {
+				{Matcher: "Bash", Hooks: []hookCommand{{Type: "command", Command: r.commandForEvent("PostToolUse")}}},
+			},
+			"UserPromptSubmit": {
+				{Hooks: []hookCommand{{Type: "command", Command: r.commandForEvent("UserPromptSubmit")}}},
+			},
+			"Stop": {
+				{Hooks: []hookCommand{{Type: "command", Command: r.commandForEvent("Stop")}}},
+			},
+		},
+	}
+
+	var buf bytes.Buffer
+	encoder := json.NewEncoder(&buf)
+	encoder.SetEscapeHTML(false)
+	encoder.SetIndent("", "  ")
+	if err := encoder.Encode(config); err != nil {
+		return nil, err
+	}
+	return buf.Bytes(), nil
+}
+
+func (r *Repository) commandForEvent(eventName string) string {
+	eventName = strings.TrimSpace(eventName)
+
+	cmd := `repo_root=$(git rev-parse --show-toplevel 2>/dev/null) || exit 0;` +
+		` exec /bin/sh "$repo_root/.codex/hooks/forward-to-rig.sh" ` + shellQuote(eventName)
+	return "/bin/sh -c " + shellQuote(cmd)
+}
+
+func (r *Repository) renderForwarderScript() ([]byte, error) {
+	var buf bytes.Buffer
+	if err := forwarderScriptTemplate.Execute(&buf, struct {
+		AgentExecQuoted  string
+		SourceRootQuoted string
+	}{
+		AgentExecQuoted:  shellQuote(r.rigBinaryPath),
+		SourceRootQuoted: shellQuote(r.sourceRoot),
+	}); err != nil {
+		return nil, fmt.Errorf("render codex forwarder script: %w", err)
+	}
+
+	return buf.Bytes(), nil
+}
+
+type hookConfig struct {
+	Hooks map[string][]hookRule `json:"hooks"`
+}
+
+type hookRule struct {
+	Matcher string        `json:"matcher,omitempty"`
+	Hooks   []hookCommand `json:"hooks"`
+}
+
+type hookCommand struct {
+	Type    string `json:"type"`
+	Command string `json:"command"`
 }
 
 func extractCodexTitle(raw string) string {
@@ -205,4 +321,12 @@ func containsLetter(s string) bool {
 	}
 
 	return false
+}
+
+func shellQuote(value string) string {
+	if value == "" {
+		return "''"
+	}
+
+	return "'" + strings.ReplaceAll(value, "'", `'\''`) + "'"
 }

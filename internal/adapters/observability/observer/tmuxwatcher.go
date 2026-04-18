@@ -141,7 +141,7 @@ func (w *TMuxWatcher) refreshTask(ctx context.Context, task *core.Task) error {
 	snapshot, err := w.monitor.Snapshot(ctx, task)
 	if err != nil {
 		if summary := w.summaryFromHookOnSnapshotFailure(task, hookSummary); summary != nil {
-			return w.persistSummary(ctx, summary, task.Provider)
+			return w.persistSummary(ctx, summary, string(task.Provider))
 		}
 		return w.persistSummary(ctx, &core.ObserverSummary{
 			TaskID:                task.ID,
@@ -149,17 +149,17 @@ func (w *TMuxWatcher) refreshTask(ctx context.Context, task *core.Task) error {
 			DisplayActivity:       core.DisplayActivityNone,
 			ProcessAlive:          false,
 			LastRuntimeObservedAt: w.now().UTC(),
-		}, task.Provider)
+		}, string(task.Provider))
 	}
 
 	if observedProvider := w.resolveObservedProvider(snapshot, hookSummary); observedProvider != "" &&
-		observedProvider != strings.TrimSpace(task.Provider) {
+		observedProvider != strings.TrimSpace(string(task.Provider)) {
 		if err := w.persistTaskProvider(ctx, task, observedProvider); err != nil {
 			return err
 		}
 	}
 
-	provider := w.providers[task.Provider]
+	provider := w.providers[string(task.Provider)]
 	if provider == nil {
 		return nil
 	}
@@ -170,7 +170,7 @@ func (w *TMuxWatcher) refreshTask(ctx context.Context, task *core.Task) error {
 	// hooks indicate the provider is actively working, override the
 	// tmux-based runtime state which may incorrectly detect a visible
 	// prompt as "needs input".
-	runtimeState = w.overrideWithHookPhase(snapshot, hookSummary, runtimeState, task.Provider)
+	runtimeState = w.overrideWithHookPhase(snapshot, hookSummary, runtimeState, string(task.Provider))
 
 	processAlive := runtimeState == core.RuntimeStateRunning || runtimeState == core.RuntimeStateNeedsInput
 	display := DeriveDisplayStatus(StatusInput{
@@ -192,7 +192,7 @@ func (w *TMuxWatcher) refreshTask(ctx context.Context, task *core.Task) error {
 		ProcessAlive:          processAlive,
 		LastRuntimeObservedAt: observedAt,
 	}
-	return w.persistSummary(ctx, summary, task.Provider)
+	return w.persistSummary(ctx, summary, string(task.Provider))
 }
 
 func (w *TMuxWatcher) findTaskBySession(ctx context.Context, sessionName string) (*core.Task, error) {
@@ -315,7 +315,7 @@ func (w *TMuxWatcher) summaryFromHookOnSnapshotFailure(
 		return nil
 	}
 
-	display, alive := w.displayStateFromHookWithoutSnapshot(task.Provider, hs)
+	display, alive := w.displayStateFromHookWithoutSnapshot(string(task.Provider), hs)
 	if display.Primary == "" {
 		return nil
 	}
@@ -395,11 +395,11 @@ func (w *TMuxWatcher) isFreshHookSummary(snapshot core.RuntimeSnapshot, hs *core
 func (w *TMuxWatcher) persistTaskProvider(ctx context.Context, task *core.Task, provider string) error {
 	updater, ok := w.tasks.(observerTaskUpdater)
 	if !ok || task == nil {
-		task.Provider = provider
+		task.Provider = core.AgentProvider(provider)
 		return nil
 	}
 
-	task.Provider = provider
+	task.Provider = core.AgentProvider(provider)
 	task.UpdatedAt = w.now().UTC()
 	return updater.UpdateTask(ctx, task)
 }

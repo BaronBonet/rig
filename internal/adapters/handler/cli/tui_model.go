@@ -1116,10 +1116,6 @@ func taskStateLabel(view *core.TaskView) string {
 	}
 
 	task := view.Task
-	if task.RuntimeState != core.RuntimeStateNone {
-		return strings.ReplaceAll(string(task.RuntimeState), "_", " ")
-	}
-
 	return string(task.Status)
 }
 
@@ -1129,10 +1125,6 @@ func taskStateStyle(view *core.TaskView) (string, lipgloss.Style) {
 	}
 
 	task := view.Task
-	if task.RuntimeState != core.RuntimeStateNone {
-		return runtimeStateStyle(string(task.RuntimeState))
-	}
-
 	return statusStyle(string(task.Status))
 }
 
@@ -1506,7 +1498,7 @@ func (m *model) applyHookSessionUpdate(update core.HookSessionSummary) {
 		view.HookSession = &copySummary
 		if view.Task != nil {
 			if provider := core.InferProviderFromHookSession(&update); provider != "" {
-				view.Task.Provider = provider
+				view.Task.Provider = core.AgentProvider(provider)
 			}
 		}
 		return
@@ -1533,9 +1525,9 @@ func (m *model) applyObserverTaskUpdate(update core.ObserverTaskUpdate) {
 		view.Observer = copySummary
 		if view.Task != nil {
 			if provider := core.NormalizeProvider(update.Provider); provider != "" {
-				view.Task.Provider = provider
+				view.Task.Provider = core.AgentProvider(provider)
 			} else if provider := core.InferProviderFromHookSession(update.HookSession); provider != "" {
-				view.Task.Provider = provider
+				view.Task.Provider = core.AgentProvider(provider)
 			}
 		}
 		if update.HookSession != nil {
@@ -1566,7 +1558,7 @@ func providerStyle(provider string) lipgloss.Style {
 }
 
 func isVisibleTask(task *core.Task) bool {
-	return task != nil && (task.SessionExists || task.WorktreeExists)
+	return task != nil
 }
 
 func (m model) fetchRecentEventsForSelected() tea.Cmd {
@@ -1613,8 +1605,8 @@ func (m model) syntheticCreationTaskView() *core.TaskView {
 	if strings.TrimSpace(task.DisplayName) == "" {
 		task.DisplayName = syntheticCreationTitle
 	}
-	if strings.TrimSpace(task.Provider) == "" {
-		task.Provider = emptyFallback(m.createInput.Provider, m.provider)
+	if strings.TrimSpace(string(task.Provider)) == "" {
+		task.Provider = core.AgentProvider(emptyFallback(m.createInput.Provider, m.provider))
 	}
 	if strings.TrimSpace(task.Prompt) == "" {
 		task.Prompt = m.createInput.Prompt
@@ -1623,7 +1615,6 @@ func (m model) syntheticCreationTaskView() *core.TaskView {
 	if m.creationFailed {
 		task.Status = core.TaskStatusBroken
 	}
-	task.RuntimeState = core.RuntimeStateNone
 
 	return &core.TaskView{Task: task}
 }
@@ -1828,7 +1819,7 @@ func (m model) renderTaskRow(b *strings.Builder, view *core.TaskView, index int,
 		nameWidth = 10
 	}
 
-	agentName := emptyFallback(task.Provider, "-")
+	agentName := emptyFallback(string(task.Provider), "-")
 	agentCell := padRight(agentName, colWidthAgent)
 	prText := m.prTextForTask(view)
 
@@ -1839,14 +1830,14 @@ func (m model) renderTaskRow(b *strings.Builder, view *core.TaskView, index int,
 		nameRendered := lipgloss.NewStyle().Foreground(colorAccent).Bold(true).Render(namePad)
 		timeRendered := primaryStyle.Render(timeCell)
 		line1 := nameRendered + stStyle.Render(statusCell) + timeRendered
-		line2 := providerStyle(task.Provider).Render(agentCell) + prText
+		line2 := providerStyle(string(task.Provider)).Render(agentCell) + prText
 		b.WriteString(selectedRowStyle.Render(line1) + "\n")
 		b.WriteString(selectedRowStyle.Render(line2) + "\n")
 	} else {
 		nameRendered := dimStyle.Render(namePad)
 		timeRendered := dimStyle.Render(timeCell)
 		line1 := nameRendered + stStyle.Render(statusCell) + timeRendered
-		line2 := providerStyle(task.Provider).Render(agentCell) + prText
+		line2 := providerStyle(string(task.Provider)).Render(agentCell) + prText
 		b.WriteString(normalRowStyle.Render(line1) + "\n")
 		b.WriteString(normalRowStyle.Render(line2) + "\n")
 	}
@@ -1997,10 +1988,6 @@ func safeCmd(name string, fn func() tea.Msg) tea.Cmd {
 }
 
 func selectedIDOrSlug(task *core.Task) string {
-	if strings.TrimSpace(task.Slug) != "" {
-		return task.Slug
-	}
-
 	return task.ID
 }
 

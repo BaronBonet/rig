@@ -123,9 +123,14 @@ func (r *Repository) CreateWorktree(ctx context.Context, in core.CreateWorktreeI
 }
 
 func (r *Repository) CreateTaskWorkspace(ctx context.Context, task *core.Task) error {
+	repoCtx, err := r.DetectRepo(ctx, task.RepoRoot)
+	if err != nil {
+		return err
+	}
+
 	return r.CreateWorktree(ctx, core.CreateWorktreeInput{
 		RepoRoot:     task.RepoRoot,
-		BaseBranch:   task.BaseBranch,
+		BaseBranch:   repoCtx.BaseBranch,
 		BranchName:   task.BranchName,
 		WorktreePath: task.WorktreePath,
 	})

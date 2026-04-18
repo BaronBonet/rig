@@ -126,13 +126,13 @@ func (r *Repository) StartTaskSession(ctx context.Context, task *core.Task, laun
 	if err := r.CreateSession(ctx, core.CreateSessionInput{
 		SessionName:      task.TmuxSession,
 		WorkingDir:       task.WorktreePath,
-		AgentWindowName:  task.AgentWindowName,
-		EditorWindowName: task.EditorWindowName,
+		AgentWindowName:  "agent",
+		EditorWindowName: "editor",
 	}); err != nil {
 		return err
 	}
 
-	if err := r.SendKeysToWindow(ctx, task.TmuxSession, task.AgentWindowName, launch.Command); err != nil {
+	if err := r.SendKeysToWindow(ctx, task.TmuxSession, "agent", launch.Command); err != nil {
 		return err
 	}
 
@@ -140,11 +140,11 @@ func (r *Repository) StartTaskSession(ctx context.Context, task *core.Task, laun
 		return nil
 	}
 
-	if err := r.waitForPrompt(ctx, task.TmuxSession, task.AgentWindowName, launch.ReadyMarker); err != nil {
+	if err := r.waitForPrompt(ctx, task.TmuxSession, "agent", launch.ReadyMarker); err != nil {
 		return err
 	}
 
-	return r.TypeInWindow(ctx, task.TmuxSession, task.AgentWindowName, launch.InitialInput)
+	return r.TypeInWindow(ctx, task.TmuxSession, "agent", launch.InitialInput)
 }
 
 func (r *Repository) OpenTaskSession(ctx context.Context, task *core.Task) error {
@@ -165,12 +165,12 @@ func (r *Repository) InspectTaskSession(ctx context.Context, task *core.Task) (c
 		return core.SessionResources{}, nil
 	}
 
-	agentWindowExists, err := r.WindowExists(ctx, task.TmuxSession, windowOrDefault(task.AgentWindowName, "agent"))
+	agentWindowExists, err := r.WindowExists(ctx, task.TmuxSession, "agent")
 	if err != nil {
 		return core.SessionResources{}, err
 	}
 
-	editorWindowExists, err := r.WindowExists(ctx, task.TmuxSession, windowOrDefault(task.EditorWindowName, "editor"))
+	editorWindowExists, err := r.WindowExists(ctx, task.TmuxSession, "editor")
 	if err != nil {
 		return core.SessionResources{}, err
 	}

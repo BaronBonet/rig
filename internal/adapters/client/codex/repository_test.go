@@ -1,6 +1,7 @@
 package codex
 
 import (
+	"os"
 	"testing"
 	"time"
 
@@ -22,51 +23,46 @@ func TestRepositoryBuildLaunchCommand_IncludesPrompt(t *testing.T) {
 	require.Equal(t, "add billing retry flow", cmd[len(cmd)-1])
 }
 
-func TestRepositoryLaunchRequest_UsesBinaryPromptAndTaskPrompt(t *testing.T) {
+func TestRepositoryBuildTaskSessionLaunchSpec_UsesBinaryPromptAndTaskPrompt(t *testing.T) {
 	repo := NewRepository(execx.NewMockRunner(t), Config{Binary: "codex"})
 
-	launch, err := repo.LaunchRequest(&core.Task{Prompt: "add billing retry flow"})
+	launch, err := repo.BuildTaskSessionLaunchSpec(&core.Task{Prompt: "add billing retry flow"})
 	require.NoError(t, err)
-	require.Equal(t, core.LaunchRequest{
+	require.Equal(t, core.TaskSessionLaunchSpec{
 		Command:      []string{"codex"},
-		Prompt:       "›",
+		ReadyMarker:  "›",
 		InitialInput: []string{"add billing retry flow"},
 	}, launch)
 }
 
-func TestRepositoryLaunchRequest_OmitsInitialInputWhenTaskPromptIsEmpty(t *testing.T) {
+func TestRepositoryBuildTaskSessionLaunchSpec_OmitsInitialInputWhenTaskPromptIsEmpty(t *testing.T) {
 	repo := NewRepository(execx.NewMockRunner(t), Config{Binary: "codex"})
 
-	launch, err := repo.LaunchRequest(&core.Task{Prompt: ""})
+	launch, err := repo.BuildTaskSessionLaunchSpec(&core.Task{Prompt: ""})
 	require.NoError(t, err)
-	require.Equal(t, core.LaunchRequest{
-		Command: []string{"codex"},
-		Prompt:  "›",
+	require.Equal(t, core.TaskSessionLaunchSpec{
+		Command:     []string{"codex"},
+		ReadyMarker: "›",
 	}, launch)
 }
 
-func TestRepositoryRestoreLaunchRequest_UsesResumeWithSessionID(t *testing.T) {
-	repo := NewRepository(execx.NewMockRunner(t), Config{Binary: "codex"})
-
-	launch, err := repo.RestoreLaunchRequest(&core.Task{Prompt: "add billing retry flow"}, &core.HookSessionSummary{
-		SessionID: "sess-1",
+func TestRepositoryBuildWorkspaceBootstrapSpec_RendersCodexHooksAndForwarderScript(t *testing.T) {
+	repo := NewRepository(execx.NewMockRunner(t), Config{
+		Binary:        "codex",
+		RigBinaryPath: "/tmp/rig-bin",
+		SourceRoot:    "/tmp/source",
 	})
-	require.NoError(t, err)
-	require.Equal(t, core.LaunchRequest{
-		Command: []string{"codex", "resume", "sess-1"},
-		Prompt:  "›",
-	}, launch)
-}
 
-func TestRepositoryRestoreLaunchRequest_FallsBackToGenericResumeWithoutSessionID(t *testing.T) {
-	repo := NewRepository(execx.NewMockRunner(t), Config{Binary: "codex"})
-
-	launch, err := repo.RestoreLaunchRequest(&core.Task{Prompt: "add billing retry flow"}, nil)
+	spec, err := repo.BuildWorkspaceBootstrapSpec(&core.Task{})
 	require.NoError(t, err)
-	require.Equal(t, core.LaunchRequest{
-		Command: []string{"codex", "resume"},
-		Prompt:  "›",
-	}, launch)
+	require.Len(t, spec.Files, 2)
+	require.Equal(t, ".codex/hooks/hooks.json", spec.Files[0].Path)
+	require.Equal(t, os.FileMode(0o644), spec.Files[0].FileMode)
+	require.Contains(t, string(spec.Files[0].Content), `"SessionStart"`)
+	require.Equal(t, ".codex/hooks/forward-to-rig.sh", spec.Files[1].Path)
+	require.Equal(t, os.FileMode(0o755), spec.Files[1].FileMode)
+	require.Contains(t, string(spec.Files[1].Content), "/tmp/rig-bin")
+	require.Contains(t, string(spec.Files[1].Content), "/tmp/source")
 }
 
 func TestRepositorySuggestTaskName_DelegatesToCodexProposal(t *testing.T) {

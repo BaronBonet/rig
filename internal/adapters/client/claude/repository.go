@@ -4,6 +4,8 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"os"
+	"path/filepath"
 	"strings"
 	"unicode"
 
@@ -82,12 +84,40 @@ func (r *Repository) ProposeTaskName(ctx context.Context, prompt string) (core.T
 	if suggestion.Name == "" {
 		return core.TaskSuggestion{}, fmt.Errorf("claude did not return a usable task title")
 	}
+	if suggestion.BranchType == "" {
+		suggestion.BranchType = "feat"
+	}
 
 	return suggestion, nil
 }
 
 func (r *Repository) SuggestTaskName(ctx context.Context, prompt string) (core.TaskSuggestion, error) {
 	return r.ProposeTaskName(ctx, prompt)
+}
+
+func (r *Repository) BuildWorkspaceBootstrapSpec(_ *core.Task) (core.WorkspaceBootstrapSpec, error) {
+	listenAddr := strings.TrimSpace(r.hookListenAddr)
+	if listenAddr == "" {
+		listenAddr = strings.TrimSpace(os.Getenv("AGENT_HOOK_LISTEN_ADDR"))
+	}
+	if listenAddr == "" {
+		listenAddr = "127.0.0.1:4123"
+	}
+
+	settings, err := BuildHookSettings(listenAddr)
+	if err != nil {
+		return core.WorkspaceBootstrapSpec{}, err
+	}
+
+	return core.WorkspaceBootstrapSpec{
+		Files: []core.WorkspaceBootstrapFile{
+			{
+				Path:     filepath.Join(".claude", "settings.local.json"),
+				Content:  settings,
+				FileMode: 0o644,
+			},
+		},
+	}, nil
 }
 
 func (r *Repository) BuildLaunchCommand(task *core.Task) ([]string, error) {

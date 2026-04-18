@@ -17,7 +17,7 @@ packages:
       WorkspaceSeeder:
       SetupScriptRunner:
       RepoClient:
-      SessionClient:
+      TmuxSessionClient:
       RuntimeMonitor:
       ProviderClient:
       PRStatusChecker:
