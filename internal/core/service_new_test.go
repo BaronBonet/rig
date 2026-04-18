@@ -119,7 +119,6 @@ func TestServiceCreateTaskWithProgress_PersistsBrokenTaskWhenTmuxCreationFails(t
 
 	require.Error(t, err)
 	require.Equal(t, TaskStatusBroken, task.Status)
-	require.Contains(t, task.LastError, "tmux failed")
 	require.Equal(t, TaskStatusBroken, svc.taskRepo.updatedTask.Status)
 	requireTimeInWindow(t, task.CreatedAt, before, after)
 	requireTimeInWindow(t, task.UpdatedAt, before, after)
@@ -280,7 +279,6 @@ func TestServiceCreateTaskWithProgress_MarksBrokenWhenSetupScriptFails(t *testin
 
 	require.Error(t, err)
 	require.Equal(t, TaskStatusBroken, task.Status)
-	require.Contains(t, task.LastError, "setup script")
 	require.Nil(t, svc.sessionClient.startedTask)
 }
 

@@ -109,3 +109,29 @@ func TestApplyBootstrapSQL_UsesEmbeddedBootstrapAssetPragmas(t *testing.T) {
 	require.NoError(t, db.QueryRowContext(context.Background(), `pragma foreign_keys`).Scan(&foreignKeys))
 	require.Equal(t, 1, foreignKeys)
 }
+
+func TestApplyGooseMigrations_TaskSchemaDoesNotIncludeLastError(t *testing.T) {
+	db, err := sql.Open("sqlite", ":memory:")
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, db.Close()) })
+
+	require.NoError(t, applyGooseMigrations(context.Background(), db, sqlFiles, "migrations"))
+
+	rows, err := db.QueryContext(context.Background(), `pragma table_info(tasks)`)
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, rows.Close()) })
+
+	for rows.Next() {
+		var (
+			cid        int
+			name       string
+			columnType string
+			notNull    int
+			dfltValue  sql.NullString
+			pk         int
+		)
+		require.NoError(t, rows.Scan(&cid, &name, &columnType, &notNull, &dfltValue, &pk))
+		require.NotEqual(t, "last_error", name)
+	}
+	require.NoError(t, rows.Err())
+}

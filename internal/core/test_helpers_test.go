@@ -145,6 +145,43 @@ type recordingWorkspacePreparer struct {
 	session *sessionClientState
 }
 
+type recordingAgentClient struct {
+	state *providerClientState
+}
+
+func (c *recordingAgentClient) SuggestTaskName(_ context.Context, _ string) (TaskSuggestion, error) {
+	if c.state.suggestErr != nil {
+		return TaskSuggestion{}, c.state.suggestErr
+	}
+	if c.state.suggestedSuggestion.Name != "" {
+		return c.state.suggestedSuggestion, nil
+	}
+	return TaskSuggestion{Name: c.state.suggestedName, BranchType: "feat"}, nil
+}
+
+func (c *recordingAgentClient) BuildWorkspaceBootstrapSpec(task *Task) (WorkspaceBootstrapSpec, error) {
+	c.state.bootstrapRequest = cloneTask(task)
+	if c.state.bootstrapErr != nil {
+		return WorkspaceBootstrapSpec{}, c.state.bootstrapErr
+	}
+	return c.state.bootstrapSpec, nil
+}
+
+func (c *recordingAgentClient) BuildTaskSessionLaunchSpec(task *Task) (TaskSessionLaunchSpec, error) {
+	if c.state.launchErr != nil {
+		return TaskSessionLaunchSpec{}, c.state.launchErr
+	}
+	if hasCustomLaunchSpec(c.state.launchRequest) {
+		return c.state.launchRequest, nil
+	}
+
+	return TaskSessionLaunchSpec{
+		Command:      []string{"codex"},
+		ReadyMarker:  "›",
+		InitialInput: []string{task.Prompt},
+	}, nil
+}
+
 func (p *recordingWorkspacePreparer) PrepareTaskWorkspace(_ context.Context, task *Task, repoRoot string, bootstrapSpec WorkspaceBootstrapSpec) error {
 	p.state.called = true
 	p.state.repoRoot = repoRoot
@@ -219,7 +256,7 @@ func newTestTaskService(t *testing.T) *testTaskServiceHarness {
 		Tasks:           base.taskRepoMock,
 		GitWorktree:     base.repoClientMock,
 		TmuxSession:     base.sessionClientMock,
-		Agents:          map[string]AgentClient{"codex": base.providerRepoMock},
+		Agents:          map[string]AgentClient{"codex": &recordingAgentClient{state: &base.providerRepo}},
 		Preparer:        &recordingWorkspacePreparer{state: &h.preparer, session: &base.sessionClient},
 		DefaultProvider: AgentProviderCodex,
 	})
@@ -404,13 +441,6 @@ func wireProviderClientMock(h *testServiceHarness) {
 			}
 			return TaskSuggestion{Name: h.providerRepo.suggestedName, BranchType: "feat"}, nil
 		}).Maybe()
-	h.providerRepoMock.EXPECT().BuildWorkspaceBootstrapSpec(mock.Anything).RunAndReturn(func(task *Task) (WorkspaceBootstrapSpec, error) {
-		h.providerRepo.bootstrapRequest = cloneTask(task)
-		if h.providerRepo.bootstrapErr != nil {
-			return WorkspaceBootstrapSpec{}, h.providerRepo.bootstrapErr
-		}
-		return h.providerRepo.bootstrapSpec, nil
-	}).Maybe()
 	h.providerRepoMock.EXPECT().BuildTaskSessionLaunchSpec(mock.Anything).RunAndReturn(func(task *Task) (TaskSessionLaunchSpec, error) {
 		if h.providerRepo.launchErr != nil {
 			return TaskSessionLaunchSpec{}, h.providerRepo.launchErr

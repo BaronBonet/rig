@@ -23,7 +23,6 @@ type Task struct {
 	TmuxSession  string
 	Provider     AgentProvider
 	Status       TaskStatus
-	LastError    string
 }
 
 type RepoContext struct {

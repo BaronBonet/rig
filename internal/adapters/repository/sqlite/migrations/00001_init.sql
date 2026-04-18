@@ -20,7 +20,6 @@ create table if not exists tasks (
   session_exists integer not null,
   agent_window_exists integer not null default 0,
   editor_window_exists integer not null default 0,
-  last_error text not null default '',
   created_at text not null,
   updated_at text not null,
   last_reconciled_at text not null default ''
