@@ -7,7 +7,7 @@ import (
 )
 
 func TestRepositoryWorkspacePackage_ExposesPreparer(t *testing.T) {
-	if repositoryworkspace.NewPreparer() == nil {
+	if repositoryworkspace.New() == nil {
 		t.Fatal("expected repository workspace preparer")
 	}
 }

@@ -4,16 +4,13 @@ import (
 	"context"
 	"fmt"
 	"os"
-	"path/filepath"
 	"rig/internal/core"
 	"rig/internal/infrastructure"
 	"rig/internal/pkg/execx"
-	"runtime"
 	"strings"
 
 	claudeclient "rig/internal/adapters/client/claude"
 	claudeagent "rig/internal/adapters/client/claudeagent"
-	codexclient "rig/internal/adapters/client/codex"
 	codexagent "rig/internal/adapters/client/codexagent"
 	gitworktree "rig/internal/adapters/client/gitworktree"
 	tmuxsession "rig/internal/adapters/client/tmuxsession"
@@ -26,13 +23,18 @@ import (
 var debugCreate = debugCreateConfig{
 	Cwd:              "/Users/ebon/personal_software/rig",
 	Prompt:           "test creating a rig test",
-	Provider:         "codex",
+	Provider:         string(core.AgentProviderCodex),
 	PrepareWorkspace: false,
 }
 
-// Set this when you want codex hook forwarding in seeded worktrees to call the
-// real rig binary instead of the debug executable.
-var debugRigBinaryPath = ""
+var debugCodexAgentConfig = codexagent.Config{
+	Binary: string(core.AgentProviderCodex),
+}
+
+var debugCodexHookForwarding = codexagent.HookForwardingConfig{
+	RigBinaryPath: "/Users/ebon/personal_software/rig/local/bin/rig",
+	SourceRoot:    "/Users/ebon/personal_software/rig",
+}
 
 type debugCreateConfig struct {
 	Cwd              string
@@ -42,9 +44,6 @@ type debugCreateConfig struct {
 }
 
 func main() {
-	if strings.TrimSpace(debugRigBinaryPath) != "" {
-		debugRigBinaryPath = strings.TrimSpace(debugRigBinaryPath)
-	}
 	if strings.TrimSpace(debugCreate.Cwd) == "" {
 		fmt.Fprintln(os.Stderr, "set debugCreate.Cwd in cmd/debug/main.go before running")
 		os.Exit(1)
@@ -60,48 +59,33 @@ func main() {
 		os.Exit(1)
 	}
 
-	taskRepo, err := tasksqlite.NewRepository(sqliterepo.Config{Path: cfg.SQLitePath})
+	taskRepo, err := tasksqlite.New(sqliterepo.Config{Path: cfg.SQLite.Path})
 	if err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		os.Exit(1)
 	}
 
 	runner := execx.ExecRunner{}
-	agentExecPath := debugRigBinaryPath
-	if agentExecPath == "" {
-		agentExecPath, err = os.Executable()
-		if err != nil {
-			fmt.Fprintln(os.Stderr, err)
-			os.Exit(1)
-		}
-	}
-	sourceRoot := ""
-	_, file, _, ok := runtime.Caller(0)
-	if ok && file != "" {
-		sourceRoot = filepath.Clean(filepath.Join(filepath.Dir(file), "..", ".."))
-	}
+	codexCfg := debugCodexAgentConfig
+	codexCfg.Binary = cfg.Codex.Binary
 
 	agents := map[string]core.AgentClient{
-		"codex": codexagent.NewRepository(runner, codexclient.Config{
-			Binary:        cfg.CodexBinary,
-			RigBinaryPath: agentExecPath,
-			SourceRoot:    sourceRoot,
-		}),
-		"claude": claudeagent.NewRepository(runner, claudeclient.Config{
-			Binary:         cfg.ClaudeBinary,
-			HookListenAddr: cfg.HookListenAddr,
+		string(core.AgentProviderCodex): codexagent.New(runner, codexCfg, debugCodexHookForwarding),
+		string(core.AgentProviderClaude): claudeagent.New(runner, claudeclient.Config{
+			Binary:         cfg.Claude.Binary,
+			HookListenAddr: cfg.Claude.HookListenAddr,
 		}),
 	}
 
 	var preparer core.WorkspacePreparer
 	if debugCreate.PrepareWorkspace {
-		preparer = repositoryworkspace.NewPreparer()
+		preparer = repositoryworkspace.New()
 	}
 
 	service := core.NewTaskService(core.TaskServiceDependencies{
 		Tasks:           taskRepo,
-		GitWorktree:     gitworktree.NewRepository(runner),
-		TmuxSession:     tmuxsession.NewRepository(runner),
+		GitWorktree:     gitworktree.New(runner),
+		TmuxSession:     tmuxsession.New(runner),
 		Agents:          agents,
 		Preparer:        preparer,
 		DefaultProvider: cfg.Provider,

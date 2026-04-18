@@ -65,27 +65,26 @@ func buildDependencies() (cli.Dependencies, error) {
 	}
 	agentSourceRoot := detectAgentSourceRoot()
 	providers := map[string]core.ProviderClient{
-		"codex": codexclient.NewRepository(runner, codexclient.Config{
-			Binary: cfg.CodexBinary,
+		string(core.AgentProviderCodex): codexclient.NewRepository(runner, codexclient.Config{
+			Binary: cfg.Codex.Binary,
 		}),
-		"claude": claudeclient.NewRepository(runner, claudeclient.Config{
-			Binary:         cfg.ClaudeBinary,
-			HookListenAddr: cfg.HookListenAddr,
+		string(core.AgentProviderClaude): claudeclient.NewRepository(runner, claudeclient.Config{
+			Binary:         cfg.Claude.Binary,
+			HookListenAddr: cfg.Claude.HookListenAddr,
 		}),
 	}
 	agentClients := map[string]core.AgentClient{
-		"codex": codexagent.NewRepository(runner, codexclient.Config{
-			Binary:        cfg.CodexBinary,
+		string(core.AgentProviderCodex): codexagent.New(runner, cfg.Codex, codexagent.HookForwardingConfig{
 			RigBinaryPath: agentExec,
 			SourceRoot:    agentSourceRoot,
 		}),
-		"claude": claudeagent.NewRepository(runner, claudeclient.Config{
-			Binary:         cfg.ClaudeBinary,
-			HookListenAddr: cfg.HookListenAddr,
+		string(core.AgentProviderClaude): claudeagent.New(runner, claudeclient.Config{
+			Binary:         cfg.Claude.Binary,
+			HookListenAddr: cfg.Claude.HookListenAddr,
 		}),
 	}
 
-	taskRepo, err := sqliterepo.NewRepository(sqliterepo.Config{Path: cfg.SQLitePath})
+	taskRepo, err := sqliterepo.NewRepository(sqliterepo.Config{Path: cfg.SQLite.Path})
 	if err != nil {
 		return cli.Dependencies{}, err
 	}
@@ -116,10 +115,10 @@ func buildDependencies() (cli.Dependencies, error) {
 
 	taskService := core.NewTaskService(core.TaskServiceDependencies{
 		Tasks:           taskStore,
-		GitWorktree:     gitworktree.NewRepository(runner),
-		TmuxSession:     tmuxsession.NewRepository(runner),
+		GitWorktree:     gitworktree.New(runner),
+		TmuxSession:     tmuxsession.New(runner),
 		Agents:          agentClients,
-		Preparer:        repositoryworkspace.NewPreparer(),
+		Preparer:        repositoryworkspace.New(),
 		DefaultProvider: cfg.Provider,
 	})
 	appService := core.NewAppService(taskService, service)
@@ -136,19 +135,19 @@ func buildDependencies() (cli.Dependencies, error) {
 		Service:      appService,
 		HookIngestor: taskRepo,
 		ObserverProcess: observer.NewProcessManager(observer.ProcessConfig{
-			SocketPath:          cfg.ObserverSocketPath,
+			SocketPath:          cfg.Observer.SocketPath,
 			ExecPath:            agentExec,
 			ExpectedFingerprint: observerFingerprint,
 		}),
 		ObserverWatcher:     observerWatcher,
-		HookListenAddr:      cfg.HookListenAddr,
-		ObserverSocketPath:  cfg.ObserverSocketPath,
+		HookListenAddr:      cfg.Claude.HookListenAddr,
+		ObserverSocketPath:  cfg.Observer.SocketPath,
 		ObserverFingerprint: observerFingerprint,
 		Stdout:              os.Stdout,
 		Stderr:              os.Stderr,
 		Cwd:                 cwd,
 		RepoRoot:            detectRepoRoot(cwd),
-		DefaultProvider:     cfg.Provider,
+		DefaultProvider:     string(cfg.Provider),
 		Version:             version,
 	}, nil
 }

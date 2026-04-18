@@ -12,21 +12,21 @@ import (
 	"rig/internal/core"
 )
 
-type Preparer struct {
+type preparer struct {
 	configLoader core.RepoConfigLoader
 	seeder       core.WorkspaceSeeder
 	setupRunner  core.SetupScriptRunner
 }
 
-func NewPreparer() *Preparer {
-	return &Preparer{
+func New() core.WorkspacePreparer {
+	return &preparer{
 		configLoader: repositoryagentconfig.NewLoader(),
 		seeder:       NewSeeder(),
 		setupRunner:  repositorysetupscript.NewRunner(),
 	}
 }
 
-func (p *Preparer) PrepareTaskWorkspace(ctx context.Context, task *core.Task, repoRoot string, bootstrapSpec core.WorkspaceBootstrapSpec) error {
+func (p *preparer) PrepareTaskWorkspace(ctx context.Context, task *core.Task, repoRoot string, bootstrapSpec core.WorkspaceBootstrapSpec) error {
 	if task == nil {
 		return nil
 	}

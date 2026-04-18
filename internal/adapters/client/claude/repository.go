@@ -21,8 +21,8 @@ type Repository struct {
 }
 
 type Config struct {
-	Binary         string
-	HookListenAddr string
+	Binary         string `env:"AGENT_CLAUDE_BINARY" envDefault:"claude"`
+	HookListenAddr string `env:"AGENT_HOOK_LISTEN_ADDR" envDefault:"127.0.0.1:4123"`
 }
 
 func NewRepository(runner execx.Runner, cfg Config) *Repository {

@@ -14,7 +14,7 @@ type TaskServiceDependencies struct {
 	TmuxSession     TmuxSessionClient
 	Agents          map[string]AgentClient
 	Preparer        WorkspacePreparer
-	DefaultProvider string
+	DefaultProvider AgentProvider
 }
 
 type taskService struct {
@@ -23,7 +23,7 @@ type taskService struct {
 	tmuxSession     TmuxSessionClient
 	agents          map[string]AgentClient
 	preparer        WorkspacePreparer
-	defaultProvider string
+	defaultProvider AgentProvider
 }
 
 func NewTaskService(deps TaskServiceDependencies) TaskService {
@@ -167,7 +167,7 @@ func (s *taskService) resolveAgent(name string) AgentClient {
 			return agent
 		}
 	}
-	if agent, ok := s.agents[s.defaultProvider]; ok {
+	if agent, ok := s.agents[string(s.defaultProvider)]; ok {
 		return agent
 	}
 	for _, agent := range s.agents {
@@ -222,13 +222,13 @@ func newTaskRecord(
 	repoCtx RepoContext,
 	existingTasks []*Task,
 	provider string,
-	defaultProvider string,
+	defaultProvider AgentProvider,
 	displayName string,
 	branchType string,
 	branchName string,
 ) *Task {
 	if provider == "" {
-		provider = defaultProvider
+		provider = string(defaultProvider)
 	}
 
 	now := time.Now().UTC()

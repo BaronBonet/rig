@@ -11,7 +11,7 @@ import (
 )
 
 func TestRepositoryCreateTask_AllowsMultipleTasksWithoutDomainSlug(t *testing.T) {
-	repo, err := NewRepository(sqliterepo.Config{Path: filepath.Join(t.TempDir(), "state.db")})
+	repo, err := New(sqliterepo.Config{Path: filepath.Join(t.TempDir(), "state.db")})
 	if err != nil {
 		t.Fatalf("new repository: %v", err)
 	}
