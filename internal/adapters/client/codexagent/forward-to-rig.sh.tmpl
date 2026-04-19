@@ -1,7 +1,7 @@
 #!/bin/sh
 set -eu
 
-collector_url=${CODEX_HOOK_COLLECTOR_URL:-http://127.0.0.1:4123/hook}
+collector_url=${CODEX_HOOK_COLLECTOR_URL:-http://127.0.0.1:4123/codex-hook}
 agent_exec={{ .AgentExecQuoted }}
 agent_source_root={{ .SourceRootQuoted }}
 event_name=$1

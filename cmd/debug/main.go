@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"os/signal"
+	statusdaemon "rig/internal/adapters/handler/statusdaemon"
 	statusstream "rig/internal/adapters/observability/statusstream"
 	"rig/internal/core"
 	"rig/internal/infrastructure"
@@ -39,9 +40,9 @@ var debugCodexHookForwarding = codexagent.HookForwardingConfig{
 	SourceRoot:    "/Users/ebon/personal_software/rig",
 }
 
-var debugStatusObserver = debugStatusObserverConfig{
+var debugStatusDaemon = debugStatusDaemonConfig{
 	ModeEnvKey:      "RIG_DEBUG_MODE",
-	ModeEnvValue:    "status-observer",
+	ModeEnvValue:    "status-daemon",
 	HookListenAddr:  "127.0.0.1:4123",
 	StatusWaitAfter: 0,
 }
@@ -53,7 +54,7 @@ type debugCreateConfig struct {
 	PrepareWorkspace bool
 }
 
-type debugStatusObserverConfig struct {
+type debugStatusDaemonConfig struct {
 	ModeEnvKey      string
 	ModeEnvValue    string
 	HookListenAddr  string
@@ -73,18 +74,52 @@ func main() {
 		os.Exit(1)
 	}
 
+	execPath, err := os.Executable()
+	if err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		os.Exit(1)
+	}
+
+	runner := execx.ExecRunner{}
+	codexCfg := debugCodexAgentConfig
+	codexCfg.Binary = cfg.Codex.Binary
+	debugHookForwarding := debugCodexHookForwarding
+	debugHookForwarding.RigBinaryPath = execPath
+
+	agents := map[string]core.AgentClient{
+		string(core.AgentProviderCodex): codexagent.New(runner, codexCfg, debugHookForwarding),
+		string(core.AgentProviderClaude): claudeagent.New(runner, claudeclient.Config{
+			Binary:         cfg.Claude.Binary,
+			HookListenAddr: debugStatusDaemon.HookListenAddr,
+		}),
+	}
+
+	var preparer core.WorkspacePreparer
+	if debugCreate.PrepareWorkspace {
+		preparer = repositoryworkspace.New()
+	}
+
+	service := core.NewTaskService(core.TaskServiceDependencies{
+		Tasks:           taskStore,
+		GitWorktree:     gitworktree.New(runner),
+		TmuxSession:     tmuxsession.New(runner),
+		Agents:          agents,
+		Preparer:        preparer,
+		DefaultProvider: cfg.Provider,
+	})
+
 	fmt.Println("rig debug starting with config")
-	if os.Getenv(debugStatusObserver.ModeEnvKey) == debugStatusObserver.ModeEnvValue {
+	if os.Getenv(debugStatusDaemon.ModeEnvKey) == debugStatusDaemon.ModeEnvValue {
 		ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 		defer cancel()
 
-		if err := statusstream.Serve(ctx, statusstream.ServerConfig{
+		if err := statusdaemon.New(statusdaemon.Config{
 			SocketPath:     cfg.Observer.SocketPath,
-			HookListenAddr: debugStatusObserver.HookListenAddr,
-			HookIngestor:   newDebugHookIngestor(taskStore),
-			Hub:            statusstream.NewHub(),
+			HookListenAddr: debugStatusDaemon.HookListenAddr,
+			Service:        service,
+			Tasks:          taskStore,
 			Stop:           cancel,
-		}); err != nil {
+		}).Serve(ctx); err != nil {
 			fmt.Fprintln(os.Stderr, err)
 			os.Exit(1)
 		}
@@ -103,17 +138,11 @@ func main() {
 		os.Exit(1)
 	}
 
-	execPath, err := os.Executable()
-	if err != nil {
-		fmt.Fprintln(os.Stderr, err)
-		os.Exit(1)
-	}
-
 	manager := statusstream.NewProcessManager(statusstream.ProcessConfig{
 		SocketPath: cfg.Observer.SocketPath,
 		ExecPath:   execPath,
 		Env: []string{
-			debugStatusObserver.ModeEnvKey + "=" + debugStatusObserver.ModeEnvValue,
+			debugStatusDaemon.ModeEnvKey + "=" + debugStatusDaemon.ModeEnvValue,
 		},
 	})
 	if err := manager.Restart(context.Background()); err != nil {
@@ -124,42 +153,7 @@ func main() {
 	statusCtx, cancelStatus := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer cancelStatus()
 
-	updates, cleanup, err := statusstream.Subscribe(statusCtx, cfg.Observer.SocketPath)
-	if err != nil {
-		fmt.Fprintln(os.Stderr, err)
-		os.Exit(1)
-	}
-	defer cleanup()
-
-	runner := execx.ExecRunner{}
-	codexCfg := debugCodexAgentConfig
-	codexCfg.Binary = cfg.Codex.Binary
-	debugHookForwarding := debugCodexHookForwarding
-	debugHookForwarding.RigBinaryPath = execPath
-
-	agents := map[string]core.AgentClient{
-		string(core.AgentProviderCodex): codexagent.New(runner, codexCfg, debugHookForwarding),
-		string(core.AgentProviderClaude): claudeagent.New(runner, claudeclient.Config{
-			Binary:         cfg.Claude.Binary,
-			HookListenAddr: debugStatusObserver.HookListenAddr,
-		}),
-	}
-
-	var preparer core.WorkspacePreparer
-	if debugCreate.PrepareWorkspace {
-		preparer = repositoryworkspace.New()
-	}
-
-	service := core.NewTaskService(core.TaskServiceDependencies{
-		Tasks:           taskStore,
-		GitWorktree:     gitworktree.New(runner),
-		TmuxSession:     tmuxsession.New(runner),
-		Agents:          agents,
-		Preparer:        preparer,
-		DefaultProvider: cfg.Provider,
-	})
-
-	task, err := service.CreateTask(context.Background(), core.CreateTaskInput{
+	task, err := createTaskViaDaemon(context.Background(), cfg.Observer.SocketPath, core.CreateTaskInput{
 		Cwd:      strings.TrimSpace(debugCreate.Cwd),
 		Prompt:   strings.TrimSpace(debugCreate.Prompt),
 		Provider: strings.TrimSpace(debugCreate.Provider),
@@ -187,6 +181,20 @@ func main() {
 		fmt.Fprintln(os.Stderr, err)
 		os.Exit(1)
 	}
+
+	latest, err := latestTaskStatusViaDaemon(context.Background(), cfg.Observer.SocketPath, task.ID)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		os.Exit(1)
+	}
+
+	updates, cleanup, err := subscribeTaskStatusViaDaemon(statusCtx, cfg.Observer.SocketPath, task.ID)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		os.Exit(1)
+	}
+	defer cleanup()
+
 	if _, err := fmt.Fprintf(
 		os.Stdout,
 		"task_status_stream=subscribed\n"+
@@ -196,10 +204,24 @@ func main() {
 		fmt.Fprintln(os.Stderr, err)
 		os.Exit(1)
 	}
+	if latest != nil {
+		if _, err := fmt.Fprintf(
+			os.Stdout,
+			"task_status task_id=%s provider=%s phase=%s raw_event=%s observed_at=%s\n",
+			latest.TaskID,
+			latest.Provider,
+			latest.Phase,
+			latest.RawEventName,
+			latest.ObservedAt.Format(time.RFC3339),
+		); err != nil {
+			fmt.Fprintln(os.Stderr, err)
+			os.Exit(1)
+		}
+	}
 
 	var statusDeadline <-chan time.Time
-	if debugStatusObserver.StatusWaitAfter > 0 {
-		timer := time.NewTimer(debugStatusObserver.StatusWaitAfter)
+	if debugStatusDaemon.StatusWaitAfter > 0 {
+		timer := time.NewTimer(debugStatusDaemon.StatusWaitAfter)
 		defer timer.Stop()
 		statusDeadline = timer.C
 	}
@@ -230,7 +252,7 @@ func main() {
 				os.Stdout,
 				"status_wait_complete=no updates observed for task %s within %s\n",
 				task.ID,
-				debugStatusObserver.StatusWaitAfter,
+				debugStatusDaemon.StatusWaitAfter,
 			); err != nil {
 				fmt.Fprintln(os.Stderr, err)
 				os.Exit(1)

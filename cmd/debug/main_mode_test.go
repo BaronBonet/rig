@@ -8,8 +8,8 @@ import (
 )
 
 func TestDebugCreateStatusStreaming_DefaultsToNoTimeout(t *testing.T) {
-	if debugStatusObserver.StatusWaitAfter != 0 {
-		t.Fatalf("expected create-mode status streaming to stay open until cancelled, got %s", debugStatusObserver.StatusWaitAfter)
+	if debugStatusDaemon.StatusWaitAfter != 0 {
+		t.Fatalf("expected create-mode status streaming to stay open until cancelled, got %s", debugStatusDaemon.StatusWaitAfter)
 	}
 }
 
