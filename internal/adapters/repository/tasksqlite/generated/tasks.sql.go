@@ -11,13 +11,14 @@ import (
 
 const createTask = `-- name: CreateTask :exec
 insert into tasks (
-  id, prompt, display_name, repo_root, repo_name, branch_name,
+  id, slug, prompt, display_name, repo_root, repo_name, branch_name,
   worktree_path, tmux_session, provider, status, created_at, updated_at
-) values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+) values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 `
 
 type CreateTaskParams struct {
 	ID           string
+	Slug         string
 	Prompt       string
 	DisplayName  string
 	RepoRoot     string
@@ -34,6 +35,7 @@ type CreateTaskParams struct {
 func (q *Queries) CreateTask(ctx context.Context, arg CreateTaskParams) error {
 	_, err := q.db.ExecContext(ctx, createTask,
 		arg.ID,
+		arg.Slug,
 		arg.Prompt,
 		arg.DisplayName,
 		arg.RepoRoot,
@@ -51,7 +53,7 @@ func (q *Queries) CreateTask(ctx context.Context, arg CreateTaskParams) error {
 
 const getTaskByID = `-- name: GetTaskByID :one
 select
-  id, prompt, display_name, repo_root, repo_name, branch_name,
+  id, slug, prompt, display_name, repo_root, repo_name, branch_name,
   worktree_path, tmux_session, provider, status, created_at, updated_at
 from tasks
 where id = ?
@@ -62,6 +64,7 @@ func (q *Queries) GetTaskByID(ctx context.Context, id string) (Task, error) {
 	var i Task
 	err := row.Scan(
 		&i.ID,
+		&i.Slug,
 		&i.Prompt,
 		&i.DisplayName,
 		&i.RepoRoot,
@@ -79,7 +82,7 @@ func (q *Queries) GetTaskByID(ctx context.Context, id string) (Task, error) {
 
 const listTasks = `-- name: ListTasks :many
 select
-  id, prompt, display_name, repo_root, repo_name, branch_name,
+  id, slug, prompt, display_name, repo_root, repo_name, branch_name,
   worktree_path, tmux_session, provider, status, created_at, updated_at
 from tasks
 order by created_at asc
@@ -96,6 +99,7 @@ func (q *Queries) ListTasks(ctx context.Context) ([]Task, error) {
 		var i Task
 		if err := rows.Scan(
 			&i.ID,
+			&i.Slug,
 			&i.Prompt,
 			&i.DisplayName,
 			&i.RepoRoot,
@@ -123,6 +127,7 @@ func (q *Queries) ListTasks(ctx context.Context) ([]Task, error) {
 
 const updateTask = `-- name: UpdateTask :exec
 update tasks set
+  slug = ?,
   prompt = ?,
   display_name = ?,
   repo_root = ?,
@@ -138,6 +143,7 @@ where id = ?
 `
 
 type UpdateTaskParams struct {
+	Slug         string
 	Prompt       string
 	DisplayName  string
 	RepoRoot     string
@@ -154,6 +160,7 @@ type UpdateTaskParams struct {
 
 func (q *Queries) UpdateTask(ctx context.Context, arg UpdateTaskParams) error {
 	_, err := q.db.ExecContext(ctx, updateTask,
+		arg.Slug,
 		arg.Prompt,
 		arg.DisplayName,
 		arg.RepoRoot,

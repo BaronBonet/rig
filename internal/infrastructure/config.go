@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	tasksqlite "rig/internal/adapters/repository/tasksqlite"
 	"rig/internal/core"
 
 	claudeclient "rig/internal/adapters/client/claude"
@@ -14,11 +15,12 @@ import (
 )
 
 type ApplicationConfig struct {
-	Provider core.AgentProvider `env:"AGENT_PROVIDER" envDefault:"codex"`
-	SQLite   sqliterepo.Config
-	Codex    codexagent.Config
-	Claude   claudeclient.Config
-	Observer ObserverConfig
+	Provider   core.AgentProvider `env:"AGENT_PROVIDER" envDefault:"codex"`
+	SQLite     sqliterepo.Config
+	TaskSQLite tasksqlite.Config
+	Codex      codexagent.Config
+	Claude     claudeclient.Config
+	Observer   ObserverConfig
 }
 
 type ObserverConfig struct {
@@ -30,6 +32,9 @@ func LoadConfig() (*ApplicationConfig, error) {
 	config := ApplicationConfig{
 		SQLite: sqliterepo.Config{
 			Path: sqliterepo.DefaultSQLitePath(),
+		},
+		TaskSQLite: tasksqlite.Config{
+			Path: tasksqlite.DefaultSQLitePath(),
 		},
 		Observer: ObserverConfig{
 			SocketPath: defaultObserverSocketPath(),

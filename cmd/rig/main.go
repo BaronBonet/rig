@@ -88,7 +88,7 @@ func buildDependencies() (cli.Dependencies, error) {
 	if err != nil {
 		return cli.Dependencies{}, err
 	}
-	taskStore, err := tasksqlite.New(tasksqlite.Config{Path: cfg.SQLite.Path})
+	taskStore, err := tasksqlite.New(tasksqlite.Config{Path: cfg.TaskSQLite.Path})
 	if err != nil {
 		return cli.Dependencies{}, err
 	}

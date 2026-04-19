@@ -10,6 +10,7 @@ import (
 func createTaskParams(task *core.Task) generated.CreateTaskParams {
 	return generated.CreateTaskParams{
 		ID:           task.ID,
+		Slug:         task.Slug,
 		Prompt:       task.Prompt,
 		DisplayName:  task.DisplayName,
 		RepoRoot:     task.RepoRoot,
@@ -26,6 +27,7 @@ func createTaskParams(task *core.Task) generated.CreateTaskParams {
 
 func updateTaskParams(task *core.Task) generated.UpdateTaskParams {
 	return generated.UpdateTaskParams{
+		Slug:         task.Slug,
 		Prompt:       task.Prompt,
 		DisplayName:  task.DisplayName,
 		RepoRoot:     task.RepoRoot,
@@ -65,6 +67,7 @@ func parseTime(raw string) time.Time {
 func taskFromRow(row generated.Task) *core.Task {
 	return &core.Task{
 		ID:           row.ID,
+		Slug:         row.Slug,
 		Prompt:       row.Prompt,
 		DisplayName:  row.DisplayName,
 		RepoRoot:     row.RepoRoot,

@@ -13,6 +13,7 @@ import (
 	"rig/internal/adapters/repository/sqlite/generated"
 	"rig/internal/core"
 
+	// Register the "sqlite" database/sql driver used by sql.Open.
 	_ "modernc.org/sqlite"
 )
 
@@ -53,6 +54,8 @@ func NewRepository(cfg Config) (*Repository, error) {
 	db.SetMaxOpenConns(1)
 	db.SetMaxIdleConns(1)
 
+	// Apply SQLite PRAGMAs on the new connection before running migrations so
+	// the database enforces the connection-level behavior this adapter expects.
 	if err := applyBootstrapSQL(context.Background(), db, sqlFiles, "bootstrap/connection.sql"); err != nil {
 		repo.initErr = err
 		_ = db.Close()
