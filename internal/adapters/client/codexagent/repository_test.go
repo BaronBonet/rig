@@ -38,12 +38,12 @@ func TestRepositoryBuildWorkspaceBootstrapSpec_RendersCodexHooksAndForwarderScri
 	require.Equal(t, ".codex/hooks.json", spec.Files[0].Path)
 	require.Equal(t, os.FileMode(0o644), spec.Files[0].FileMode)
 	require.Contains(t, string(spec.Files[0].Content), `"SessionStart"`)
-	require.Contains(t, string(spec.Files[0].Content), `"PermissionRequest"`)
+	require.NotContains(t, string(spec.Files[0].Content), `"PermissionRequest"`)
 	require.Equal(t, ".codex/hooks/forward-to-rig.sh", spec.Files[1].Path)
 	require.Equal(t, os.FileMode(0o755), spec.Files[1].FileMode)
 	require.Contains(t, string(spec.Files[1].Content), "/tmp/rig-bin")
 	require.Contains(t, string(spec.Files[1].Content), "/tmp/source")
-	require.Contains(t, string(spec.Files[1].Content), "RIG_DEBUG_MODE=status-ingest")
+	require.NotContains(t, string(spec.Files[1].Content), "status-ingest")
 }
 
 func TestRepositorySuggestTaskName_DelegatesToCodexProposal(t *testing.T) {

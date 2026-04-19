@@ -16,19 +16,17 @@ import (
 )
 
 type SocketServerConfig struct {
-	SocketPath   string
-	Hub          *Hub
-	HookIngestor core.HookEventIngestor
-	Fingerprint  string
-	Stop         func()
+	SocketPath  string
+	Hub         *Hub
+	Fingerprint string
+	Stop        func()
 }
 
 type SocketServer struct {
-	socketPath   string
-	hub          *Hub
-	hookIngestor core.HookEventIngestor
-	fingerprint  string
-	stop         func()
+	socketPath  string
+	hub         *Hub
+	fingerprint string
+	stop        func()
 }
 
 type HealthStatus struct {
@@ -36,8 +34,7 @@ type HealthStatus struct {
 }
 
 type socketRequest struct {
-	Command string               `json:"command"`
-	Input   *core.HookEventInput `json:"input,omitempty"`
+	Command string `json:"command"`
 }
 
 type socketEnvelope struct {
@@ -50,11 +47,10 @@ type socketEnvelope struct {
 
 func NewSocketServer(cfg SocketServerConfig) *SocketServer {
 	return &SocketServer{
-		socketPath:   cfg.SocketPath,
-		hub:          cfg.Hub,
-		hookIngestor: cfg.HookIngestor,
-		fingerprint:  cfg.Fingerprint,
-		stop:         cfg.Stop,
+		socketPath:  cfg.SocketPath,
+		hub:         cfg.Hub,
+		fingerprint: cfg.Fingerprint,
+		stop:        cfg.Stop,
 	}
 }
 
@@ -121,29 +117,9 @@ func (s *SocketServer) handleConn(ctx context.Context, conn net.Conn) {
 		if s.stop != nil {
 			s.stop()
 		}
-	case "ingest_hook":
-		s.ingestHook(ctx, encoder, req)
 	default:
 		_ = encoder.Encode(socketEnvelope{Type: "error", Error: fmt.Sprintf("unsupported command %q", req.Command)})
 	}
-}
-
-func (s *SocketServer) ingestHook(ctx context.Context, encoder *json.Encoder, req socketRequest) {
-	if s.hookIngestor == nil {
-		_ = encoder.Encode(socketEnvelope{Type: "error", Error: "status hook ingestor not configured"})
-		return
-	}
-	if req.Input == nil {
-		_ = encoder.Encode(socketEnvelope{Type: "error", Error: "status hook input not provided"})
-		return
-	}
-
-	if _, err := s.hookIngestor.IngestHookEvent(ctx, *req.Input); err != nil {
-		_ = encoder.Encode(socketEnvelope{Type: "error", Error: err.Error()})
-		return
-	}
-
-	_ = encoder.Encode(socketEnvelope{Type: "ingested", OK: true})
 }
 
 func (s *SocketServer) serveSubscription(ctx context.Context, encoder *json.Encoder) {
@@ -279,37 +255,4 @@ func Subscribe(ctx context.Context, socketPath string) (<-chan core.TaskStatusUp
 	}()
 
 	return updates, cleanup, nil
-}
-
-func IngestHookEvent(ctx context.Context, socketPath string, input core.HookEventInput) error {
-	if socketPath == "" {
-		return fmt.Errorf("status observer socket path not configured")
-	}
-
-	var d net.Dialer
-	conn, err := d.DialContext(ctx, "unix", socketPath)
-	if err != nil {
-		return err
-	}
-	defer conn.Close()
-
-	if err := json.NewEncoder(conn).Encode(socketRequest{
-		Command: "ingest_hook",
-		Input:   &input,
-	}); err != nil {
-		return err
-	}
-
-	var resp socketEnvelope
-	if err := json.NewDecoder(bufio.NewReader(conn)).Decode(&resp); err != nil {
-		return err
-	}
-	if resp.Type != "ingested" || !resp.OK {
-		if resp.Error != "" {
-			return errors.New(resp.Error)
-		}
-		return fmt.Errorf("unexpected status observer ingest response %q", resp.Type)
-	}
-
-	return nil
 }

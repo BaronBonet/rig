@@ -126,15 +126,13 @@ func TestSocketStop_InvokesStopCallback(t *testing.T) {
 	require.NoError(t, <-errCh)
 }
 
-func TestSocketIngestHookEvent_InvokesServerIngestor(t *testing.T) {
+func TestSocketRejectsUnsupportedCommands(t *testing.T) {
 	t.Parallel()
 
 	socketPath := testSocketPath(t)
-	recorder := &socketRecordingIngestor{}
 	server := NewSocketServer(SocketServerConfig{
-		SocketPath:   socketPath,
-		Hub:          NewHub(),
-		HookIngestor: recorder,
+		SocketPath: socketPath,
+		Hub:        NewHub(),
 	})
 
 	ctx, cancel := context.WithCancel(context.Background())
@@ -146,16 +144,16 @@ func TestSocketIngestHookEvent_InvokesServerIngestor(t *testing.T) {
 	}()
 	waitForSocketServer(t, socketPath)
 
-	input := core.HookEventInput{
-		TaskID:     "task-1",
-		EventName:  "PreToolUse",
-		Provider:   string(core.AgentProviderCodex),
-		OccurredAt: time.Now().UTC(),
-	}
+	conn, err := net.Dial("unix", socketPath)
+	require.NoError(t, err)
+	defer conn.Close()
 
-	require.NoError(t, IngestHookEvent(context.Background(), socketPath, input))
-	require.Equal(t, input.TaskID, recorder.lastInput.TaskID)
-	require.Equal(t, input.EventName, recorder.lastInput.EventName)
+	require.NoError(t, json.NewEncoder(conn).Encode(socketRequest{Command: "ingest_hook"}))
+
+	var resp socketEnvelope
+	require.NoError(t, json.NewDecoder(conn).Decode(&resp))
+	require.Equal(t, "error", resp.Type)
+	require.Contains(t, resp.Error, `unsupported command "ingest_hook"`)
 
 	cancel()
 	require.NoError(t, <-errCh)
@@ -184,13 +182,4 @@ func testSocketPath(t *testing.T) string {
 	})
 
 	return path
-}
-
-type socketRecordingIngestor struct {
-	lastInput core.HookEventInput
-}
-
-func (r *socketRecordingIngestor) IngestHookEvent(_ context.Context, input core.HookEventInput) (*core.HookSessionSummary, error) {
-	r.lastInput = input
-	return &core.HookSessionSummary{TaskID: input.TaskID, LastEventName: input.EventName}, nil
 }

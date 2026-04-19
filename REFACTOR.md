@@ -55,6 +55,13 @@ That means:
 - if the new architecture works through `cmd/debug/main.go`, that is progress
 - if old application paths still depend on legacy services, that is not the current priority
 
+Verified on 2026-04-19:
+
+- `go run ./cmd/debug` produced the supported Codex status path end to end
+- `SessionStart` streamed as `starting`
+- normal turns streamed `working` and then `waiting_for_input`
+- approval-selector / permission-request state remains deferred
+
 ## Status Of `cmd/rig/main.go`
 
 - [cmd/rig/main.go](/Users/ebon/personal_software/rig/cmd/rig/main.go) is not the current driver of this refactor
@@ -83,6 +90,11 @@ Until further notice:
 
 - optimize for the new architecture
 - treat `cmd/debug/main.go` as the active execution path
+- treat Codex status streaming as normal-turn streaming only:
+  - `SessionStart` -> `starting`
+  - `UserPromptSubmit`, `PreToolUse`, `PostToolUse` -> `working`
+  - `Stop` -> `waiting_for_input`
+- approval-selector / permission-request detection is deferred until Codex exposes a reliable hook for it
 - do not preserve legacy complexity just to keep old paths alive
 - only bring `cmd/rig/main.go` along when it is cheap or useful
 - prefer smaller, more direct boundaries over “helpful” extra abstractions

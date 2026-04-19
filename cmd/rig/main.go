@@ -88,7 +88,10 @@ func buildDependencies() (cli.Dependencies, error) {
 	if err != nil {
 		return cli.Dependencies{}, err
 	}
-	taskStore := tasksqlite.FromRepository(taskRepo)
+	taskStore, err := tasksqlite.New(tasksqlite.Config{Path: cfg.SQLite.Path})
+	if err != nil {
+		return cli.Dependencies{}, err
+	}
 
 	observerFingerprint, err := binaryFingerprint(agentExec)
 	if err != nil {

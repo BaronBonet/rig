@@ -3,10 +3,8 @@ package main
 import (
 	"context"
 	"fmt"
-	"io"
 	"os"
 	"os/signal"
-	hookhttp "rig/internal/adapters/observability/codexhooks"
 	statusstream "rig/internal/adapters/observability/statusstream"
 	"rig/internal/core"
 	"rig/internal/infrastructure"
@@ -20,7 +18,6 @@ import (
 	codexagent "rig/internal/adapters/client/codexagent"
 	gitworktree "rig/internal/adapters/client/gitworktree"
 	tmuxsession "rig/internal/adapters/client/tmuxsession"
-	sqliterepo "rig/internal/adapters/repository/sqlite"
 	tasksqlite "rig/internal/adapters/repository/tasksqlite"
 	repositoryworkspace "rig/internal/adapters/repository/workspace"
 )
@@ -52,7 +49,6 @@ var debugCodexHookForwarding = codexagent.HookForwardingConfig{
 var debugStatusObserver = debugStatusObserverConfig{
 	ModeEnvKey:      "RIG_DEBUG_MODE",
 	ModeEnvValue:    "status-observer",
-	IngestEnvValue:  "status-ingest",
 	HookListenAddr:  "127.0.0.1:4123",
 	StatusWaitAfter: 0,
 }
@@ -67,7 +63,6 @@ type debugCreateConfig struct {
 type debugStatusObserverConfig struct {
 	ModeEnvKey      string
 	ModeEnvValue    string
-	IngestEnvValue  string
 	HookListenAddr  string
 	StatusWaitAfter time.Duration
 }
@@ -79,12 +74,11 @@ func main() {
 		os.Exit(1)
 	}
 
-	sqliteRepo, err := sqliterepo.NewRepository(sqliterepo.Config{Path: cfg.SQLite.Path})
+	taskStore, err := tasksqlite.New(tasksqlite.Config{Path: cfg.SQLite.Path})
 	if err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		os.Exit(1)
 	}
-	taskRepo := tasksqlite.FromRepository(sqliteRepo)
 
 	if os.Getenv(debugStatusObserver.ModeEnvKey) == debugStatusObserver.ModeEnvValue {
 		ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
@@ -93,27 +87,10 @@ func main() {
 		if err := statusstream.Serve(ctx, statusstream.ServerConfig{
 			SocketPath:     cfg.Observer.SocketPath,
 			HookListenAddr: debugStatusObserver.HookListenAddr,
-			HookIngestor:   sqliteRepo,
+			HookIngestor:   newDebugHookIngestor(taskStore),
 			Hub:            statusstream.NewHub(),
 			Stop:           cancel,
 		}); err != nil {
-			fmt.Fprintln(os.Stderr, err)
-			os.Exit(1)
-		}
-		return
-	}
-	if os.Getenv(debugStatusObserver.ModeEnvKey) == debugStatusObserver.IngestEnvValue {
-		if len(os.Args) < 2 || strings.TrimSpace(os.Args[1]) == "" {
-			fmt.Fprintln(os.Stderr, "hook event name is required for status-ingest mode")
-			os.Exit(1)
-		}
-		body, err := io.ReadAll(os.Stdin)
-		if err != nil {
-			fmt.Fprintln(os.Stderr, err)
-			os.Exit(1)
-		}
-		input := hookhttp.DecodeHookEventInput(time.Now, os.Args[1], body)
-		if err := statusstream.IngestHookEvent(context.Background(), cfg.Observer.SocketPath, input); err != nil {
 			fmt.Fprintln(os.Stderr, err)
 			os.Exit(1)
 		}
@@ -228,7 +205,7 @@ func main() {
 	}
 
 	service := core.NewTaskService(core.TaskServiceDependencies{
-		Tasks:           taskRepo,
+		Tasks:           taskStore,
 		GitWorktree:     gitworktree.New(runner),
 		TmuxSession:     tmuxsession.New(runner),
 		Agents:          agents,

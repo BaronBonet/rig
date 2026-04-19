@@ -1,5 +1,10 @@
 # Rig Codex Hook-Only Reset Design
 
+> Historical design note. Superseded by the 2026-04-18 status-stream design and
+> the 2026-04-19 cleanup decisions. Any `PermissionRequest` references here are
+> retained for context only and are not part of the supported current
+> implementation.
+
 ## Summary
 
 Create a new standalone Go repository that resets Rig down to the smallest useful Codex workflow:

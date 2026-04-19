@@ -50,11 +50,10 @@ func Serve(ctx context.Context, cfg ServerConfig) error {
 	defer hookListener.Close()
 
 	socketServer := NewSocketServer(SocketServerConfig{
-		SocketPath:   cfg.SocketPath,
-		Hub:          cfg.Hub,
-		HookIngestor: newPublishingIngestor(cfg.HookIngestor, cfg.Hub, cfg.Now),
-		Fingerprint:  cfg.Fingerprint,
-		Stop:         cfg.Stop,
+		SocketPath:  cfg.SocketPath,
+		Hub:         cfg.Hub,
+		Fingerprint: cfg.Fingerprint,
+		Stop:        cfg.Stop,
 	})
 
 	hookMux := http.NewServeMux()
