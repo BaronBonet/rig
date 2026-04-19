@@ -8,8 +8,8 @@ import (
 )
 
 func TestDebugCreateStatusStreaming_DefaultsToNoTimeout(t *testing.T) {
-	if debugStatusDaemon.StatusWaitAfter != 0 {
-		t.Fatalf("expected create-mode status streaming to stay open until cancelled, got %s", debugStatusDaemon.StatusWaitAfter)
+	if debugTaskDaemon.StatusWaitAfter != 0 {
+		t.Fatalf("expected create-mode status streaming to stay open until cancelled, got %s", debugTaskDaemon.StatusWaitAfter)
 	}
 }
 
@@ -42,5 +42,18 @@ func TestDebugMode_SourceDoesNotContainManualModeSwitching(t *testing.T) {
 		if strings.Contains(string(content), needle) {
 			t.Fatalf("main.go should not contain legacy manual mode switching token %q", needle)
 		}
+	}
+}
+
+func TestDebugMode_SourceDoesNotDependOnLegacyStatusstreamPackage(t *testing.T) {
+	content, err := os.ReadFile(filepath.Join(".", "main.go"))
+	if err != nil {
+		t.Fatalf("read main.go: %v", err)
+	}
+	if strings.Contains(string(content), "internal/adapters/observability/statusstream") {
+		t.Fatal("main.go should not import the legacy statusstream package")
+	}
+	if strings.Contains(string(content), "statusstream.") {
+		t.Fatal("main.go should not reference the legacy statusstream package")
 	}
 }
