@@ -9,18 +9,21 @@ import (
 
 	claudeclient "rig/internal/adapters/client/claude"
 	codexagent "rig/internal/adapters/client/codexagent"
-	sqliterepo "rig/internal/adapters/repository/sqlite"
 
 	"github.com/caarlos0/env/v11"
 )
 
 type ApplicationConfig struct {
 	Provider   core.AgentProvider `env:"AGENT_PROVIDER" envDefault:"codex"`
-	SQLite     sqliterepo.Config
+	SQLite     SQLiteConfig
 	TaskSQLite tasksqlite.Config
 	Codex      codexagent.Config
 	Claude     claudeclient.Config
 	Observer   ObserverConfig
+}
+
+type SQLiteConfig struct {
+	Path string `env:"AGENT_SQLITE_PATH"`
 }
 
 type ObserverConfig struct {
@@ -30,8 +33,8 @@ type ObserverConfig struct {
 // LoadConfig loads the application configuration from environment variables.
 func LoadConfig() (*ApplicationConfig, error) {
 	config := ApplicationConfig{
-		SQLite: sqliterepo.Config{
-			Path: sqliterepo.DefaultSQLitePath(),
+		SQLite: SQLiteConfig{
+			Path: defaultSQLitePath(),
 		},
 		TaskSQLite: tasksqlite.Config{
 			Path: tasksqlite.DefaultSQLitePath(),
@@ -67,4 +70,13 @@ func defaultObserverSocketPath() string {
 	}
 
 	return filepath.Join(home, ".local", "share", "agent", "observer.sock")
+}
+
+func defaultSQLitePath() string {
+	home, err := os.UserHomeDir()
+	if err != nil || home == "" {
+		return ".agent/state.db"
+	}
+
+	return filepath.Join(home, ".local", "share", "agent", "state.db")
 }

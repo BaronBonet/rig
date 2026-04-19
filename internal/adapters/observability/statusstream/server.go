@@ -11,10 +11,14 @@ import (
 	"rig/internal/core"
 )
 
+type HookEventIngestor interface {
+	IngestHookEvent(context.Context, core.HookEventInput) (*core.HookSessionSummary, error)
+}
+
 type ServerConfig struct {
 	SocketPath     string
 	HookListenAddr string
-	HookIngestor   core.HookEventIngestor
+	HookIngestor   HookEventIngestor
 	Hub            *Hub
 	Now            func() time.Time
 	HookListener   net.Listener
@@ -82,12 +86,12 @@ func Serve(ctx context.Context, cfg ServerConfig) error {
 }
 
 type publishingIngestor struct {
-	ingestor core.HookEventIngestor
+	ingestor HookEventIngestor
 	hub      *Hub
 	now      func() time.Time
 }
 
-func newPublishingIngestor(ingestor core.HookEventIngestor, hub *Hub, now func() time.Time) core.HookEventIngestor {
+func newPublishingIngestor(ingestor HookEventIngestor, hub *Hub, now func() time.Time) HookEventIngestor {
 	return &publishingIngestor{
 		ingestor: ingestor,
 		hub:      hub,

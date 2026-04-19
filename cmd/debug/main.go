@@ -22,13 +22,6 @@ import (
 	repositoryworkspace "rig/internal/adapters/repository/workspace"
 )
 
-const (
-	debugModeCreate    = "create"
-	debugModeSubscribe = "subscribe"
-)
-
-var debugMode = debugModeCreate
-
 // Edit these values directly when you want to debug the create-task flow.
 var debugCreate = debugCreateConfig{
 	Cwd:              "/Users/ebon/personal_software/rig",
@@ -80,6 +73,7 @@ func main() {
 		os.Exit(1)
 	}
 
+	fmt.Println("rig debug starting with config")
 	if os.Getenv(debugStatusObserver.ModeEnvKey) == debugStatusObserver.ModeEnvValue {
 		ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 		defer cancel()
@@ -95,54 +89,6 @@ func main() {
 			os.Exit(1)
 		}
 		return
-	}
-	if debugMode == debugModeSubscribe {
-		statusCtx, cancelStatus := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
-		defer cancelStatus()
-
-		updates, cleanup, err := statusstream.Subscribe(statusCtx, cfg.Observer.SocketPath)
-		if err != nil {
-			fmt.Fprintln(os.Stderr, err)
-			os.Exit(1)
-		}
-		defer cleanup()
-
-		if _, err := fmt.Fprintf(
-			os.Stdout,
-			"task_status_stream=subscribed global=true socket=%s\n",
-			cfg.Observer.SocketPath,
-		); err != nil {
-			fmt.Fprintln(os.Stderr, err)
-			os.Exit(1)
-		}
-
-		for {
-			select {
-			case <-statusCtx.Done():
-				return
-			case update, ok := <-updates:
-				if !ok {
-					fmt.Fprintln(os.Stderr, "status stream closed unexpectedly")
-					os.Exit(1)
-				}
-				if _, err := fmt.Fprintf(
-					os.Stdout,
-					"task_status task_id=%s provider=%s phase=%s raw_event=%s observed_at=%s\n",
-					update.TaskID,
-					update.Provider,
-					update.Phase,
-					update.RawEventName,
-					update.ObservedAt.Format(time.RFC3339),
-				); err != nil {
-					fmt.Fprintln(os.Stderr, err)
-					os.Exit(1)
-				}
-			}
-		}
-	}
-	if debugMode != debugModeCreate {
-		fmt.Fprintf(os.Stderr, "unsupported debugMode %q\n", debugMode)
-		os.Exit(1)
 	}
 	if strings.TrimSpace(debugCreate.Cwd) == "" {
 		fmt.Fprintln(os.Stderr, "set debugCreate.Cwd in cmd/debug/main.go before running")
@@ -228,14 +174,12 @@ func main() {
 		"task_id=%s\n"+
 			"display_name=%s\n"+
 			"provider=%s\n"+
-			"status=%s\n"+
 			"branch=%s\n"+
 			"worktree=%s\n"+
 			"tmux_session=%s\n",
 		task.ID,
 		task.DisplayName,
 		task.Provider,
-		task.Status,
 		task.BranchName,
 		task.WorktreePath,
 		task.TmuxSession,

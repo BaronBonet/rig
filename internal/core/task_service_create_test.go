@@ -8,7 +8,7 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func TestTaskServiceContract_ExposesCreateTaskWithoutProgressCallback(t *testing.T) {
+func TestTaskServiceContract_ExposesCreateTask(t *testing.T) {
 	var _ interface {
 		CreateTask(context.Context, CreateTaskInput) (*Task, error)
 	} = (TaskService)(nil)
@@ -58,9 +58,10 @@ func TestTaskServiceCreateTask_CreatesWorkspaceSessionAndPersistsTask(t *testing
 	require.Equal(t, "billing retry flow", task.DisplayName)
 	require.Equal(t, "billing-retry-flow", task.Slug)
 	require.Equal(t, "feat/billing-retry-flow", task.BranchName)
-	require.Equal(t, TaskStatusRunning, task.Status)
 	require.Equal(t, "/tmp/repo-billing-retry-flow", svc.repoClient.createdTask.WorktreePath)
 	require.Equal(t, "repo_billing_retry_flow", svc.sessionClient.startedTask.TmuxSession)
+	require.Zero(t, svc.taskRepo.updateCount)
+	require.Nil(t, svc.taskRepo.updatedTask)
 	require.True(t, svc.preparer.called)
 	require.True(t, svc.preparer.calledBeforeSession)
 	require.Equal(t, "/tmp/repo", svc.preparer.repoRoot)
@@ -69,7 +70,6 @@ func TestTaskServiceCreateTask_CreatesWorkspaceSessionAndPersistsTask(t *testing
 	require.NotNil(t, svc.providerRepo.bootstrapRequest)
 	require.Equal(t, task.ID, svc.providerRepo.bootstrapRequest.ID)
 	require.Equal(t, task.Slug, svc.providerRepo.bootstrapRequest.Slug)
-	require.Equal(t, TaskStatusCreating, svc.providerRepo.bootstrapRequest.Status)
 	require.Equal(t, task.WorktreePath, svc.providerRepo.bootstrapRequest.WorktreePath)
 	require.Equal(t, task.BranchName, svc.providerRepo.bootstrapRequest.BranchName)
 	require.Equal(t, TaskSessionLaunchSpec{
@@ -130,7 +130,7 @@ func TestTaskServiceCreateTask_FailsWhenTaskNameSuggestionIsEmpty(t *testing.T) 
 	require.Nil(t, svc.sessionClient.startedTask)
 }
 
-func TestTaskServiceCreateTask_PersistsBrokenTaskWhenWorkspaceBootstrapSpecFails(t *testing.T) {
+func TestTaskServiceCreateTask_ReturnsErrorWithoutPersistingLifecycleWhenWorkspaceBootstrapSpecFails(t *testing.T) {
 	svc := newTestTaskService(t)
 	svc.providerRepo.suggestedName = "billing retry flow"
 	svc.providerRepo.bootstrapErr = errors.New("bootstrap failed")
@@ -141,15 +141,16 @@ func TestTaskServiceCreateTask_PersistsBrokenTaskWhenWorkspaceBootstrapSpecFails
 	})
 
 	require.Error(t, err)
+	require.NotNil(t, task)
 	require.Nil(t, svc.preparer.bootstrapSpec.Files)
 	require.False(t, svc.preparer.called)
 	require.Nil(t, svc.sessionClient.startedTask)
-	require.Equal(t, TaskStatusBroken, task.Status)
 	require.EqualError(t, err, "build workspace bootstrap spec: bootstrap failed")
-	require.Equal(t, TaskStatusBroken, svc.taskRepo.updatedTask.Status)
+	require.Zero(t, svc.taskRepo.updateCount)
+	require.Nil(t, svc.taskRepo.updatedTask)
 }
 
-func TestTaskServiceCreateTask_PersistsBrokenTaskWhenWorkspacePreparationFails(t *testing.T) {
+func TestTaskServiceCreateTask_ReturnsErrorWithoutPersistingLifecycleWhenWorkspacePreparationFails(t *testing.T) {
 	svc := newTestTaskService(t)
 	svc.providerRepo.suggestedName = "billing retry flow"
 	svc.preparer.prepareErr = errors.New("setup script failed")
@@ -165,12 +166,13 @@ func TestTaskServiceCreateTask_PersistsBrokenTaskWhenWorkspacePreparationFails(t
 	})
 
 	require.Error(t, err)
+	require.NotNil(t, task)
 	require.True(t, svc.preparer.called)
 	require.Equal(t, svc.providerRepo.bootstrapSpec, svc.preparer.bootstrapSpec)
 	require.Nil(t, svc.sessionClient.startedTask)
-	require.Equal(t, TaskStatusBroken, task.Status)
 	require.EqualError(t, err, "prepare workspace: setup script failed")
-	require.Equal(t, TaskStatusBroken, svc.taskRepo.updatedTask.Status)
+	require.Zero(t, svc.taskRepo.updateCount)
+	require.Nil(t, svc.taskRepo.updatedTask)
 }
 
 func TestTaskServiceCreateTask_RejectsDuplicatePullRequestBranchBeforePersist(t *testing.T) {
@@ -200,7 +202,7 @@ func TestTaskServiceCreateTask_RejectsDuplicatePullRequestBranchBeforePersist(t 
 	require.Nil(t, svc.repoClient.createdTask)
 }
 
-func TestTaskServiceCreateTask_PersistsBrokenTaskWhenRuntimeLaunchFails(t *testing.T) {
+func TestTaskServiceCreateTask_ReturnsErrorWithoutPersistingLifecycleWhenRuntimeLaunchFails(t *testing.T) {
 	svc := newTestTaskService(t)
 	svc.providerRepo.suggestedName = "billing retry flow"
 	svc.sessionClient.startErr = errors.New("tmux failed")
@@ -211,9 +213,10 @@ func TestTaskServiceCreateTask_PersistsBrokenTaskWhenRuntimeLaunchFails(t *testi
 	})
 
 	require.Error(t, err)
-	require.Equal(t, TaskStatusBroken, task.Status)
+	require.NotNil(t, task)
 	require.EqualError(t, err, "start task session: tmux failed")
-	require.Equal(t, TaskStatusBroken, svc.taskRepo.updatedTask.Status)
+	require.Zero(t, svc.taskRepo.updateCount)
+	require.Nil(t, svc.taskRepo.updatedTask)
 }
 
 func TestTaskServiceCreateTask_AppendsNumericSuffixWhenSlugAlreadyExists(t *testing.T) {

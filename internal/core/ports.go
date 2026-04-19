@@ -44,31 +44,6 @@ type SeedWorkspaceInput struct {
 	RelativePaths []string
 }
 
-type TaskRepository interface {
-	IsAvailable(ctx context.Context) error
-	CreateTask(ctx context.Context, task *Task) error
-	UpdateTask(ctx context.Context, task *Task) error
-	GetTask(ctx context.Context, idOrSlug string) (*Task, error)
-	ListTasks(ctx context.Context) ([]*Task, error)
-	ListTasksByRepo(ctx context.Context, repoRoot string) ([]*Task, error)
-}
-
-type HookEventIngestor interface {
-	IngestHookEvent(ctx context.Context, raw HookEventInput) (*HookSessionSummary, error)
-}
-
-type HookObservabilityRepository interface {
-	ListHookSessionSummaries(ctx context.Context, taskIDs []string) (map[string]*HookSessionSummary, error)
-	ListHookEvents(ctx context.Context, taskID string, limit int) ([]HookEvent, error)
-	SubscribeHookSessionUpdates(ctx context.Context) (<-chan HookSessionSummary, func(), error)
-}
-
-type ObserverRuntimeRepository interface {
-	ListObserverSummaries(ctx context.Context, taskIDs []string) (map[string]*ObserverSummary, error)
-	UpsertObserverSummary(ctx context.Context, summary *ObserverSummary) error
-	SubscribeObserverTaskUpdates(ctx context.Context) (<-chan ObserverTaskUpdate, func(), error)
-}
-
 type RepoConfigLoader interface {
 	LoadRepoConfig(ctx context.Context, repoRoot string) (RepoConfig, error)
 }

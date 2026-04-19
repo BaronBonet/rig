@@ -1,8 +1,8 @@
 -- name: CreateTask :exec
 insert into tasks (
   id, slug, prompt, display_name, repo_root, repo_name, branch_name,
-  worktree_path, tmux_session, provider, status, created_at, updated_at
-) values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
+  worktree_path, tmux_session, provider, created_at, updated_at
+) values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
 
 -- name: UpdateTask :exec
 update tasks set
@@ -15,21 +15,13 @@ update tasks set
   worktree_path = ?,
   tmux_session = ?,
   provider = ?,
-  status = ?,
   created_at = ?,
   updated_at = ?
-where id = ?;
-
--- name: GetTaskByID :one
-select
-  id, slug, prompt, display_name, repo_root, repo_name, branch_name,
-  worktree_path, tmux_session, provider, status, created_at, updated_at
-from tasks
 where id = ?;
 
 -- name: ListTasks :many
 select
   id, slug, prompt, display_name, repo_root, repo_name, branch_name,
-  worktree_path, tmux_session, provider, status, created_at, updated_at
+  worktree_path, tmux_session, provider, created_at, updated_at
 from tasks
 order by created_at asc;

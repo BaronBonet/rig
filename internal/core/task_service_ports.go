@@ -2,6 +2,10 @@ package core
 
 import "context"
 
+type CreateTaskSource struct {
+	PullRequest *RepoPullRequest
+}
+
 type CreateTaskInput struct {
 	Cwd      string
 	Prompt   string
@@ -9,21 +13,54 @@ type CreateTaskInput struct {
 	Source   CreateTaskSource
 }
 
+// TaskFrontend is the frontend-facing task application port used by the TUI.
+// The transport layer that serves the frontend, such as the local status
+// daemon, implements this port and forwards requests into the underlying task
+// application service.
+type TaskFrontend interface {
+	// CreateTask creates a new task and returns the durable task record that the
+	// frontend should render immediately.
+	CreateTask(ctx context.Context, input CreateTaskInput) (*Task, error)
+	// LatestTaskStatus returns the latest published live status for a task, or
+	// nil when no status has been published yet.
+	LatestTaskStatus(ctx context.Context, taskID string) (*TaskStatusUpdate, error)
+	// SubscribeTaskStatus subscribes to live status updates for a task. The
+	// subscription lifetime is owned by ctx; cancelling it removes the
+	// subscription and closes the update channel.
+	SubscribeTaskStatus(ctx context.Context, taskID string) (<-chan TaskStatusUpdate, error)
+}
+
 type TaskService interface {
 	// CreateTask creates a new task from either a prompt or a pull request source.
 	CreateTask(ctx context.Context, input CreateTaskInput) (*Task, error)
+	// LatestTaskStatus returns the latest published live status for a task, or
+	// nil when no status has been published yet.
+	LatestTaskStatus(ctx context.Context, taskID string) (*TaskStatusUpdate, error)
+	// SubscribeTaskStatus subscribes to live status updates for a task. The
+	// subscription lifetime is owned by ctx; cancelling it removes the
+	// subscription and closes the update channel.
+	SubscribeTaskStatus(ctx context.Context, taskID string) (<-chan TaskStatusUpdate, error)
+	// PublishTaskStatus publishes a normalized live status update for a task.
+	PublishTaskStatus(ctx context.Context, update TaskStatusUpdate) error
 }
 
-// TaskStore persists task records and returns their durable state.
-type TaskStore interface {
+// TaskRepository persists task records and returns their durable state.
+type TaskRepository interface {
 	// CreateTask stores a newly created task record.
 	CreateTask(ctx context.Context, task *Task) error
 	// UpdateTask persists changes to an existing task record.
 	UpdateTask(ctx context.Context, task *Task) error
-	// GetTask loads a task by ID.
-	GetTask(ctx context.Context, id string) (*Task, error)
 	// ListTasks returns all known tasks.
 	ListTasks(ctx context.Context) ([]*Task, error)
+	// UpsertTaskStatus stores the latest known live status for a task.
+	UpsertTaskStatus(ctx context.Context, update TaskStatusUpdate) error
+	// LatestTaskStatus returns the latest known live status for a task, or nil
+	// when no status has been recorded yet.
+	LatestTaskStatus(ctx context.Context, taskID string) (*TaskStatusUpdate, error)
+	// SubscribeTaskStatus subscribes to live status updates for a task. The
+	// subscription lifetime is owned by ctx; cancelling it removes the
+	// subscription and closes the update channel.
+	SubscribeTaskStatus(ctx context.Context, taskID string) (<-chan TaskStatusUpdate, error)
 }
 
 // AgentClient wraps provider-specific agent behavior behind one application
