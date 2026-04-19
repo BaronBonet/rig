@@ -5,8 +5,7 @@ import (
 	"fmt"
 	"os"
 	"os/signal"
-	statusdaemon "rig/internal/adapters/handler/statusdaemon"
-	statusstream "rig/internal/adapters/observability/statusstream"
+	taskdaemon "rig/internal/adapters/handler/taskdaemon"
 	"rig/internal/core"
 	"rig/internal/infrastructure"
 	"rig/internal/pkg/execx"
@@ -40,9 +39,9 @@ var debugCodexHookForwarding = codexagent.HookForwardingConfig{
 	SourceRoot:    "/Users/ebon/personal_software/rig",
 }
 
-var debugStatusDaemon = debugStatusDaemonConfig{
+var debugTaskDaemon = debugTaskDaemonConfig{
 	ModeEnvKey:      "RIG_DEBUG_MODE",
-	ModeEnvValue:    "status-daemon",
+	ModeEnvValue:    "task-daemon",
 	HookListenAddr:  "127.0.0.1:4123",
 	StatusWaitAfter: 0,
 }
@@ -54,7 +53,7 @@ type debugCreateConfig struct {
 	PrepareWorkspace bool
 }
 
-type debugStatusDaemonConfig struct {
+type debugTaskDaemonConfig struct {
 	ModeEnvKey      string
 	ModeEnvValue    string
 	HookListenAddr  string
@@ -90,7 +89,7 @@ func main() {
 		string(core.AgentProviderCodex): codexagent.New(runner, codexCfg, debugHookForwarding),
 		string(core.AgentProviderClaude): claudeagent.New(runner, claudeclient.Config{
 			Binary:         cfg.Claude.Binary,
-			HookListenAddr: debugStatusDaemon.HookListenAddr,
+			HookListenAddr: debugTaskDaemon.HookListenAddr,
 		}),
 	}
 
@@ -109,13 +108,13 @@ func main() {
 	})
 
 	fmt.Println("rig debug starting with config")
-	if os.Getenv(debugStatusDaemon.ModeEnvKey) == debugStatusDaemon.ModeEnvValue {
+	if os.Getenv(debugTaskDaemon.ModeEnvKey) == debugTaskDaemon.ModeEnvValue {
 		ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 		defer cancel()
 
-		if err := statusdaemon.New(statusdaemon.Config{
+		if err := taskdaemon.New(taskdaemon.Config{
 			SocketPath:     cfg.Observer.SocketPath,
-			HookListenAddr: debugStatusDaemon.HookListenAddr,
+			HookListenAddr: debugTaskDaemon.HookListenAddr,
 			Service:        service,
 			Tasks:          taskStore,
 			Stop:           cancel,
@@ -138,11 +137,11 @@ func main() {
 		os.Exit(1)
 	}
 
-	manager := statusstream.NewProcessManager(statusstream.ProcessConfig{
+	manager := taskdaemon.NewProcessManager(taskdaemon.ProcessConfig{
 		SocketPath: cfg.Observer.SocketPath,
 		ExecPath:   execPath,
 		Env: []string{
-			debugStatusDaemon.ModeEnvKey + "=" + debugStatusDaemon.ModeEnvValue,
+			debugTaskDaemon.ModeEnvKey + "=" + debugTaskDaemon.ModeEnvValue,
 		},
 	})
 	if err := manager.Restart(context.Background()); err != nil {
@@ -220,8 +219,8 @@ func main() {
 	}
 
 	var statusDeadline <-chan time.Time
-	if debugStatusDaemon.StatusWaitAfter > 0 {
-		timer := time.NewTimer(debugStatusDaemon.StatusWaitAfter)
+	if debugTaskDaemon.StatusWaitAfter > 0 {
+		timer := time.NewTimer(debugTaskDaemon.StatusWaitAfter)
 		defer timer.Stop()
 		statusDeadline = timer.C
 	}
@@ -252,7 +251,7 @@ func main() {
 				os.Stdout,
 				"status_wait_complete=no updates observed for task %s within %s\n",
 				task.ID,
-				debugStatusDaemon.StatusWaitAfter,
+				debugTaskDaemon.StatusWaitAfter,
 			); err != nil {
 				fmt.Fprintln(os.Stderr, err)
 				os.Exit(1)
