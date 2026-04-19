@@ -17,7 +17,7 @@ import (
 
 type Forwarder struct {
 	CollectorURL string
-	Ingestor     core.HookEventIngestor
+	Ingestor     HookEventIngestor
 	Client       *http.Client
 	Now          func() time.Time
 	ErrorLogPath string

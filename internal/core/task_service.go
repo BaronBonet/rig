@@ -10,7 +10,7 @@ import (
 )
 
 type TaskServiceDependencies struct {
-	Tasks           TaskStore
+	Tasks           TaskRepository
 	GitWorktree     GitWorktreeClient
 	TmuxSession     TmuxSessionClient
 	Agents          map[string]AgentClient
@@ -19,7 +19,7 @@ type TaskServiceDependencies struct {
 }
 
 type taskService struct {
-	tasks           TaskStore
+	tasks           TaskRepository
 	gitWorktree     GitWorktreeClient
 	tmuxSession     TmuxSessionClient
 	agents          map[string]AgentClient
@@ -51,8 +51,24 @@ func (s *taskService) CreateTask(ctx context.Context, input CreateTaskInput) (*T
 	return s.createTaskFromPrompt(ctx, repoCtx, input)
 }
 
-type CreateTaskSource struct {
-	PullRequest *RepoPullRequest
+func (s *taskService) LatestTaskStatus(ctx context.Context, taskID string) (*TaskStatusUpdate, error) {
+	return s.tasks.LatestTaskStatus(ctx, strings.TrimSpace(taskID))
+}
+
+func (s *taskService) SubscribeTaskStatus(
+	ctx context.Context,
+	taskID string,
+) (<-chan TaskStatusUpdate, error) {
+	return s.tasks.SubscribeTaskStatus(ctx, strings.TrimSpace(taskID))
+}
+
+func (s *taskService) PublishTaskStatus(ctx context.Context, update TaskStatusUpdate) error {
+	if strings.TrimSpace(update.TaskID) == "" {
+		return fmt.Errorf("task status update task ID is required")
+	}
+
+	update.TaskID = strings.TrimSpace(update.TaskID)
+	return s.tasks.UpsertTaskStatus(ctx, update)
 }
 
 func (s *taskService) createTaskFromPrompt(
@@ -83,21 +99,16 @@ func (s *taskService) createTaskFromPrompt(
 		return nil, err
 	}
 	if err := s.gitWorktree.CreateTaskWorkspace(ctx, task); err != nil {
-		return s.markBroken(ctx, task, fmt.Errorf("create worktree: %w", err))
-	}
-
-	task.UpdatedAt = time.Now().UTC()
-	if err := s.tasks.UpdateTask(ctx, task); err != nil {
-		return task, err
+		return task, fmt.Errorf("create worktree: %w", err)
 	}
 
 	bootstrapSpec, err := s.buildWorkspaceBootstrapSpec(ctx, task)
 	if err != nil {
-		return s.markBroken(ctx, task, fmt.Errorf("build workspace bootstrap spec: %w", err))
+		return task, fmt.Errorf("build workspace bootstrap spec: %w", err)
 	}
 
 	if err := s.preparer.PrepareTaskWorkspace(ctx, task, repoCtx.Root, bootstrapSpec); err != nil {
-		return s.markBroken(ctx, task, fmt.Errorf("prepare workspace: %w", err))
+		return task, fmt.Errorf("prepare workspace: %w", err)
 	}
 
 	return s.startTaskRuntime(ctx, task)
@@ -142,12 +153,7 @@ func (s *taskService) createTaskFromPullRequest(
 		return nil, err
 	}
 	if err := s.gitWorktree.CreateTaskWorkspaceFromBranch(ctx, task); err != nil {
-		return s.markBroken(ctx, task, fmt.Errorf("create worktree: %w", err))
-	}
-
-	task.UpdatedAt = time.Now().UTC()
-	if err := s.tasks.UpdateTask(ctx, task); err != nil {
-		return task, err
+		return task, fmt.Errorf("create worktree: %w", err)
 	}
 
 	return s.startTaskRuntime(ctx, task)
@@ -183,21 +189,15 @@ func (s *taskService) agentFor(provider string) (AgentClient, error) {
 func (s *taskService) startTaskRuntime(ctx context.Context, task *Task) (*Task, error) {
 	agent, err := s.agentFor(string(task.Provider))
 	if err != nil {
-		return s.markBroken(ctx, task, err)
+		return task, err
 	}
 
 	launch, err := agent.BuildTaskSessionLaunchSpec(task)
 	if err != nil {
-		return s.markBroken(ctx, task, fmt.Errorf("build task session launch spec: %w", err))
+		return task, fmt.Errorf("build task session launch spec: %w", err)
 	}
 	if err := s.tmuxSession.StartTaskSession(ctx, task, launch); err != nil {
-		return s.markBroken(ctx, task, fmt.Errorf("start task session: %w", err))
-	}
-
-	task.Status = TaskStatusRunning
-	task.UpdatedAt = time.Now().UTC()
-	if err := s.tasks.UpdateTask(ctx, task); err != nil {
-		return task, err
+		return task, fmt.Errorf("start task session: %w", err)
 	}
 
 	return task, nil
@@ -210,15 +210,6 @@ func (s *taskService) buildWorkspaceBootstrapSpec(ctx context.Context, task *Tas
 	}
 
 	return agent.BuildWorkspaceBootstrapSpec(task)
-}
-
-func (s *taskService) markBroken(ctx context.Context, task *Task, failure error) (*Task, error) {
-	task.Status = TaskStatusBroken
-	task.UpdatedAt = time.Now().UTC()
-	if err := s.tasks.UpdateTask(ctx, task); err != nil {
-		return task, err
-	}
-	return task, failure
 }
 
 func newPromptTaskRecord(
@@ -246,7 +237,6 @@ func newPromptTaskRecord(
 		WorktreePath: taskWorktreePath(repoCtx, taskSlug),
 		TmuxSession:  taskSessionName(repoCtx, taskSlug),
 		Provider:     AgentProvider(provider),
-		Status:       TaskStatusCreating,
 		CreatedAt:    now,
 		UpdatedAt:    now,
 	}
@@ -277,7 +267,6 @@ func newPullRequestTaskRecord(
 		WorktreePath: taskWorktreePath(repoCtx, taskSlug),
 		TmuxSession:  taskSessionName(repoCtx, taskSlug),
 		Provider:     AgentProvider(provider),
-		Status:       TaskStatusCreating,
 		CreatedAt:    now,
 		UpdatedAt:    now,
 	}

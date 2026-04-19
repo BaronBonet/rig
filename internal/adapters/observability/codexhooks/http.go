@@ -2,6 +2,7 @@ package codexhooks
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"errors"
 	"io"
@@ -12,12 +13,16 @@ import (
 	"rig/internal/core"
 )
 
+type HookEventIngestor interface {
+	IngestHookEvent(context.Context, core.HookEventInput) (*core.HookSessionSummary, error)
+}
+
 type HTTPHandler struct {
-	repo core.HookEventIngestor
+	repo HookEventIngestor
 	now  func() time.Time
 }
 
-func NewHTTPHandler(repo core.HookEventIngestor, now func() time.Time) *HTTPHandler {
+func NewHTTPHandler(repo HookEventIngestor, now func() time.Time) *HTTPHandler {
 	if now == nil {
 		now = time.Now
 	}

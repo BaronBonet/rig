@@ -11,9 +11,12 @@ import (
 // checks. Those belong in separate runtime/read-side types rather than on the
 // core task record itself.
 type Task struct {
-	CreatedAt    time.Time
-	UpdatedAt    time.Time
-	ID           string
+	CreatedAt time.Time
+	UpdatedAt time.Time
+	ID        string
+	// Slug is the stable workspace identifier derived once at task creation from
+	// DisplayName and then persisted so branch/worktree/session naming remains
+	// stable even if display names collide or later change.
 	Slug         string
 	Prompt       string
 	DisplayName  string
@@ -23,7 +26,6 @@ type Task struct {
 	WorktreePath string
 	TmuxSession  string
 	Provider     AgentProvider
-	Status       TaskStatus
 }
 
 type RepoContext struct {

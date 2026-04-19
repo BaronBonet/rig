@@ -10,23 +10,23 @@ import (
 )
 
 type stubTaskStore struct {
-	getTaskFn   func(id string) (*core.Task, error)
 	listTasksFn func() ([]*core.Task, error)
 }
 
 func (s stubTaskStore) CreateTask(_ context.Context, _ *core.Task) error { return nil }
 func (s stubTaskStore) UpdateTask(_ context.Context, _ *core.Task) error { return nil }
-func (s stubTaskStore) GetTask(_ context.Context, id string) (*core.Task, error) {
-	if s.getTaskFn == nil {
-		return nil, nil
-	}
-	return s.getTaskFn(id)
-}
 func (s stubTaskStore) ListTasks(_ context.Context) ([]*core.Task, error) {
 	if s.listTasksFn == nil {
 		return nil, nil
 	}
 	return s.listTasksFn()
+}
+func (s stubTaskStore) UpsertTaskStatus(_ context.Context, _ core.TaskStatusUpdate) error { return nil }
+func (s stubTaskStore) LatestTaskStatus(_ context.Context, _ string) (*core.TaskStatusUpdate, error) {
+	return nil, nil
+}
+func (s stubTaskStore) SubscribeTaskStatus(_ context.Context, _ string) (<-chan core.TaskStatusUpdate, error) {
+	return nil, nil
 }
 
 func TestDebugHookIngestor_RequiresTaskID(t *testing.T) {

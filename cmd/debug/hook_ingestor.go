@@ -9,10 +9,10 @@ import (
 )
 
 type debugHookIngestor struct {
-	tasks core.TaskStore
+	tasks core.TaskRepository
 }
 
-func newDebugHookIngestor(tasks core.TaskStore) *debugHookIngestor {
+func newDebugHookIngestor(tasks core.TaskRepository) *debugHookIngestor {
 	return &debugHookIngestor{tasks: tasks}
 }
 

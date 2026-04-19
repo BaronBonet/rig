@@ -9,6 +9,8 @@ import (
 	"rig/internal/adapters/repository/tasksqlite/generated"
 	"rig/internal/core"
 	"slices"
+	"strings"
+	"sync"
 
 	// Register the "sqlite" database/sql driver used by sql.Open.
 	_ "modernc.org/sqlite"
@@ -17,9 +19,11 @@ import (
 type repository struct {
 	db      *sql.DB
 	queries *generated.Queries
+	mu      sync.Mutex
+	subs    map[string][]chan core.TaskStatusUpdate
 }
 
-func New(cfg Config) (core.TaskStore, error) {
+func New(cfg Config) (core.TaskRepository, error) {
 	if err := ValidateConfig(cfg); err != nil {
 		return nil, err
 	}
@@ -60,6 +64,7 @@ func New(cfg Config) (core.TaskStore, error) {
 	return &repository{
 		db:      db,
 		queries: generated.New(db),
+		subs:    make(map[string][]chan core.TaskStatusUpdate),
 	}, nil
 }
 
@@ -71,18 +76,6 @@ func (r *repository) UpdateTask(ctx context.Context, task *core.Task) error {
 	return r.queries.UpdateTask(ctx, updateTaskParams(task))
 }
 
-func (r *repository) GetTask(ctx context.Context, id string) (*core.Task, error) {
-	row, err := r.queries.GetTaskByID(ctx, id)
-	if errors.Is(err, sql.ErrNoRows) {
-		return nil, core.ErrTaskNotFound
-	}
-	if err != nil {
-		return nil, err
-	}
-
-	return taskFromRow(row), nil
-}
-
 func (r *repository) ListTasks(ctx context.Context) ([]*core.Task, error) {
 	rows, err := r.queries.ListTasks(ctx)
 	if err != nil {
@@ -90,6 +83,73 @@ func (r *repository) ListTasks(ctx context.Context) ([]*core.Task, error) {
 	}
 
 	return tasksFromRows(rows), nil
+}
+
+func (r *repository) UpsertTaskStatus(ctx context.Context, update core.TaskStatusUpdate) error {
+	update.TaskID = strings.TrimSpace(update.TaskID)
+	if update.TaskID == "" {
+		return fmt.Errorf("task status update task ID is required")
+	}
+
+	if err := r.queries.UpsertTaskStatus(ctx, upsertTaskStatusParams(update)); err != nil {
+		return err
+	}
+
+	r.mu.Lock()
+	subscribers := append([]chan core.TaskStatusUpdate(nil), r.subs[update.TaskID]...)
+	r.mu.Unlock()
+
+	for _, subscriber := range subscribers {
+		select {
+		case subscriber <- update:
+		default:
+		}
+	}
+
+	return nil
+}
+
+func (r *repository) LatestTaskStatus(ctx context.Context, taskID string) (*core.TaskStatusUpdate, error) {
+	row, err := r.queries.LatestTaskStatus(ctx, strings.TrimSpace(taskID))
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+
+	return taskStatusUpdateFromRow(row), nil
+}
+
+func (r *repository) SubscribeTaskStatus(ctx context.Context, taskID string) (<-chan core.TaskStatusUpdate, error) {
+	taskID = strings.TrimSpace(taskID)
+	updates := make(chan core.TaskStatusUpdate, 8)
+
+	r.mu.Lock()
+	r.subs[taskID] = append(r.subs[taskID], updates)
+	r.mu.Unlock()
+
+	go func() {
+		<-ctx.Done()
+		r.mu.Lock()
+		defer r.mu.Unlock()
+
+		subscribers := r.subs[taskID]
+		filtered := subscribers[:0]
+		for _, subscriber := range subscribers {
+			if subscriber != updates {
+				filtered = append(filtered, subscriber)
+			}
+		}
+		if len(filtered) == 0 {
+			delete(r.subs, taskID)
+		} else {
+			r.subs[taskID] = filtered
+		}
+		close(updates)
+	}()
+
+	return updates, nil
 }
 
 func openSQLiteDB(path string) (*sql.DB, error) {
@@ -131,7 +191,7 @@ func hasStaleTasksSchema(ctx context.Context, db *sql.DB) (bool, error) {
 		return false, nil
 	}
 
-	return !slices.Equal(columns, []string{
+	if !slices.Equal(columns, []string{
 		"id",
 		"slug",
 		"prompt",
@@ -142,9 +202,46 @@ func hasStaleTasksSchema(ctx context.Context, db *sql.DB) (bool, error) {
 		"worktree_path",
 		"tmux_session",
 		"provider",
-		"status",
 		"created_at",
 		"updated_at",
+	}) {
+		return true, nil
+	}
+
+	statusRows, err := db.QueryContext(ctx, "pragma table_info(task_status)")
+	if err != nil {
+		return false, fmt.Errorf("inspect task_status schema: %w", err)
+	}
+	defer statusRows.Close()
+
+	var statusColumns []string
+	for statusRows.Next() {
+		var (
+			cid        int
+			name       string
+			columnType string
+			notNull    int
+			defaultVal sql.NullString
+			primaryKey int
+		)
+		if err := statusRows.Scan(&cid, &name, &columnType, &notNull, &defaultVal, &primaryKey); err != nil {
+			return false, fmt.Errorf("scan task_status schema: %w", err)
+		}
+		statusColumns = append(statusColumns, name)
+	}
+	if err := statusRows.Err(); err != nil {
+		return false, fmt.Errorf("read task_status schema: %w", err)
+	}
+	if len(statusColumns) == 0 {
+		return true, nil
+	}
+
+	return !slices.Equal(statusColumns, []string{
+		"task_id",
+		"provider",
+		"phase",
+		"raw_event_name",
+		"observed_at",
 	}), nil
 }
 

@@ -19,7 +19,6 @@ func createTaskParams(task *core.Task) generated.CreateTaskParams {
 		WorktreePath: task.WorktreePath,
 		TmuxSession:  task.TmuxSession,
 		Provider:     string(task.Provider),
-		Status:       string(task.Status),
 		CreatedAt:    formatTime(task.CreatedAt),
 		UpdatedAt:    formatTime(task.UpdatedAt),
 	}
@@ -36,10 +35,19 @@ func updateTaskParams(task *core.Task) generated.UpdateTaskParams {
 		WorktreePath: task.WorktreePath,
 		TmuxSession:  task.TmuxSession,
 		Provider:     string(task.Provider),
-		Status:       string(task.Status),
 		CreatedAt:    formatTime(task.CreatedAt),
 		UpdatedAt:    formatTime(task.UpdatedAt),
 		ID:           task.ID,
+	}
+}
+
+func upsertTaskStatusParams(update core.TaskStatusUpdate) generated.UpsertTaskStatusParams {
+	return generated.UpsertTaskStatusParams{
+		TaskID:       update.TaskID,
+		Provider:     string(update.Provider),
+		Phase:        string(update.Phase),
+		RawEventName: update.RawEventName,
+		ObservedAt:   formatTime(update.ObservedAt),
 	}
 }
 
@@ -76,7 +84,6 @@ func taskFromRow(row generated.Task) *core.Task {
 		WorktreePath: row.WorktreePath,
 		TmuxSession:  row.TmuxSession,
 		Provider:     core.AgentProvider(row.Provider),
-		Status:       core.TaskStatus(row.Status),
 		CreatedAt:    parseTime(row.CreatedAt),
 		UpdatedAt:    parseTime(row.UpdatedAt),
 	}
@@ -88,4 +95,14 @@ func tasksFromRows(rows []generated.Task) []*core.Task {
 		tasks = append(tasks, taskFromRow(row))
 	}
 	return tasks
+}
+
+func taskStatusUpdateFromRow(row generated.TaskStatus) *core.TaskStatusUpdate {
+	return &core.TaskStatusUpdate{
+		TaskID:       row.TaskID,
+		Provider:     core.AgentProvider(row.Provider),
+		Phase:        core.TaskStatusPhase(row.Phase),
+		RawEventName: row.RawEventName,
+		ObservedAt:   parseTime(row.ObservedAt),
+	}
 }
