@@ -74,7 +74,7 @@ func main() {
 		os.Exit(1)
 	}
 
-	taskStore, err := tasksqlite.New(tasksqlite.Config{Path: cfg.SQLite.Path})
+	taskStore, err := tasksqlite.New(tasksqlite.Config{Path: cfg.TaskSQLite.Path})
 	if err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		os.Exit(1)

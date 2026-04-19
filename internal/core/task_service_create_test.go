@@ -56,17 +56,19 @@ func TestTaskServiceCreateTask_CreatesWorkspaceSessionAndPersistsTask(t *testing
 
 	require.NoError(t, err)
 	require.Equal(t, "billing retry flow", task.DisplayName)
-	require.Equal(t, "feat/"+task.ID, task.BranchName)
+	require.Equal(t, "billing-retry-flow", task.Slug)
+	require.Equal(t, "feat/billing-retry-flow", task.BranchName)
 	require.Equal(t, TaskStatusRunning, task.Status)
-	require.Equal(t, "/tmp/repo-"+task.ID, svc.repoClient.createdTask.WorktreePath)
-	require.Equal(t, "repo_"+task.ID, svc.sessionClient.startedTask.TmuxSession)
+	require.Equal(t, "/tmp/repo-billing-retry-flow", svc.repoClient.createdTask.WorktreePath)
+	require.Equal(t, "repo_billing_retry_flow", svc.sessionClient.startedTask.TmuxSession)
 	require.True(t, svc.preparer.called)
 	require.True(t, svc.preparer.calledBeforeSession)
 	require.Equal(t, "/tmp/repo", svc.preparer.repoRoot)
-	require.Equal(t, "/tmp/repo-"+task.ID, svc.preparer.worktreePath)
+	require.Equal(t, "/tmp/repo-billing-retry-flow", svc.preparer.worktreePath)
 	require.Equal(t, svc.providerRepo.bootstrapSpec, svc.preparer.bootstrapSpec)
 	require.NotNil(t, svc.providerRepo.bootstrapRequest)
 	require.Equal(t, task.ID, svc.providerRepo.bootstrapRequest.ID)
+	require.Equal(t, task.Slug, svc.providerRepo.bootstrapRequest.Slug)
 	require.Equal(t, TaskStatusCreating, svc.providerRepo.bootstrapRequest.Status)
 	require.Equal(t, task.WorktreePath, svc.providerRepo.bootstrapRequest.WorktreePath)
 	require.Equal(t, task.BranchName, svc.providerRepo.bootstrapRequest.BranchName)
@@ -212,4 +214,29 @@ func TestTaskServiceCreateTask_PersistsBrokenTaskWhenRuntimeLaunchFails(t *testi
 	require.Equal(t, TaskStatusBroken, task.Status)
 	require.EqualError(t, err, "start task session: tmux failed")
 	require.Equal(t, TaskStatusBroken, svc.taskRepo.updatedTask.Status)
+}
+
+func TestTaskServiceCreateTask_AppendsNumericSuffixWhenSlugAlreadyExists(t *testing.T) {
+	svc := newTestTaskService(t)
+	svc.providerRepo.suggestedName = "billing retry flow"
+	svc.taskRepo.listTasks = []*Task{{
+		ID:           "existing-task",
+		Slug:         "billing-retry-flow",
+		RepoRoot:     "/tmp/repo",
+		DisplayName:  "billing retry flow",
+		BranchName:   "feat/billing-retry-flow",
+		WorktreePath: "/tmp/repo-billing-retry-flow",
+		TmuxSession:  "repo_billing_retry_flow",
+	}}
+
+	task, err := svc.service.CreateTask(t.Context(), CreateTaskInput{
+		Cwd:    "/tmp/repo",
+		Prompt: "add billing retry flow",
+	})
+
+	require.NoError(t, err)
+	require.Equal(t, "billing-retry-flow-2", task.Slug)
+	require.Equal(t, "feat/billing-retry-flow-2", task.BranchName)
+	require.Equal(t, "/tmp/repo-billing-retry-flow-2", task.WorktreePath)
+	require.Equal(t, "repo_billing_retry_flow_2", task.TmuxSession)
 }

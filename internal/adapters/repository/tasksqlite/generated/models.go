@@ -6,6 +6,7 @@ package generated
 
 type Task struct {
 	ID           string
+	Slug         string
 	Prompt       string
 	DisplayName  string
 	RepoRoot     string

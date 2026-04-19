@@ -9,6 +9,8 @@ import (
 	"time"
 
 	"rig/internal/core"
+
+	_ "modernc.org/sqlite"
 )
 
 func TestRepositoryCreateTask_AllowsMultipleTasksWithoutDomainSlug(t *testing.T) {
@@ -20,6 +22,7 @@ func TestRepositoryCreateTask_AllowsMultipleTasksWithoutDomainSlug(t *testing.T)
 	now := time.Now().UTC()
 	first := &core.Task{
 		ID:           "task-1",
+		Slug:         "duplicate-name",
 		Prompt:       "first prompt",
 		DisplayName:  "duplicate name",
 		RepoRoot:     "/tmp/repo",
@@ -34,6 +37,7 @@ func TestRepositoryCreateTask_AllowsMultipleTasksWithoutDomainSlug(t *testing.T)
 	}
 	second := &core.Task{
 		ID:           "task-2",
+		Slug:         "duplicate-name-2",
 		Prompt:       "second prompt",
 		DisplayName:  "duplicate name",
 		RepoRoot:     "/tmp/repo",
@@ -64,6 +68,7 @@ func TestRepositoryNew_CreatesParentDirectoryAndAppliesMigrations(t *testing.T) 
 	now := time.Now().UTC()
 	task := &core.Task{
 		ID:           "task-1",
+		Slug:         "task-name",
 		Prompt:       "first prompt",
 		DisplayName:  "task name",
 		RepoRoot:     "/tmp/repo",
@@ -79,6 +84,72 @@ func TestRepositoryNew_CreatesParentDirectoryAndAppliesMigrations(t *testing.T) 
 
 	if err := repo.CreateTask(context.Background(), task); err != nil {
 		t.Fatalf("create task after New bootstrap: %v", err)
+	}
+}
+
+func TestRepositoryNew_ReturnsErrorForInvalidConfig(t *testing.T) {
+	repo, err := New(Config{Path: "state.db"})
+	if err == nil {
+		t.Fatal("expected constructor error for invalid config")
+	}
+	if repo != nil {
+		t.Fatalf("expected nil repository on constructor error, got %T", repo)
+	}
+}
+
+func TestRepositoryNew_ResetsDisposableDBWhenTasksSchemaIsStale(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "state.db")
+
+	db, err := sql.Open("sqlite", path)
+	if err != nil {
+		t.Fatalf("open stale db: %v", err)
+	}
+	_, err = db.Exec(`
+		create table tasks (
+			id text primary key,
+			prompt text not null,
+			display_name text not null,
+			repo_root text not null,
+			repo_name text not null,
+			branch_name text not null,
+			worktree_path text not null,
+			tmux_session text not null,
+			provider text not null,
+			status text not null,
+			created_at text not null,
+			updated_at text not null
+		);
+	`)
+	if err != nil {
+		t.Fatalf("create stale tasks table: %v", err)
+	}
+	if err := db.Close(); err != nil {
+		t.Fatalf("close stale db: %v", err)
+	}
+
+	repo, err := New(Config{Path: path})
+	if err != nil {
+		t.Fatalf("new repository: %v", err)
+	}
+
+	now := time.Now().UTC()
+	task := &core.Task{
+		ID:           "task-1",
+		Slug:         "task-name",
+		Prompt:       "first prompt",
+		DisplayName:  "task name",
+		RepoRoot:     "/tmp/repo",
+		RepoName:     "repo",
+		BranchName:   "feat/task-name",
+		WorktreePath: "/tmp/repo-task-name",
+		TmuxSession:  "repo_task_name",
+		Provider:     core.AgentProviderCodex,
+		Status:       core.TaskStatusCreating,
+		CreatedAt:    now,
+		UpdatedAt:    now,
+	}
+	if err := repo.CreateTask(context.Background(), task); err != nil {
+		t.Fatalf("create task after reset: %v", err)
 	}
 }
 
@@ -120,6 +191,7 @@ func TestRepositoryNew_CreatesTasksTableWithCoreTaskColumnsOnly(t *testing.T) {
 
 	want := []string{
 		"id",
+		"slug",
 		"prompt",
 		"display_name",
 		"repo_root",
@@ -146,6 +218,7 @@ func TestRepositoryGetTask_ReturnsStoredTask(t *testing.T) {
 	now := time.Now().UTC()
 	task := &core.Task{
 		ID:           "task-1",
+		Slug:         "task-name",
 		Prompt:       "first prompt",
 		DisplayName:  "task name",
 		RepoRoot:     "/tmp/repo",
@@ -182,6 +255,7 @@ func TestRepositoryListTasks_ReturnsStoredTasks(t *testing.T) {
 	for _, task := range []*core.Task{
 		{
 			ID:           "task-1",
+			Slug:         "task-one",
 			Prompt:       "first prompt",
 			DisplayName:  "task one",
 			RepoRoot:     "/tmp/repo",
@@ -196,6 +270,7 @@ func TestRepositoryListTasks_ReturnsStoredTasks(t *testing.T) {
 		},
 		{
 			ID:           "task-2",
+			Slug:         "task-two",
 			Prompt:       "second prompt",
 			DisplayName:  "task two",
 			RepoRoot:     "/tmp/repo",

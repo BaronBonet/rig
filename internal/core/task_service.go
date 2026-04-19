@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"path/filepath"
+	slugpkg "rig/internal/pkg/slug"
 	"strings"
 	"time"
 )
@@ -69,7 +70,13 @@ func (s *taskService) createTaskFromPrompt(
 		return nil, err
 	}
 
-	task := newPromptTaskRecord(repoCtx, input.Provider, s.defaultProvider, suggestion.Name, suggestion.BranchType)
+	existingTasks, err := s.tasks.ListTasks(ctx)
+	if err != nil {
+		return nil, err
+	}
+
+	taskSlug := uniqueTaskSlug(repoCtx.Root, suggestion.Name, existingTasks)
+	task := newPromptTaskRecord(repoCtx, input.Provider, s.defaultProvider, suggestion.Name, taskSlug, suggestion.BranchType)
 	task.Prompt = input.Prompt
 
 	if err := s.tasks.CreateTask(ctx, task); err != nil {
@@ -122,11 +129,13 @@ func (s *taskService) createTaskFromPullRequest(
 		return nil, fmt.Errorf("PR already has workspace")
 	}
 
+	taskSlug := uniqueTaskSlug(repoCtx.Root, pr.BranchName, existingTasks)
 	task := newPullRequestTaskRecord(
 		repoCtx,
 		input.Provider,
 		s.defaultProvider,
 		prDisplayName(*pr),
+		taskSlug,
 		pr.BranchName,
 	)
 	if err := s.tasks.CreateTask(ctx, task); err != nil {
@@ -217,6 +226,7 @@ func newPromptTaskRecord(
 	provider string,
 	defaultProvider AgentProvider,
 	displayName string,
+	taskSlug string,
 	branchType string,
 ) *Task {
 	if provider == "" {
@@ -228,12 +238,13 @@ func newPromptTaskRecord(
 
 	return &Task{
 		ID:           taskID,
+		Slug:         taskSlug,
 		DisplayName:  displayName,
 		RepoRoot:     repoCtx.Root,
 		RepoName:     repoCtx.Name,
-		BranchName:   branchNameForTask(taskID, branchType),
-		WorktreePath: filepath.Join(filepath.Dir(repoCtx.Root), repoCtx.Name+"-"+taskID),
-		TmuxSession:  repoCtx.Name + "_" + taskID,
+		BranchName:   branchNameForTask(taskSlug, branchType),
+		WorktreePath: taskWorktreePath(repoCtx, taskSlug),
+		TmuxSession:  taskSessionName(repoCtx, taskSlug),
 		Provider:     AgentProvider(provider),
 		Status:       TaskStatusCreating,
 		CreatedAt:    now,
@@ -246,6 +257,7 @@ func newPullRequestTaskRecord(
 	provider string,
 	defaultProvider AgentProvider,
 	displayName string,
+	taskSlug string,
 	branchName string,
 ) *Task {
 	if provider == "" {
@@ -257,12 +269,13 @@ func newPullRequestTaskRecord(
 
 	return &Task{
 		ID:           taskID,
+		Slug:         taskSlug,
 		DisplayName:  displayName,
 		RepoRoot:     repoCtx.Root,
 		RepoName:     repoCtx.Name,
 		BranchName:   strings.TrimSpace(branchName),
-		WorktreePath: filepath.Join(filepath.Dir(repoCtx.Root), repoCtx.Name+"-"+taskID),
-		TmuxSession:  repoCtx.Name + "_" + taskID,
+		WorktreePath: taskWorktreePath(repoCtx, taskSlug),
+		TmuxSession:  taskSessionName(repoCtx, taskSlug),
 		Provider:     AgentProvider(provider),
 		Status:       TaskStatusCreating,
 		CreatedAt:    now,
@@ -270,8 +283,32 @@ func newPullRequestTaskRecord(
 	}
 }
 
-func branchNameForTask(taskID string, branchType string) string {
-	return TaskSuggestion{BranchType: branchType}.BranchTypeOrDefault() + "/" + taskID
+func branchNameForTask(taskSlug string, branchType string) string {
+	return TaskSuggestion{BranchType: branchType}.BranchTypeOrDefault() + "/" + taskSlug
+}
+
+func taskWorktreePath(repoCtx RepoContext, taskSlug string) string {
+	return filepath.Join(filepath.Dir(repoCtx.Root), repoCtx.Name+"-"+taskSlug)
+}
+
+func taskSessionName(repoCtx RepoContext, taskSlug string) string {
+	return repoCtx.Name + "_" + strings.ReplaceAll(taskSlug, "-", "_")
+}
+
+func uniqueTaskSlug(repoRoot string, raw string, tasks []*Task) string {
+	base := slugpkg.FromDisplayName(raw)
+	existing := make(map[string]struct{})
+	for _, task := range tasks {
+		if task == nil || task.RepoRoot != repoRoot {
+			continue
+		}
+		slug := strings.TrimSpace(task.Slug)
+		if slug == "" {
+			slug = slugpkg.FromDisplayName(task.DisplayName)
+		}
+		existing[slug] = struct{}{}
+	}
+	return slugpkg.EnsureUnique(base, existing)
 }
 
 func existingTaskForBranch(tasks []*Task, repoRoot string, branchName string) *Task {

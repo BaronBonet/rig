@@ -14,6 +14,7 @@ type Task struct {
 	CreatedAt    time.Time
 	UpdatedAt    time.Time
 	ID           string
+	Slug         string
 	Prompt       string
 	DisplayName  string
 	RepoRoot     string

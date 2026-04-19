@@ -2,6 +2,7 @@
 
 create table if not exists tasks (
   id text primary key,
+  slug text not null,
   prompt text not null,
   display_name text not null,
   repo_root text not null,
