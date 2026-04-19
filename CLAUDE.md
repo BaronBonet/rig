@@ -1,5 +1,7 @@
 # CLAUDE.md
 
+This file is mirrored in `AGENTS.md`. Keep both files in sync.
+
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
 ## Project
@@ -22,6 +24,11 @@ go test -run TestNewService_CreateTask ./internal/core
 ```
 
 `make generate` must run before build/test/lint — it regenerates `internal/adapters/repository/sqlite/generated/` and mock files. The Makefile handles this automatically via target dependencies.
+
+## Workspace Rules
+
+- Do not create a git worktree automatically for Codex work in this repository.
+- Work in the current workspace unless the human explicitly asks for a worktree.
 
 ## Architecture
 

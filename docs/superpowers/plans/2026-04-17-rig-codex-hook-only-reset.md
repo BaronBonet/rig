@@ -1,5 +1,8 @@
 # Rig Codex Hook-Only Reset Implementation Plan
 
+> Historical implementation plan. Superseded by later status-stream cleanup
+> work. Any `PermissionRequest` references here are retained for context only.
+
 > **For agentic workers:** REQUIRED: Use superpowers:subagent-driven-development (if subagents available) or superpowers:executing-plans to implement this plan. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** Build a new standalone Go CLI repo that launches Codex in the current repository, persists hook-driven task state in SQLite, and exposes `start`, `status`, and `watch` commands without tmux, worktrees, or a TUI.

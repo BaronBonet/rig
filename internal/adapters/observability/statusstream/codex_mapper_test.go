@@ -18,11 +18,12 @@ func TestMapCodexHookToStatus(t *testing.T) {
 		phase     core.TaskStatusPhase
 		ok        bool
 	}{
+		{name: "session start maps to starting", eventName: "SessionStart", phase: core.TaskStatusPhaseStarting, ok: true},
 		{name: "user prompt submit maps to working", eventName: "UserPromptSubmit", phase: core.TaskStatusPhaseWorking, ok: true},
 		{name: "pre tool use maps to working", eventName: "PreToolUse", phase: core.TaskStatusPhaseWorking, ok: true},
 		{name: "post tool use maps to working", eventName: "PostToolUse", phase: core.TaskStatusPhaseWorking, ok: true},
 		{name: "stop maps to waiting for input", eventName: "Stop", phase: core.TaskStatusPhaseWaitingForInput, ok: true},
-		{name: "unsupported event ignored", eventName: "SessionStart", ok: false},
+		{name: "permission request ignored", eventName: "PermissionRequest", ok: false},
 		{name: "empty event ignored", eventName: "", ok: false},
 	}
 

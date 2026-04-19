@@ -52,6 +52,7 @@ type WorkspaceBootstrapFile struct {
 type TaskStatusPhase string
 
 const (
+	TaskStatusPhaseStarting        TaskStatusPhase = "starting"
 	TaskStatusPhaseWorking         TaskStatusPhase = "working"
 	TaskStatusPhaseWaitingForInput TaskStatusPhase = "waiting_for_input"
 )

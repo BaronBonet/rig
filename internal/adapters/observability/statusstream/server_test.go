@@ -74,7 +74,7 @@ func TestServe_PublishesStatusUpdateFromCodexHook(t *testing.T) {
 	require.NoError(t, <-serverErr)
 }
 
-func TestServe_PublishesWaitingForInputFromCodexPermissionRequestHook(t *testing.T) {
+func TestServe_PublishesStartingFromCodexSessionStartHook(t *testing.T) {
 	t.Parallel()
 
 	socketPath := testSocketPath(t)
@@ -112,7 +112,7 @@ func TestServe_PublishesWaitingForInputFromCodexPermissionRequestHook(t *testing
 
 	req, err := http.NewRequest(http.MethodPost, fmt.Sprintf("http://%s/hook", hookListener.Addr().String()), bytes.NewReader(body))
 	require.NoError(t, err)
-	req.Header.Set("X-Codex-Hook-Event", "PermissionRequest")
+	req.Header.Set("X-Codex-Hook-Event", "SessionStart")
 
 	resp, err := http.DefaultClient.Do(req)
 	require.NoError(t, err)
@@ -123,8 +123,8 @@ func TestServe_PublishesWaitingForInputFromCodexPermissionRequestHook(t *testing
 	case update := <-updates:
 		require.Equal(t, "task-1", update.TaskID)
 		require.Equal(t, core.AgentProviderCodex, update.Provider)
-		require.Equal(t, core.TaskStatusPhaseWaitingForInput, update.Phase)
-		require.Equal(t, "PermissionRequest", update.RawEventName)
+		require.Equal(t, core.TaskStatusPhaseStarting, update.Phase)
+		require.Equal(t, "SessionStart", update.RawEventName)
 	case <-time.After(2 * time.Second):
 		t.Fatal("timed out waiting for published status update")
 	}
@@ -168,7 +168,7 @@ func TestServe_IgnoresUnsupportedCodexHookEvents(t *testing.T) {
 
 	req, err := http.NewRequest(http.MethodPost, fmt.Sprintf("http://%s/hook", hookListener.Addr().String()), bytes.NewReader(body))
 	require.NoError(t, err)
-	req.Header.Set("X-Codex-Hook-Event", "SessionStart")
+	req.Header.Set("X-Codex-Hook-Event", "PermissionRequest")
 
 	resp, err := http.DefaultClient.Do(req)
 	require.NoError(t, err)

@@ -19,9 +19,11 @@ func MapCodexHookToStatus(summary *core.HookSessionSummary, observedAt time.Time
 
 	var phase core.TaskStatusPhase
 	switch eventName {
+	case "SessionStart":
+		phase = core.TaskStatusPhaseStarting
 	case "UserPromptSubmit", "PreToolUse", "PostToolUse":
 		phase = core.TaskStatusPhaseWorking
-	case "PermissionRequest", "Stop":
+	case "Stop":
 		phase = core.TaskStatusPhaseWaitingForInput
 	default:
 		return core.TaskStatusUpdate{}, false

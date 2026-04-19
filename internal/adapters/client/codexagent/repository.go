@@ -172,9 +172,6 @@ func (r *repository) renderHooksJSON() ([]byte, error) {
 			"PreToolUse": {
 				{Matcher: "Bash", Hooks: []hookCommand{{Type: "command", Command: r.commandForEvent("PreToolUse")}}},
 			},
-			"PermissionRequest": {
-				{Hooks: []hookCommand{{Type: "command", Command: r.commandForEvent("PermissionRequest")}}},
-			},
 			"PostToolUse": {
 				{Matcher: "Bash", Hooks: []hookCommand{{Type: "command", Command: r.commandForEvent("PostToolUse")}}},
 			},
