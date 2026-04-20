@@ -12,7 +12,7 @@ type Dependencies struct {
 	Stop    func()
 }
 
-type Server struct {
+type server struct {
 	socketPath     string
 	hookListenAddr string
 	service        core.TaskService
@@ -20,8 +20,8 @@ type Server struct {
 	httpHooks      *httpHookServer
 }
 
-func New(cfg Config, deps Dependencies) *Server {
-	return &Server{
+func New(cfg Config, deps Dependencies) core.TaskFrontendServer {
+	return &server{
 		socketPath:     cfg.SocketPath,
 		hookListenAddr: cfg.HookListenAddr,
 		service:        deps.Service,
@@ -33,19 +33,19 @@ func New(cfg Config, deps Dependencies) *Server {
 	}
 }
 
-func (s *Server) CreateTask(ctx context.Context, input core.CreateTaskInput) (*core.Task, error) {
+func (s *server) CreateTask(ctx context.Context, input core.CreateTaskInput) (*core.Task, error) {
 	return s.service.CreateTask(ctx, input)
 }
 
-func (s *Server) LatestTaskStatus(ctx context.Context, taskID string) (*core.TaskStatusUpdate, error) {
+func (s *server) LatestTaskStatus(ctx context.Context, taskID string) (*core.TaskStatusUpdate, error) {
 	return s.service.LatestTaskStatus(ctx, taskID)
 }
 
-func (s *Server) SubscribeTaskStatus(ctx context.Context, taskID string) (<-chan core.TaskStatusUpdate, error) {
+func (s *server) SubscribeTaskStatus(ctx context.Context, taskID string) (<-chan core.TaskStatusUpdate, error) {
 	return s.service.SubscribeTaskStatus(ctx, taskID)
 }
 
-func (s *Server) Serve(ctx context.Context) error {
+func (s *server) Serve(ctx context.Context) error {
 	httpHookListener, err := listenForHTTPHooks(s.hookListenAddr)
 	if err != nil {
 		return err

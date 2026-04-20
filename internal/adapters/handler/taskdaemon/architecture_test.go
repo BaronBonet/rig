@@ -43,3 +43,14 @@ func TestTaskDaemonPackage_SourceDoesNotUseDeprecatedNetErrorTemporary(t *testin
 		}
 	}
 }
+
+func TestTaskDaemonPackage_NewReturnsCoreFrontendServerInterface(t *testing.T) {
+	content, err := os.ReadFile("server.go")
+	if err != nil {
+		t.Fatalf("read server.go: %v", err)
+	}
+
+	if !strings.Contains(string(content), "func New(cfg Config, deps Dependencies) core.TaskFrontendServer") {
+		t.Fatal("taskdaemon.New should return core.TaskFrontendServer")
+	}
+}
