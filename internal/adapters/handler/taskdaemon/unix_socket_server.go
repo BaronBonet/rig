@@ -11,10 +11,9 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"rig/internal/core"
 	"strings"
 	"sync"
-
-	"rig/internal/core"
 )
 
 type UnixSocketServerConfig struct {
@@ -67,9 +66,11 @@ func (s *UnixSocketServer) Serve(ctx context.Context) error {
 		return fmt.Errorf("task daemon frontend not configured")
 	}
 
+	// TODO: what is the point of this?
 	if err := os.MkdirAll(filepath.Dir(s.socketPath), 0o755); err != nil {
 		return fmt.Errorf("prepare task daemon socket directory: %w", err)
 	}
+	// TODO: what is the point of this?
 	if err := os.Remove(s.socketPath); err != nil && !errors.Is(err, os.ErrNotExist) {
 		return fmt.Errorf("remove stale task daemon socket: %w", err)
 	}
@@ -93,6 +94,7 @@ func (s *UnixSocketServer) Serve(ctx context.Context) error {
 				return nil
 			}
 			var netErr net.Error
+			// TODO: netErr.Temporary() is not always implemented, so we may want to check for specific error types or messages instead
 			if errors.As(err, &netErr) && netErr.Temporary() {
 				continue
 			}
