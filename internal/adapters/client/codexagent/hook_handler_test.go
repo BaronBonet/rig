@@ -83,10 +83,6 @@ func (s *stubTaskService) SubscribeTaskStatus(context.Context, string) (<-chan c
 	return nil, nil
 }
 
-func (s *stubTaskService) PublishTaskStatus(context.Context, core.TaskStatusUpdate) error {
-	return nil
-}
-
 func (s *stubTaskService) HandleHookEvent(ctx context.Context, input core.HookEventInput) error {
 	if s.handleHookEventFn == nil {
 		return nil

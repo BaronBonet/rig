@@ -12,7 +12,6 @@ func TestTaskServiceContract_ExposesStatusMethods(t *testing.T) {
 	var _ interface {
 		LatestTaskStatus(context.Context, string) (*TaskStatusUpdate, error)
 		SubscribeTaskStatus(context.Context, string) (<-chan TaskStatusUpdate, error)
-		PublishTaskStatus(context.Context, TaskStatusUpdate) error
 		HandleHookEvent(context.Context, HookEventInput) error
 	} = (TaskService)(nil)
 }
@@ -39,7 +38,7 @@ func TestTaskStatusService_SubscribePublishesMatchingTaskUpdates(t *testing.T) {
 	updates, err := svc.service.SubscribeTaskStatus(t.Context(), "task-123")
 	require.NoError(t, err)
 
-	require.NoError(t, svc.service.PublishTaskStatus(t.Context(), TaskStatusUpdate{
+	require.NoError(t, svc.taskRepoMock.UpsertTaskStatus(t.Context(), TaskStatusUpdate{
 		TaskID:       "task-999",
 		Provider:     AgentProviderCodex,
 		Phase:        TaskStatusPhaseWorking,
@@ -47,7 +46,7 @@ func TestTaskStatusService_SubscribePublishesMatchingTaskUpdates(t *testing.T) {
 		ObservedAt:   time.Date(2026, time.April, 19, 11, 0, 0, 0, time.UTC),
 	}))
 
-	require.NoError(t, svc.service.PublishTaskStatus(t.Context(), TaskStatusUpdate{
+	require.NoError(t, svc.taskRepoMock.UpsertTaskStatus(t.Context(), TaskStatusUpdate{
 		TaskID:       "task-123",
 		Provider:     AgentProviderCodex,
 		Phase:        TaskStatusPhaseWorking,
@@ -100,8 +99,8 @@ func TestTaskStatusService_LatestReturnsMostRecentTaskUpdate(t *testing.T) {
 		ObservedAt:   time.Date(2026, time.April, 19, 11, 3, 0, 0, time.UTC),
 	}
 
-	require.NoError(t, svc.service.PublishTaskStatus(t.Context(), first))
-	require.NoError(t, svc.service.PublishTaskStatus(t.Context(), second))
+	require.NoError(t, svc.taskRepoMock.UpsertTaskStatus(t.Context(), first))
+	require.NoError(t, svc.taskRepoMock.UpsertTaskStatus(t.Context(), second))
 
 	update, err := svc.service.LatestTaskStatus(t.Context(), "task-123")
 	require.NoError(t, err)

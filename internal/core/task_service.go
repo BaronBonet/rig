@@ -65,15 +65,6 @@ func (s *taskService) SubscribeTaskStatus(
 	return s.tasks.SubscribeTaskStatus(ctx, strings.TrimSpace(taskID))
 }
 
-func (s *taskService) PublishTaskStatus(ctx context.Context, update TaskStatusUpdate) error {
-	if strings.TrimSpace(update.TaskID) == "" {
-		return fmt.Errorf("task status update task ID is required")
-	}
-
-	update.TaskID = strings.TrimSpace(update.TaskID)
-	return s.tasks.UpsertTaskStatus(ctx, update)
-}
-
 func (s *taskService) HandleHookEvent(ctx context.Context, input HookEventInput) error {
 	if input.Provider == "" {
 		return ErrUnmanagedHookEvent
@@ -110,7 +101,12 @@ func (s *taskService) HandleHookEvent(ctx context.Context, input HookEventInput)
 		update.ObservedAt = input.OccurredAt
 	}
 
-	return s.PublishTaskStatus(ctx, *update)
+	update.TaskID = strings.TrimSpace(update.TaskID)
+	if update.TaskID == "" {
+		return fmt.Errorf("task status update task ID is required")
+	}
+
+	return s.tasks.UpsertTaskStatus(ctx, *update)
 }
 
 func (s *taskService) createTaskFromPrompt(
