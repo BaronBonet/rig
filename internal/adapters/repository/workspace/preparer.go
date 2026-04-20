@@ -5,23 +5,14 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"strings"
-
 	"rig/internal/core"
+	"strings"
 )
 
-type preparer struct {
-	configLoader core.RepoConfigLoader
-	seeder       core.WorkspaceSeeder
-	setupRunner  core.SetupScriptRunner
-}
+type preparer struct{}
 
 func New() core.TaskWorkspaceManager {
-	return &preparer{
-		configLoader: NewRepoConfigLoader(),
-		seeder:       NewSeeder(),
-		setupRunner:  NewSetupScriptRunner(),
-	}
+	return &preparer{}
 }
 
 func (p *preparer) SetupTaskWorkspace(ctx context.Context, task *core.Task, repoRoot string) error {
@@ -32,16 +23,16 @@ func (p *preparer) SetupTaskWorkspace(ctx context.Context, task *core.Task, repo
 		repoRoot = task.RepoRoot
 	}
 
-	repoConfig, err := p.configLoader.LoadRepoConfig(ctx, repoRoot)
+	repoConfig, err := loadRepoConfig(repoRoot)
 	if err != nil {
 		return err
 	}
 
 	if len(repoConfig.Seed.Copy) > 0 {
-		if err := p.seeder.ValidateSeedPaths(ctx, repoRoot, repoConfig.Seed.Copy); err != nil {
+		if err := validateSeedPaths(ctx, repoRoot, repoConfig.Seed.Copy); err != nil {
 			return fmt.Errorf("seed workspace: %w", err)
 		}
-		if err := p.seeder.SeedWorkspace(ctx, core.SeedWorkspaceInput{
+		if err := seedWorkspace(ctx, core.SeedWorkspaceInput{
 			RepoRoot:      repoRoot,
 			WorktreePath:  task.WorktreePath,
 			RelativePaths: repoConfig.Seed.Copy,
@@ -51,10 +42,10 @@ func (p *preparer) SetupTaskWorkspace(ctx context.Context, task *core.Task, repo
 	}
 
 	if repoConfig.Seed.SetupScript != "" {
-		if err := p.setupRunner.ValidateSetupScript(ctx, repoRoot, repoConfig.Seed.SetupScript); err != nil {
+		if err := validateSetupScript(repoRoot, repoConfig.Seed.SetupScript); err != nil {
 			return fmt.Errorf("setup script: %w", err)
 		}
-		if err := p.setupRunner.RunSetupScript(ctx, core.RunSetupScriptInput{
+		if err := runSetupScript(ctx, core.RunSetupScriptInput{
 			RepoRoot:     repoRoot,
 			WorktreePath: task.WorktreePath,
 			ScriptPath:   repoConfig.Seed.SetupScript,

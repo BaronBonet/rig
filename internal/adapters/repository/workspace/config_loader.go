@@ -1,7 +1,6 @@
 package workspace
 
 import (
-	"context"
 	"errors"
 	"fmt"
 	"os"
@@ -17,13 +16,7 @@ const (
 	legacyConfigName = "rig.yaml"
 )
 
-type repoConfigLoader struct{}
-
-func NewRepoConfigLoader() core.RepoConfigLoader {
-	return &repoConfigLoader{}
-}
-
-func (l *repoConfigLoader) LoadRepoConfig(_ context.Context, repoRoot string) (core.RepoConfig, error) {
+func loadRepoConfig(repoRoot string) (core.RepoConfig, error) {
 	configName, raw, err := readRepoConfig(repoRoot)
 	if err != nil {
 		return core.RepoConfig{}, err
