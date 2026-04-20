@@ -7,17 +7,17 @@ import (
 )
 
 type Dependencies struct {
-	Service core.TaskService
-	Tasks   core.TaskRepository
-	Stop    func()
+	Service    core.TaskService
+	HookRoutes []HookRoute
+	Stop       func()
 }
 
 type server struct {
 	socketPath     string
 	hookListenAddr string
 	service        core.TaskService
+	hookRoutes     []HookRoute
 	stop           func()
-	httpHooks      *httpHookServer
 }
 
 func New(cfg Config, deps Dependencies) core.TaskFrontendServer {
@@ -25,11 +25,8 @@ func New(cfg Config, deps Dependencies) core.TaskFrontendServer {
 		socketPath:     cfg.SocketPath,
 		hookListenAddr: cfg.HookListenAddr,
 		service:        deps.Service,
+		hookRoutes:     deps.HookRoutes,
 		stop:           deps.Stop,
-		httpHooks: newHTTPHookServer(httpHookServerConfig{
-			Service: deps.Service,
-			Tasks:   deps.Tasks,
-		}),
 	}
 }
 
@@ -58,10 +55,7 @@ func (s *server) Serve(ctx context.Context) error {
 		Stop:       s.stop,
 	})
 
-	httpHookMux := http.NewServeMux()
-	httpHookMux.Handle("/codex-hook", s.httpHooks)
-	httpHookMux.Handle("/hook", s.httpHooks)
-	httpHookServer := &http.Server{Handler: httpHookMux}
+	httpHookServer := &http.Server{Handler: newHTTPHookServer(s.hookRoutes)}
 
 	errCh := make(chan error, 2)
 	go func() {

@@ -71,6 +71,47 @@ func (s *taskService) PublishTaskStatus(ctx context.Context, update TaskStatusUp
 	return s.tasks.UpsertTaskStatus(ctx, update)
 }
 
+func (s *taskService) HandleHookEvent(ctx context.Context, input HookEventInput) error {
+	provider := NormalizeProvider(input.Provider)
+	if provider == "" {
+		return ErrUnmanagedHookEvent
+	}
+
+	agent, err := s.agentFor(provider)
+	if err != nil {
+		return err
+	}
+
+	input.Provider = provider
+	input.TaskID = strings.TrimSpace(input.TaskID)
+	if input.TaskID == "" {
+		resolvedTaskID, err := s.resolveTaskIDFromCwd(ctx, input.Cwd)
+		if err != nil {
+			return err
+		}
+		input.TaskID = resolvedTaskID
+	}
+
+	update, err := agent.HookEventToTaskStatus(input)
+	if err != nil {
+		return err
+	}
+	if update == nil {
+		return nil
+	}
+	if strings.TrimSpace(update.TaskID) == "" {
+		update.TaskID = input.TaskID
+	}
+	if update.Provider == "" {
+		update.Provider = AgentProvider(provider)
+	}
+	if update.ObservedAt.IsZero() {
+		update.ObservedAt = input.OccurredAt
+	}
+
+	return s.PublishTaskStatus(ctx, *update)
+}
+
 func (s *taskService) createTaskFromPrompt(
 	ctx context.Context,
 	repoCtx RepoContext,
@@ -210,6 +251,26 @@ func (s *taskService) buildWorkspaceBootstrapSpec(ctx context.Context, task *Tas
 	}
 
 	return agent.BuildWorkspaceBootstrapSpec(task)
+}
+
+func (s *taskService) resolveTaskIDFromCwd(ctx context.Context, cwd string) (string, error) {
+	cwd = strings.TrimSpace(cwd)
+	if cwd == "" {
+		return "", ErrUnmanagedHookEvent
+	}
+
+	tasks, err := s.tasks.ListTasks(ctx)
+	if err != nil {
+		return "", fmt.Errorf("list tasks for hook resolution: %w", err)
+	}
+
+	for _, task := range tasks {
+		if task != nil && strings.TrimSpace(task.WorktreePath) == cwd {
+			return strings.TrimSpace(task.ID), nil
+		}
+	}
+
+	return "", ErrUnmanagedHookEvent
 }
 
 func newPromptTaskRecord(

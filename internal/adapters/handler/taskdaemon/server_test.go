@@ -118,49 +118,25 @@ func TestUnixSocketServer_SubscribeTaskStatusStreamsMatchingUpdates(t *testing.T
 	require.NoError(t, <-errCh)
 }
 
-func TestHTTPHookServer_PublishesMappedTaskStatusUpdate(t *testing.T) {
+func TestHTTPHookServer_DelegatesToInjectedHookHandler(t *testing.T) {
 	t.Parallel()
 
-	now := time.Date(2026, time.April, 19, 15, 0, 0, 0, time.UTC)
-	var published core.TaskStatusUpdate
-	svc := &stubTaskService{
-		publishTaskStatusFn: func(_ context.Context, update core.TaskStatusUpdate) error {
-			published = update
-			return nil
-		},
-	}
-	tasks := &stubTaskRepository{
-		listTasksFn: func(_ context.Context) ([]*core.Task, error) {
-			return []*core.Task{{
-				ID:           "task-1",
-				WorktreePath: "/tmp/repo-task",
-			}}, nil
-		},
-	}
-	server := newHTTPHookServer(httpHookServerConfig{
-		Service: svc,
-		Tasks:   tasks,
-		Now:     func() time.Time { return now },
-	})
+	called := false
+	server := newHTTPHookServer([]HookRoute{{
+		Path: "/hook",
+		Handler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			called = true
+			w.WriteHeader(http.StatusAccepted)
+		}),
+	}})
 
-	req := httptestNewRequest(t, http.MethodPost, "/codex-hook", map[string]any{
-		"cwd":             "/tmp/repo-task",
-		"hook_event_name": "SessionStart",
-		"session_id":      "session-1",
-	})
-	req.Header.Set("X-Codex-Hook-Event", "SessionStart")
+	req := httptestNewRequest(t, http.MethodPost, "/hook", map[string]any{"ok": true})
 
 	rec := newRecorder()
 	server.ServeHTTP(rec, req)
 
 	require.Equal(t, http.StatusAccepted, rec.Code)
-	require.Equal(t, core.TaskStatusUpdate{
-		TaskID:       "task-1",
-		Provider:     core.AgentProviderCodex,
-		Phase:        core.TaskStatusPhaseStarting,
-		RawEventName: "SessionStart",
-		ObservedAt:   now,
-	}, published)
+	require.True(t, called)
 }
 
 type stubTaskService struct {
@@ -168,6 +144,7 @@ type stubTaskService struct {
 	latestTaskStatusFn    func(context.Context, string) (*core.TaskStatusUpdate, error)
 	subscribeTaskStatusFn func(context.Context, string) (<-chan core.TaskStatusUpdate, error)
 	publishTaskStatusFn   func(context.Context, core.TaskStatusUpdate) error
+	handleHookEventFn     func(context.Context, core.HookEventInput) error
 }
 
 func (s *stubTaskService) CreateTask(ctx context.Context, input core.CreateTaskInput) (*core.Task, error) {
@@ -192,26 +169,11 @@ func (s *stubTaskService) PublishTaskStatus(ctx context.Context, update core.Tas
 	return s.publishTaskStatusFn(ctx, update)
 }
 
-type stubTaskRepository struct {
-	listTasksFn func(context.Context) ([]*core.Task, error)
-}
-
-func (s *stubTaskRepository) CreateTask(context.Context, *core.Task) error { return nil }
-func (s *stubTaskRepository) UpdateTask(context.Context, *core.Task) error { return nil }
-func (s *stubTaskRepository) ListTasks(ctx context.Context) ([]*core.Task, error) {
-	if s.listTasksFn == nil {
-		return nil, nil
+func (s *stubTaskService) HandleHookEvent(ctx context.Context, input core.HookEventInput) error {
+	if s.handleHookEventFn == nil {
+		return nil
 	}
-	return s.listTasksFn(ctx)
-}
-func (s *stubTaskRepository) UpsertTaskStatus(context.Context, core.TaskStatusUpdate) error {
-	return nil
-}
-func (s *stubTaskRepository) LatestTaskStatus(context.Context, string) (*core.TaskStatusUpdate, error) {
-	return nil, nil
-}
-func (s *stubTaskRepository) SubscribeTaskStatus(context.Context, string) (<-chan core.TaskStatusUpdate, error) {
-	return nil, nil
+	return s.handleHookEventFn(ctx, input)
 }
 
 func waitForUnixSocketServer(t *testing.T, socketPath string) {

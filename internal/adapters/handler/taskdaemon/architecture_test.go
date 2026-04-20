@@ -54,3 +54,18 @@ func TestTaskDaemonPackage_NewReturnsCoreFrontendServerInterface(t *testing.T) {
 		t.Fatal("taskdaemon.New should return core.TaskFrontendServer")
 	}
 }
+
+func TestTaskDaemonPackage_HTTPHookServerIsNotCodexSpecific(t *testing.T) {
+	content, err := os.ReadFile("http_hook_server.go")
+	if err != nil {
+		t.Fatalf("read http_hook_server.go: %v", err)
+	}
+
+	source := string(content)
+	if strings.Contains(source, "codexhooks") {
+		t.Fatal("http_hook_server should not depend on the codexhooks adapter directly")
+	}
+	if strings.Contains(source, "codexHookToTaskStatus") {
+		t.Fatal("http_hook_server should not contain codex-specific hook mapping")
+	}
+}

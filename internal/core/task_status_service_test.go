@@ -13,6 +13,7 @@ func TestTaskServiceContract_ExposesStatusMethods(t *testing.T) {
 		LatestTaskStatus(context.Context, string) (*TaskStatusUpdate, error)
 		SubscribeTaskStatus(context.Context, string) (<-chan TaskStatusUpdate, error)
 		PublishTaskStatus(context.Context, TaskStatusUpdate) error
+		HandleHookEvent(context.Context, HookEventInput) error
 	} = (TaskService)(nil)
 }
 
@@ -106,4 +107,37 @@ func TestTaskStatusService_LatestReturnsMostRecentTaskUpdate(t *testing.T) {
 	require.NoError(t, err)
 	require.NotNil(t, update)
 	require.Equal(t, second, *update)
+}
+
+func TestTaskStatusService_HandleHookEventResolvesTaskIDAndPublishesMappedUpdate(t *testing.T) {
+	svc := newTestTaskService(t)
+	svc.taskRepo.listTasks = []*Task{{
+		ID:           "task-123",
+		WorktreePath: "/tmp/repo-task",
+	}}
+	svc.providerRepo.hookUpdate = &TaskStatusUpdate{
+		Phase:        TaskStatusPhaseStarting,
+		RawEventName: "SessionStart",
+	}
+
+	err := svc.service.HandleHookEvent(t.Context(), HookEventInput{
+		OccurredAt: time.Date(2026, time.April, 20, 9, 0, 0, 0, time.UTC),
+		Provider:   "codex",
+		Cwd:        "/tmp/repo-task",
+		EventName:  "SessionStart",
+	})
+	require.NoError(t, err)
+	require.Equal(t, "task-123", svc.providerRepo.hookInput.TaskID)
+	require.Equal(t, "codex", svc.providerRepo.hookInput.Provider)
+
+	update, err := svc.service.LatestTaskStatus(t.Context(), "task-123")
+	require.NoError(t, err)
+	require.NotNil(t, update)
+	require.Equal(t, TaskStatusUpdate{
+		TaskID:       "task-123",
+		Provider:     AgentProviderCodex,
+		Phase:        TaskStatusPhaseStarting,
+		RawEventName: "SessionStart",
+		ObservedAt:   time.Date(2026, time.April, 20, 9, 0, 0, 0, time.UTC),
+	}, *update)
 }

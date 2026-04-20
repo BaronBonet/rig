@@ -27,3 +27,7 @@ func (r *repository) BuildWorkspaceBootstrapSpec(task *core.Task) (core.Workspac
 func (r *repository) BuildTaskSessionLaunchSpec(task *core.Task) (core.TaskSessionLaunchSpec, error) {
 	return r.repo.BuildTaskSessionLaunchSpec(task)
 }
+
+func (r *repository) HookEventToTaskStatus(core.HookEventInput) (*core.TaskStatusUpdate, error) {
+	return nil, core.ErrUnmanagedHookEvent
+}

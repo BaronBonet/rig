@@ -6,9 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"io"
 	"net"
-	"net/http"
 	"os"
 	"path/filepath"
 	"rig/internal/core"
@@ -223,12 +221,4 @@ func probeSocketHealth(ctx context.Context, socketPath string) error {
 
 func dialSocketHealth(ctx context.Context, socketPath string) error {
 	return probeSocketHealth(ctx, socketPath)
-}
-
-func mustReadAll(r *http.Request) []byte {
-	body, err := io.ReadAll(r.Body)
-	if err != nil {
-		return nil
-	}
-	return body
 }
