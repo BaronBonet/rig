@@ -9,8 +9,8 @@ import (
 	"os"
 	"path/filepath"
 	"rig/internal/core"
-	"rig/internal/pkg/execx"
 	"rig/internal/pkg/prompts"
+	"rig/internal/pkg/subprocess"
 	"strings"
 	"text/template"
 	"unicode"
@@ -26,13 +26,13 @@ const (
 )
 
 type repository struct {
-	runner        execx.Runner
+	runner        subprocess.Runner
 	binary        string
 	rigBinaryPath string
 	sourceRoot    string
 }
 
-func New(runner execx.Runner, cfg Config, hooks HookForwardingConfig) core.AgentClient {
+func New(runner subprocess.Runner, cfg Config, hooks HookForwardingConfig) core.AgentClient {
 	return &repository{
 		runner:        runner,
 		binary:        cfg.Binary,

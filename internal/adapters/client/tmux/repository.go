@@ -8,17 +8,17 @@ import (
 	"time"
 
 	"rig/internal/core"
-	"rig/internal/pkg/execx"
+	"rig/internal/pkg/subprocess"
 )
 
 type Repository struct {
-	runner         execx.Runner
+	runner         subprocess.Runner
 	runtimeMonitor core.RuntimeMonitor
 	now            func() time.Time
 	sleep          func(time.Duration)
 }
 
-func NewRepository(runner execx.Runner) *Repository {
+func NewRepository(runner subprocess.Runner) *Repository {
 	return &Repository{
 		runner:         runner,
 		runtimeMonitor: NewRuntimeMonitor(),
@@ -310,8 +310,8 @@ func windowOrDefault(window, fallback string) string {
 	return window
 }
 
-func isMissingSession(result execx.Result, err error) bool {
-	var commandErr execx.CommandError
+func isMissingSession(result subprocess.Result, err error) bool {
+	var commandErr subprocess.CommandError
 	if !errors.As(err, &commandErr) {
 		return false
 	}

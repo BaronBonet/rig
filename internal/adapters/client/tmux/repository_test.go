@@ -7,32 +7,32 @@ import (
 	"time"
 
 	"rig/internal/core"
-	"rig/internal/pkg/execx"
+	"rig/internal/pkg/subprocess"
 
 	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
 )
 
 func TestRepository_StartTaskSession_LaunchesCommandAndTypesPrefillInput(t *testing.T) {
-	runner := execx.NewMockRunner(t)
+	runner := subprocess.NewMockRunner(t)
 	repo := NewRepository(runner)
 	repo.now = func() time.Time { return time.Unix(0, 0) }
 	repo.sleep = func(time.Duration) {}
 
 	mock.InOrder(
-		expectTmuxRun(runner, execx.Result{}, nil,
+		expectTmuxRun(runner, subprocess.Result{}, nil,
 			"new-session", "-d", "-s", "repo_task", "-n", "agent", "-c", "/tmp/repo-task",
 		),
-		expectTmuxRun(runner, execx.Result{}, nil,
+		expectTmuxRun(runner, subprocess.Result{}, nil,
 			"new-window", "-d", "-t", "=repo_task", "-n", "editor", "-c", "/tmp/repo-task",
 		),
-		expectTmuxRun(runner, execx.Result{}, nil,
+		expectTmuxRun(runner, subprocess.Result{}, nil,
 			"send-keys", "-t", "=repo_task:agent", "codex", "C-m",
 		),
-		expectTmuxRun(runner, execx.Result{Stdout: "›"}, nil,
+		expectTmuxRun(runner, subprocess.Result{Stdout: "›"}, nil,
 			"capture-pane", "-t", "=repo_task:agent", "-p",
 		),
-		expectTmuxRun(runner, execx.Result{}, nil,
+		expectTmuxRun(runner, subprocess.Result{}, nil,
 			"send-keys", "-t", "=repo_task:agent", "fix billing retry flow",
 		),
 	)
@@ -52,14 +52,14 @@ func TestRepository_StartTaskSession_LaunchesCommandAndTypesPrefillInput(t *test
 }
 
 func TestRepositoryCreateSession_UsesDetachedSessionInWorkingDir(t *testing.T) {
-	runner := execx.NewMockRunner(t)
+	runner := subprocess.NewMockRunner(t)
 	repo := NewRepository(runner)
 
 	mock.InOrder(
-		expectTmuxRun(runner, execx.Result{}, nil,
+		expectTmuxRun(runner, subprocess.Result{}, nil,
 			"new-session", "-d", "-s", "repo-billing-retry-flow", "-n", "agent", "-c", "/tmp/repo-billing-retry-flow",
 		),
-		expectTmuxRun(runner, execx.Result{}, nil,
+		expectTmuxRun(runner, subprocess.Result{}, nil,
 			"new-window", "-d", "-t", "=repo-billing-retry-flow", "-n", "editor", "-c", "/tmp/repo-billing-retry-flow",
 		),
 	)
@@ -74,17 +74,17 @@ func TestRepositoryCreateSession_UsesDetachedSessionInWorkingDir(t *testing.T) {
 }
 
 func TestRepositoryCreateSession_KillsSessionIfEditorWindowCreationFails(t *testing.T) {
-	runner := execx.NewMockRunner(t)
+	runner := subprocess.NewMockRunner(t)
 	repo := NewRepository(runner)
 
 	mock.InOrder(
-		expectTmuxRun(runner, execx.Result{}, nil,
+		expectTmuxRun(runner, subprocess.Result{}, nil,
 			"new-session", "-d", "-s", "repo-billing-retry-flow", "-n", "agent", "-c", "/tmp/repo-billing-retry-flow",
 		),
-		expectTmuxRun(runner, execx.Result{}, errors.New("new-window failed"),
+		expectTmuxRun(runner, subprocess.Result{}, errors.New("new-window failed"),
 			"new-window", "-d", "-t", "=repo-billing-retry-flow", "-n", "editor", "-c", "/tmp/repo-billing-retry-flow",
 		),
-		expectTmuxRun(runner, execx.Result{}, nil,
+		expectTmuxRun(runner, subprocess.Result{}, nil,
 			"kill-session", "-t", "=repo-billing-retry-flow",
 		),
 	)
@@ -100,17 +100,17 @@ func TestRepositoryCreateSession_KillsSessionIfEditorWindowCreationFails(t *test
 }
 
 func TestRepositoryCreateSession_JoinsWindowCreationAndCleanupErrors(t *testing.T) {
-	runner := execx.NewMockRunner(t)
+	runner := subprocess.NewMockRunner(t)
 	repo := NewRepository(runner)
 
 	mock.InOrder(
-		expectTmuxRun(runner, execx.Result{}, nil,
+		expectTmuxRun(runner, subprocess.Result{}, nil,
 			"new-session", "-d", "-s", "repo-billing-retry-flow", "-n", "agent", "-c", "/tmp/repo-billing-retry-flow",
 		),
-		expectTmuxRun(runner, execx.Result{}, errors.New("new-window failed"),
+		expectTmuxRun(runner, subprocess.Result{}, errors.New("new-window failed"),
 			"new-window", "-d", "-t", "=repo-billing-retry-flow", "-n", "editor", "-c", "/tmp/repo-billing-retry-flow",
 		),
-		expectTmuxRun(runner, execx.Result{}, errors.New("kill-session failed"),
+		expectTmuxRun(runner, subprocess.Result{}, errors.New("kill-session failed"),
 			"kill-session", "-t", "=repo-billing-retry-flow",
 		),
 	)
@@ -130,33 +130,33 @@ func TestRepositoryCreateSession_JoinsWindowCreationAndCleanupErrors(t *testing.
 func TestRepositoryOpenTaskSession_UsesTaskSession(t *testing.T) {
 	t.Setenv("TMUX", "")
 
-	runner := execx.NewMockRunner(t)
+	runner := subprocess.NewMockRunner(t)
 	repo := NewRepository(runner)
-	expectTmuxRun(runner, execx.Result{}, nil, "attach-session", "-t", "=repo-billing-retry-flow")
+	expectTmuxRun(runner, subprocess.Result{}, nil, "attach-session", "-t", "=repo-billing-retry-flow")
 
 	err := repo.OpenTaskSession(context.Background(), &core.Task{TmuxSession: "repo-billing-retry-flow"})
 	require.NoError(t, err)
 }
 
 func TestRepositoryDeleteTaskSession_UsesTaskSession(t *testing.T) {
-	runner := execx.NewMockRunner(t)
+	runner := subprocess.NewMockRunner(t)
 	repo := NewRepository(runner)
-	expectTmuxRun(runner, execx.Result{}, nil, "kill-session", "-t", "=repo-billing-retry-flow")
+	expectTmuxRun(runner, subprocess.Result{}, nil, "kill-session", "-t", "=repo-billing-retry-flow")
 
 	err := repo.DeleteTaskSession(context.Background(), &core.Task{TmuxSession: "repo-billing-retry-flow"})
 	require.NoError(t, err)
 }
 
 func TestRepositoryInspectTaskSession_ReturnsSessionAndWindowResources(t *testing.T) {
-	runner := execx.NewMockRunner(t)
+	runner := subprocess.NewMockRunner(t)
 	repo := NewRepository(runner)
 
 	mock.InOrder(
-		expectTmuxRun(runner, execx.Result{}, nil, "has-session", "-t", "=repo-billing-retry-flow"),
-		expectTmuxRun(runner, execx.Result{Stdout: "agent\neditor\n"}, nil,
+		expectTmuxRun(runner, subprocess.Result{}, nil, "has-session", "-t", "=repo-billing-retry-flow"),
+		expectTmuxRun(runner, subprocess.Result{Stdout: "agent\neditor\n"}, nil,
 			"list-windows", "-t", "=repo-billing-retry-flow", "-F", "#{window_name}",
 		),
-		expectTmuxRun(runner, execx.Result{Stdout: "agent\neditor\n"}, nil,
+		expectTmuxRun(runner, subprocess.Result{Stdout: "agent\neditor\n"}, nil,
 			"list-windows", "-t", "=repo-billing-retry-flow", "-F", "#{window_name}",
 		),
 	)
@@ -175,7 +175,7 @@ func TestRepositoryInspectTaskSession_ReturnsSessionAndWindowResources(t *testin
 }
 
 func TestRepositorySnapshotTaskSession_UsesRuntimeMonitor(t *testing.T) {
-	repo := NewRepository(execx.NewMockRunner(t))
+	repo := NewRepository(subprocess.NewMockRunner(t))
 	runtimeMonitor := core.NewMockRuntimeMonitor(t)
 	repo.runtimeMonitor = runtimeMonitor
 
@@ -194,25 +194,25 @@ func TestRepositorySnapshotTaskSession_UsesRuntimeMonitor(t *testing.T) {
 func TestRepositoryNormalizesColonSessionNamesAcrossTmuxCommands(t *testing.T) {
 	t.Setenv("TMUX", "")
 
-	runner := execx.NewMockRunner(t)
+	runner := subprocess.NewMockRunner(t)
 	repo := NewRepository(runner)
 
 	mock.InOrder(
-		expectTmuxRun(runner, execx.Result{}, nil,
+		expectTmuxRun(runner, subprocess.Result{}, nil,
 			"new-session", "-d", "-s", "repo-billing-retry-flow", "-n", "agent", "-c", "/tmp/repo-billing-retry-flow",
 		),
-		expectTmuxRun(runner, execx.Result{}, nil,
+		expectTmuxRun(runner, subprocess.Result{}, nil,
 			"new-window", "-d", "-t", "=repo-billing-retry-flow", "-n", "editor", "-c", "/tmp/repo-billing-retry-flow",
 		),
-		expectTmuxRun(runner, execx.Result{}, nil, "has-session", "-t", "=repo-billing-retry-flow"),
-		expectTmuxRun(runner, execx.Result{Stdout: "agent\neditor\n"}, nil,
+		expectTmuxRun(runner, subprocess.Result{}, nil, "has-session", "-t", "=repo-billing-retry-flow"),
+		expectTmuxRun(runner, subprocess.Result{Stdout: "agent\neditor\n"}, nil,
 			"list-windows", "-t", "=repo-billing-retry-flow", "-F", "#{window_name}",
 		),
-		expectTmuxRun(runner, execx.Result{}, nil, "attach-session", "-t", "=repo-billing-retry-flow"),
-		expectTmuxRun(runner, execx.Result{}, nil,
+		expectTmuxRun(runner, subprocess.Result{}, nil, "attach-session", "-t", "=repo-billing-retry-flow"),
+		expectTmuxRun(runner, subprocess.Result{}, nil,
 			"send-keys", "-t", "=repo-billing-retry-flow:editor", "codex 'fix bug'", "C-m",
 		),
-		expectTmuxRun(runner, execx.Result{}, nil, "kill-session", "-t", "=repo-billing-retry-flow"),
+		expectTmuxRun(runner, subprocess.Result{}, nil, "kill-session", "-t", "=repo-billing-retry-flow"),
 	)
 
 	input := core.CreateSessionInput{
@@ -243,17 +243,17 @@ func TestRepositoryNormalizesColonSessionNamesAcrossTmuxCommands(t *testing.T) {
 func TestRepositoryNormalizesColonSessionNamesForSwitchClientInsideTmux(t *testing.T) {
 	t.Setenv("TMUX", "/tmp/tmux-123/default,123,0")
 
-	runner := execx.NewMockRunner(t)
+	runner := subprocess.NewMockRunner(t)
 	repo := NewRepository(runner)
-	expectTmuxRun(runner, execx.Result{}, nil, "switch-client", "-t", "=repo-billing-retry-flow")
+	expectTmuxRun(runner, subprocess.Result{}, nil, "switch-client", "-t", "=repo-billing-retry-flow")
 
 	require.NoError(t, repo.AttachOrSwitch(context.Background(), "repo:billing-retry-flow"))
 }
 
 func TestRepositorySendKeysToWindow_UsesNamedWindowTarget(t *testing.T) {
-	runner := execx.NewMockRunner(t)
+	runner := subprocess.NewMockRunner(t)
 	repo := NewRepository(runner)
-	expectTmuxRun(runner, execx.Result{}, nil,
+	expectTmuxRun(runner, subprocess.Result{}, nil,
 		"send-keys", "-t", "=repo-billing-retry-flow:editor", "codex 'fix bug'", "C-m",
 	)
 
@@ -267,9 +267,9 @@ func TestRepositorySendKeysToWindow_UsesNamedWindowTarget(t *testing.T) {
 }
 
 func TestRepositorySendKeysToWindow_DefaultsEmptyWindowToAgent(t *testing.T) {
-	runner := execx.NewMockRunner(t)
+	runner := subprocess.NewMockRunner(t)
 	repo := NewRepository(runner)
-	expectTmuxRun(runner, execx.Result{}, nil,
+	expectTmuxRun(runner, subprocess.Result{}, nil,
 		"send-keys", "-t", "=repo-billing-retry-flow:agent", "codex 'fix bug'", "C-m",
 	)
 
@@ -278,9 +278,9 @@ func TestRepositorySendKeysToWindow_DefaultsEmptyWindowToAgent(t *testing.T) {
 }
 
 func TestRepositoryTypeInWindow_SendsKeysWithoutEnter(t *testing.T) {
-	runner := execx.NewMockRunner(t)
+	runner := subprocess.NewMockRunner(t)
 	repo := NewRepository(runner)
-	expectTmuxRun(runner, execx.Result{}, nil,
+	expectTmuxRun(runner, subprocess.Result{}, nil,
 		"send-keys", "-t", "=repo-billing-retry-flow:agent", "codex fix bug",
 	)
 
@@ -296,9 +296,9 @@ func TestRepositoryTypeInWindow_SendsKeysWithoutEnter(t *testing.T) {
 func TestRepositoryAttachOrSwitch_UsesExactSessionTarget(t *testing.T) {
 	t.Setenv("TMUX", "")
 
-	runner := execx.NewMockRunner(t)
+	runner := subprocess.NewMockRunner(t)
 	repo := NewRepository(runner)
-	expectTmuxRun(runner, execx.Result{}, nil, "attach-session", "-t", "=repo-billing-retry-flow")
+	expectTmuxRun(runner, subprocess.Result{}, nil, "attach-session", "-t", "=repo-billing-retry-flow")
 
 	err := repo.AttachOrSwitch(context.Background(), "repo-billing-retry-flow")
 	require.NoError(t, err)
@@ -307,18 +307,18 @@ func TestRepositoryAttachOrSwitch_UsesExactSessionTarget(t *testing.T) {
 func TestRepositoryAttachOrSwitch_UsesSwitchClientInsideTmux(t *testing.T) {
 	t.Setenv("TMUX", "/tmp/tmux-123/default,123,0")
 
-	runner := execx.NewMockRunner(t)
+	runner := subprocess.NewMockRunner(t)
 	repo := NewRepository(runner)
-	expectTmuxRun(runner, execx.Result{}, nil, "switch-client", "-t", "=repo-billing-retry-flow")
+	expectTmuxRun(runner, subprocess.Result{}, nil, "switch-client", "-t", "=repo-billing-retry-flow")
 
 	err := repo.AttachOrSwitch(context.Background(), "repo-billing-retry-flow")
 	require.NoError(t, err)
 }
 
 func TestRepositorySessionExists_UsesExactSessionTarget(t *testing.T) {
-	runner := execx.NewMockRunner(t)
+	runner := subprocess.NewMockRunner(t)
 	repo := NewRepository(runner)
-	expectTmuxRun(runner, execx.Result{}, nil, "has-session", "-t", "=repo-billing-retry-flow")
+	expectTmuxRun(runner, subprocess.Result{}, nil, "has-session", "-t", "=repo-billing-retry-flow")
 
 	exists, err := repo.SessionExists(context.Background(), "repo-billing-retry-flow")
 	require.NoError(t, err)
@@ -326,8 +326,8 @@ func TestRepositorySessionExists_UsesExactSessionTarget(t *testing.T) {
 }
 
 func TestRepositorySessionExists_ReturnsFalseForMissingSessionOnly(t *testing.T) {
-	runner := execx.NewMockRunner(t)
-	expectTmuxRun(runner, execx.Result{Stderr: "can't find session: repo-billing-retry-flow\n"}, execx.CommandError{
+	runner := subprocess.NewMockRunner(t)
+	expectTmuxRun(runner, subprocess.Result{Stderr: "can't find session: repo-billing-retry-flow\n"}, subprocess.CommandError{
 		Name:   "tmux",
 		Args:   []string{"has-session", "-t", "=repo-billing-retry-flow"},
 		Stderr: "can't find session: repo-billing-retry-flow\n",
@@ -341,8 +341,8 @@ func TestRepositorySessionExists_ReturnsFalseForMissingSessionOnly(t *testing.T)
 }
 
 func TestRepositorySessionExists_ReturnsErrorForTmuxFailure(t *testing.T) {
-	runner := execx.NewMockRunner(t)
-	expectTmuxRun(runner, execx.Result{Stderr: "failed to connect to server\n"}, execx.CommandError{
+	runner := subprocess.NewMockRunner(t)
+	expectTmuxRun(runner, subprocess.Result{Stderr: "failed to connect to server\n"}, subprocess.CommandError{
 		Name:   "tmux",
 		Args:   []string{"has-session", "-t", "=repo-billing-retry-flow"},
 		Stderr: "failed to connect to server\n",
@@ -356,9 +356,9 @@ func TestRepositorySessionExists_ReturnsErrorForTmuxFailure(t *testing.T) {
 }
 
 func TestRepositoryWindowExists_UsesExactSessionTarget(t *testing.T) {
-	runner := execx.NewMockRunner(t)
+	runner := subprocess.NewMockRunner(t)
 	repo := NewRepository(runner)
-	expectTmuxRun(runner, execx.Result{Stdout: "agent\neditor\n"}, nil,
+	expectTmuxRun(runner, subprocess.Result{Stdout: "agent\neditor\n"}, nil,
 		"list-windows", "-t", "=repo-billing-retry-flow", "-F", "#{window_name}",
 	)
 
@@ -368,8 +368,8 @@ func TestRepositoryWindowExists_UsesExactSessionTarget(t *testing.T) {
 }
 
 func TestRepositoryWindowExists_ReturnsFalseForMissingSessionOnly(t *testing.T) {
-	runner := execx.NewMockRunner(t)
-	expectTmuxRun(runner, execx.Result{Stderr: "can't find session: repo-billing-retry-flow\n"}, execx.CommandError{
+	runner := subprocess.NewMockRunner(t)
+	expectTmuxRun(runner, subprocess.Result{Stderr: "can't find session: repo-billing-retry-flow\n"}, subprocess.CommandError{
 		Name:   "tmux",
 		Args:   []string{"list-windows", "-t", "=repo-billing-retry-flow", "-F", "#{window_name}"},
 		Stderr: "can't find session: repo-billing-retry-flow\n",
@@ -383,15 +383,15 @@ func TestRepositoryWindowExists_ReturnsFalseForMissingSessionOnly(t *testing.T) 
 }
 
 func TestRepositoryKillSession_UsesExactSessionTarget(t *testing.T) {
-	runner := execx.NewMockRunner(t)
+	runner := subprocess.NewMockRunner(t)
 	repo := NewRepository(runner)
-	expectTmuxRun(runner, execx.Result{}, nil, "kill-session", "-t", "=repo-billing-retry-flow")
+	expectTmuxRun(runner, subprocess.Result{}, nil, "kill-session", "-t", "=repo-billing-retry-flow")
 
 	err := repo.KillSession(context.Background(), "repo-billing-retry-flow")
 	require.NoError(t, err)
 }
 
-func expectTmuxRun(runner *execx.MockRunner, result execx.Result, err error, args ...string) *mock.Call {
+func expectTmuxRun(runner *subprocess.MockRunner, result subprocess.Result, err error, args ...string) *mock.Call {
 	callArgs := make([]interface{}, 0, len(args)+3)
 	callArgs = append(callArgs, mock.Anything, "", "tmux")
 	for _, arg := range args {

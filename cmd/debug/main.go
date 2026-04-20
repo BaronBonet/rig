@@ -8,7 +8,7 @@ import (
 	taskdaemon "rig/internal/adapters/handler/taskdaemon"
 	"rig/internal/core"
 	"rig/internal/infrastructure"
-	"rig/internal/pkg/execx"
+	"rig/internal/pkg/subprocess"
 	"strings"
 	"syscall"
 	"time"
@@ -77,7 +77,7 @@ func main() {
 		os.Exit(1)
 	}
 
-	runner := execx.ExecRunner{}
+	runner := subprocess.ExecRunner{}
 	codexCfg := debugCodexAgentConfig
 	codexCfg.Binary = cfg.Codex.Binary
 	debugHookForwarding := debugCodexHookForwarding

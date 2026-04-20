@@ -6,7 +6,7 @@ import (
 	"testing"
 
 	"rig/internal/core"
-	"rig/internal/pkg/execx"
+	"rig/internal/pkg/subprocess"
 
 	"github.com/stretchr/testify/require"
 )
@@ -47,7 +47,7 @@ func TestRepositoryBuildWorkspaceBootstrapSpec_RendersCodexHooksAndForwarderScri
 
 func TestRepositorySuggestTaskName_DelegatesToCodexProposal(t *testing.T) {
 	runner := stubRunner{
-		runFn: func(_ context.Context, cwd string, name string, args ...string) (execx.Result, error) {
+		runFn: func(_ context.Context, cwd string, name string, args ...string) (subprocess.Result, error) {
 			require.Equal(t, "", cwd)
 			require.Equal(t, "codex", name)
 			require.Equal(
@@ -55,7 +55,7 @@ func TestRepositorySuggestTaskName_DelegatesToCodexProposal(t *testing.T) {
 				[]string{"exec", "--skip-git-repo-check", "--output-last-message", args[3], args[4]},
 				args,
 			)
-			return execx.Result{Stdout: "billing retry flow\n"}, nil
+			return subprocess.Result{Stdout: "billing retry flow\n"}, nil
 		},
 	}
 	repo := New(runner, Config{Binary: "codex"}, HookForwardingConfig{})
@@ -68,9 +68,9 @@ func TestRepositorySuggestTaskName_DelegatesToCodexProposal(t *testing.T) {
 
 func TestRepositorySuggestTaskName_PrefersOutputFileOverStdout(t *testing.T) {
 	runner := stubRunner{
-		runFn: func(_ context.Context, _ string, _ string, args ...string) (execx.Result, error) {
+		runFn: func(_ context.Context, _ string, _ string, args ...string) (subprocess.Result, error) {
 			require.NoError(t, os.WriteFile(args[3], []byte("{\"name\":\"File Result\",\"branch_type\":\"feat\"}\n"), 0o600))
-			return execx.Result{Stdout: "stdout result\n"}, nil
+			return subprocess.Result{Stdout: "stdout result\n"}, nil
 		},
 	}
 	repo := New(runner, Config{Binary: "codex"}, HookForwardingConfig{})
@@ -82,20 +82,20 @@ func TestRepositorySuggestTaskName_PrefersOutputFileOverStdout(t *testing.T) {
 }
 
 type stubRunner struct {
-	runFn          func(context.Context, string, string, ...string) (execx.Result, error)
-	runWithStdinFn func(context.Context, execx.RunWithStdinOptions) (execx.Result, error)
+	runFn          func(context.Context, string, string, ...string) (subprocess.Result, error)
+	runWithStdinFn func(context.Context, subprocess.RunWithStdinOptions) (subprocess.Result, error)
 }
 
-func (s stubRunner) Run(ctx context.Context, cwd string, name string, args ...string) (execx.Result, error) {
+func (s stubRunner) Run(ctx context.Context, cwd string, name string, args ...string) (subprocess.Result, error) {
 	if s.runFn == nil {
-		return execx.Result{}, nil
+		return subprocess.Result{}, nil
 	}
 	return s.runFn(ctx, cwd, name, args...)
 }
 
-func (s stubRunner) RunWithStdin(ctx context.Context, opts execx.RunWithStdinOptions) (execx.Result, error) {
+func (s stubRunner) RunWithStdin(ctx context.Context, opts subprocess.RunWithStdinOptions) (subprocess.Result, error) {
 	if s.runWithStdinFn == nil {
-		return execx.Result{}, nil
+		return subprocess.Result{}, nil
 	}
 	return s.runWithStdinFn(ctx, opts)
 }

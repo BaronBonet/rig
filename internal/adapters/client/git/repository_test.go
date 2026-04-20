@@ -7,27 +7,27 @@ import (
 	"testing"
 
 	"rig/internal/core"
-	"rig/internal/pkg/execx"
+	"rig/internal/pkg/subprocess"
 
 	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
 )
 
 func TestRepositoryDetectRepo_ParsesTopLevelAndBranch(t *testing.T) {
-	runner := execx.NewMockRunner(t)
+	runner := subprocess.NewMockRunner(t)
 	runner.EXPECT().
 		Run(mock.Anything, "/tmp/repo", "git", "rev-parse", "--show-toplevel").
-		Return(execx.Result{Stdout: "/tmp/repo\n"}, nil).
+		Return(subprocess.Result{Stdout: "/tmp/repo\n"}, nil).
 		Once()
 	runner.EXPECT().
 		Run(mock.Anything, "/tmp/repo", "git", "worktree", "list", "--porcelain").
-		Return(execx.Result{
+		Return(subprocess.Result{
 			Stdout: "worktree /tmp/repo\nHEAD abcdef\nbranch refs/heads/main\n",
 		}, nil).
 		Once()
 	runner.EXPECT().
 		Run(mock.Anything, "/tmp/repo", "git", "branch", "--show-current").
-		Return(execx.Result{Stdout: "main\n"}, nil).
+		Return(subprocess.Result{Stdout: "main\n"}, nil).
 		Once()
 	repo := NewRepository(runner)
 
@@ -39,21 +39,21 @@ func TestRepositoryDetectRepo_ParsesTopLevelAndBranch(t *testing.T) {
 }
 
 func TestRepositoryDetectRepo_UsesPrimaryWorktreeWhenCalledFromLinkedWorktree(t *testing.T) {
-	runner := execx.NewMockRunner(t)
+	runner := subprocess.NewMockRunner(t)
 	runner.EXPECT().
 		Run(mock.Anything, "/tmp/repo-auth", "git", "rev-parse", "--show-toplevel").
-		Return(execx.Result{Stdout: "/tmp/repo-auth\n"}, nil).
+		Return(subprocess.Result{Stdout: "/tmp/repo-auth\n"}, nil).
 		Once()
 	runner.EXPECT().
 		Run(mock.Anything, "/tmp/repo-auth", "git", "worktree", "list", "--porcelain").
-		Return(execx.Result{
+		Return(subprocess.Result{
 			Stdout: "worktree /tmp/repo\nHEAD abcdef\nbranch refs/heads/main\n\n" +
 				"worktree /tmp/repo-auth\nHEAD 123456\nbranch refs/heads/feat/auth\n",
 		}, nil).
 		Once()
 	runner.EXPECT().
 		Run(mock.Anything, "/tmp/repo", "git", "branch", "--show-current").
-		Return(execx.Result{Stdout: "main\n"}, nil).
+		Return(subprocess.Result{Stdout: "main\n"}, nil).
 		Once()
 	repo := NewRepository(runner)
 
@@ -65,10 +65,10 @@ func TestRepositoryDetectRepo_UsesPrimaryWorktreeWhenCalledFromLinkedWorktree(t 
 }
 
 func TestRepositoryCreateWorktree_UsesExpectedGitCommand(t *testing.T) {
-	runner := execx.NewMockRunner(t)
+	runner := subprocess.NewMockRunner(t)
 	runner.EXPECT().
 		Run(mock.Anything, "/tmp/repo", "git", "worktree", "add", "/tmp/repo-billing-retry-flow", "-b", "feat/billing-retry-flow", "main").
-		Return(execx.Result{}, nil).
+		Return(subprocess.Result{}, nil).
 		Once()
 	repo := NewRepository(runner)
 
@@ -82,10 +82,10 @@ func TestRepositoryCreateWorktree_UsesExpectedGitCommand(t *testing.T) {
 }
 
 func TestRepositoryCreateTaskWorkspace_UsesTaskFields(t *testing.T) {
-	runner := execx.NewMockRunner(t)
+	runner := subprocess.NewMockRunner(t)
 	runner.EXPECT().
 		Run(mock.Anything, "/tmp/repo", "git", "worktree", "add", "/tmp/repo-billing-retry-flow", "-b", "feat/billing-retry-flow", "main").
-		Return(execx.Result{}, nil).
+		Return(subprocess.Result{}, nil).
 		Once()
 	repo := NewRepository(runner)
 
@@ -99,7 +99,7 @@ func TestRepositoryCreateTaskWorkspace_UsesTaskFields(t *testing.T) {
 }
 
 func TestRepositoryCreateTaskWorkspaceFromBranch_UsesExistingBranch(t *testing.T) {
-	runner := execx.NewMockRunner(t)
+	runner := subprocess.NewMockRunner(t)
 	runner.EXPECT().
 		Run(
 			mock.Anything,
@@ -110,7 +110,7 @@ func TestRepositoryCreateTaskWorkspaceFromBranch_UsesExistingBranch(t *testing.T
 			"/tmp/repo-auth-rewrite",
 			"feat/auth-rewrite",
 		).
-		Return(execx.Result{}, nil).
+		Return(subprocess.Result{}, nil).
 		Once()
 	repo := NewRepository(runner)
 
@@ -123,10 +123,10 @@ func TestRepositoryCreateTaskWorkspaceFromBranch_UsesExistingBranch(t *testing.T
 }
 
 func TestRepositoryIsBranchUsedByWorktree_ReturnsTrueWhenBranchIsCheckedOutElsewhere(t *testing.T) {
-	runner := execx.NewMockRunner(t)
+	runner := subprocess.NewMockRunner(t)
 	runner.EXPECT().
 		Run(mock.Anything, "/tmp/repo", "git", "worktree", "list", "--porcelain").
-		Return(execx.Result{
+		Return(subprocess.Result{
 			Stdout: "worktree /tmp/repo\nHEAD abcdef\nbranch refs/heads/main\n\n" +
 				"worktree /tmp/repo-auth\nHEAD 123456\nbranch refs/heads/feat/auth\n",
 		}, nil).
@@ -142,10 +142,10 @@ func TestRepositoryInspectTaskWorkspace_ReturnsWorktreeAndBranchPresence(t *test
 	worktreePath := filepath.Join(t.TempDir(), "repo-billing-retry-flow")
 	require.NoError(t, os.Mkdir(worktreePath, 0o755))
 
-	runner := execx.NewMockRunner(t)
+	runner := subprocess.NewMockRunner(t)
 	runner.EXPECT().
 		Run(mock.Anything, "/tmp/repo", "git", "show-ref", "--verify", "--quiet", "refs/heads/feat/billing-retry-flow").
-		Return(execx.Result{}, nil).
+		Return(subprocess.Result{}, nil).
 		Once()
 	repo := NewRepository(runner)
 
@@ -162,10 +162,10 @@ func TestRepositoryInspectTaskWorkspace_ReturnsWorktreeAndBranchPresence(t *test
 }
 
 func TestRepositoryRemoveTaskWorkspace_UsesTaskFields(t *testing.T) {
-	runner := execx.NewMockRunner(t)
+	runner := subprocess.NewMockRunner(t)
 	runner.EXPECT().
 		Run(mock.Anything, "/tmp/repo", "git", "worktree", "remove", "--force", "/tmp/repo-billing-retry-flow").
-		Return(execx.Result{}, nil).
+		Return(subprocess.Result{}, nil).
 		Once()
 	repo := NewRepository(runner)
 
@@ -177,10 +177,10 @@ func TestRepositoryRemoveTaskWorkspace_UsesTaskFields(t *testing.T) {
 }
 
 func TestRepositoryRemoveWorktree_UsesExpectedGitCommand(t *testing.T) {
-	runner := execx.NewMockRunner(t)
+	runner := subprocess.NewMockRunner(t)
 	runner.EXPECT().
 		Run(mock.Anything, "/tmp/repo", "git", "worktree", "remove", "--force", "/tmp/repo-billing-retry-flow").
-		Return(execx.Result{}, nil).
+		Return(subprocess.Result{}, nil).
 		Once()
 	repo := NewRepository(runner)
 

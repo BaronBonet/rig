@@ -1,4 +1,4 @@
-package execx
+package subprocess
 
 import (
 	"errors"

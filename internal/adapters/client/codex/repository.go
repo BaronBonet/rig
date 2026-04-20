@@ -13,8 +13,8 @@ import (
 	"unicode"
 
 	"rig/internal/core"
-	"rig/internal/pkg/execx"
 	"rig/internal/pkg/prompts"
+	"rig/internal/pkg/subprocess"
 )
 
 //go:embed forward-to-rig.sh.tmpl
@@ -23,7 +23,7 @@ var forwarderScriptTemplateText string
 var forwarderScriptTemplate = template.Must(template.New("forward-to-rig.sh").Parse(forwarderScriptTemplateText))
 
 type Repository struct {
-	runner        execx.Runner
+	runner        subprocess.Runner
 	binary        string
 	rigBinaryPath string
 	sourceRoot    string
@@ -35,7 +35,7 @@ type Config struct {
 	SourceRoot    string
 }
 
-func NewRepository(runner execx.Runner, cfg Config) *Repository {
+func NewRepository(runner subprocess.Runner, cfg Config) *Repository {
 	if cfg.Binary == "" {
 		cfg.Binary = "codex"
 	}

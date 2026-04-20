@@ -4,7 +4,7 @@ import (
 	"context"
 	"errors"
 	"rig/internal/core"
-	"rig/internal/pkg/execx"
+	"rig/internal/pkg/subprocess"
 	"strings"
 	"time"
 )
@@ -12,12 +12,12 @@ import (
 const promptSubmitDelay = 500 * time.Millisecond
 
 type repository struct {
-	runner execx.Runner
+	runner subprocess.Runner
 	now    func() time.Time
 	sleep  func(time.Duration)
 }
 
-func New(runner execx.Runner) core.TmuxSessionClient {
+func New(runner subprocess.Runner) core.TmuxSessionClient {
 	return &repository{
 		runner: runner,
 		now:    time.Now,

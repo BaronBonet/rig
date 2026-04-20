@@ -5,14 +5,14 @@ import (
 
 	claudeclient "rig/internal/adapters/client/claude"
 	"rig/internal/core"
-	"rig/internal/pkg/execx"
+	"rig/internal/pkg/subprocess"
 )
 
 type repository struct {
 	repo *claudeclient.Repository
 }
 
-func New(runner execx.Runner, cfg claudeclient.Config) core.AgentClient {
+func New(runner subprocess.Runner, cfg claudeclient.Config) core.AgentClient {
 	return &repository{repo: claudeclient.NewRepository(runner, cfg)}
 }
 
