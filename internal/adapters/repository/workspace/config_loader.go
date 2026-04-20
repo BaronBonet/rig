@@ -1,4 +1,4 @@
-package agentconfig
+package workspace
 
 import (
 	"context"
@@ -6,9 +6,8 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"strings"
-
 	"rig/internal/core"
+	"strings"
 
 	"gopkg.in/yaml.v3"
 )
@@ -18,13 +17,13 @@ const (
 	legacyConfigName = "rig.yaml"
 )
 
-type Loader struct{}
+type repoConfigLoader struct{}
 
-func NewLoader() *Loader {
-	return &Loader{}
+func NewRepoConfigLoader() core.RepoConfigLoader {
+	return &repoConfigLoader{}
 }
 
-func (l *Loader) LoadRepoConfig(_ context.Context, repoRoot string) (core.RepoConfig, error) {
+func (l *repoConfigLoader) LoadRepoConfig(_ context.Context, repoRoot string) (core.RepoConfig, error) {
 	configName, raw, err := readRepoConfig(repoRoot)
 	if err != nil {
 		return core.RepoConfig{}, err
@@ -317,8 +316,4 @@ func isAbsoluteSeedPath(path string) bool {
 		return true
 	}
 	return len(path) >= 3 && isWindowsDriveLetter(path[0]) && path[1] == ':' && (path[2] == '\\' || path[2] == '/')
-}
-
-func isWindowsDriveLetter(b byte) bool {
-	return (b >= 'A' && b <= 'Z') || (b >= 'a' && b <= 'z')
 }

@@ -9,7 +9,7 @@ type CreateTaskSource struct {
 type CreateTaskInput struct {
 	Cwd      string
 	Prompt   string
-	Provider string
+	Provider AgentProvider
 	Source   CreateTaskSource
 }
 
@@ -128,10 +128,13 @@ type TmuxSessionClient interface {
 	SnapshotTaskSession(ctx context.Context, task *Task) (RuntimeSnapshot, error)
 }
 
-// WorkspacePreparer applies local workspace setup after a worktree has been
-// created and before the task session is launched.
-type WorkspacePreparer interface {
-	// PrepareTaskWorkspace loads repo configuration and applies any local
-	// workspace setup needed for the task.
-	PrepareTaskWorkspace(ctx context.Context, task *Task, repoRoot string, bootstrapSpec WorkspaceBootstrapSpec) error
+// TaskWorkspaceManager applies repo-local setup and provider bootstrap files
+// after a worktree has been created and before the task session is launched.
+type TaskWorkspaceManager interface {
+	// SetupTaskWorkspace loads repo configuration and applies any optional
+	// repo-local workspace setup needed for the task.
+	SetupTaskWorkspace(ctx context.Context, task *Task, repoRoot string) error
+	// BootstrapTaskWorkspace writes the provider-specific bootstrap files needed
+	// to launch the interactive agent session inside the task workspace.
+	BootstrapTaskWorkspace(ctx context.Context, task *Task, bootstrapSpec WorkspaceBootstrapSpec) error
 }

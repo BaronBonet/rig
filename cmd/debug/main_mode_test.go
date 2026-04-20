@@ -13,6 +13,12 @@ func TestDebugCreateStatusStreaming_DefaultsToNoTimeout(t *testing.T) {
 	}
 }
 
+func TestDebugCreate_DoesNotPrepareWorkspaceByDefault(t *testing.T) {
+	if debugCreate.PrepareWorkspace {
+		t.Fatal("expected debug create flow to skip workspace preparation by default")
+	}
+}
+
 func TestDebugMode_SourceDoesNotContainLegacyStatusIngestMode(t *testing.T) {
 	content, err := os.ReadFile(filepath.Join(".", "main.go"))
 	if err != nil {

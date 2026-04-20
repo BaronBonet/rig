@@ -18,14 +18,14 @@ func TestCreateTaskInput_SupportsPromptAndPullRequestSources(t *testing.T) {
 	promptCreate := CreateTaskInput{
 		Cwd:      "/tmp/repo",
 		Prompt:   "add billing retry flow",
-		Provider: "codex",
+		Provider: AgentProviderCodex,
 	}
 	if promptCreate.Prompt == "" {
 		t.Fatal("expected prompt-based creation input to carry a prompt")
 	}
 
 	prCreate := CreateTaskInput{
-		Provider: "codex",
+		Provider: AgentProviderCodex,
 		Source: CreateTaskSource{
 			PullRequest: &RepoPullRequest{
 				Number:     42,
@@ -62,11 +62,13 @@ func TestTaskServiceCreateTask_CreatesWorkspaceSessionAndPersistsTask(t *testing
 	require.Equal(t, "repo_billing_retry_flow", svc.sessionClient.startedTask.TmuxSession)
 	require.Zero(t, svc.taskRepo.updateCount)
 	require.Nil(t, svc.taskRepo.updatedTask)
-	require.True(t, svc.preparer.called)
-	require.True(t, svc.preparer.calledBeforeSession)
-	require.Equal(t, "/tmp/repo", svc.preparer.repoRoot)
-	require.Equal(t, "/tmp/repo-billing-retry-flow", svc.preparer.worktreePath)
-	require.Equal(t, svc.providerRepo.bootstrapSpec, svc.preparer.bootstrapSpec)
+	require.True(t, svc.workspace.setupCalled)
+	require.True(t, svc.workspace.bootstrapCalled)
+	require.True(t, svc.workspace.setupCalledBeforeSession)
+	require.True(t, svc.workspace.bootstrapCalledBeforeSession)
+	require.Equal(t, "/tmp/repo", svc.workspace.repoRoot)
+	require.Equal(t, "/tmp/repo-billing-retry-flow", svc.workspace.worktreePath)
+	require.Equal(t, svc.providerRepo.bootstrapSpec, svc.workspace.bootstrapSpec)
 	require.NotNil(t, svc.providerRepo.bootstrapRequest)
 	require.Equal(t, task.ID, svc.providerRepo.bootstrapRequest.ID)
 	require.Equal(t, task.Slug, svc.providerRepo.bootstrapRequest.Slug)
@@ -85,14 +87,15 @@ func TestTaskServiceCreateTask_FailsWhenRequestedProviderIsUnavailable(t *testin
 	task, err := svc.service.CreateTask(t.Context(), CreateTaskInput{
 		Cwd:      "/tmp/repo",
 		Prompt:   "add billing retry flow",
-		Provider: "claude",
+		Provider: AgentProviderClaude,
 	})
 
 	require.Nil(t, task)
 	require.EqualError(t, err, `agent provider "claude" unavailable`)
 	require.Nil(t, svc.taskRepo.createdTask)
 	require.Nil(t, svc.repoClient.createdTask)
-	require.False(t, svc.preparer.called)
+	require.False(t, svc.workspace.setupCalled)
+	require.False(t, svc.workspace.bootstrapCalled)
 	require.Nil(t, svc.sessionClient.startedTask)
 }
 
@@ -109,7 +112,8 @@ func TestTaskServiceCreateTask_FailsWhenTaskNameSuggestionFails(t *testing.T) {
 	require.EqualError(t, err, "suggest task name: codex unavailable")
 	require.Nil(t, svc.taskRepo.createdTask)
 	require.Nil(t, svc.repoClient.createdTask)
-	require.False(t, svc.preparer.called)
+	require.False(t, svc.workspace.setupCalled)
+	require.False(t, svc.workspace.bootstrapCalled)
 	require.Nil(t, svc.sessionClient.startedTask)
 }
 
@@ -126,7 +130,8 @@ func TestTaskServiceCreateTask_FailsWhenTaskNameSuggestionIsEmpty(t *testing.T) 
 	require.EqualError(t, err, "suggest task name: empty task name")
 	require.Nil(t, svc.taskRepo.createdTask)
 	require.Nil(t, svc.repoClient.createdTask)
-	require.False(t, svc.preparer.called)
+	require.False(t, svc.workspace.setupCalled)
+	require.False(t, svc.workspace.bootstrapCalled)
 	require.Nil(t, svc.sessionClient.startedTask)
 }
 
@@ -142,18 +147,19 @@ func TestTaskServiceCreateTask_ReturnsErrorWithoutPersistingLifecycleWhenWorkspa
 
 	require.Error(t, err)
 	require.NotNil(t, task)
-	require.Nil(t, svc.preparer.bootstrapSpec.Files)
-	require.False(t, svc.preparer.called)
+	require.Nil(t, svc.workspace.bootstrapSpec.Files)
+	require.False(t, svc.workspace.setupCalled)
+	require.False(t, svc.workspace.bootstrapCalled)
 	require.Nil(t, svc.sessionClient.startedTask)
 	require.EqualError(t, err, "build workspace bootstrap spec: bootstrap failed")
 	require.Zero(t, svc.taskRepo.updateCount)
 	require.Nil(t, svc.taskRepo.updatedTask)
 }
 
-func TestTaskServiceCreateTask_ReturnsErrorWithoutPersistingLifecycleWhenWorkspacePreparationFails(t *testing.T) {
+func TestTaskServiceCreateTask_ReturnsErrorWithoutPersistingLifecycleWhenWorkspaceSetupFails(t *testing.T) {
 	svc := newTestTaskService(t)
 	svc.providerRepo.suggestedName = "billing retry flow"
-	svc.preparer.prepareErr = errors.New("setup script failed")
+	svc.workspace.setupErr = errors.New("setup script failed")
 	svc.providerRepo.bootstrapSpec = WorkspaceBootstrapSpec{Files: []WorkspaceBootstrapFile{{
 		Path:     ".claude/settings.local.json",
 		Content:  []byte("{}"),
@@ -167,12 +173,71 @@ func TestTaskServiceCreateTask_ReturnsErrorWithoutPersistingLifecycleWhenWorkspa
 
 	require.Error(t, err)
 	require.NotNil(t, task)
-	require.True(t, svc.preparer.called)
-	require.Equal(t, svc.providerRepo.bootstrapSpec, svc.preparer.bootstrapSpec)
+	require.True(t, svc.workspace.setupCalled)
+	require.False(t, svc.workspace.bootstrapCalled)
 	require.Nil(t, svc.sessionClient.startedTask)
-	require.EqualError(t, err, "prepare workspace: setup script failed")
+	require.EqualError(t, err, "setup workspace: setup script failed")
 	require.Zero(t, svc.taskRepo.updateCount)
 	require.Nil(t, svc.taskRepo.updatedTask)
+}
+
+func TestTaskServiceCreateTask_BootstrapsWorkspaceWhenRepoSetupIsDisabled(t *testing.T) {
+	svc := newTestTaskService(t)
+	svc.providerRepo.suggestedName = "billing retry flow"
+	svc.providerRepo.bootstrapSpec = WorkspaceBootstrapSpec{Files: []WorkspaceBootstrapFile{{
+		Path:     ".codex/hooks.json",
+		Content:  []byte("{}"),
+		FileMode: 0o644,
+	}}}
+	svc.service = NewTaskService(TaskServiceDependencies{
+		Tasks:                svc.taskRepoMock,
+		GitWorktree:          svc.repoClientMock,
+		TmuxSession:          svc.sessionClientMock,
+		Agents:               map[AgentProvider]AgentClient{AgentProviderCodex: &recordingAgentClient{state: &svc.providerRepo}},
+		Workspace:            &recordingWorkspaceManager{state: &svc.workspace, session: &svc.sessionClient},
+		EnableWorkspaceSetup: false,
+		DefaultProvider:      AgentProviderCodex,
+	})
+
+	task, err := svc.service.CreateTask(t.Context(), CreateTaskInput{
+		Cwd:    "/tmp/repo",
+		Prompt: "add billing retry flow",
+	})
+
+	require.NoError(t, err)
+	require.NotNil(t, task)
+	require.False(t, svc.workspace.setupCalled)
+	require.True(t, svc.workspace.bootstrapCalled)
+	require.NotNil(t, svc.sessionClient.startedTask)
+}
+
+func TestTaskServiceCreateTask_FromPullRequestBootstrapsWorkspaceBeforeStartingSession(t *testing.T) {
+	svc := newTestTaskService(t)
+	svc.providerRepo.bootstrapSpec = WorkspaceBootstrapSpec{Files: []WorkspaceBootstrapFile{{
+		Path:     ".codex/hooks.json",
+		Content:  []byte("{}"),
+		FileMode: 0o644,
+	}}}
+
+	task, err := svc.service.CreateTask(t.Context(), CreateTaskInput{
+		Cwd:      "/tmp/repo",
+		Provider: AgentProviderCodex,
+		Source: CreateTaskSource{
+			PullRequest: &RepoPullRequest{
+				Number:     42,
+				Title:      "Auth rewrite",
+				BranchName: "feat/auth",
+				State:      PRStateDraft,
+			},
+		},
+	})
+
+	require.NoError(t, err)
+	require.NotNil(t, task)
+	require.True(t, svc.workspace.setupCalled)
+	require.True(t, svc.workspace.bootstrapCalled)
+	require.True(t, svc.workspace.bootstrapCalledBeforeSession)
+	require.NotNil(t, svc.sessionClient.startedTask)
 }
 
 func TestTaskServiceCreateTask_RejectsDuplicatePullRequestBranchBeforePersist(t *testing.T) {
@@ -185,7 +250,7 @@ func TestTaskServiceCreateTask_RejectsDuplicatePullRequestBranchBeforePersist(t 
 
 	task, err := svc.service.CreateTask(t.Context(), CreateTaskInput{
 		Cwd:      "/tmp/repo",
-		Provider: "codex",
+		Provider: AgentProviderCodex,
 		Source: CreateTaskSource{
 			PullRequest: &RepoPullRequest{
 				Number:     42,

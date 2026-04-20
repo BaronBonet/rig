@@ -150,7 +150,7 @@ type HookEventInput struct {
 	SessionID            string
 	TurnID               string
 	EventName            string
-	Provider             string
+	Provider             AgentProvider
 	RawPayloadJSON       string
 	LastAssistantMessage string
 	PromptText           string

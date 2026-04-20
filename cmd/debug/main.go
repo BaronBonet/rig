@@ -26,8 +26,8 @@ import (
 var debugCreate = debugCreateConfig{
 	Cwd:              "/Users/ebon/personal_software/rig",
 	Prompt:           "print hi 10 times then stop",
-	Provider:         string(core.AgentProviderCodex),
-	PrepareWorkspace: true,
+	Provider:         core.AgentProviderCodex,
+	PrepareWorkspace: false,
 }
 
 var debugCodexAgentConfig = codexagent.Config{
@@ -48,7 +48,7 @@ var debugTaskDaemon = debugTaskDaemonConfig{
 type debugCreateConfig struct {
 	Cwd              string
 	Prompt           string
-	Provider         string
+	Provider         core.AgentProvider
 	PrepareWorkspace bool
 }
 
@@ -83,26 +83,22 @@ func main() {
 	debugHookForwarding := debugCodexHookForwarding
 	debugHookForwarding.RigBinaryPath = execPath
 
-	agents := map[string]core.AgentClient{
-		string(core.AgentProviderCodex): codexagent.New(runner, codexCfg, debugHookForwarding),
-		string(core.AgentProviderClaude): claudeagent.New(runner, claudeclient.Config{
+	agents := map[core.AgentProvider]core.AgentClient{
+		core.AgentProviderCodex: codexagent.New(runner, codexCfg, debugHookForwarding),
+		core.AgentProviderClaude: claudeagent.New(runner, claudeclient.Config{
 			Binary:         cfg.Claude.Binary,
 			HookListenAddr: cfg.TaskDaemon.HookListenAddr,
 		}),
 	}
 
-	var preparer core.WorkspacePreparer
-	if debugCreate.PrepareWorkspace {
-		preparer = repositoryworkspace.New()
-	}
-
 	service := core.NewTaskService(core.TaskServiceDependencies{
-		Tasks:           taskStore,
-		GitWorktree:     gitworktree.New(runner),
-		TmuxSession:     tmuxsession.New(runner),
-		Agents:          agents,
-		Preparer:        preparer,
-		DefaultProvider: cfg.Provider,
+		Tasks:                taskStore,
+		GitWorktree:          gitworktree.New(runner),
+		TmuxSession:          tmuxsession.New(runner),
+		Agents:               agents,
+		Workspace:            repositoryworkspace.New(),
+		EnableWorkspaceSetup: debugCreate.PrepareWorkspace,
+		DefaultProvider:      cfg.Provider,
 	})
 
 	fmt.Println("rig debug starting with config")
@@ -143,7 +139,7 @@ func main() {
 	task, err := createTaskViaDaemon(context.Background(), cfg.TaskDaemon.SocketPath, core.CreateTaskInput{
 		Cwd:      strings.TrimSpace(debugCreate.Cwd),
 		Prompt:   strings.TrimSpace(debugCreate.Prompt),
-		Provider: strings.TrimSpace(debugCreate.Provider),
+		Provider: debugCreate.Provider,
 	})
 	if err != nil {
 		fmt.Fprintln(os.Stderr, err)

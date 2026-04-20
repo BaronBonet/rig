@@ -1,4 +1,4 @@
-package setupscript
+package workspace
 
 import (
 	"bufio"
@@ -13,15 +13,15 @@ import (
 	"rig/internal/core"
 )
 
-type Runner struct{}
+type setupScriptRunner struct{}
 
 const outputTailLineLimit = 20
 
-func NewRunner() *Runner {
-	return &Runner{}
+func NewSetupScriptRunner() core.SetupScriptRunner {
+	return &setupScriptRunner{}
 }
 
-func (r *Runner) ValidateSetupScript(_ context.Context, repoRoot string, scriptPath string) error {
+func (r *setupScriptRunner) ValidateSetupScript(_ context.Context, repoRoot string, scriptPath string) error {
 	absPath := filepath.Join(repoRoot, scriptPath)
 
 	rel, err := filepath.Rel(repoRoot, absPath)
@@ -50,7 +50,7 @@ func (r *Runner) ValidateSetupScript(_ context.Context, repoRoot string, scriptP
 	return nil
 }
 
-func (r *Runner) RunSetupScript(ctx context.Context, in core.RunSetupScriptInput, output func(string)) error {
+func (r *setupScriptRunner) RunSetupScript(ctx context.Context, in core.RunSetupScriptInput, output func(string)) error {
 	scriptAbsPath := filepath.Join(in.RepoRoot, in.ScriptPath)
 
 	cmd := exec.CommandContext(ctx, "bash", scriptAbsPath)

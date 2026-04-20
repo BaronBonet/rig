@@ -30,7 +30,7 @@ func TestUnixSocketServer_CreateTaskCallsTaskService(t *testing.T) {
 			require.Equal(t, core.CreateTaskInput{
 				Cwd:      "/tmp/repo",
 				Prompt:   "add retries",
-				Provider: "codex",
+				Provider: core.AgentProviderCodex,
 			}, input)
 			return &core.Task{
 				ID:          "task-1",
@@ -55,7 +55,7 @@ func TestUnixSocketServer_CreateTaskCallsTaskService(t *testing.T) {
 	task, err := createTask(context.Background(), socketPath, core.CreateTaskInput{
 		Cwd:      "/tmp/repo",
 		Prompt:   "add retries",
-		Provider: "codex",
+		Provider: core.AgentProviderCodex,
 	})
 	require.NoError(t, err)
 	require.NotNil(t, task)
