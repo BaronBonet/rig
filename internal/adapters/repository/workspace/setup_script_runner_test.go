@@ -16,8 +16,7 @@ func TestWorkspacePackage_ExposesSetupScriptRunner(t *testing.T) {
 		t.Fatalf("write script: %v", err)
 	}
 
-	runner := NewSetupScriptRunner()
-	if err := runner.ValidateSetupScript(t.Context(), repoRoot, "scripts/setup.sh"); err != nil {
+	if err := validateSetupScript(repoRoot, "scripts/setup.sh"); err != nil {
 		t.Fatalf("expected runner to validate script, got %v", err)
 	}
 }

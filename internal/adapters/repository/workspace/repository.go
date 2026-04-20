@@ -8,18 +8,11 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
-	"strings"
-
 	"rig/internal/core"
+	"strings"
 )
 
-type Seeder struct{}
-
-func NewSeeder() *Seeder {
-	return &Seeder{}
-}
-
-func (s *Seeder) SeedWorkspace(ctx context.Context, in core.SeedWorkspaceInput, progress func(string)) error {
+func seedWorkspace(ctx context.Context, in core.SeedWorkspaceInput, progress func(string)) error {
 	paths, err := prepareSeedPaths(in.RepoRoot, in.RelativePaths)
 	if err != nil {
 		return err
@@ -40,7 +33,7 @@ func (s *Seeder) SeedWorkspace(ctx context.Context, in core.SeedWorkspaceInput, 
 	return nil
 }
 
-func (s *Seeder) ValidateSeedPaths(ctx context.Context, repoRoot string, relativePaths []string) error {
+func validateSeedPaths(ctx context.Context, repoRoot string, relativePaths []string) error {
 	paths, err := prepareSeedPaths(repoRoot, relativePaths)
 	if err != nil {
 		return err

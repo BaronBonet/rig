@@ -23,10 +23,9 @@ func TestRepositorySeedWorkspaceCopiesFilesAndDirectories(t *testing.T) {
 		os.WriteFile(filepath.Join(repoRoot, "local", "scripts", "setup.sh"), []byte("#!/bin/sh\necho setup\n"), 0o755),
 	)
 
-	repo := NewSeeder()
 	var copied []string
 
-	err := repo.SeedWorkspace(context.Background(), core.SeedWorkspaceInput{
+	err := seedWorkspace(context.Background(), core.SeedWorkspaceInput{
 		RepoRoot:      repoRoot,
 		WorktreePath:  worktreePath,
 		RelativePaths: []string{".env", "local/"},
