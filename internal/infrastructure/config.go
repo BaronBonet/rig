@@ -14,8 +14,13 @@ import (
 	"github.com/caarlos0/env/v11"
 )
 
+type SQLiteConfig struct {
+	Path string `env:"AGENT_SQLITE_PATH"`
+}
+
 type ApplicationConfig struct {
 	Provider   core.AgentProvider `env:"AGENT_PROVIDER" envDefault:"codex"`
+	SQLite     SQLiteConfig
 	TaskSQLite tasksqlite.Config
 	Codex      codexagent.Config
 	Claude     claudeclient.Config
@@ -25,8 +30,14 @@ type ApplicationConfig struct {
 // LoadConfig loads the application configuration from environment variables.
 func LoadConfig() (*ApplicationConfig, error) {
 	config := ApplicationConfig{
+		SQLite: SQLiteConfig{
+			Path: defaultSQLitePath(),
+		},
 		TaskSQLite: tasksqlite.Config{
 			Path: tasksqlite.DefaultSQLitePath(),
+		},
+		TaskDaemon: taskdaemon.Config{
+			SocketPath: defaultObserverSocketPath(),
 		},
 	}
 

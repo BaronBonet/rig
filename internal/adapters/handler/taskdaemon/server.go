@@ -6,12 +6,10 @@ import (
 	"rig/internal/core"
 )
 
-type Config struct {
-	SocketPath     string
-	HookListenAddr string
-	Service        core.TaskService
-	Tasks          core.TaskRepository
-	Stop           func()
+type Dependencies struct {
+	Service core.TaskService
+	Tasks   core.TaskRepository
+	Stop    func()
 }
 
 type Server struct {
@@ -22,16 +20,15 @@ type Server struct {
 	httpHooks      *httpHookServer
 }
 
-// TODO: this should return an interface from the core/ports package, not a struct
-func New(cfg Config, service core.TaskService, taskRepo core.TaskRepository) *Server {
+func New(cfg Config, deps Dependencies) *Server {
 	return &Server{
 		socketPath:     cfg.SocketPath,
 		hookListenAddr: cfg.HookListenAddr,
-		service:        service,
-		stop:           cfg.Stop,
+		service:        deps.Service,
+		stop:           deps.Stop,
 		httpHooks: newHTTPHookServer(httpHookServerConfig{
-			Service: service,
-			Tasks:   taskRepo,
+			Service: deps.Service,
+			Tasks:   deps.Tasks,
 		}),
 	}
 }
