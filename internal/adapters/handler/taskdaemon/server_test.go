@@ -143,7 +143,6 @@ type stubTaskService struct {
 	createTaskFn          func(context.Context, core.CreateTaskInput) (*core.Task, error)
 	latestTaskStatusFn    func(context.Context, string) (*core.TaskStatusUpdate, error)
 	subscribeTaskStatusFn func(context.Context, string) (<-chan core.TaskStatusUpdate, error)
-	publishTaskStatusFn   func(context.Context, core.TaskStatusUpdate) error
 	handleHookEventFn     func(context.Context, core.HookEventInput) error
 }
 
@@ -160,13 +159,6 @@ func (s *stubTaskService) LatestTaskStatus(ctx context.Context, taskID string) (
 
 func (s *stubTaskService) SubscribeTaskStatus(ctx context.Context, taskID string) (<-chan core.TaskStatusUpdate, error) {
 	return s.subscribeTaskStatusFn(ctx, taskID)
-}
-
-func (s *stubTaskService) PublishTaskStatus(ctx context.Context, update core.TaskStatusUpdate) error {
-	if s.publishTaskStatusFn == nil {
-		return nil
-	}
-	return s.publishTaskStatusFn(ctx, update)
 }
 
 func (s *stubTaskService) HandleHookEvent(ctx context.Context, input core.HookEventInput) error {

@@ -48,8 +48,6 @@ type TaskService interface {
 	// subscription lifetime is owned by ctx; cancelling it removes the
 	// subscription and closes the update channel.
 	SubscribeTaskStatus(ctx context.Context, taskID string) (<-chan TaskStatusUpdate, error)
-	// PublishTaskStatus publishes a normalized live status update for a task.
-	PublishTaskStatus(ctx context.Context, update TaskStatusUpdate) error
 	// HandleHookEvent resolves and publishes any task status update implied by a
 	// provider hook event.
 	HandleHookEvent(ctx context.Context, input HookEventInput) error
