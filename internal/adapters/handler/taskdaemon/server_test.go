@@ -18,7 +18,7 @@ import (
 
 func TestServer_ImplementsTaskFrontend(t *testing.T) {
 	var _ core.TaskFrontend = New(Config{}, Dependencies{})
-	var _ interface{ Serve(context.Context) error } = New(Config{}, Dependencies{})
+	var _ core.TaskFrontendServer = New(Config{}, Dependencies{})
 }
 
 func TestUnixSocketServer_CreateTaskCallsTaskService(t *testing.T) {

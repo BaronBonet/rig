@@ -30,6 +30,14 @@ type TaskFrontend interface {
 	SubscribeTaskStatus(ctx context.Context, taskID string) (<-chan TaskStatusUpdate, error)
 }
 
+// TaskFrontendServer is the runtime application port for a long-lived
+// frontend-facing transport, such as the local task daemon. It exposes the
+// frontend task API and the lifecycle hook needed to start serving requests.
+type TaskFrontendServer interface {
+	TaskFrontend
+	Serve(ctx context.Context) error
+}
+
 type TaskService interface {
 	// CreateTask creates a new task from either a prompt or a pull request source.
 	CreateTask(ctx context.Context, input CreateTaskInput) (*Task, error)
