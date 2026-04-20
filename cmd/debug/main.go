@@ -137,7 +137,7 @@ func main() {
 		os.Exit(1)
 	}
 
-	manager := taskdaemon.NewProcessManager(taskdaemon.ProcessConfig{
+	manager := newTaskDaemonProcessManager(taskDaemonProcessConfig{
 		SocketPath: cfg.Observer.SocketPath,
 		ExecPath:   execPath,
 		Env: []string{

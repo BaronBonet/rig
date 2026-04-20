@@ -16,16 +16,15 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func TestDaemon_ImplementsTaskFrontend(t *testing.T) {
+func TestServer_ImplementsTaskFrontend(t *testing.T) {
 	var _ core.TaskFrontend = New(Config{})
-	var _ Server = New(Config{})
+	var _ interface{ Serve(context.Context) error } = New(Config{})
 }
 
 func TestUnixSocketServer_CreateTaskCallsTaskService(t *testing.T) {
 	t.Parallel()
 
 	socketPath := testSocketPath(t)
-	hookListener := testHookListener(t)
 	svc := &stubTaskService{
 		createTaskFn: func(_ context.Context, input core.CreateTaskInput) (*core.Task, error) {
 			require.Equal(t, core.CreateTaskInput{
@@ -39,10 +38,10 @@ func TestUnixSocketServer_CreateTaskCallsTaskService(t *testing.T) {
 			}, nil
 		},
 	}
-	daemon := New(Config{
-		SocketPath:   socketPath,
-		Service:      svc,
-		HookListener: hookListener,
+	server := New(Config{
+		SocketPath:     socketPath,
+		HookListenAddr: "127.0.0.1:0",
+		Service:        svc,
 	})
 
 	ctx, cancel := context.WithCancel(context.Background())
@@ -50,7 +49,7 @@ func TestUnixSocketServer_CreateTaskCallsTaskService(t *testing.T) {
 
 	errCh := make(chan error, 1)
 	go func() {
-		errCh <- daemon.Serve(ctx)
+		errCh <- server.Serve(ctx)
 	}()
 	waitForUnixSocketServer(t, socketPath)
 
@@ -72,7 +71,6 @@ func TestUnixSocketServer_SubscribeTaskStatusStreamsMatchingUpdates(t *testing.T
 	t.Parallel()
 
 	socketPath := testSocketPath(t)
-	hookListener := testHookListener(t)
 	updates := make(chan core.TaskStatusUpdate, 1)
 	svc := &stubTaskService{
 		subscribeTaskStatusFn: func(_ context.Context, taskID string) (<-chan core.TaskStatusUpdate, error) {
@@ -80,10 +78,10 @@ func TestUnixSocketServer_SubscribeTaskStatusStreamsMatchingUpdates(t *testing.T
 			return updates, nil
 		},
 	}
-	daemon := New(Config{
-		SocketPath:   socketPath,
-		Service:      svc,
-		HookListener: hookListener,
+	server := New(Config{
+		SocketPath:     socketPath,
+		HookListenAddr: "127.0.0.1:0",
+		Service:        svc,
 	})
 
 	ctx, cancel := context.WithCancel(context.Background())
@@ -91,7 +89,7 @@ func TestUnixSocketServer_SubscribeTaskStatusStreamsMatchingUpdates(t *testing.T
 
 	errCh := make(chan error, 1)
 	go func() {
-		errCh <- daemon.Serve(ctx)
+		errCh <- server.Serve(ctx)
 	}()
 	waitForUnixSocketServer(t, socketPath)
 
@@ -122,7 +120,7 @@ func TestUnixSocketServer_SubscribeTaskStatusStreamsMatchingUpdates(t *testing.T
 	require.NoError(t, <-errCh)
 }
 
-func TestCodexHookHandler_PublishesMappedTaskStatusUpdate(t *testing.T) {
+func TestHTTPHookServer_PublishesMappedTaskStatusUpdate(t *testing.T) {
 	t.Parallel()
 
 	now := time.Date(2026, time.April, 19, 15, 0, 0, 0, time.UTC)
@@ -141,7 +139,7 @@ func TestCodexHookHandler_PublishesMappedTaskStatusUpdate(t *testing.T) {
 			}}, nil
 		},
 	}
-	daemon := newDaemon(Config{
+	server := newHTTPHookServer(httpHookServerConfig{
 		Service: svc,
 		Tasks:   tasks,
 		Now:     func() time.Time { return now },
@@ -155,7 +153,7 @@ func TestCodexHookHandler_PublishesMappedTaskStatusUpdate(t *testing.T) {
 	req.Header.Set("X-Codex-Hook-Event", "SessionStart")
 
 	rec := newRecorder()
-	daemon.codexHookHandler().ServeHTTP(rec, req)
+	server.ServeHTTP(rec, req)
 
 	require.Equal(t, http.StatusAccepted, rec.Code)
 	require.Equal(t, core.TaskStatusUpdate{
@@ -241,18 +239,6 @@ func testSocketPath(t *testing.T) string {
 	})
 
 	return path
-}
-
-func testHookListener(t *testing.T) net.Listener {
-	t.Helper()
-
-	listener, err := net.Listen("tcp", "127.0.0.1:0")
-	require.NoError(t, err)
-	t.Cleanup(func() {
-		_ = listener.Close()
-	})
-
-	return listener
 }
 
 func createTask(ctx context.Context, socketPath string, input core.CreateTaskInput) (*core.Task, error) {

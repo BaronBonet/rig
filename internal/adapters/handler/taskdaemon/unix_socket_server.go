@@ -17,21 +17,15 @@ import (
 )
 
 type UnixSocketServerConfig struct {
-	SocketPath  string
-	Frontend    core.TaskFrontend
-	Fingerprint string
-	Stop        func()
+	SocketPath string
+	Frontend   core.TaskFrontend
+	Stop       func()
 }
 
 type UnixSocketServer struct {
-	socketPath  string
-	frontend    core.TaskFrontend
-	fingerprint string
-	stop        func()
-}
-
-type HealthStatus struct {
-	Fingerprint string
+	socketPath string
+	frontend   core.TaskFrontend
+	stop       func()
 }
 
 type socketRequest struct {
@@ -41,20 +35,18 @@ type socketRequest struct {
 }
 
 type socketEnvelope struct {
-	Type        string                 `json:"type"`
-	OK          bool                   `json:"ok,omitempty"`
-	Error       string                 `json:"error,omitempty"`
-	Fingerprint string                 `json:"fingerprint,omitempty"`
-	Task        *core.Task             `json:"task,omitempty"`
-	Update      *core.TaskStatusUpdate `json:"update,omitempty"`
+	Type   string                 `json:"type"`
+	OK     bool                   `json:"ok,omitempty"`
+	Error  string                 `json:"error,omitempty"`
+	Task   *core.Task             `json:"task,omitempty"`
+	Update *core.TaskStatusUpdate `json:"update,omitempty"`
 }
 
 func NewUnixSocketServer(cfg UnixSocketServerConfig) *UnixSocketServer {
 	return &UnixSocketServer{
-		socketPath:  cfg.SocketPath,
-		frontend:    cfg.Frontend,
-		fingerprint: cfg.Fingerprint,
-		stop:        cfg.Stop,
+		socketPath: cfg.SocketPath,
+		frontend:   cfg.Frontend,
+		stop:       cfg.Stop,
 	}
 }
 
@@ -66,11 +58,13 @@ func (s *UnixSocketServer) Serve(ctx context.Context) error {
 		return fmt.Errorf("task daemon frontend not configured")
 	}
 
-	// TODO: what is the point of this?
+	// Unix sockets are regular filesystem entries, so the parent directory must
+	// exist before we can bind the socket file.
 	if err := os.MkdirAll(filepath.Dir(s.socketPath), 0o755); err != nil {
 		return fmt.Errorf("prepare task daemon socket directory: %w", err)
 	}
-	// TODO: what is the point of this?
+	// A previous crash can leave the socket path behind; remove it so this
+	// process can bind a fresh listener.
 	if err := os.Remove(s.socketPath); err != nil && !errors.Is(err, os.ErrNotExist) {
 		return fmt.Errorf("remove stale task daemon socket: %w", err)
 	}
@@ -90,13 +84,10 @@ func (s *UnixSocketServer) Serve(ctx context.Context) error {
 	for {
 		conn, err := listener.Accept()
 		if err != nil {
-			if ctx.Err() != nil {
+			// Closing the listener during shutdown causes Accept to return an
+			// error; treat that as a normal exit instead of a server failure.
+			if ctx.Err() != nil || errors.Is(err, net.ErrClosed) {
 				return nil
-			}
-			var netErr net.Error
-			// TODO: netErr.Temporary() is not always implemented, so we may want to check for specific error types or messages instead
-			if errors.As(err, &netErr) && netErr.Temporary() {
-				continue
 			}
 			return err
 		}
@@ -119,7 +110,7 @@ func (s *UnixSocketServer) handleConn(ctx context.Context, conn net.Conn) {
 
 	switch req.Command {
 	case "health":
-		_ = encoder.Encode(socketEnvelope{Type: "health", OK: true, Fingerprint: s.fingerprint})
+		_ = encoder.Encode(socketEnvelope{Type: "health", OK: true})
 	case "create_task":
 		s.handleCreateTask(ctx, encoder, req)
 	case "latest_task_status":
@@ -192,11 +183,11 @@ func (s *UnixSocketServer) handleSubscribeTaskStatus(ctx context.Context, encode
 	}
 }
 
-func probeSocketHealth(ctx context.Context, socketPath string) (HealthStatus, error) {
+func probeSocketHealth(ctx context.Context, socketPath string) error {
 	var d net.Dialer
 	conn, err := d.DialContext(ctx, "unix", socketPath)
 	if err != nil {
-		return HealthStatus{}, err
+		return err
 	}
 	defer conn.Close()
 
@@ -218,21 +209,20 @@ func probeSocketHealth(ctx context.Context, socketPath string) (HealthStatus, er
 	wg.Wait()
 
 	if writeErr != nil {
-		return HealthStatus{}, writeErr
+		return writeErr
 	}
 	if readErr != nil {
-		return HealthStatus{}, readErr
+		return readErr
 	}
 	if resp.Type != "health" || !resp.OK {
-		return HealthStatus{}, fmt.Errorf("task daemon unhealthy")
+		return fmt.Errorf("task daemon unhealthy")
 	}
 
-	return HealthStatus{Fingerprint: resp.Fingerprint}, nil
+	return nil
 }
 
 func dialSocketHealth(ctx context.Context, socketPath string) error {
-	_, err := probeSocketHealth(ctx, socketPath)
-	return err
+	return probeSocketHealth(ctx, socketPath)
 }
 
 func mustReadAll(r *http.Request) []byte {
