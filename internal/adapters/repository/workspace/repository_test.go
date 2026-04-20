@@ -41,7 +41,7 @@ func TestRepositorySeedWorkspaceCopiesFilesAndDirectories(t *testing.T) {
 	require.Equal(t, "API_KEY=1\n", string(envBody))
 }
 
-func TestRepositoryPrepareTaskWorkspaceWritesBootstrapFilesAndRunsSetup(t *testing.T) {
+func TestRepositorySetupAndBootstrapTaskWorkspace(t *testing.T) {
 	repoRoot := t.TempDir()
 	worktreePath := t.TempDir()
 
@@ -49,11 +49,17 @@ func TestRepositoryPrepareTaskWorkspaceWritesBootstrapFilesAndRunsSetup(t *testi
 	require.NoError(t, os.WriteFile(filepath.Join(repoRoot, ".env"), []byte("API_KEY=1\n"), 0o600))
 	require.NoError(t, os.WriteFile(filepath.Join(repoRoot, "setup.sh"), []byte("#!/bin/sh\nset -eu\nprintf setup-ran > \"$PWD/setup-ran.txt\"\n"), 0o755))
 
-	preparer := New()
-	err := preparer.PrepareTaskWorkspace(context.Background(), &core.Task{
+	manager := New()
+	err := manager.SetupTaskWorkspace(context.Background(), &core.Task{
 		WorktreePath: worktreePath,
 		RepoRoot:     repoRoot,
-	}, repoRoot, core.WorkspaceBootstrapSpec{Files: []core.WorkspaceBootstrapFile{
+	}, repoRoot)
+	require.NoError(t, err)
+
+	err = manager.BootstrapTaskWorkspace(context.Background(), &core.Task{
+		WorktreePath: worktreePath,
+		RepoRoot:     repoRoot,
+	}, core.WorkspaceBootstrapSpec{Files: []core.WorkspaceBootstrapFile{
 		{
 			Path:     ".codex/hooks/hooks.json",
 			Content:  []byte("{\"hooks\":{}}\n"),

@@ -1,4 +1,4 @@
-package setupscript
+package workspace
 
 import (
 	"os"
@@ -6,7 +6,7 @@ import (
 	"testing"
 )
 
-func TestRepositoryPackage_ExposesRunner(t *testing.T) {
+func TestWorkspacePackage_ExposesSetupScriptRunner(t *testing.T) {
 	repoRoot := t.TempDir()
 	scriptDir := filepath.Join(repoRoot, "scripts")
 	if err := os.MkdirAll(scriptDir, 0o755); err != nil {
@@ -16,7 +16,7 @@ func TestRepositoryPackage_ExposesRunner(t *testing.T) {
 		t.Fatalf("write script: %v", err)
 	}
 
-	runner := NewRunner()
+	runner := NewSetupScriptRunner()
 	if err := runner.ValidateSetupScript(t.Context(), repoRoot, "scripts/setup.sh"); err != nil {
 		t.Fatalf("expected runner to validate script, got %v", err)
 	}

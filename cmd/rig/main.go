@@ -22,8 +22,6 @@ import (
 	sessionusagefs "rig/internal/adapters/filesystem/sessionusage"
 	"rig/internal/adapters/handler/cli"
 	observer "rig/internal/adapters/observability/observer"
-	repositoryagentconfig "rig/internal/adapters/repository/agentconfig"
-	repositorysetupscript "rig/internal/adapters/repository/setupscript"
 	sqliterepo "rig/internal/adapters/repository/sqlite"
 	tasksqlite "rig/internal/adapters/repository/tasksqlite"
 	repositoryworkspace "rig/internal/adapters/repository/workspace"
@@ -104,25 +102,26 @@ func buildDependencies() (cli.Dependencies, error) {
 		gitclient.NewRepository(runner),
 		tmuxclient.NewRepository(runner),
 		providers,
-		repositoryagentconfig.NewLoader(),
+		repositoryworkspace.NewRepoConfigLoader(),
 		repositoryworkspace.NewSeeder(),
 		codexhooksfs.NewBootstrapper(
 			agentExec,
 			detectAgentSourceRoot(),
 		),
-		repositorysetupscript.NewRunner(),
+		repositoryworkspace.NewSetupScriptRunner(),
 		core.Config{Provider: cfg.Provider},
 	)
 	service.SetSessionUsageReader(sessionusagefs.NewRepository())
 	service.SetPRStatusChecker(ghclient.NewPRStatusChecker(runner))
 
 	taskService := core.NewTaskService(core.TaskServiceDependencies{
-		Tasks:           taskStore,
-		GitWorktree:     gitworktree.New(runner),
-		TmuxSession:     tmuxsession.New(runner),
-		Agents:          agentClients,
-		Preparer:        repositoryworkspace.New(),
-		DefaultProvider: cfg.Provider,
+		Tasks:                taskStore,
+		GitWorktree:          gitworktree.New(runner),
+		TmuxSession:          tmuxsession.New(runner),
+		Agents:               agentClients,
+		Workspace:            repositoryworkspace.New(),
+		EnableWorkspaceSetup: true,
+		DefaultProvider:      cfg.Provider,
 	})
 	appService := core.NewAppService(taskService, service)
 

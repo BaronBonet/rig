@@ -122,13 +122,13 @@ func TestTaskStatusService_HandleHookEventResolvesTaskIDAndPublishesMappedUpdate
 
 	err := svc.service.HandleHookEvent(t.Context(), HookEventInput{
 		OccurredAt: time.Date(2026, time.April, 20, 9, 0, 0, 0, time.UTC),
-		Provider:   "codex",
+		Provider:   AgentProviderCodex,
 		Cwd:        "/tmp/repo-task",
 		EventName:  "SessionStart",
 	})
 	require.NoError(t, err)
 	require.Equal(t, "task-123", svc.providerRepo.hookInput.TaskID)
-	require.Equal(t, "codex", svc.providerRepo.hookInput.Provider)
+	require.Equal(t, AgentProviderCodex, svc.providerRepo.hookInput.Provider)
 
 	update, err := svc.service.LatestTaskStatus(t.Context(), "task-123")
 	require.NoError(t, err)

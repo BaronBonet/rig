@@ -7,8 +7,6 @@ import (
 	"path/filepath"
 	"strings"
 
-	repositoryagentconfig "rig/internal/adapters/repository/agentconfig"
-	repositorysetupscript "rig/internal/adapters/repository/setupscript"
 	"rig/internal/core"
 )
 
@@ -18,15 +16,15 @@ type preparer struct {
 	setupRunner  core.SetupScriptRunner
 }
 
-func New() core.WorkspacePreparer {
+func New() core.TaskWorkspaceManager {
 	return &preparer{
-		configLoader: repositoryagentconfig.NewLoader(),
+		configLoader: NewRepoConfigLoader(),
 		seeder:       NewSeeder(),
-		setupRunner:  repositorysetupscript.NewRunner(),
+		setupRunner:  NewSetupScriptRunner(),
 	}
 }
 
-func (p *preparer) PrepareTaskWorkspace(ctx context.Context, task *core.Task, repoRoot string, bootstrapSpec core.WorkspaceBootstrapSpec) error {
+func (p *preparer) SetupTaskWorkspace(ctx context.Context, task *core.Task, repoRoot string) error {
 	if task == nil {
 		return nil
 	}
@@ -63,6 +61,18 @@ func (p *preparer) PrepareTaskWorkspace(ctx context.Context, task *core.Task, re
 		}, nil); err != nil {
 			return fmt.Errorf("setup script: %w", err)
 		}
+	}
+
+	return nil
+}
+
+func (p *preparer) BootstrapTaskWorkspace(
+	_ context.Context,
+	task *core.Task,
+	bootstrapSpec core.WorkspaceBootstrapSpec,
+) error {
+	if task == nil {
+		return nil
 	}
 
 	for _, file := range bootstrapSpec.Files {

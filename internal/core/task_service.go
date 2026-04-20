@@ -10,31 +10,34 @@ import (
 )
 
 type TaskServiceDependencies struct {
-	Tasks           TaskRepository
-	GitWorktree     GitWorktreeClient
-	TmuxSession     TmuxSessionClient
-	Agents          map[string]AgentClient
-	Preparer        WorkspacePreparer
-	DefaultProvider AgentProvider
+	Tasks                TaskRepository
+	GitWorktree          GitWorktreeClient
+	TmuxSession          TmuxSessionClient
+	Agents               map[AgentProvider]AgentClient
+	Workspace            TaskWorkspaceManager
+	EnableWorkspaceSetup bool
+	DefaultProvider      AgentProvider
 }
 
 type taskService struct {
-	tasks           TaskRepository
-	gitWorktree     GitWorktreeClient
-	tmuxSession     TmuxSessionClient
-	agents          map[string]AgentClient
-	preparer        WorkspacePreparer
-	defaultProvider AgentProvider
+	tasks                TaskRepository
+	gitWorktree          GitWorktreeClient
+	tmuxSession          TmuxSessionClient
+	agents               map[AgentProvider]AgentClient
+	workspace            TaskWorkspaceManager
+	enableWorkspaceSetup bool
+	defaultProvider      AgentProvider
 }
 
 func NewTaskService(deps TaskServiceDependencies) TaskService {
 	return &taskService{
-		tasks:           deps.Tasks,
-		gitWorktree:     deps.GitWorktree,
-		tmuxSession:     deps.TmuxSession,
-		agents:          deps.Agents,
-		preparer:        deps.Preparer,
-		defaultProvider: deps.DefaultProvider,
+		tasks:                deps.Tasks,
+		gitWorktree:          deps.GitWorktree,
+		tmuxSession:          deps.TmuxSession,
+		agents:               deps.Agents,
+		workspace:            deps.Workspace,
+		enableWorkspaceSetup: deps.EnableWorkspaceSetup,
+		defaultProvider:      deps.DefaultProvider,
 	}
 }
 
@@ -72,17 +75,15 @@ func (s *taskService) PublishTaskStatus(ctx context.Context, update TaskStatusUp
 }
 
 func (s *taskService) HandleHookEvent(ctx context.Context, input HookEventInput) error {
-	provider := NormalizeProvider(input.Provider)
-	if provider == "" {
+	if input.Provider == "" {
 		return ErrUnmanagedHookEvent
 	}
 
-	agent, err := s.agentFor(provider)
+	agent, err := s.agentFor(input.Provider)
 	if err != nil {
 		return err
 	}
 
-	input.Provider = provider
 	input.TaskID = strings.TrimSpace(input.TaskID)
 	if input.TaskID == "" {
 		resolvedTaskID, err := s.resolveTaskIDFromCwd(ctx, input.Cwd)
@@ -103,7 +104,7 @@ func (s *taskService) HandleHookEvent(ctx context.Context, input HookEventInput)
 		update.TaskID = input.TaskID
 	}
 	if update.Provider == "" {
-		update.Provider = AgentProvider(provider)
+		update.Provider = input.Provider
 	}
 	if update.ObservedAt.IsZero() {
 		update.ObservedAt = input.OccurredAt
@@ -143,13 +144,8 @@ func (s *taskService) createTaskFromPrompt(
 		return task, fmt.Errorf("create worktree: %w", err)
 	}
 
-	bootstrapSpec, err := s.buildWorkspaceBootstrapSpec(ctx, task)
-	if err != nil {
-		return task, fmt.Errorf("build workspace bootstrap spec: %w", err)
-	}
-
-	if err := s.preparer.PrepareTaskWorkspace(ctx, task, repoCtx.Root, bootstrapSpec); err != nil {
-		return task, fmt.Errorf("prepare workspace: %w", err)
+	if err := s.prepareTaskWorkspace(ctx, task, repoCtx.Root); err != nil {
+		return task, err
 	}
 
 	return s.startTaskRuntime(ctx, task)
@@ -196,6 +192,9 @@ func (s *taskService) createTaskFromPullRequest(
 	if err := s.gitWorktree.CreateTaskWorkspaceFromBranch(ctx, task); err != nil {
 		return task, fmt.Errorf("create worktree: %w", err)
 	}
+	if err := s.prepareTaskWorkspace(ctx, task, repoCtx.Root); err != nil {
+		return task, err
+	}
 
 	return s.startTaskRuntime(ctx, task)
 }
@@ -214,9 +213,9 @@ func (s *taskService) suggestTaskName(ctx context.Context, agent AgentClient, pr
 	return suggestion, nil
 }
 
-func (s *taskService) agentFor(provider string) (AgentClient, error) {
+func (s *taskService) agentFor(provider AgentProvider) (AgentClient, error) {
 	if provider == "" {
-		provider = string(s.defaultProvider)
+		provider = s.defaultProvider
 	}
 
 	agent, ok := s.agents[provider]
@@ -228,7 +227,7 @@ func (s *taskService) agentFor(provider string) (AgentClient, error) {
 }
 
 func (s *taskService) startTaskRuntime(ctx context.Context, task *Task) (*Task, error) {
-	agent, err := s.agentFor(string(task.Provider))
+	agent, err := s.agentFor(task.Provider)
 	if err != nil {
 		return task, err
 	}
@@ -244,8 +243,31 @@ func (s *taskService) startTaskRuntime(ctx context.Context, task *Task) (*Task, 
 	return task, nil
 }
 
+func (s *taskService) prepareTaskWorkspace(ctx context.Context, task *Task, repoRoot string) error {
+	bootstrapSpec, err := s.buildWorkspaceBootstrapSpec(ctx, task)
+	if err != nil {
+		return fmt.Errorf("build workspace bootstrap spec: %w", err)
+	}
+
+	if s.workspace == nil {
+		return nil
+	}
+
+	if s.enableWorkspaceSetup {
+		if err := s.workspace.SetupTaskWorkspace(ctx, task, repoRoot); err != nil {
+			return fmt.Errorf("setup workspace: %w", err)
+		}
+	}
+
+	if err := s.workspace.BootstrapTaskWorkspace(ctx, task, bootstrapSpec); err != nil {
+		return fmt.Errorf("bootstrap workspace: %w", err)
+	}
+
+	return nil
+}
+
 func (s *taskService) buildWorkspaceBootstrapSpec(ctx context.Context, task *Task) (WorkspaceBootstrapSpec, error) {
-	agent, err := s.agentFor(string(task.Provider))
+	agent, err := s.agentFor(task.Provider)
 	if err != nil {
 		return WorkspaceBootstrapSpec{}, err
 	}
@@ -275,14 +297,14 @@ func (s *taskService) resolveTaskIDFromCwd(ctx context.Context, cwd string) (str
 
 func newPromptTaskRecord(
 	repoCtx RepoContext,
-	provider string,
+	provider AgentProvider,
 	defaultProvider AgentProvider,
 	displayName string,
 	taskSlug string,
 	branchType string,
 ) *Task {
 	if provider == "" {
-		provider = string(defaultProvider)
+		provider = defaultProvider
 	}
 
 	now := time.Now().UTC()
@@ -297,7 +319,7 @@ func newPromptTaskRecord(
 		BranchName:   branchNameForTask(taskSlug, branchType),
 		WorktreePath: taskWorktreePath(repoCtx, taskSlug),
 		TmuxSession:  taskSessionName(repoCtx, taskSlug),
-		Provider:     AgentProvider(provider),
+		Provider:     provider,
 		CreatedAt:    now,
 		UpdatedAt:    now,
 	}
@@ -305,14 +327,14 @@ func newPromptTaskRecord(
 
 func newPullRequestTaskRecord(
 	repoCtx RepoContext,
-	provider string,
+	provider AgentProvider,
 	defaultProvider AgentProvider,
 	displayName string,
 	taskSlug string,
 	branchName string,
 ) *Task {
 	if provider == "" {
-		provider = string(defaultProvider)
+		provider = defaultProvider
 	}
 
 	now := time.Now().UTC()
@@ -327,7 +349,7 @@ func newPullRequestTaskRecord(
 		BranchName:   strings.TrimSpace(branchName),
 		WorktreePath: taskWorktreePath(repoCtx, taskSlug),
 		TmuxSession:  taskSessionName(repoCtx, taskSlug),
-		Provider:     AgentProvider(provider),
+		Provider:     provider,
 		CreatedAt:    now,
 		UpdatedAt:    now,
 	}

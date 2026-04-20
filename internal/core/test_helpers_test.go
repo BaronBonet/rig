@@ -19,7 +19,7 @@ type testTaskServiceHarness struct {
 	sessionClient     sessionClientState
 
 	providerRepo providerClientState
-	preparer     workspacePreparerState
+	workspace    workspaceManagerState
 }
 
 type taskRepositoryState struct {
@@ -66,19 +66,22 @@ type providerClientState struct {
 	hookInput           HookEventInput
 }
 
-type workspacePreparerState struct {
-	prepareErr          error
-	called              bool
-	repoRoot            string
-	worktreePath        string
-	bootstrapSpec       WorkspaceBootstrapSpec
-	calledBeforeSession bool
-	preparedDisplayName string
-	preparedBranchName  string
+type workspaceManagerState struct {
+	setupErr                     error
+	bootstrapErr                 error
+	setupCalled                  bool
+	bootstrapCalled              bool
+	repoRoot                     string
+	worktreePath                 string
+	bootstrapSpec                WorkspaceBootstrapSpec
+	setupCalledBeforeSession     bool
+	bootstrapCalledBeforeSession bool
+	preparedDisplayName          string
+	preparedBranchName           string
 }
 
-type recordingWorkspacePreparer struct {
-	state   *workspacePreparerState
+type recordingWorkspaceManager struct {
+	state   *workspaceManagerState
 	session *sessionClientState
 }
 
@@ -144,22 +147,36 @@ func (c *recordingAgentClient) HookEventToTaskStatus(input HookEventInput) (*Tas
 	return &update, nil
 }
 
-func (p *recordingWorkspacePreparer) PrepareTaskWorkspace(
+func (p *recordingWorkspaceManager) SetupTaskWorkspace(
 	_ context.Context,
 	task *Task,
 	repoRoot string,
+) error {
+	p.state.setupCalled = true
+	p.state.repoRoot = repoRoot
+	if task != nil {
+		p.state.worktreePath = task.WorktreePath
+		p.state.preparedDisplayName = task.DisplayName
+		p.state.preparedBranchName = task.BranchName
+	}
+	p.state.setupCalledBeforeSession = p.session.startedTask == nil
+	return p.state.setupErr
+}
+
+func (p *recordingWorkspaceManager) BootstrapTaskWorkspace(
+	_ context.Context,
+	task *Task,
 	bootstrapSpec WorkspaceBootstrapSpec,
 ) error {
-	p.state.called = true
-	p.state.repoRoot = repoRoot
+	p.state.bootstrapCalled = true
 	p.state.bootstrapSpec = bootstrapSpec
 	if task != nil {
 		p.state.worktreePath = task.WorktreePath
 		p.state.preparedDisplayName = task.DisplayName
 		p.state.preparedBranchName = task.BranchName
 	}
-	p.state.calledBeforeSession = p.session.startedTask == nil
-	return p.state.prepareErr
+	p.state.bootstrapCalledBeforeSession = p.session.startedTask == nil
+	return p.state.bootstrapErr
 }
 
 func newTestTaskService(t *testing.T) *testTaskServiceHarness {
@@ -182,12 +199,13 @@ func newTestTaskService(t *testing.T) *testTaskServiceHarness {
 	h.sessionClientMock = &stubTmuxSessionClient{state: &h.sessionClient}
 
 	h.service = NewTaskService(TaskServiceDependencies{
-		Tasks:           h.taskRepoMock,
-		GitWorktree:     h.repoClientMock,
-		TmuxSession:     h.sessionClientMock,
-		Agents:          map[string]AgentClient{"codex": &recordingAgentClient{state: &h.providerRepo}},
-		Preparer:        &recordingWorkspacePreparer{state: &h.preparer, session: &h.sessionClient},
-		DefaultProvider: AgentProviderCodex,
+		Tasks:                h.taskRepoMock,
+		GitWorktree:          h.repoClientMock,
+		TmuxSession:          h.sessionClientMock,
+		Agents:               map[AgentProvider]AgentClient{AgentProviderCodex: &recordingAgentClient{state: &h.providerRepo}},
+		Workspace:            &recordingWorkspaceManager{state: &h.workspace, session: &h.sessionClient},
+		EnableWorkspaceSetup: true,
+		DefaultProvider:      AgentProviderCodex,
 	})
 
 	return h

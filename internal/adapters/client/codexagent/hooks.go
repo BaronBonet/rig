@@ -90,7 +90,7 @@ func DecodeHookEventInput(now func() time.Time, headerEventName string, body []b
 	input := core.HookEventInput{
 		OccurredAt:     now().UTC(),
 		EventName:      strings.TrimSpace(headerEventName),
-		Provider:       "codex",
+		Provider:       core.AgentProviderCodex,
 		RawPayloadJSON: string(bytes.TrimSpace(body)),
 	}
 
