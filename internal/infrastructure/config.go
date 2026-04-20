@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"rig/internal/adapters/handler/taskdaemon"
 	tasksqlite "rig/internal/adapters/repository/tasksqlite"
 	"rig/internal/core"
 
@@ -15,32 +16,17 @@ import (
 
 type ApplicationConfig struct {
 	Provider   core.AgentProvider `env:"AGENT_PROVIDER" envDefault:"codex"`
-	SQLite     SQLiteConfig
 	TaskSQLite tasksqlite.Config
 	Codex      codexagent.Config
 	Claude     claudeclient.Config
-	Observer   ObserverConfig
-}
-
-type SQLiteConfig struct {
-	Path string `env:"AGENT_SQLITE_PATH"`
-}
-
-type ObserverConfig struct {
-	SocketPath string `env:"AGENT_OBSERVER_SOCKET_PATH"`
+	TaskDaemon taskdaemon.Config
 }
 
 // LoadConfig loads the application configuration from environment variables.
 func LoadConfig() (*ApplicationConfig, error) {
 	config := ApplicationConfig{
-		SQLite: SQLiteConfig{
-			Path: defaultSQLitePath(),
-		},
 		TaskSQLite: tasksqlite.Config{
 			Path: tasksqlite.DefaultSQLitePath(),
-		},
-		Observer: ObserverConfig{
-			SocketPath: defaultObserverSocketPath(),
 		},
 	}
 
