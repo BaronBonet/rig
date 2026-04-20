@@ -57,3 +57,13 @@ func TestDebugMode_SourceDoesNotDependOnLegacyStatusstreamPackage(t *testing.T) 
 		t.Fatal("main.go should not reference the legacy statusstream package")
 	}
 }
+
+func TestDebugMode_SourceUsesTaskDaemonConfigInsteadOfObserverConfig(t *testing.T) {
+	content, err := os.ReadFile(filepath.Join(".", "main.go"))
+	if err != nil {
+		t.Fatalf("read main.go: %v", err)
+	}
+	if strings.Contains(string(content), "cfg.Observer.") {
+		t.Fatal("main.go should use cfg.TaskDaemon instead of the removed observer config")
+	}
+}

@@ -42,7 +42,6 @@ var debugCodexHookForwarding = codexagent.HookForwardingConfig{
 var debugTaskDaemon = debugTaskDaemonConfig{
 	ModeEnvKey:      "RIG_DEBUG_MODE",
 	ModeEnvValue:    "task-daemon",
-	HookListenAddr:  "127.0.0.1:4123",
 	StatusWaitAfter: 0,
 }
 
@@ -56,7 +55,6 @@ type debugCreateConfig struct {
 type debugTaskDaemonConfig struct {
 	ModeEnvKey      string
 	ModeEnvValue    string
-	HookListenAddr  string
 	StatusWaitAfter time.Duration
 }
 
@@ -89,7 +87,7 @@ func main() {
 		string(core.AgentProviderCodex): codexagent.New(runner, codexCfg, debugHookForwarding),
 		string(core.AgentProviderClaude): claudeagent.New(runner, claudeclient.Config{
 			Binary:         cfg.Claude.Binary,
-			HookListenAddr: debugTaskDaemon.HookListenAddr,
+			HookListenAddr: cfg.TaskDaemon.HookListenAddr,
 		}),
 	}
 
@@ -112,33 +110,19 @@ func main() {
 		ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 		defer cancel()
 
-		if err := taskdaemon.New(taskdaemon.Config{
-			SocketPath:     cfg.Observer.SocketPath,
-			HookListenAddr: debugTaskDaemon.HookListenAddr,
-			Service:        service,
-			Tasks:          taskStore,
-			Stop:           cancel,
+		if err := taskdaemon.New(cfg.TaskDaemon, taskdaemon.Dependencies{
+			Service: service,
+			Tasks:   taskStore,
+			Stop:    cancel,
 		}).Serve(ctx); err != nil {
 			fmt.Fprintln(os.Stderr, err)
 			os.Exit(1)
 		}
 		return
 	}
-	if strings.TrimSpace(debugCreate.Cwd) == "" {
-		fmt.Fprintln(os.Stderr, "set debugCreate.Cwd in cmd/debug/main.go before running")
-		os.Exit(1)
-	}
-	if strings.TrimSpace(debugCreate.Prompt) == "" {
-		fmt.Fprintln(os.Stderr, "set debugCreate.Prompt in cmd/debug/main.go before running")
-		os.Exit(1)
-	}
-	if !debugCreate.PrepareWorkspace {
-		fmt.Fprintln(os.Stderr, "set debugCreate.PrepareWorkspace=true to debug hook-driven status streaming")
-		os.Exit(1)
-	}
 
 	manager := newTaskDaemonProcessManager(taskDaemonProcessConfig{
-		SocketPath: cfg.Observer.SocketPath,
+		SocketPath: cfg.TaskDaemon.SocketPath,
 		ExecPath:   execPath,
 		Env: []string{
 			debugTaskDaemon.ModeEnvKey + "=" + debugTaskDaemon.ModeEnvValue,
@@ -152,7 +136,7 @@ func main() {
 	statusCtx, cancelStatus := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer cancelStatus()
 
-	task, err := createTaskViaDaemon(context.Background(), cfg.Observer.SocketPath, core.CreateTaskInput{
+	task, err := createTaskViaDaemon(context.Background(), cfg.TaskDaemon.SocketPath, core.CreateTaskInput{
 		Cwd:      strings.TrimSpace(debugCreate.Cwd),
 		Prompt:   strings.TrimSpace(debugCreate.Prompt),
 		Provider: strings.TrimSpace(debugCreate.Provider),
@@ -181,13 +165,13 @@ func main() {
 		os.Exit(1)
 	}
 
-	latest, err := latestTaskStatusViaDaemon(context.Background(), cfg.Observer.SocketPath, task.ID)
+	latest, err := latestTaskStatusViaDaemon(context.Background(), cfg.TaskDaemon.SocketPath, task.ID)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		os.Exit(1)
 	}
 
-	updates, cleanup, err := subscribeTaskStatusViaDaemon(statusCtx, cfg.Observer.SocketPath, task.ID)
+	updates, cleanup, err := subscribeTaskStatusViaDaemon(statusCtx, cfg.TaskDaemon.SocketPath, task.ID)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		os.Exit(1)
