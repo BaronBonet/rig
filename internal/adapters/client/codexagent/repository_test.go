@@ -8,12 +8,11 @@ import (
 	"rig/internal/core"
 	"rig/internal/pkg/execx"
 
-	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
 )
 
 func TestRepositoryBuildTaskSessionLaunchSpec_StartsCodexAndPrefillsTaskPrompt(t *testing.T) {
-	repo := New(execx.NewMockRunner(t), Config{Binary: "codex"}, HookForwardingConfig{})
+	repo := New(stubRunner{}, Config{Binary: "codex"}, HookForwardingConfig{})
 
 	launch, err := repo.BuildTaskSessionLaunchSpec(&core.Task{Prompt: "add billing retry flow"})
 	require.NoError(t, err)
@@ -25,7 +24,7 @@ func TestRepositoryBuildTaskSessionLaunchSpec_StartsCodexAndPrefillsTaskPrompt(t
 }
 
 func TestRepositoryBuildWorkspaceBootstrapSpec_RendersCodexHooksAndForwarderScript(t *testing.T) {
-	repo := New(execx.NewMockRunner(t), Config{
+	repo := New(stubRunner{}, Config{
 		Binary: "codex",
 	}, HookForwardingConfig{
 		RigBinaryPath: "/tmp/rig-bin",
@@ -47,11 +46,18 @@ func TestRepositoryBuildWorkspaceBootstrapSpec_RendersCodexHooksAndForwarderScri
 }
 
 func TestRepositorySuggestTaskName_DelegatesToCodexProposal(t *testing.T) {
-	runner := execx.NewMockRunner(t)
-	runner.EXPECT().
-		Run(mock.Anything, "", "codex", "exec", "--skip-git-repo-check", "--output-last-message", mock.Anything, mock.Anything).
-		Return(execx.Result{Stdout: "billing retry flow\n"}, nil).
-		Once()
+	runner := stubRunner{
+		runFn: func(_ context.Context, cwd string, name string, args ...string) (execx.Result, error) {
+			require.Equal(t, "", cwd)
+			require.Equal(t, "codex", name)
+			require.Equal(
+				t,
+				[]string{"exec", "--skip-git-repo-check", "--output-last-message", args[3], args[4]},
+				args,
+			)
+			return execx.Result{Stdout: "billing retry flow\n"}, nil
+		},
+	}
 	repo := New(runner, Config{Binary: "codex"}, HookForwardingConfig{})
 
 	suggestion, err := repo.SuggestTaskName(t.Context(), "add billing retry flow")
@@ -61,18 +67,35 @@ func TestRepositorySuggestTaskName_DelegatesToCodexProposal(t *testing.T) {
 }
 
 func TestRepositorySuggestTaskName_PrefersOutputFileOverStdout(t *testing.T) {
-	runner := execx.NewMockRunner(t)
-	runner.EXPECT().
-		Run(mock.Anything, "", "codex", "exec", "--skip-git-repo-check", "--output-last-message", mock.Anything, mock.Anything).
-		RunAndReturn(func(_ context.Context, _ string, _ string, args ...string) (execx.Result, error) {
+	runner := stubRunner{
+		runFn: func(_ context.Context, _ string, _ string, args ...string) (execx.Result, error) {
 			require.NoError(t, os.WriteFile(args[3], []byte("{\"name\":\"File Result\",\"branch_type\":\"feat\"}\n"), 0o600))
 			return execx.Result{Stdout: "stdout result\n"}, nil
-		}).
-		Once()
+		},
+	}
 	repo := New(runner, Config{Binary: "codex"}, HookForwardingConfig{})
 
 	suggestion, err := repo.SuggestTaskName(t.Context(), "add billing retry flow")
 	require.NoError(t, err)
 	require.Equal(t, "File Result", suggestion.Name)
 	require.Equal(t, "feat", suggestion.BranchType)
+}
+
+type stubRunner struct {
+	runFn          func(context.Context, string, string, ...string) (execx.Result, error)
+	runWithStdinFn func(context.Context, execx.RunWithStdinOptions) (execx.Result, error)
+}
+
+func (s stubRunner) Run(ctx context.Context, cwd string, name string, args ...string) (execx.Result, error) {
+	if s.runFn == nil {
+		return execx.Result{}, nil
+	}
+	return s.runFn(ctx, cwd, name, args...)
+}
+
+func (s stubRunner) RunWithStdin(ctx context.Context, opts execx.RunWithStdinOptions) (execx.Result, error) {
+	if s.runWithStdinFn == nil {
+		return execx.Result{}, nil
+	}
+	return s.runWithStdinFn(ctx, opts)
 }

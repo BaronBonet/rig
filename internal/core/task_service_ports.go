@@ -50,6 +50,9 @@ type TaskService interface {
 	SubscribeTaskStatus(ctx context.Context, taskID string) (<-chan TaskStatusUpdate, error)
 	// PublishTaskStatus publishes a normalized live status update for a task.
 	PublishTaskStatus(ctx context.Context, update TaskStatusUpdate) error
+	// HandleHookEvent resolves and publishes any task status update implied by a
+	// provider hook event.
+	HandleHookEvent(ctx context.Context, input HookEventInput) error
 }
 
 // TaskRepository persists task records and returns their durable state.
@@ -82,6 +85,9 @@ type AgentClient interface {
 	// BuildTaskSessionLaunchSpec describes how the provider's CLI should be
 	// started inside the task's tmux session.
 	BuildTaskSessionLaunchSpec(task *Task) (TaskSessionLaunchSpec, error)
+	// HookEventToTaskStatus normalizes a provider hook event into a task status
+	// update when the event contributes to the live task status stream.
+	HookEventToTaskStatus(input HookEventInput) (*TaskStatusUpdate, error)
 }
 
 // GitWorktreeClient manages the Git worktree operations needed by the new task

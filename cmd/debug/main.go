@@ -110,10 +110,14 @@ func main() {
 		ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 		defer cancel()
 
+		codexHooks := codexagent.NewHookHTTPHandler(service, nil)
 		if err := taskdaemon.New(cfg.TaskDaemon, taskdaemon.Dependencies{
 			Service: service,
-			Tasks:   taskStore,
-			Stop:    cancel,
+			HookRoutes: []taskdaemon.HookRoute{
+				{Path: "/hook", Handler: codexHooks},
+				{Path: "/codex-hook", Handler: codexHooks},
+			},
+			Stop: cancel,
 		}).Serve(ctx); err != nil {
 			fmt.Fprintln(os.Stderr, err)
 			os.Exit(1)
