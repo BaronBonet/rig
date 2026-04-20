@@ -13,19 +13,17 @@ import (
 )
 
 type ProcessConfig struct {
-	SocketPath     string
-	ExecPath       string
-	CommandArgs    []string
-	Env            []string
-	Spawn          func(context.Context, string, []string, []string) error
-	Dial           func(context.Context, string) error
-	Stop           func(context.Context, string) error
-	Remove         func(string) error
-	HealthyTimeout time.Duration
-	RetryInterval  time.Duration
+	SocketPath string
+	ExecPath   string
+	Env        []string
 }
 
 type ProcessManager struct{ cfg ProcessConfig }
+
+const (
+	processHealthyTimeout = 2 * time.Second
+	processRetryInterval  = 25 * time.Millisecond
+)
 
 func NewProcessManager(cfg ProcessConfig) *ProcessManager {
 	return &ProcessManager{cfg: cfg}
@@ -47,31 +45,16 @@ func (m *ProcessManager) EnsureRunning(ctx context.Context) error {
 		}
 		cfg.ExecPath = execPath
 	}
-	if len(cfg.CommandArgs) == 0 {
-		cfg.CommandArgs = []string{}
-	}
-	if cfg.Spawn == nil {
-		cfg.Spawn = defaultProcessSpawn
-	}
-	if cfg.Dial == nil {
-		cfg.Dial = defaultProcessDial
-	}
-	if cfg.HealthyTimeout <= 0 {
-		cfg.HealthyTimeout = 2 * time.Second
-	}
-	if cfg.RetryInterval <= 0 {
-		cfg.RetryInterval = 25 * time.Millisecond
-	}
 
-	if err := processHealthy(ctx, cfg); err == nil {
+	if err := dialSocketHealth(ctx, cfg.SocketPath); err == nil {
 		return nil
 	}
 
-	if err := cfg.Spawn(ctx, cfg.ExecPath, cfg.CommandArgs, cfg.Env); err != nil {
+	if err := defaultProcessSpawn(ctx, cfg.ExecPath, cfg.Env); err != nil {
 		return err
 	}
 
-	return waitForHealthyProcess(ctx, cfg)
+	return waitForHealthyProcess(ctx, cfg.SocketPath)
 }
 
 func (m *ProcessManager) Restart(ctx context.Context) error {
@@ -83,20 +66,14 @@ func (m *ProcessManager) Restart(ctx context.Context) error {
 	if cfg.SocketPath == "" {
 		return fmt.Errorf("task daemon socket path not configured")
 	}
-	if cfg.Stop == nil {
-		cfg.Stop = Stop
-	}
-	if cfg.Remove == nil {
-		cfg.Remove = os.Remove
-	}
 
 	exists, err := socketPathExists(cfg.SocketPath)
 	if err != nil {
 		return err
 	}
 	if exists {
-		_ = cfg.Stop(ctx, cfg.SocketPath)
-		if err := cfg.Remove(cfg.SocketPath); err != nil && !errors.Is(err, os.ErrNotExist) {
+		_ = Stop(ctx, cfg.SocketPath)
+		if err := os.Remove(cfg.SocketPath); err != nil && !errors.Is(err, os.ErrNotExist) {
 			return fmt.Errorf("remove stale task daemon socket: %w", err)
 		}
 	}
@@ -104,12 +81,12 @@ func (m *ProcessManager) Restart(ctx context.Context) error {
 	return m.EnsureRunning(ctx)
 }
 
-func defaultProcessSpawn(ctx context.Context, execPath string, args []string, env []string) error {
+func defaultProcessSpawn(ctx context.Context, execPath string, env []string) error {
 	if err := ctx.Err(); err != nil {
 		return err
 	}
 
-	cmd := exec.Command(execPath, args...)
+	cmd := exec.Command(execPath)
 	if len(env) > 0 {
 		cmd.Env = append(os.Environ(), env...)
 	}
@@ -131,19 +108,15 @@ func defaultProcessSpawn(ctx context.Context, execPath string, args []string, en
 	return nil
 }
 
-func defaultProcessDial(ctx context.Context, socketPath string) error {
-	return dialSocketHealth(ctx, socketPath)
-}
-
-func waitForHealthyProcess(ctx context.Context, cfg ProcessConfig) error {
-	waitCtx, cancel := context.WithTimeout(ctx, cfg.HealthyTimeout)
+func waitForHealthyProcess(ctx context.Context, socketPath string) error {
+	waitCtx, cancel := context.WithTimeout(ctx, processHealthyTimeout)
 	defer cancel()
 
-	ticker := time.NewTicker(cfg.RetryInterval)
+	ticker := time.NewTicker(processRetryInterval)
 	defer ticker.Stop()
 
 	for {
-		if err := processHealthy(waitCtx, cfg); err == nil {
+		if err := dialSocketHealth(waitCtx, socketPath); err == nil {
 			return nil
 		}
 
@@ -153,10 +126,6 @@ func waitForHealthyProcess(ctx context.Context, cfg ProcessConfig) error {
 		case <-ticker.C:
 		}
 	}
-}
-
-func processHealthy(ctx context.Context, cfg ProcessConfig) error {
-	return cfg.Dial(ctx, cfg.SocketPath)
 }
 
 func Stop(ctx context.Context, socketPath string) error {
