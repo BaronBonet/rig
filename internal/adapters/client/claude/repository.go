@@ -10,12 +10,12 @@ import (
 	"unicode"
 
 	"rig/internal/core"
-	"rig/internal/pkg/execx"
 	"rig/internal/pkg/prompts"
+	"rig/internal/pkg/subprocess"
 )
 
 type Repository struct {
-	runner         execx.Runner
+	runner         subprocess.Runner
 	binary         string
 	hookListenAddr string
 }
@@ -25,7 +25,7 @@ type Config struct {
 	HookListenAddr string `env:"AGENT_HOOK_LISTEN_ADDR" envDefault:"127.0.0.1:4123"`
 }
 
-func NewRepository(runner execx.Runner, cfg Config) *Repository {
+func NewRepository(runner subprocess.Runner, cfg Config) *Repository {
 	if cfg.Binary == "" {
 		cfg.Binary = "claude"
 	}
@@ -48,7 +48,7 @@ type claudeResult struct {
 }
 
 func (r *Repository) ProposeTaskName(ctx context.Context, prompt string) (core.TaskSuggestion, error) {
-	result, err := r.runner.RunWithStdin(ctx, execx.RunWithStdinOptions{
+	result, err := r.runner.RunWithStdin(ctx, subprocess.RunWithStdinOptions{
 		Name:  r.binary,
 		Stdin: prompt,
 		Args: []string{

@@ -8,14 +8,14 @@ import (
 	"strings"
 
 	"rig/internal/core"
-	"rig/internal/pkg/execx"
+	"rig/internal/pkg/subprocess"
 )
 
 type Repository struct {
-	runner execx.Runner
+	runner subprocess.Runner
 }
 
-func NewRepository(runner execx.Runner) *Repository {
+func NewRepository(runner subprocess.Runner) *Repository {
 	return &Repository{runner: runner}
 }
 
@@ -79,7 +79,7 @@ func (r *Repository) BranchExists(ctx context.Context, repoRoot, branch string) 
 	if err != nil {
 		// git show-ref exits non-zero when the ref does not exist;
 		// treat CommandError (expected) as "branch not found".
-		var cmdErr execx.CommandError
+		var cmdErr subprocess.CommandError
 		if errors.As(err, &cmdErr) {
 			return false, nil
 		}

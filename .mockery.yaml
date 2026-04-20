@@ -24,7 +24,7 @@ packages:
   rig/internal/adapters/handler/cli:
     interfaces:
       TaskService:
-  rig/internal/pkg/execx:
+  rig/internal/pkg/subprocess:
     interfaces:
       Runner:
   rig/internal/adapters/client/tmux:

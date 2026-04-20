@@ -6,14 +6,14 @@ import (
 	"strings"
 
 	"rig/internal/core"
-	"rig/internal/pkg/execx"
+	"rig/internal/pkg/subprocess"
 )
 
 type PRStatusChecker struct {
-	runner execx.Runner
+	runner subprocess.Runner
 }
 
-func NewPRStatusChecker(runner execx.Runner) *PRStatusChecker {
+func NewPRStatusChecker(runner subprocess.Runner) *PRStatusChecker {
 	return &PRStatusChecker{runner: runner}
 }
 

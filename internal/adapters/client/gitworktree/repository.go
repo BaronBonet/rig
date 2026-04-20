@@ -6,14 +6,14 @@ import (
 	"strings"
 
 	"rig/internal/core"
-	"rig/internal/pkg/execx"
+	"rig/internal/pkg/subprocess"
 )
 
 type repository struct {
-	runner execx.Runner
+	runner subprocess.Runner
 }
 
-func New(runner execx.Runner) core.GitWorktreeClient {
+func New(runner subprocess.Runner) core.GitWorktreeClient {
 	return &repository{runner: runner}
 }
 

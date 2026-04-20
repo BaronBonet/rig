@@ -5,14 +5,14 @@ import (
 	"testing"
 
 	"rig/internal/core"
-	"rig/internal/pkg/execx"
+	"rig/internal/pkg/subprocess"
 
 	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
 )
 
 func TestGHPRChecker_ListRepoPullRequests_ReturnsOpenAndDraftPRs(t *testing.T) {
-	runner := execx.NewMockRunner(t)
+	runner := subprocess.NewMockRunner(t)
 	runner.EXPECT().
 		Run(
 			mock.Anything,
@@ -27,7 +27,7 @@ func TestGHPRChecker_ListRepoPullRequests_ReturnsOpenAndDraftPRs(t *testing.T) {
 			"--jq",
 			".[] | [.number, .title, .headRefName, .isDraft] | @tsv",
 		).
-		Return(execx.Result{Stdout: "42\tBilling retry\tfeat/billing\tfalse\n43\tAuth rewrite\tfeat/auth\ttrue\n"}, nil).
+		Return(subprocess.Result{Stdout: "42\tBilling retry\tfeat/billing\tfalse\n43\tAuth rewrite\tfeat/auth\ttrue\n"}, nil).
 		Once()
 
 	checker := NewPRStatusChecker(runner)

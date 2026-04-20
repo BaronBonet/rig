@@ -6,14 +6,14 @@ import (
 	"time"
 
 	"rig/internal/core"
-	"rig/internal/pkg/execx"
+	"rig/internal/pkg/subprocess"
 
 	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
 )
 
 func TestRepositoryBuildLaunchCommand_IncludesPrompt(t *testing.T) {
-	repo := NewRepository(execx.NewMockRunner(t), Config{Binary: "codex"})
+	repo := NewRepository(subprocess.NewMockRunner(t), Config{Binary: "codex"})
 
 	cmd, err := repo.BuildLaunchCommand(&core.Task{
 		Prompt: "add billing retry flow",
@@ -24,7 +24,7 @@ func TestRepositoryBuildLaunchCommand_IncludesPrompt(t *testing.T) {
 }
 
 func TestRepositoryBuildTaskSessionLaunchSpec_UsesBinaryPromptAndTaskPrompt(t *testing.T) {
-	repo := NewRepository(execx.NewMockRunner(t), Config{Binary: "codex"})
+	repo := NewRepository(subprocess.NewMockRunner(t), Config{Binary: "codex"})
 
 	launch, err := repo.BuildTaskSessionLaunchSpec(&core.Task{Prompt: "add billing retry flow"})
 	require.NoError(t, err)
@@ -36,7 +36,7 @@ func TestRepositoryBuildTaskSessionLaunchSpec_UsesBinaryPromptAndTaskPrompt(t *t
 }
 
 func TestRepositoryBuildTaskSessionLaunchSpec_OmitsPrefillInputWhenTaskPromptIsEmpty(t *testing.T) {
-	repo := NewRepository(execx.NewMockRunner(t), Config{Binary: "codex"})
+	repo := NewRepository(subprocess.NewMockRunner(t), Config{Binary: "codex"})
 
 	launch, err := repo.BuildTaskSessionLaunchSpec(&core.Task{Prompt: ""})
 	require.NoError(t, err)
@@ -47,7 +47,7 @@ func TestRepositoryBuildTaskSessionLaunchSpec_OmitsPrefillInputWhenTaskPromptIsE
 }
 
 func TestRepositoryBuildWorkspaceBootstrapSpec_RendersCodexHooksAndForwarderScript(t *testing.T) {
-	repo := NewRepository(execx.NewMockRunner(t), Config{
+	repo := NewRepository(subprocess.NewMockRunner(t), Config{
 		Binary:        "codex",
 		RigBinaryPath: "/tmp/rig-bin",
 		SourceRoot:    "/tmp/source",
@@ -66,10 +66,10 @@ func TestRepositoryBuildWorkspaceBootstrapSpec_RendersCodexHooksAndForwarderScri
 }
 
 func TestRepositorySuggestTaskName_DelegatesToCodexProposal(t *testing.T) {
-	runner := execx.NewMockRunner(t)
+	runner := subprocess.NewMockRunner(t)
 	runner.EXPECT().
 		Run(mock.Anything, "", "codex", "exec", "--skip-git-repo-check", "--output-last-message", mock.Anything, mock.Anything).
-		Return(execx.Result{Stdout: "billing retry flow\n"}, nil).
+		Return(subprocess.Result{Stdout: "billing retry flow\n"}, nil).
 		Once()
 	repo := NewRepository(runner, Config{Binary: "codex"})
 
@@ -80,7 +80,7 @@ func TestRepositorySuggestTaskName_DelegatesToCodexProposal(t *testing.T) {
 }
 
 func TestRepositoryDetectRuntimeState_ReturnsNeedsInputForPrompt(t *testing.T) {
-	repo := NewRepository(execx.NewMockRunner(t), Config{Binary: "codex"})
+	repo := NewRepository(subprocess.NewMockRunner(t), Config{Binary: "codex"})
 
 	state := repo.DetectRuntimeState(core.RuntimeSnapshot{
 		ForegroundCommand: "codex",
@@ -92,10 +92,10 @@ func TestRepositoryDetectRuntimeState_ReturnsNeedsInputForPrompt(t *testing.T) {
 }
 
 func TestRepositoryProposeTaskName_TrimsRunnerOutput(t *testing.T) {
-	runner := execx.NewMockRunner(t)
+	runner := subprocess.NewMockRunner(t)
 	runner.EXPECT().
 		Run(mock.Anything, "", "codex", "exec", "--skip-git-repo-check", "--output-last-message", mock.Anything, mock.Anything).
-		Return(execx.Result{Stdout: "billing retry flow\n"}, nil).
+		Return(subprocess.Result{Stdout: "billing retry flow\n"}, nil).
 		Once()
 	repo := NewRepository(runner, Config{Binary: "codex"})
 
@@ -106,10 +106,10 @@ func TestRepositoryProposeTaskName_TrimsRunnerOutput(t *testing.T) {
 }
 
 func TestRepositoryProposeTaskName_ExtractsFinalTitleFromTranscriptOutput(t *testing.T) {
-	runner := execx.NewMockRunner(t)
+	runner := subprocess.NewMockRunner(t)
 	runner.EXPECT().
 		Run(mock.Anything, "", "codex", "exec", "--skip-git-repo-check", "--output-last-message", mock.Anything, mock.Anything).
-		Return(execx.Result{Stdout: `OpenAI Codex v0.118.0 (research preview)
+		Return(subprocess.Result{Stdout: `OpenAI Codex v0.118.0 (research preview)
 --------
 workdir: /Users/ebon/personal_software/tmux-llm-session
 model: gpt-5.4
@@ -133,10 +133,10 @@ tokens used
 }
 
 func TestRepositoryProposeTaskName_StripsMarkdownTicksFromTitle(t *testing.T) {
-	runner := execx.NewMockRunner(t)
+	runner := subprocess.NewMockRunner(t)
 	runner.EXPECT().
 		Run(mock.Anything, "", "codex", "exec", "--skip-git-repo-check", "--output-last-message", mock.Anything, mock.Anything).
-		Return(execx.Result{Stdout: "Migrate SQLite Repo to `sqlc`\n"}, nil).
+		Return(subprocess.Result{Stdout: "Migrate SQLite Repo to `sqlc`\n"}, nil).
 		Once()
 	repo := NewRepository(runner, Config{Binary: "codex"})
 

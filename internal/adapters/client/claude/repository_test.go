@@ -6,15 +6,15 @@ import (
 	"time"
 
 	"rig/internal/core"
-	"rig/internal/pkg/execx"
 	"rig/internal/pkg/prompts"
+	"rig/internal/pkg/subprocess"
 
 	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
 )
 
 func TestRepositoryBuildLaunchCommand_IncludesPrompt(t *testing.T) {
-	repo := NewRepository(execx.NewMockRunner(t), Config{Binary: "claude"})
+	repo := NewRepository(subprocess.NewMockRunner(t), Config{Binary: "claude"})
 
 	cmd, err := repo.BuildLaunchCommand(&core.Task{
 		Prompt: "add billing retry flow",
@@ -25,7 +25,7 @@ func TestRepositoryBuildLaunchCommand_IncludesPrompt(t *testing.T) {
 }
 
 func TestRepositoryBuildTaskSessionLaunchSpec_UsesBinaryPromptAndTaskPrompt(t *testing.T) {
-	repo := NewRepository(execx.NewMockRunner(t), Config{Binary: "claude"})
+	repo := NewRepository(subprocess.NewMockRunner(t), Config{Binary: "claude"})
 
 	launch, err := repo.BuildTaskSessionLaunchSpec(&core.Task{Prompt: "add billing retry flow"})
 	require.NoError(t, err)
@@ -37,7 +37,7 @@ func TestRepositoryBuildTaskSessionLaunchSpec_UsesBinaryPromptAndTaskPrompt(t *t
 }
 
 func TestRepositoryBuildTaskSessionLaunchSpec_OmitsPrefillInputWhenTaskPromptIsEmpty(t *testing.T) {
-	repo := NewRepository(execx.NewMockRunner(t), Config{Binary: "claude"})
+	repo := NewRepository(subprocess.NewMockRunner(t), Config{Binary: "claude"})
 
 	launch, err := repo.BuildTaskSessionLaunchSpec(&core.Task{Prompt: ""})
 	require.NoError(t, err)
@@ -48,7 +48,7 @@ func TestRepositoryBuildTaskSessionLaunchSpec_OmitsPrefillInputWhenTaskPromptIsE
 }
 
 func TestRepositoryBuildWorkspaceBootstrapSpec_RendersClaudeSettings(t *testing.T) {
-	repo := NewRepository(execx.NewMockRunner(t), Config{
+	repo := NewRepository(subprocess.NewMockRunner(t), Config{
 		Binary:         "claude",
 		HookListenAddr: "127.0.0.1:4000",
 	})
@@ -62,9 +62,9 @@ func TestRepositoryBuildWorkspaceBootstrapSpec_RendersClaudeSettings(t *testing.
 }
 
 func TestRepositorySuggestTaskName_DelegatesToClaudeProposal(t *testing.T) {
-	runner := execx.NewMockRunner(t)
+	runner := subprocess.NewMockRunner(t)
 	runner.EXPECT().
-		RunWithStdin(mock.Anything, execx.RunWithStdinOptions{
+		RunWithStdin(mock.Anything, subprocess.RunWithStdinOptions{
 			Stdin: "add billing retry flow",
 			Name:  "claude",
 			Args: []string{
@@ -74,7 +74,7 @@ func TestRepositorySuggestTaskName_DelegatesToClaudeProposal(t *testing.T) {
 				"--system-prompt", prompts.SuggestTaskPrompt,
 			},
 		}).
-		Return(execx.Result{
+		Return(subprocess.Result{
 			Stdout: `{"type":"result","subtype":"success","result":"{\"branch_type\":\"feat\",\"name\":\"Billing Retry Flow\"}","is_error":false}` + "\n",
 		}, nil).
 		Once()
@@ -87,7 +87,7 @@ func TestRepositorySuggestTaskName_DelegatesToClaudeProposal(t *testing.T) {
 }
 
 func TestRepositoryDetectRuntimeState_ReturnsNeedsInputForPrompt(t *testing.T) {
-	repo := NewRepository(execx.NewMockRunner(t), Config{Binary: "claude"})
+	repo := NewRepository(subprocess.NewMockRunner(t), Config{Binary: "claude"})
 
 	state := repo.DetectRuntimeState(core.RuntimeSnapshot{
 		ForegroundCommand: "claude",
@@ -99,9 +99,9 @@ func TestRepositoryDetectRuntimeState_ReturnsNeedsInputForPrompt(t *testing.T) {
 }
 
 func TestRepositoryProposeTaskName_ParsesJSONOutput(t *testing.T) {
-	runner := execx.NewMockRunner(t)
+	runner := subprocess.NewMockRunner(t)
 	runner.EXPECT().
-		RunWithStdin(mock.Anything, execx.RunWithStdinOptions{
+		RunWithStdin(mock.Anything, subprocess.RunWithStdinOptions{
 			Stdin: "add billing retry flow",
 			Name:  "claude",
 			Args: []string{
@@ -111,7 +111,7 @@ func TestRepositoryProposeTaskName_ParsesJSONOutput(t *testing.T) {
 				"--system-prompt", prompts.SuggestTaskPrompt,
 			},
 		}).
-		Return(execx.Result{
+		Return(subprocess.Result{
 			Stdout: `{"type":"result","subtype":"success","cost_usd":0.002,"duration_ms":1500,"duration_api_ms":1200,"is_error":false,"num_turns":1,"result":"{\"branch_type\":\"feat\",\"name\":\"Billing Retry Flow\"}","session_id":"abc123","total_cost_usd":0.002}` + "\n",
 		}, nil).
 		Once()
@@ -124,9 +124,9 @@ func TestRepositoryProposeTaskName_ParsesJSONOutput(t *testing.T) {
 }
 
 func TestRepositoryProposeTaskName_FallsBackToPlainStringResult(t *testing.T) {
-	runner := execx.NewMockRunner(t)
+	runner := subprocess.NewMockRunner(t)
 	runner.EXPECT().
-		RunWithStdin(mock.Anything, execx.RunWithStdinOptions{
+		RunWithStdin(mock.Anything, subprocess.RunWithStdinOptions{
 			Stdin: "switch sqlite to sqlc",
 			Name:  "claude",
 			Args: []string{
@@ -136,7 +136,7 @@ func TestRepositoryProposeTaskName_FallsBackToPlainStringResult(t *testing.T) {
 				"--system-prompt", prompts.SuggestTaskPrompt,
 			},
 		}).
-		Return(execx.Result{
+		Return(subprocess.Result{
 			Stdout: `{"type":"result","subtype":"success","result":"Migrate to ` + "`sqlc`" + `","is_error":false}` + "\n",
 		}, nil).
 		Once()
@@ -149,9 +149,9 @@ func TestRepositoryProposeTaskName_FallsBackToPlainStringResult(t *testing.T) {
 }
 
 func TestRepositoryProposeTaskName_ReturnsErrorOnEmptyResult(t *testing.T) {
-	runner := execx.NewMockRunner(t)
+	runner := subprocess.NewMockRunner(t)
 	runner.EXPECT().
-		RunWithStdin(mock.Anything, execx.RunWithStdinOptions{
+		RunWithStdin(mock.Anything, subprocess.RunWithStdinOptions{
 			Stdin: "do something",
 			Name:  "claude",
 			Args: []string{
@@ -161,7 +161,7 @@ func TestRepositoryProposeTaskName_ReturnsErrorOnEmptyResult(t *testing.T) {
 				"--system-prompt", prompts.SuggestTaskPrompt,
 			},
 		}).
-		Return(execx.Result{Stdout: `{"type":"result","subtype":"success","result":"","is_error":false}` + "\n"}, nil).
+		Return(subprocess.Result{Stdout: `{"type":"result","subtype":"success","result":"","is_error":false}` + "\n"}, nil).
 		Once()
 	repo := NewRepository(runner, Config{Binary: "claude"})
 
@@ -170,9 +170,9 @@ func TestRepositoryProposeTaskName_ReturnsErrorOnEmptyResult(t *testing.T) {
 }
 
 func TestRepositoryProposeTaskName_ReturnsErrorOnAPIError(t *testing.T) {
-	runner := execx.NewMockRunner(t)
+	runner := subprocess.NewMockRunner(t)
 	runner.EXPECT().
-		RunWithStdin(mock.Anything, execx.RunWithStdinOptions{
+		RunWithStdin(mock.Anything, subprocess.RunWithStdinOptions{
 			Stdin: "do something",
 			Name:  "claude",
 			Args: []string{
@@ -182,7 +182,7 @@ func TestRepositoryProposeTaskName_ReturnsErrorOnAPIError(t *testing.T) {
 				"--system-prompt", prompts.SuggestTaskPrompt,
 			},
 		}).
-		Return(execx.Result{Stdout: `{"type":"result","subtype":"error","result":"API error","is_error":true}` + "\n"}, nil).
+		Return(subprocess.Result{Stdout: `{"type":"result","subtype":"error","result":"API error","is_error":true}` + "\n"}, nil).
 		Once()
 	repo := NewRepository(runner, Config{Binary: "claude"})
 
@@ -191,10 +191,10 @@ func TestRepositoryProposeTaskName_ReturnsErrorOnAPIError(t *testing.T) {
 }
 
 func TestRepositoryIsAvailable_CallsClaudeVersion(t *testing.T) {
-	runner := execx.NewMockRunner(t)
+	runner := subprocess.NewMockRunner(t)
 	runner.EXPECT().
 		Run(mock.Anything, "", "claude", "--version").
-		Return(execx.Result{Stdout: "1.0.0\n"}, nil).
+		Return(subprocess.Result{Stdout: "1.0.0\n"}, nil).
 		Once()
 	repo := NewRepository(runner, Config{Binary: "claude"})
 
