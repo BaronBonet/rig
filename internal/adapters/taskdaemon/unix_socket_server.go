@@ -78,6 +78,12 @@ func (s *unixSocketServer) handleConn(ctx context.Context, conn net.Conn) {
 	switch req.Command {
 	case "health":
 		_ = encoder.Encode(socketEnvelope{Type: "health", OK: true})
+	case "protocol_version":
+		_ = encoder.Encode(socketEnvelope{
+			Type:    "protocol_version",
+			OK:      true,
+			Version: currentFrontendProtocolVersion,
+		})
 	case "create_task":
 		s.handleCreateTask(ctx, encoder, req)
 	case "list_tasks":
