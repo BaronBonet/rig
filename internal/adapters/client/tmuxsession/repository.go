@@ -55,7 +55,7 @@ func (r *repository) DeleteTaskSession(ctx context.Context, task *core.Task) err
 		return nil
 	}
 
-	_, err := r.runner.Run(
+	result, err := r.runner.Run(
 		ctx,
 		"",
 		"tmux",
@@ -63,6 +63,10 @@ func (r *repository) DeleteTaskSession(ctx context.Context, task *core.Task) err
 		"-t",
 		exactSessionTarget(task.TmuxSession),
 	)
+	if isMissingSessionError(err, result) {
+		return nil
+	}
+
 	return err
 }
 
@@ -209,4 +213,20 @@ func exactWindowTarget(session, window string) string {
 
 func normalizedSessionName(session string) string {
 	return strings.ReplaceAll(session, ":", "-")
+}
+
+func isMissingSessionError(err error, result subprocess.Result) bool {
+	if err == nil {
+		return false
+	}
+
+	stderr := result.Stderr
+	if strings.TrimSpace(stderr) == "" {
+		var commandErr subprocess.CommandError
+		if errors.As(err, &commandErr) {
+			stderr = commandErr.Stderr
+		}
+	}
+
+	return strings.Contains(strings.ToLower(stderr), "can't find session")
 }
