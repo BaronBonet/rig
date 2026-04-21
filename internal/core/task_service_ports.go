@@ -108,23 +108,6 @@ type HookEventInput struct {
 	StartSource          string
 }
 
-type SessionResources struct {
-	SessionExists      bool
-	TaskWindowExists   bool
-	EditorWindowExists bool
-}
-
-type RuntimeSnapshot struct {
-	ObservedAt        time.Time
-	LastOutputAt      time.Time
-	SessionName       string
-	WindowName        string
-	PaneID            string
-	ForegroundCommand string
-	Content           string
-	HadAgentBinding   bool
-}
-
 // TaskDaemon is the application port for the local daemon-backed task
 // frontend subsystem.
 //
@@ -237,12 +220,8 @@ type TmuxSessionClient interface {
 	StartTaskSession(ctx context.Context, task *Task, launch TaskSessionLaunchSpec) error
 	// OpenTaskSession attaches to an existing task session.
 	OpenTaskSession(ctx context.Context, task *Task) error
-	// DeleteTaskSession tears down the task session.
+	// DeleteTaskSession tears down the task session during task deletion.
 	DeleteTaskSession(ctx context.Context, task *Task) error
-	// InspectTaskSession reports the current session-side resources for a task.
-	InspectTaskSession(ctx context.Context, task *Task) (SessionResources, error)
-	// SnapshotTaskSession captures a runtime snapshot of the current task session.
-	SnapshotTaskSession(ctx context.Context, task *Task) (RuntimeSnapshot, error)
 }
 
 // TaskWorkspaceManager applies repo-local setup and provider bootstrap files

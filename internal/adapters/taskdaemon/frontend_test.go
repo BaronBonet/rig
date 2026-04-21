@@ -8,10 +8,9 @@ import (
 	"net"
 	"os"
 	"reflect"
+	"rig/internal/core"
 	"testing"
 	"time"
-
-	"rig/internal/core"
 
 	"github.com/stretchr/testify/require"
 )
@@ -388,14 +387,6 @@ func (s *stubTaskSessionClient) OpenTaskSession(ctx context.Context, task *core.
 
 func (s *stubTaskSessionClient) DeleteTaskSession(context.Context, *core.Task) error {
 	panic("unexpected DeleteTaskSession call")
-}
-
-func (s *stubTaskSessionClient) InspectTaskSession(context.Context, *core.Task) (core.SessionResources, error) {
-	panic("unexpected InspectTaskSession call")
-}
-
-func (s *stubTaskSessionClient) SnapshotTaskSession(context.Context, *core.Task) (core.RuntimeSnapshot, error) {
-	panic("unexpected SnapshotTaskSession call")
 }
 
 func TestFrontend_ReturnsExplicitErrorsOnErrorEnvelopesAndUnexpectedTypes(t *testing.T) {

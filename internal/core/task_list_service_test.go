@@ -7,6 +7,20 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+type minimalTmuxSessionClient struct{}
+
+func (minimalTmuxSessionClient) StartTaskSession(context.Context, *Task, TaskSessionLaunchSpec) error {
+	return nil
+}
+
+func (minimalTmuxSessionClient) OpenTaskSession(context.Context, *Task) error {
+	return nil
+}
+
+func (minimalTmuxSessionClient) DeleteTaskSession(context.Context, *Task) error {
+	return nil
+}
+
 func TestTaskFrontendContract_ExposesCreateListAndStatusMethods(t *testing.T) {
 	var _ interface {
 		OpenTaskSession(context.Context, *Task) error
@@ -24,6 +38,10 @@ func TestTaskServiceContract_ExposesListTasks(t *testing.T) {
 		DeleteTask(context.Context, string) error
 		ListTasks(context.Context) ([]*Task, error)
 	} = (TaskService)(nil)
+}
+
+func TestTmuxSessionClientContract_OnlyRequiresTaskLifecycleMethods(t *testing.T) {
+	var _ TmuxSessionClient = minimalTmuxSessionClient{}
 }
 
 func TestTaskService_ListTasksReturnsRepositoryTasks(t *testing.T) {
