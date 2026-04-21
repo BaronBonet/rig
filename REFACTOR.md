@@ -9,13 +9,24 @@ The problem in the current code is not the existence of boundaries. The problem 
 The target shape is:
 
 - one business-facing `TaskService`
-- three adapter families only:
+- a small set of adapter families only:
   - `handler`
   - `repository`
   - `client`
+  - `taskdaemon`
 - a small set of business-shaped ports
 - fewer public methods
 - fewer implementation details exposed in `core`
+
+`taskdaemon` is the one explicit exception to the old “only handler/repository/client”
+rule. It is now a single cohesive adapter subsystem that owns:
+
+- the local daemon server
+- the Unix-socket frontend client
+- the daemon process lifecycle
+
+Trying to force those pieces back into separate top-level `handler/...` and
+`client/...` packages made the subsystem harder to understand, not simpler.
 
 Additional working rules:
 
@@ -44,33 +55,64 @@ This is intentionally not a compatibility-first migration. If legacy code breaks
 
 ## Current Source Of Truth
 
-Right now, the active implementation path is:
+Right now, the active implementation path is the daemon-backed task/TUI slice:
 
+- [cmd/rig/main.go](/Users/ebon/personal_software/rig/cmd/rig/main.go)
 - [cmd/debug/main.go](/Users/ebon/personal_software/rig/cmd/debug/main.go)
 
-This is the path we are using to wire the new architecture together and verify that the `CreateTask` flow works end to end.
+This is the path we are using to wire the new architecture together and verify
+that the task lifecycle works end to end.
 
 That means:
 
-- if the new architecture works through `cmd/debug/main.go`, that is progress
-- if old application paths still depend on legacy services, that is not the current priority
+- if the new architecture works through `cmd/rig/main.go`, that is the primary signal
+- `cmd/debug/main.go` is still useful as a narrow development harness
+- old paths that are outside this slice are not the current priority
 
-Verified on 2026-04-19:
+Verified on 2026-04-21:
 
-- `go run ./cmd/debug` produced the supported Codex status path end to end
-- `SessionStart` streamed as `starting`
-- normal turns streamed `working` and then `waiting_for_input`
+- `rig` now runs through the daemon-backed TUI path
+- the daemon is auto-started by the root entrypoint when needed
+- task creation, task listing, latest-status reads, and per-task status subscriptions
+  run through `TaskFrontend`
+- Codex hooks are ingested through the unified `taskdaemon` adapter
+- `SessionStart` streams as `starting`
+- `UserPromptSubmit`, `PreToolUse`, and `PostToolUse` stream as `working`
+- `Stop` streams as `waiting_for_input`
 - approval-selector / permission-request state remains deferred
 
 ## Status Of `cmd/rig/main.go`
 
-- [cmd/rig/main.go](/Users/ebon/personal_software/rig/cmd/rig/main.go) is not the current driver of this refactor
-- it may still contain legacy wiring
-- it should not block architectural cleanup on the debug path
+- [cmd/rig/main.go](/Users/ebon/personal_software/rig/cmd/rig/main.go) is now the real
+  entrypoint for the active slice
+- it ensures the local task daemon is running and launches the new TUI
+- it is no longer a legacy compatibility path
 
-For now, `cmd/rig/main.go` is effectively secondary. It can be kept compiling if convenient, but it is not the source of truth for the refactor.
+`cmd/debug/main.go` still exists as a useful narrow harness for task creation
+and hook/status debugging, but it is not the primary product entrypoint anymore.
 
-If maintaining it starts slowing down the cleanup of the new architecture, it is acceptable to delete it and rebuild it later on top of the finished boundaries.
+## Current Runtime Shape
+
+The active runtime shape is now:
+
+- `cmd/rig` composes the application and ensures the task daemon exists
+- `internal/adapters/taskdaemon` owns:
+  - daemon serving
+  - Unix-socket frontend transport
+  - daemon process management
+- `internal/adapters/handler/tui` renders the browse/create MVP against `TaskFrontend`
+- `TaskService` owns:
+  - `CreateTask`
+  - `ListTasks`
+  - `LatestTaskStatus`
+  - `SubscribeTaskStatus`
+  - `HandleHookEvent`
+- `tasksqlite` is the active durable task repository
+- `gitworktree`, `tmuxsession`, and `codexagent` are the active operational adapters
+- `workspace` owns repo-local setup plus provider bootstrap file writing
+
+This slice is intentionally Codex-only for now. Claude support and other legacy
+provider/runtime paths were removed rather than carried forward as dead weight.
 
 ## What “Done” Looks Like
 
@@ -89,13 +131,15 @@ This refactor is successful when:
 Until further notice:
 
 - optimize for the new architecture
-- treat `cmd/debug/main.go` as the active execution path
+- treat `cmd/rig/main.go` as the primary execution path
+- use `cmd/debug/main.go` as a focused harness when that is useful
+- keep the active slice Codex-only
 - treat Codex status streaming as normal-turn streaming only:
   - `SessionStart` -> `starting`
   - `UserPromptSubmit`, `PreToolUse`, `PostToolUse` -> `working`
   - `Stop` -> `waiting_for_input`
 - approval-selector / permission-request detection is deferred until Codex exposes a reliable hook for it
-- do not preserve legacy complexity just to keep old paths alive
-- only bring `cmd/rig/main.go` along when it is cheap or useful
+- do not preserve legacy complexity just to keep removed providers or dead paths alive
 - prefer smaller, more direct boundaries over “helpful” extra abstractions
 - when a package exists to satisfy a core port, expose it through that port at construction time
+- keep daemon protocol concerns inside `internal/adapters/taskdaemon` rather than splitting them across multiple top-level packages
