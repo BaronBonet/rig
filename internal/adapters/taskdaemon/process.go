@@ -31,7 +31,10 @@ func ensureRunning(ctx context.Context, cfg Config) error {
 	}
 
 	if err := probeSocketHealth(ctx, cfg.SocketPath); err == nil {
-		return nil
+		if err := probeFrontendProtocol(ctx, cfg.SocketPath); err == nil {
+			return nil
+		}
+		return restartDaemon(ctx, cfg)
 	}
 
 	if err := spawnTaskDaemonProcess(ctx, cfg.ExecPath, cfg.Env); err != nil {

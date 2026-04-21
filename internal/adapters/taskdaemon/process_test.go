@@ -119,6 +119,32 @@ func TestAdapterEnsureRunning_UsesDefaultExecutableAndConfiguredEnvToStartDaemon
 	require.NoError(t, waitForSocketRemoval(socketPath, 2*time.Second))
 }
 
+func TestAdapterEnsureRunning_RestartsStaleHealthyDaemonMissingFrontendProtocol(t *testing.T) {
+	t.Parallel()
+
+	socketPath := processTestSocketPath(t)
+	adapter := New(processTestHelperConfig(t, socketPath))
+
+	manualListener, err := net.Listen("unix", socketPath)
+	require.NoError(t, err)
+	defer manualListener.Close()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	var stopSeen atomic.Bool
+	errCh := make(chan error, 1)
+	go serveLegacyTestDaemon(ctx, manualListener, &stopSeen, errCh)
+
+	require.NoError(t, adapter.EnsureRunning(context.Background()))
+	require.True(t, stopSeen.Load())
+
+	cancel()
+	require.NoError(t, <-errCh)
+	require.NoError(t, stopTaskDaemon(context.Background(), socketPath))
+	require.NoError(t, waitForSocketRemoval(socketPath, 2*time.Second))
+}
+
 func TestAdapterRestart_StopsExistingDaemonAndStartsFreshProcess(t *testing.T) {
 	t.Parallel()
 
@@ -315,7 +341,76 @@ func serveTestDaemon(
 	}
 }
 
+func serveLegacyTestDaemon(
+	ctx context.Context,
+	listener net.Listener,
+	stopSeen *atomic.Bool,
+	errCh chan<- error,
+) {
+	defer listener.Close()
+	defer close(errCh)
+
+	for {
+		if err := listener.(*net.UnixListener).SetDeadline(time.Now().Add(50 * time.Millisecond)); err != nil {
+			errCh <- err
+			return
+		}
+
+		conn, acceptErr := listener.Accept()
+		if acceptErr != nil {
+			if ne, ok := acceptErr.(net.Error); ok && ne.Timeout() {
+				select {
+				case <-ctx.Done():
+					errCh <- nil
+					return
+				default:
+					continue
+				}
+			}
+			errCh <- acceptErr
+			return
+		}
+
+		if err := handleLegacyTestDaemonConnection(conn, stopSeen); err != nil {
+			_ = conn.Close()
+			errCh <- err
+			return
+		}
+		_ = conn.Close()
+
+		if stopSeen.Load() {
+			errCh <- nil
+			return
+		}
+	}
+}
+
 func handleTestDaemonConnection(conn net.Conn, stopSeen *atomic.Bool) error {
+	var req socketRequest
+	if err := json.NewDecoder(bufio.NewReader(conn)).Decode(&req); err != nil {
+		return err
+	}
+
+	resp := socketEnvelope{OK: true}
+	switch req.Command {
+	case "health":
+		resp.Type = "health"
+	case "protocol_version":
+		resp.Type = "protocol_version"
+		resp.Version = currentFrontendProtocolVersion
+	case "stop":
+		resp.Type = "stopping"
+		stopSeen.Store(true)
+	default:
+		resp.Type = "error"
+		resp.OK = false
+		resp.Error = "unexpected command"
+	}
+
+	return json.NewEncoder(conn).Encode(resp)
+}
+
+func handleLegacyTestDaemonConnection(conn net.Conn, stopSeen *atomic.Bool) error {
 	var req socketRequest
 	if err := json.NewDecoder(bufio.NewReader(conn)).Decode(&req); err != nil {
 		return err
@@ -331,7 +426,7 @@ func handleTestDaemonConnection(conn net.Conn, stopSeen *atomic.Bool) error {
 	default:
 		resp.Type = "error"
 		resp.OK = false
-		resp.Error = "unexpected command"
+		resp.Error = "unsupported command"
 	}
 
 	return json.NewEncoder(conn).Encode(resp)

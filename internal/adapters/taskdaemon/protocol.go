@@ -13,6 +13,8 @@ import (
 	"rig/internal/core"
 )
 
+const currentFrontendProtocolVersion = 1
+
 type socketRequest struct {
 	Command string                `json:"command"`
 	TaskID  string                `json:"task_id,omitempty"`
@@ -20,12 +22,13 @@ type socketRequest struct {
 }
 
 type socketEnvelope struct {
-	Type   string                 `json:"type"`
-	OK     bool                   `json:"ok,omitempty"`
-	Error  string                 `json:"error,omitempty"`
-	Task   *core.Task             `json:"task,omitempty"`
-	Tasks  []*core.Task           `json:"tasks,omitempty"`
-	Update *core.TaskStatusUpdate `json:"update,omitempty"`
+	Type    string                 `json:"type"`
+	OK      bool                   `json:"ok,omitempty"`
+	Error   string                 `json:"error,omitempty"`
+	Task    *core.Task             `json:"task,omitempty"`
+	Tasks   []*core.Task           `json:"tasks,omitempty"`
+	Update  *core.TaskStatusUpdate `json:"update,omitempty"`
+	Version int                    `json:"version,omitempty"`
 }
 
 func dialDaemonSocket(ctx context.Context, socketPath string) (net.Conn, error) {
@@ -69,6 +72,34 @@ func probeSocketHealth(ctx context.Context, socketPath string) error {
 			return fmt.Errorf("task daemon unhealthy: %s", resp.Error)
 		}
 		return fmt.Errorf("task daemon unhealthy")
+	}
+
+	return nil
+}
+
+func probeFrontendProtocol(ctx context.Context, socketPath string) error {
+	conn, err := dialDaemonSocket(ctx, socketPath)
+	if err != nil {
+		return err
+	}
+	defer conn.Close()
+
+	if err := json.NewEncoder(conn).Encode(socketRequest{Command: "protocol_version"}); err != nil {
+		return err
+	}
+
+	var resp socketEnvelope
+	if err := json.NewDecoder(bufio.NewReader(conn)).Decode(&resp); err != nil {
+		return err
+	}
+	if resp.Type == "error" && resp.Error != "" {
+		return errors.New(resp.Error)
+	}
+	if resp.Type != "protocol_version" || !resp.OK {
+		return fmt.Errorf("task daemon protocol probe failed")
+	}
+	if resp.Version != currentFrontendProtocolVersion {
+		return fmt.Errorf("task daemon protocol version mismatch: got %d want %d", resp.Version, currentFrontendProtocolVersion)
 	}
 
 	return nil
