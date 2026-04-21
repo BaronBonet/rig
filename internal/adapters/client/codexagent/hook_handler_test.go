@@ -75,6 +75,10 @@ func (s *stubTaskService) CreateTask(context.Context, core.CreateTaskInput) (*co
 	return nil, nil
 }
 
+func (s *stubTaskService) ListTasks(context.Context) ([]*core.Task, error) {
+	return nil, nil
+}
+
 func (s *stubTaskService) LatestTaskStatus(context.Context, string) (*core.TaskStatusUpdate, error) {
 	return nil, nil
 }

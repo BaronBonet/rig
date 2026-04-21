@@ -114,6 +114,18 @@ The active runtime shape is now:
 This slice is intentionally Codex-only for now. Claude support and other legacy
 provider/runtime paths were removed rather than carried forward as dead weight.
 
+The important runtime split is:
+
+- `TaskFrontend` is the client-side application port used by the TUI
+- the taskdaemon adapter's `Frontend()` method returns the Unix-socket client
+  that implements that port
+- `TaskDaemon.Serve(...)` is the daemon-side server path that serves both the
+  frontend socket protocol and the provider hook HTTP routes
+
+So the TUI does not talk to `TaskService` directly. It talks to a
+daemon-backed `TaskFrontend`, and the daemon server forwards those requests
+into `TaskService`.
+
 ## What “Done” Looks Like
 
 This refactor is successful when:
@@ -143,3 +155,6 @@ Until further notice:
 - prefer smaller, more direct boundaries over “helpful” extra abstractions
 - when a package exists to satisfy a core port, expose it through that port at construction time
 - keep daemon protocol concerns inside `internal/adapters/taskdaemon` rather than splitting them across multiple top-level packages
+- keep the client-side `TaskFrontend` view of the daemon separate from the
+  daemon-serving `TaskDaemon.Serve(...)` path so the TUI stays unaware of
+  transport and lifecycle details
