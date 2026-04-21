@@ -39,15 +39,14 @@ func TestRun_EnsuresTaskDaemonBeforeLaunchingTUI(t *testing.T) {
 	require.Equal(t, []string{"ensure", "ui"}, calls)
 }
 
-func TestDaemonHookRoutes_IncludesClaudeHookRoute(t *testing.T) {
+func TestDaemonHookRoutes_ExposeCodexHooksOnly(t *testing.T) {
 	t.Parallel()
 
 	routes := daemonHookRoutes(nil)
-	require.Len(t, routes, 3)
-	require.Equal(t, []string{"/hook", "/codex-hook", "/claude-hook"}, []string{
+	require.Len(t, routes, 2)
+	require.Equal(t, []string{"/hook", "/codex-hook"}, []string{
 		routes[0].Path,
 		routes[1].Path,
-		routes[2].Path,
 	})
 }
 

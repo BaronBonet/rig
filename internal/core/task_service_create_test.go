@@ -87,11 +87,11 @@ func TestTaskServiceCreateTask_FailsWhenRequestedProviderIsUnavailable(t *testin
 	task, err := svc.service.CreateTask(t.Context(), CreateTaskInput{
 		Cwd:      "/tmp/repo",
 		Prompt:   "add billing retry flow",
-		Provider: AgentProviderClaude,
+		Provider: AgentProvider("gemini"),
 	})
 
 	require.Nil(t, task)
-	require.EqualError(t, err, `agent provider "claude" unavailable`)
+	require.EqualError(t, err, `agent provider "gemini" unavailable`)
 	require.Nil(t, svc.taskRepo.createdTask)
 	require.Nil(t, svc.repoClient.createdTask)
 	require.False(t, svc.workspace.setupCalled)
@@ -161,7 +161,7 @@ func TestTaskServiceCreateTask_ReturnsErrorWithoutPersistingLifecycleWhenWorkspa
 	svc.providerRepo.suggestedName = "billing retry flow"
 	svc.workspace.setupErr = errors.New("setup script failed")
 	svc.providerRepo.bootstrapSpec = WorkspaceBootstrapSpec{Files: []WorkspaceBootstrapFile{{
-		Path:     ".claude/settings.local.json",
+		Path:     ".codex/hooks.json",
 		Content:  []byte("{}"),
 		FileMode: 0o644,
 	}}}

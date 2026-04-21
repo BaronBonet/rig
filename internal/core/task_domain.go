@@ -75,8 +75,7 @@ type TaskStatusUpdate struct {
 type AgentProvider string
 
 const (
-	AgentProviderCodex  AgentProvider = "codex"
-	AgentProviderClaude AgentProvider = "claude"
+	AgentProviderCodex AgentProvider = "codex"
 )
 
 // TaskSessionLaunchSpec is the handoff from an agent client to the tmux
@@ -86,7 +85,7 @@ const (
 // describes how the tmux adapter should start the provider's CLI.
 type TaskSessionLaunchSpec struct {
 	// Command is the argv launched in the task's agent tmux window, for example
-	// []string{"codex"} or []string{"claude", "--resume", "<session-id>"}.
+	// []string{"codex"}.
 	Command []string
 	// ReadyMarker is the terminal prompt marker emitted by the agent when it is
 	// ready to receive interactive input. The tmux session client waits for this
