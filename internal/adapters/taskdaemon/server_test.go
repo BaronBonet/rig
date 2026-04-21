@@ -24,7 +24,11 @@ func TestUnixSocketServer_CreateTaskCallsTaskService(t *testing.T) {
 
 	socketPath := serverTestSocketPath(t)
 	svc := &stubTaskService{
-		createTaskFn: func(_ context.Context, input core.CreateTaskInput) (*core.Task, error) {
+		createTaskWithProgressFn: func(
+			_ context.Context,
+			input core.CreateTaskInput,
+			_ core.TaskCreateProgressReporter,
+		) (*core.Task, error) {
 			require.Equal(t, core.CreateTaskInput{
 				Cwd:      "/tmp/repo",
 				Prompt:   "add retries",
@@ -69,10 +73,15 @@ func TestUnixSocketServer_CreateTaskStreamsProgressBeforeTerminalResult(t *testi
 
 	socketPath := serverTestSocketPath(t)
 	svc := &stubTaskService{
-		createTaskFn: func(ctx context.Context, input core.CreateTaskInput) (*core.Task, error) {
+		createTaskWithProgressFn: func(
+			ctx context.Context,
+			input core.CreateTaskInput,
+			reporter core.TaskCreateProgressReporter,
+		) (*core.Task, error) {
 			require.Equal(t, "add retries", input.Prompt)
-			core.ReportTaskCreateProgress(ctx, core.TaskCreateProgressSuggestingName)
-			core.ReportTaskCreateProgress(ctx, core.TaskCreateProgressCreatingWorktree)
+			require.NotNil(t, reporter)
+			reporter.ReportTaskCreateProgress(core.TaskCreateProgressSuggestingName)
+			reporter.ReportTaskCreateProgress(core.TaskCreateProgressCreatingWorktree)
 			return &core.Task{
 				ID:          "task-1",
 				DisplayName: "add retries",
@@ -116,9 +125,14 @@ func TestUnixSocketServer_CreateTaskStreamsTerminalErrorOnFailure(t *testing.T) 
 
 	socketPath := serverTestSocketPath(t)
 	svc := &stubTaskService{
-		createTaskFn: func(ctx context.Context, input core.CreateTaskInput) (*core.Task, error) {
+		createTaskWithProgressFn: func(
+			ctx context.Context,
+			input core.CreateTaskInput,
+			reporter core.TaskCreateProgressReporter,
+		) (*core.Task, error) {
 			require.Equal(t, "add retries", input.Prompt)
-			core.ReportTaskCreateProgress(ctx, core.TaskCreateProgressPreparingWorkspace)
+			require.NotNil(t, reporter)
+			reporter.ReportTaskCreateProgress(core.TaskCreateProgressPreparingWorkspace)
 			return nil, assertiveError("create failed")
 		},
 	}
@@ -371,16 +385,20 @@ func TestHTTPHookServer_DelegatesToInjectedHookHandler(t *testing.T) {
 }
 
 type stubTaskService struct {
-	createTaskFn          func(context.Context, core.CreateTaskInput) (*core.Task, error)
-	deleteTaskFn          func(context.Context, string) error
-	listTasksFn           func(context.Context) ([]*core.Task, error)
-	latestTaskStatusFn    func(context.Context, string) (*core.TaskStatusUpdate, error)
-	subscribeTaskStatusFn func(context.Context, string) (<-chan core.TaskStatusUpdate, error)
-	handleHookEventFn     func(context.Context, core.HookEventInput) error
+	createTaskWithProgressFn func(context.Context, core.CreateTaskInput, core.TaskCreateProgressReporter) (*core.Task, error)
+	deleteTaskFn             func(context.Context, string) error
+	listTasksFn              func(context.Context) ([]*core.Task, error)
+	latestTaskStatusFn       func(context.Context, string) (*core.TaskStatusUpdate, error)
+	subscribeTaskStatusFn    func(context.Context, string) (<-chan core.TaskStatusUpdate, error)
+	handleHookEventFn        func(context.Context, core.HookEventInput) error
 }
 
-func (s *stubTaskService) CreateTask(ctx context.Context, input core.CreateTaskInput) (*core.Task, error) {
-	return s.createTaskFn(ctx, input)
+func (s *stubTaskService) CreateTaskWithProgress(
+	ctx context.Context,
+	input core.CreateTaskInput,
+	reporter core.TaskCreateProgressReporter,
+) (*core.Task, error) {
+	return s.createTaskWithProgressFn(ctx, input, reporter)
 }
 
 func (s *stubTaskService) DeleteTask(ctx context.Context, taskID string) error {

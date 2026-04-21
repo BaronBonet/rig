@@ -329,7 +329,7 @@ func TestModel_CreateTaskFromPromptAppendsTaskAndStartsStatusTracking(t *testing
 		{ID: "task-1", DisplayName: "first task", RepoName: "repo-a", Provider: core.ProviderCodex},
 		{ID: "task-2", DisplayName: "second task", RepoName: "repo-b", Provider: core.ProviderCodex},
 	}
-	frontend.createdTask = &core.Task{
+	createdTask := &core.Task{
 		ID:          "task-3",
 		DisplayName: "new task",
 		RepoName:    "repo-c",
@@ -337,7 +337,7 @@ func TestModel_CreateTaskFromPromptAppendsTaskAndStartsStatusTracking(t *testing
 	}
 	frontend.createTaskEvents = []core.TaskCreateEvent{
 		{Progress: &core.TaskCreateProgressEvent{Step: core.TaskCreateProgressSuggestingName}},
-		{Task: frontend.createdTask},
+		{Task: createdTask},
 	}
 	frontend.latestTaskStatus = map[string]*core.TaskStatusUpdate{
 		"task-3": {
@@ -394,7 +394,7 @@ func TestModel_CreateTaskFromPromptAppendsTaskAndStartsStatusTracking(t *testing
 	require.Equal(t, core.ProviderCodex, frontend.createInput.Provider)
 	require.Equal(t, 1, frontend.createTaskStreamCalls)
 
-	frontend.listTasks = append(frontend.listTasks, frontend.createdTask)
+	frontend.listTasks = append(frontend.listTasks, createdTask)
 	msgs := runBatchCmd(t, follow)
 	require.Len(t, msgs, 3)
 	tasksLoaded := requireMsgType[tasksLoadedMsg](t, msgs)
@@ -419,14 +419,14 @@ func TestModel_CreateTaskReloadsAuthoritativeTaskSnapshotWhenCreateResponseIsPar
 	frontend.listTasks = []*core.Task{
 		{ID: "task-1", DisplayName: "first task", RepoName: "repo-a", Provider: core.ProviderCodex},
 	}
-	frontend.createdTask = &core.Task{
+	createdTask := &core.Task{
 		ID:       "task-2",
 		Prompt:   "testing if new rig things work",
 		Provider: core.ProviderCodex,
 	}
 	frontend.createTaskEvents = []core.TaskCreateEvent{
 		{Progress: &core.TaskCreateProgressEvent{Step: core.TaskCreateProgressSuggestingName}},
-		{Task: frontend.createdTask},
+		{Task: createdTask},
 	}
 	frontend.latestTaskStatus = map[string]*core.TaskStatusUpdate{
 		"task-2": {
@@ -517,7 +517,6 @@ func TestModel_CreateTaskFailureKeepsPromptRecoverableAndPreservesListView(t *te
 		{ID: "task-1", DisplayName: "first task", RepoName: "repo-a", Provider: core.ProviderCodex},
 		{ID: "task-2", DisplayName: "second task", RepoName: "repo-b", Provider: core.ProviderCodex},
 	}
-	frontend.createTaskErr = errors.New("create failed")
 	frontend.createTaskEvents = []core.TaskCreateEvent{
 		{Progress: &core.TaskCreateProgressEvent{Step: core.TaskCreateProgressCreatingWorktree}},
 		{Err: errors.New("create failed")},
@@ -772,10 +771,7 @@ type stubFrontend struct {
 	openedTask               *core.Task
 	openTaskSessionErr       error
 	openTaskSessionCalls     int
-	createdTask              *core.Task
 	createInput              core.CreateTaskInput
-	createTaskErr            error
-	createTaskCalls          int
 	createTaskEvents         []core.TaskCreateEvent
 	createTaskStreamErr      error
 	createTaskStreamCalls    int
@@ -797,12 +793,6 @@ func (s *stubFrontend) OpenTaskSession(_ context.Context, task *core.Task) error
 	s.openTaskSessionCalls++
 	s.openedTask = task
 	return s.openTaskSessionErr
-}
-
-func (s *stubFrontend) CreateTask(_ context.Context, input core.CreateTaskInput) (*core.Task, error) {
-	s.createTaskCalls++
-	s.createInput = input
-	return s.createdTask, s.createTaskErr
 }
 
 func (s *stubFrontend) CreateTaskStream(

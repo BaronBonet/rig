@@ -8,9 +8,9 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func TestTaskServiceContract_ExposesCreateTask(t *testing.T) {
+func TestTaskServiceContract_ExposesCreateTaskWithProgress(t *testing.T) {
 	var _ interface {
-		CreateTask(context.Context, CreateTaskInput) (*Task, error)
+		CreateTaskWithProgress(context.Context, CreateTaskInput, TaskCreateProgressReporter) (*Task, error)
 	} = (TaskService)(nil)
 }
 
@@ -49,10 +49,10 @@ func TestTaskServiceCreateTask_CreatesWorkspaceSessionAndPersistsTask(t *testing
 		FileMode: 0o644,
 	}}}
 
-	task, err := svc.service.CreateTask(t.Context(), CreateTaskInput{
+	task, err := svc.service.CreateTaskWithProgress(t.Context(), CreateTaskInput{
 		Cwd:    "/tmp/repo",
 		Prompt: "add billing retry flow",
-	})
+	}, nil)
 
 	require.NoError(t, err)
 	require.Equal(t, "billing retry flow", task.DisplayName)
@@ -84,11 +84,11 @@ func TestTaskServiceCreateTask_CreatesWorkspaceSessionAndPersistsTask(t *testing
 func TestTaskServiceCreateTask_FailsWhenRequestedProviderIsUnavailable(t *testing.T) {
 	svc := newTestTaskService(t)
 
-	task, err := svc.service.CreateTask(t.Context(), CreateTaskInput{
+	task, err := svc.service.CreateTaskWithProgress(t.Context(), CreateTaskInput{
 		Cwd:      "/tmp/repo",
 		Prompt:   "add billing retry flow",
 		Provider: Provider("gemini"),
-	})
+	}, nil)
 
 	require.Nil(t, task)
 	require.EqualError(t, err, `provider "gemini" unavailable`)
@@ -103,10 +103,10 @@ func TestTaskServiceCreateTask_FailsWhenTaskNameSuggestionFails(t *testing.T) {
 	svc := newTestTaskService(t)
 	svc.providerRepo.suggestErr = errors.New("codex unavailable")
 
-	task, err := svc.service.CreateTask(t.Context(), CreateTaskInput{
+	task, err := svc.service.CreateTaskWithProgress(t.Context(), CreateTaskInput{
 		Cwd:    "/tmp/repo",
 		Prompt: "add billing retry flow",
-	})
+	}, nil)
 
 	require.Nil(t, task)
 	require.EqualError(t, err, "suggest task name: codex unavailable")
@@ -121,10 +121,10 @@ func TestTaskServiceCreateTask_FailsWhenTaskNameSuggestionIsEmpty(t *testing.T) 
 	svc := newTestTaskService(t)
 	svc.providerRepo.suggestedSuggestion = TaskSuggestion{Name: "", BranchType: "feat"}
 
-	task, err := svc.service.CreateTask(t.Context(), CreateTaskInput{
+	task, err := svc.service.CreateTaskWithProgress(t.Context(), CreateTaskInput{
 		Cwd:    "/tmp/repo",
 		Prompt: "add billing retry flow",
-	})
+	}, nil)
 
 	require.Nil(t, task)
 	require.EqualError(t, err, "suggest task name: empty task name")
@@ -140,10 +140,10 @@ func TestTaskServiceCreateTask_ReturnsErrorWithoutPersistingLifecycleWhenWorkspa
 	svc.providerRepo.suggestedName = "billing retry flow"
 	svc.providerRepo.bootstrapErr = errors.New("bootstrap failed")
 
-	task, err := svc.service.CreateTask(t.Context(), CreateTaskInput{
+	task, err := svc.service.CreateTaskWithProgress(t.Context(), CreateTaskInput{
 		Cwd:    "/tmp/repo",
 		Prompt: "add billing retry flow",
-	})
+	}, nil)
 
 	require.Error(t, err)
 	require.NotNil(t, task)
@@ -166,10 +166,10 @@ func TestTaskServiceCreateTask_ReturnsErrorWithoutPersistingLifecycleWhenWorkspa
 		FileMode: 0o644,
 	}}}
 
-	task, err := svc.service.CreateTask(t.Context(), CreateTaskInput{
+	task, err := svc.service.CreateTaskWithProgress(t.Context(), CreateTaskInput{
 		Cwd:    "/tmp/repo",
 		Prompt: "add billing retry flow",
-	})
+	}, nil)
 
 	require.Error(t, err)
 	require.NotNil(t, task)
@@ -201,10 +201,10 @@ func TestTaskServiceCreateTask_BootstrapsWorkspaceWhenRepoSetupIsDisabled(t *tes
 		DefaultProvider:      ProviderCodex,
 	})
 
-	task, err := svc.service.CreateTask(t.Context(), CreateTaskInput{
+	task, err := svc.service.CreateTaskWithProgress(t.Context(), CreateTaskInput{
 		Cwd:    "/tmp/repo",
 		Prompt: "add billing retry flow",
-	})
+	}, nil)
 
 	require.NoError(t, err)
 	require.NotNil(t, task)
@@ -221,7 +221,7 @@ func TestTaskServiceCreateTask_FromPullRequestBootstrapsWorkspaceBeforeStartingS
 		FileMode: 0o644,
 	}}}
 
-	task, err := svc.service.CreateTask(t.Context(), CreateTaskInput{
+	task, err := svc.service.CreateTaskWithProgress(t.Context(), CreateTaskInput{
 		Cwd:      "/tmp/repo",
 		Provider: ProviderCodex,
 		Source: CreateTaskSource{
@@ -232,7 +232,7 @@ func TestTaskServiceCreateTask_FromPullRequestBootstrapsWorkspaceBeforeStartingS
 				State:      PRStateDraft,
 			},
 		},
-	})
+	}, nil)
 
 	require.NoError(t, err)
 	require.NotNil(t, task)
@@ -250,7 +250,7 @@ func TestTaskServiceCreateTask_RejectsDuplicatePullRequestBranchBeforePersist(t 
 		DisplayName: "auth",
 	}}
 
-	task, err := svc.service.CreateTask(t.Context(), CreateTaskInput{
+	task, err := svc.service.CreateTaskWithProgress(t.Context(), CreateTaskInput{
 		Cwd:      "/tmp/repo",
 		Provider: ProviderCodex,
 		Source: CreateTaskSource{
@@ -261,7 +261,7 @@ func TestTaskServiceCreateTask_RejectsDuplicatePullRequestBranchBeforePersist(t 
 				State:      PRStateDraft,
 			},
 		},
-	})
+	}, nil)
 
 	require.Nil(t, task)
 	require.EqualError(t, err, "PR already has workspace")
@@ -274,10 +274,10 @@ func TestTaskServiceCreateTask_ReturnsErrorWithoutPersistingLifecycleWhenRuntime
 	svc.providerRepo.suggestedName = "billing retry flow"
 	svc.sessionClient.startErr = errors.New("tmux failed")
 
-	task, err := svc.service.CreateTask(t.Context(), CreateTaskInput{
+	task, err := svc.service.CreateTaskWithProgress(t.Context(), CreateTaskInput{
 		Cwd:    "/tmp/repo",
 		Prompt: "add billing retry flow",
-	})
+	}, nil)
 
 	require.Error(t, err)
 	require.NotNil(t, task)
@@ -299,10 +299,10 @@ func TestTaskServiceCreateTask_AppendsNumericSuffixWhenSlugAlreadyExists(t *test
 		TmuxSession:  "repo_billing_retry_flow",
 	}}
 
-	task, err := svc.service.CreateTask(t.Context(), CreateTaskInput{
+	task, err := svc.service.CreateTaskWithProgress(t.Context(), CreateTaskInput{
 		Cwd:    "/tmp/repo",
 		Prompt: "add billing retry flow",
-	})
+	}, nil)
 
 	require.NoError(t, err)
 	require.Equal(t, "billing-retry-flow-2", task.Slug)
@@ -311,7 +311,15 @@ func TestTaskServiceCreateTask_AppendsNumericSuffixWhenSlugAlreadyExists(t *test
 	require.Equal(t, "repo_billing_retry_flow_2", task.TmuxSession)
 }
 
-func TestTaskServiceCreateTask_EmitsProgressStepsInOrder(t *testing.T) {
+type recordingTaskCreateProgressReporter struct {
+	steps []TaskCreateProgressStep
+}
+
+func (r *recordingTaskCreateProgressReporter) ReportTaskCreateProgress(step TaskCreateProgressStep) {
+	r.steps = append(r.steps, step)
+}
+
+func TestTaskServiceCreateTaskWithProgress_EmitsProgressStepsInOrder(t *testing.T) {
 	svc := newTestTaskService(t)
 	svc.providerRepo.suggestedName = "task creation workflow tests"
 	svc.providerRepo.bootstrapSpec = WorkspaceBootstrapSpec{Files: []WorkspaceBootstrapFile{{
@@ -320,16 +328,13 @@ func TestTaskServiceCreateTask_EmitsProgressStepsInOrder(t *testing.T) {
 		FileMode: 0o644,
 	}}}
 
-	var got []TaskCreateProgressStep
-	ctx := ContextWithTaskCreateProgressSink(t.Context(), func(step TaskCreateProgressStep) {
-		got = append(got, step)
-	})
+	reporter := &recordingTaskCreateProgressReporter{}
 
-	task, err := svc.service.CreateTask(ctx, CreateTaskInput{
+	task, err := svc.service.CreateTaskWithProgress(t.Context(), CreateTaskInput{
 		Cwd:      "/tmp/repo",
 		Prompt:   "testing creating a new task",
 		Provider: ProviderCodex,
-	})
+	}, reporter)
 
 	require.NoError(t, err)
 	require.NotNil(t, task)
@@ -338,10 +343,10 @@ func TestTaskServiceCreateTask_EmitsProgressStepsInOrder(t *testing.T) {
 		TaskCreateProgressCreatingWorktree,
 		TaskCreateProgressPreparingWorkspace,
 		TaskCreateProgressStartingSession,
-	}, got)
+	}, reporter.steps)
 }
 
-func TestTaskServiceCreateTask_AllowsMissingProgressSink(t *testing.T) {
+func TestTaskServiceCreateTaskWithProgress_AllowsNilReporter(t *testing.T) {
 	svc := newTestTaskService(t)
 	svc.providerRepo.suggestedName = "task creation workflow tests"
 	svc.providerRepo.bootstrapSpec = WorkspaceBootstrapSpec{Files: []WorkspaceBootstrapFile{{
@@ -350,11 +355,11 @@ func TestTaskServiceCreateTask_AllowsMissingProgressSink(t *testing.T) {
 		FileMode: 0o644,
 	}}}
 
-	task, err := svc.service.CreateTask(t.Context(), CreateTaskInput{
+	task, err := svc.service.CreateTaskWithProgress(t.Context(), CreateTaskInput{
 		Cwd:      "/tmp/repo",
 		Prompt:   "testing creating a new task",
 		Provider: ProviderCodex,
-	})
+	}, nil)
 
 	require.NoError(t, err)
 	require.NotNil(t, task)

@@ -21,8 +21,17 @@ func (s *server) OpenTaskSession(context.Context, *core.Task) error {
 	return fmt.Errorf("open task session unsupported on daemon server")
 }
 
-func (s *server) CreateTask(ctx context.Context, input core.CreateTaskInput) (*core.Task, error) {
-	return s.service.CreateTask(ctx, input)
+type taskCreateEventReporter struct {
+	ctx    context.Context
+	events chan<- core.TaskCreateEvent
+}
+
+func (r taskCreateEventReporter) ReportTaskCreateProgress(step core.TaskCreateProgressStep) {
+	select {
+	case <-r.ctx.Done():
+		return
+	case r.events <- core.TaskCreateEvent{Progress: &core.TaskCreateProgressEvent{Step: step}}:
+	}
 }
 
 func (s *server) CreateTaskStream(ctx context.Context, input core.CreateTaskInput) (<-chan core.TaskCreateEvent, error) {
@@ -31,15 +40,10 @@ func (s *server) CreateTaskStream(ctx context.Context, input core.CreateTaskInpu
 	go func() {
 		defer close(events)
 
-		progressCtx := core.ContextWithTaskCreateProgressSink(ctx, func(step core.TaskCreateProgressStep) {
-			select {
-			case <-ctx.Done():
-				return
-			case events <- core.TaskCreateEvent{Progress: &core.TaskCreateProgressEvent{Step: step}}:
-			}
+		task, err := s.service.CreateTaskWithProgress(ctx, input, taskCreateEventReporter{
+			ctx:    ctx,
+			events: events,
 		})
-
-		task, err := s.service.CreateTask(progressCtx, input)
 		if err != nil {
 			select {
 			case <-ctx.Done():
