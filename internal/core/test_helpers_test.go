@@ -91,7 +91,7 @@ type recordingWorkspaceManager struct {
 	session *sessionClientState
 }
 
-type recordingAgentClient struct {
+type recordingProviderClient struct {
 	state *providerClientState
 }
 
@@ -107,7 +107,7 @@ type stubTaskRepository struct {
 	state *taskRepositoryState
 }
 
-func (c *recordingAgentClient) SuggestTaskName(_ context.Context, _ string) (TaskSuggestion, error) {
+func (c *recordingProviderClient) SuggestTaskName(_ context.Context, _ string) (TaskSuggestion, error) {
 	if c.state.suggestErr != nil {
 		return TaskSuggestion{}, c.state.suggestErr
 	}
@@ -117,7 +117,7 @@ func (c *recordingAgentClient) SuggestTaskName(_ context.Context, _ string) (Tas
 	return TaskSuggestion{Name: c.state.suggestedName, BranchType: "feat"}, nil
 }
 
-func (c *recordingAgentClient) BuildWorkspaceBootstrapSpec(task *Task) (WorkspaceBootstrapSpec, error) {
+func (c *recordingProviderClient) BuildWorkspaceBootstrapSpec(task *Task) (WorkspaceBootstrapSpec, error) {
 	c.state.bootstrapRequest = cloneTask(task)
 	if c.state.bootstrapErr != nil {
 		return WorkspaceBootstrapSpec{}, c.state.bootstrapErr
@@ -125,7 +125,7 @@ func (c *recordingAgentClient) BuildWorkspaceBootstrapSpec(task *Task) (Workspac
 	return c.state.bootstrapSpec, nil
 }
 
-func (c *recordingAgentClient) BuildTaskSessionLaunchSpec(task *Task) (TaskSessionLaunchSpec, error) {
+func (c *recordingProviderClient) BuildTaskSessionLaunchSpec(task *Task) (TaskSessionLaunchSpec, error) {
 	if c.state.launchErr != nil {
 		return TaskSessionLaunchSpec{}, c.state.launchErr
 	}
@@ -140,7 +140,7 @@ func (c *recordingAgentClient) BuildTaskSessionLaunchSpec(task *Task) (TaskSessi
 	}, nil
 }
 
-func (c *recordingAgentClient) HookEventToTaskStatus(input HookEventInput) (*TaskStatusUpdate, error) {
+func (c *recordingProviderClient) HookEventToTaskStatus(input HookEventInput) (*TaskStatusUpdate, error) {
 	c.state.hookInput = input
 	if c.state.hookErr != nil {
 		return nil, c.state.hookErr
@@ -208,12 +208,12 @@ func newTestTaskService(t *testing.T) *testTaskServiceHarness {
 		Tasks:       h.taskRepoMock,
 		GitWorktree: h.repoClientMock,
 		TmuxSession: h.sessionClientMock,
-		Agents: map[AgentProvider]AgentClient{
-			AgentProviderCodex: &recordingAgentClient{state: &h.providerRepo},
+		Providers: map[Provider]ProviderClient{
+			ProviderCodex: &recordingProviderClient{state: &h.providerRepo},
 		},
 		Workspace:            &recordingWorkspaceManager{state: &h.workspace, session: &h.sessionClient},
 		EnableWorkspaceSetup: true,
-		DefaultProvider:      AgentProviderCodex,
+		DefaultProvider:      ProviderCodex,
 	})
 
 	return h
@@ -277,7 +277,7 @@ func (s *stubTmuxSessionClient) StartTaskSession(_ context.Context, task *Task, 
 
 	s.state.sessionResources = SessionResources{
 		SessionExists:      true,
-		AgentWindowExists:  true,
+		TaskWindowExists:   true,
 		EditorWindowExists: true,
 	}
 	return nil

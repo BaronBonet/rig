@@ -22,7 +22,7 @@ const (
 	modeCleanupConfirm
 )
 
-const defaultCreateProvider = core.AgentProviderCodex
+const defaultCreateProvider = core.ProviderCodex
 
 // nolint:recvcheck // bubbletea requires value receivers for tea.Model.
 type model struct {

@@ -108,7 +108,7 @@ The active runtime shape is now:
   - `SubscribeTaskStatus`
   - `HandleHookEvent`
 - `sqlite` is the active durable task repository
-- `gitworktree`, `tmuxsession`, and `codexagent` are the active operational adapters
+- `gitworktree`, `tmuxsession`, and `codexprovider` are the active operational adapters
 - `workspace` owns repo-local setup plus provider bootstrap file writing
 
 This slice is intentionally Codex-only for now. Claude support and other legacy
@@ -158,3 +158,9 @@ Until further notice:
 - keep the client-side `TaskFrontend` view of the daemon separate from the
   daemon-serving `TaskDaemon.Serve(...)` path so the TUI stays unaware of
   transport and lifecycle details
+
+OLD CODE: this commit removed most of the old code which may be useful to look at for how things use to work
+ 187410c - BREAKING: remove legacy obesrver and client packages
+
+CLAUDE: this commit removed all the claude code.
+f5a626d - BREAKING: remove claude

@@ -20,13 +20,13 @@ func TestModel_InitLoadsAllTasksAcrossRepos(t *testing.T) {
 			ID:          "task-1",
 			RepoName:    "repo-a",
 			DisplayName: "first task",
-			Provider:    core.AgentProviderCodex,
+			Provider:    core.ProviderCodex,
 		},
 		{
 			ID:          "task-2",
 			RepoName:    "repo-b",
 			DisplayName: "second task",
-			Provider:    core.AgentProviderCodex,
+			Provider:    core.ProviderCodex,
 		},
 	}
 
@@ -52,7 +52,7 @@ func TestModel_ViewRendersTaskMetadata(t *testing.T) {
 			RepoName:    "repo-a",
 			DisplayName: "first task",
 			BranchName:  "feat/first-task",
-			Provider:    core.AgentProviderCodex,
+			Provider:    core.ProviderCodex,
 			CreatedAt:   time.Now().Add(-15 * time.Minute),
 		},
 	}
@@ -79,8 +79,8 @@ func TestModel_ViewRendersTaskMetadata(t *testing.T) {
 func TestModel_AfterLoadRequestsLatestStatusAndSubscriptionsForEachTask(t *testing.T) {
 	frontend := newStubFrontend()
 	frontend.listTasks = []*core.Task{
-		{ID: "task-1", RepoName: "repo-a", DisplayName: "first task", Provider: core.AgentProviderCodex},
-		{ID: "task-2", RepoName: "repo-b", DisplayName: "second task", Provider: core.AgentProviderCodex},
+		{ID: "task-1", RepoName: "repo-a", DisplayName: "first task", Provider: core.ProviderCodex},
+		{ID: "task-2", RepoName: "repo-b", DisplayName: "second task", Provider: core.ProviderCodex},
 	}
 	frontend.subscribeTaskStatus = map[string]chan core.TaskStatusUpdate{
 		"task-1": make(chan core.TaskStatusUpdate, 1),
@@ -104,7 +104,7 @@ func TestModel_AfterLoadRequestsLatestStatusAndSubscriptionsForEachTask(t *testi
 func TestModel_LatestStatusSeedUpdatesRenderedPhase(t *testing.T) {
 	frontend := newStubFrontend()
 	frontend.listTasks = []*core.Task{
-		{ID: "task-1", RepoName: "repo-a", DisplayName: "first task", Provider: core.AgentProviderCodex},
+		{ID: "task-1", RepoName: "repo-a", DisplayName: "first task", Provider: core.ProviderCodex},
 	}
 	frontend.latestTaskStatus = map[string]*core.TaskStatusUpdate{
 		"task-1": {
@@ -138,7 +138,7 @@ func TestModel_LatestStatusSeedUpdatesRenderedPhase(t *testing.T) {
 func TestModel_TaskRowUpdatesWhenSubscriptionUpdateArrives(t *testing.T) {
 	frontend := newStubFrontend()
 	frontend.listTasks = []*core.Task{
-		{ID: "task-1", RepoName: "repo-a", DisplayName: "first task", Provider: core.AgentProviderCodex},
+		{ID: "task-1", RepoName: "repo-a", DisplayName: "first task", Provider: core.ProviderCodex},
 	}
 	updates := make(chan core.TaskStatusUpdate, 1)
 	frontend.subscribeTaskStatus = map[string]chan core.TaskStatusUpdate{
@@ -179,8 +179,8 @@ func TestModel_TaskRowUpdatesWhenSubscriptionUpdateArrives(t *testing.T) {
 func TestModel_StatusEnrichmentFailuresDoNotCollapseListView(t *testing.T) {
 	frontend := newStubFrontend()
 	frontend.listTasks = []*core.Task{
-		{ID: "task-1", RepoName: "repo-a", DisplayName: "first task", Provider: core.AgentProviderCodex},
-		{ID: "task-2", RepoName: "repo-b", DisplayName: "second task", Provider: core.AgentProviderCodex},
+		{ID: "task-1", RepoName: "repo-a", DisplayName: "first task", Provider: core.ProviderCodex},
+		{ID: "task-2", RepoName: "repo-b", DisplayName: "second task", Provider: core.ProviderCodex},
 	}
 	frontend.latestTaskStatus = map[string]*core.TaskStatusUpdate{
 		"task-2": {
@@ -271,8 +271,8 @@ func TestModel_KeyNEntersPromptMode(t *testing.T) {
 func TestModel_EnterOpensSelectedTaskAndKeepsRigRunningOnSuccess(t *testing.T) {
 	frontend := newStubFrontend()
 	frontend.listTasks = []*core.Task{
-		{ID: "task-1", DisplayName: "first task", TmuxSession: "repo_task_1", Provider: core.AgentProviderCodex},
-		{ID: "task-2", DisplayName: "second task", TmuxSession: "repo_task_2", Provider: core.AgentProviderCodex},
+		{ID: "task-1", DisplayName: "first task", TmuxSession: "repo_task_1", Provider: core.ProviderCodex},
+		{ID: "task-2", DisplayName: "second task", TmuxSession: "repo_task_2", Provider: core.ProviderCodex},
 	}
 
 	m := newLoadedModel(frontend)
@@ -300,7 +300,7 @@ func TestModel_EnterOpensSelectedTaskAndKeepsRigRunningOnSuccess(t *testing.T) {
 func TestModel_OpenTaskFailureShowsErrorAndStaysInList(t *testing.T) {
 	frontend := newStubFrontend()
 	frontend.listTasks = []*core.Task{
-		{ID: "task-1", DisplayName: "first task", TmuxSession: "repo_task_1", Provider: core.AgentProviderCodex},
+		{ID: "task-1", DisplayName: "first task", TmuxSession: "repo_task_1", Provider: core.ProviderCodex},
 	}
 	frontend.openTaskSessionErr = errors.New("open failed")
 
@@ -326,14 +326,14 @@ func TestModel_OpenTaskFailureShowsErrorAndStaysInList(t *testing.T) {
 func TestModel_CreateTaskFromPromptAppendsTaskAndStartsStatusTracking(t *testing.T) {
 	frontend := newStubFrontend()
 	frontend.listTasks = []*core.Task{
-		{ID: "task-1", DisplayName: "first task", RepoName: "repo-a", Provider: core.AgentProviderCodex},
-		{ID: "task-2", DisplayName: "second task", RepoName: "repo-b", Provider: core.AgentProviderCodex},
+		{ID: "task-1", DisplayName: "first task", RepoName: "repo-a", Provider: core.ProviderCodex},
+		{ID: "task-2", DisplayName: "second task", RepoName: "repo-b", Provider: core.ProviderCodex},
 	}
 	frontend.createdTask = &core.Task{
 		ID:          "task-3",
 		DisplayName: "new task",
 		RepoName:    "repo-c",
-		Provider:    core.AgentProviderCodex,
+		Provider:    core.ProviderCodex,
 	}
 	frontend.latestTaskStatus = map[string]*core.TaskStatusUpdate{
 		"task-3": {
@@ -372,7 +372,7 @@ func TestModel_CreateTaskFromPromptAppendsTaskAndStartsStatusTracking(t *testing
 	require.False(t, got.createPending)
 	require.Equal(t, "task-3", got.rows[len(got.rows)-1].task.ID)
 	require.Equal(t, "fix the retry loop", frontend.createInput.Prompt)
-	require.Equal(t, core.AgentProviderCodex, frontend.createInput.Provider)
+	require.Equal(t, core.ProviderCodex, frontend.createInput.Provider)
 	require.Equal(t, 1, frontend.createTaskCalls)
 
 	msgs := runBatchCmd(t, follow)
@@ -409,8 +409,8 @@ func TestModel_EnterWithBlankPromptDoesNothing(t *testing.T) {
 func TestModel_CreateTaskFailureKeepsPromptRecoverableAndPreservesListView(t *testing.T) {
 	frontend := newStubFrontend()
 	frontend.listTasks = []*core.Task{
-		{ID: "task-1", DisplayName: "first task", RepoName: "repo-a", Provider: core.AgentProviderCodex},
-		{ID: "task-2", DisplayName: "second task", RepoName: "repo-b", Provider: core.AgentProviderCodex},
+		{ID: "task-1", DisplayName: "first task", RepoName: "repo-a", Provider: core.ProviderCodex},
+		{ID: "task-2", DisplayName: "second task", RepoName: "repo-b", Provider: core.ProviderCodex},
 	}
 	frontend.createTaskErr = errors.New("create failed")
 
@@ -510,8 +510,8 @@ func TestModel_KeyXEntersCleanupConfirmMode(t *testing.T) {
 func TestModel_ConfirmCleanupDeletesTaskAndRemovesRow(t *testing.T) {
 	frontend := newStubFrontend()
 	frontend.listTasks = []*core.Task{
-		{ID: "task-1", DisplayName: "first task", Provider: core.AgentProviderCodex},
-		{ID: "task-2", DisplayName: "second task", Provider: core.AgentProviderCodex},
+		{ID: "task-1", DisplayName: "first task", Provider: core.ProviderCodex},
+		{ID: "task-2", DisplayName: "second task", Provider: core.ProviderCodex},
 	}
 
 	m := newLoadedModel(frontend)
@@ -543,7 +543,7 @@ func TestModel_ConfirmCleanupDeletesTaskAndRemovesRow(t *testing.T) {
 func TestModel_CleanupFailurePreservesRowsAndShowsError(t *testing.T) {
 	frontend := newStubFrontend()
 	frontend.listTasks = []*core.Task{
-		{ID: "task-1", DisplayName: "first task", Provider: core.AgentProviderCodex},
+		{ID: "task-1", DisplayName: "first task", Provider: core.ProviderCodex},
 	}
 	frontend.deleteTaskErr = errors.New("cleanup failed")
 

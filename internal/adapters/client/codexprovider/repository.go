@@ -1,4 +1,4 @@
-package codexagent
+package codexprovider
 
 import (
 	"bytes"
@@ -33,7 +33,7 @@ type repository struct {
 	sourceRoot    string
 }
 
-func New(runner subprocess.Runner, cfg Config, hooks HookForwardingConfig) core.AgentClient {
+func New(runner subprocess.Runner, cfg Config, hooks HookForwardingConfig) core.ProviderClient {
 	return &repository{
 		runner:        runner,
 		binary:        cfg.Binary,
@@ -43,7 +43,7 @@ func New(runner subprocess.Runner, cfg Config, hooks HookForwardingConfig) core.
 }
 
 func (r *repository) SuggestTaskName(ctx context.Context, prompt string) (core.TaskSuggestion, error) {
-	tmpFile, err := os.CreateTemp("", "agent-codex-name-*.txt")
+	tmpFile, err := os.CreateTemp("", "rig-codex-name-*.txt")
 	if err != nil {
 		return core.TaskSuggestion{}, err
 	}
@@ -207,11 +207,11 @@ func (r *repository) commandForEvent(eventName string) string {
 func (r *repository) renderForwarderScript() ([]byte, error) {
 	var buf bytes.Buffer
 	if err := forwarderScriptTemplate.Execute(&buf, struct {
-		AgentExecQuoted  string
-		SourceRootQuoted string
+		RigExecQuoted       string
+		RigSourceRootQuoted string
 	}{
-		AgentExecQuoted:  shellQuote(r.rigBinaryPath),
-		SourceRootQuoted: shellQuote(r.sourceRoot),
+		RigExecQuoted:       shellQuote(r.rigBinaryPath),
+		RigSourceRootQuoted: shellQuote(r.sourceRoot),
 	}); err != nil {
 		return nil, fmt.Errorf("render codex forwarder script: %w", err)
 	}

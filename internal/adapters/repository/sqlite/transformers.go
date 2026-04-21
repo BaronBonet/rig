@@ -83,7 +83,7 @@ func taskFromRow(row generated.Task) *core.Task {
 		BranchName:   row.BranchName,
 		WorktreePath: row.WorktreePath,
 		TmuxSession:  row.TmuxSession,
-		Provider:     core.AgentProvider(row.Provider),
+		Provider:     core.Provider(row.Provider),
 		CreatedAt:    parseTime(row.CreatedAt),
 		UpdatedAt:    parseTime(row.UpdatedAt),
 	}
@@ -100,7 +100,7 @@ func tasksFromRows(rows []generated.Task) []*core.Task {
 func taskStatusUpdateFromRow(row generated.TaskStatus) *core.TaskStatusUpdate {
 	return &core.TaskStatusUpdate{
 		TaskID:       row.TaskID,
-		Provider:     core.AgentProvider(row.Provider),
+		Provider:     core.Provider(row.Provider),
 		Phase:        core.TaskStatusPhase(row.Phase),
 		RawEventName: row.RawEventName,
 		ObservedAt:   parseTime(row.ObservedAt),

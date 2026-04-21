@@ -3,9 +3,9 @@ set -eu
 
 PREFIX="${PREFIX:-$HOME/.local}"
 BIN_DIR="${BIN_DIR:-$PREFIX/bin}"
-AGENT_INSTALL_REPO="${AGENT_INSTALL_REPO:-BaronBonet/rig}"
-AGENT_INSTALL_API_URL="${AGENT_INSTALL_API_URL:-https://api.github.com/repos/$AGENT_INSTALL_REPO/releases/latest}"
-AGENT_INSTALL_DOWNLOAD_ROOT="${AGENT_INSTALL_DOWNLOAD_ROOT:-https://github.com/$AGENT_INSTALL_REPO/releases/download}"
+RIG_INSTALL_REPO="${RIG_INSTALL_REPO:-BaronBonet/rig}"
+RIG_INSTALL_API_URL="${RIG_INSTALL_API_URL:-https://api.github.com/repos/$RIG_INSTALL_REPO/releases/latest}"
+RIG_INSTALL_DOWNLOAD_ROOT="${RIG_INSTALL_DOWNLOAD_ROOT:-https://github.com/$RIG_INSTALL_REPO/releases/download}"
 
 fail() {
 	echo "rig installer: $*" >&2
@@ -77,9 +77,9 @@ detect_goarch() {
 
 latest_tag() {
 	if can_use_gh; then
-		tag="$(gh api "repos/$AGENT_INSTALL_REPO/releases/latest" --jq .tag_name)"
+		tag="$(gh api "repos/$RIG_INSTALL_REPO/releases/latest" --jq .tag_name)"
 	else
-		tag="$(curl_fetch "$AGENT_INSTALL_API_URL" | sed -n 's/.*"tag_name"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' | head -n 1)"
+		tag="$(curl_fetch "$RIG_INSTALL_API_URL" | sed -n 's/.*"tag_name"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' | head -n 1)"
 	fi
 
 	[ -n "$tag" ] || fail "could not resolve the latest GitHub release; authenticate with gh or set GH_TOKEN for private repos"
@@ -92,11 +92,11 @@ download_release_assets() {
 	tmpdir=$3
 
 	if can_use_gh; then
-		gh release download "$version" -R "$AGENT_INSTALL_REPO" -p "$archive" -p checksums.txt -D "$tmpdir"
+		gh release download "$version" -R "$RIG_INSTALL_REPO" -p "$archive" -p checksums.txt -D "$tmpdir"
 		return
 	fi
 
-	download_base="$AGENT_INSTALL_DOWNLOAD_ROOT/$version"
+	download_base="$RIG_INSTALL_DOWNLOAD_ROOT/$version"
 	curl_download "$download_base/$archive" "$tmpdir/$archive"
 	curl_download "$download_base/checksums.txt" "$tmpdir/checksums.txt"
 }

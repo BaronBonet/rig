@@ -29,4 +29,3 @@ create table if not exists task_status (
 
 -- +goose Down
 
--- Intentionally left blank for the goose baseline.

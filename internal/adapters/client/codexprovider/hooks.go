@@ -1,4 +1,4 @@
-package codexagent
+package codexprovider
 
 import (
 	"bytes"
@@ -91,7 +91,7 @@ func DecodeHookEventInput(now func() time.Time, headerEventName string, body []b
 	input := core.HookEventInput{
 		OccurredAt:     now().UTC(),
 		EventName:      strings.TrimSpace(headerEventName),
-		Provider:       core.AgentProviderCodex,
+		Provider:       core.ProviderCodex,
 		RawPayloadJSON: string(bytes.TrimSpace(body)),
 	}
 
@@ -150,7 +150,7 @@ func (r *repository) HookEventToTaskStatus(input core.HookEventInput) (*core.Tas
 
 	return &core.TaskStatusUpdate{
 		TaskID:       taskID,
-		Provider:     core.AgentProviderCodex,
+		Provider:     core.ProviderCodex,
 		Phase:        phase,
 		RawEventName: eventName,
 		ObservedAt:   input.OccurredAt,
@@ -239,7 +239,7 @@ func (f Forwarder) errorLogPath() string {
 		return f.ErrorLogPath
 	}
 
-	return filepath.Join(".agent", "observability", "hook-forwarder-errors.log")
+	return filepath.Join(".rig", "observability", "hook-forwarder-errors.log")
 }
 
 func (f Forwarder) logFailure(eventName string, detail string) {

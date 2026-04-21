@@ -29,7 +29,7 @@ func TestUnixSocketServer_CreateTaskCallsTaskService(t *testing.T) {
 			require.Equal(t, core.CreateTaskInput{
 				Cwd:      "/tmp/repo",
 				Prompt:   "add retries",
-				Provider: core.AgentProviderCodex,
+				Provider: core.ProviderCodex,
 			}, input)
 			return &core.Task{
 				ID:          "task-1",
@@ -54,7 +54,7 @@ func TestUnixSocketServer_CreateTaskCallsTaskService(t *testing.T) {
 	task, err := createTaskViaSocket(context.Background(), socketPath, core.CreateTaskInput{
 		Cwd:      "/tmp/repo",
 		Prompt:   "add retries",
-		Provider: core.AgentProviderCodex,
+		Provider: core.ProviderCodex,
 	})
 	require.NoError(t, err)
 	require.NotNil(t, task)
@@ -167,7 +167,7 @@ func TestUnixSocketServer_SubscribeTaskStatusStreamsMatchingUpdates(t *testing.T
 
 	expected := core.TaskStatusUpdate{
 		TaskID:       "task-1",
-		Provider:     core.AgentProviderCodex,
+		Provider:     core.ProviderCodex,
 		Phase:        core.TaskStatusPhaseWorking,
 		RawEventName: "PreToolUse",
 		ObservedAt:   time.Now().UTC(),

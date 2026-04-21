@@ -12,7 +12,7 @@ type CreateTaskSource struct {
 type CreateTaskInput struct {
 	Cwd      string
 	Prompt   string
-	Provider AgentProvider
+	Provider Provider
 	Source   CreateTaskSource
 }
 
@@ -107,9 +107,9 @@ type TaskRepository interface {
 	SubscribeTaskStatus(ctx context.Context, taskID string) (<-chan TaskStatusUpdate, error)
 }
 
-// AgentClient wraps provider-specific agent behavior behind one application
+// ProviderClient wraps provider-specific behavior behind one application
 // contract.
-type AgentClient interface {
+type ProviderClient interface {
 	// SuggestTaskName derives a task display name and branch type from a prompt.
 	SuggestTaskName(ctx context.Context, prompt string) (TaskSuggestion, error)
 	// BuildWorkspaceBootstrapSpec describes the provider-specific files that
@@ -170,6 +170,6 @@ type TaskWorkspaceManager interface {
 	// repo-local workspace setup needed for the task.
 	SetupTaskWorkspace(ctx context.Context, task *Task, repoRoot string) error
 	// BootstrapTaskWorkspace writes the provider-specific bootstrap files needed
-	// to launch the interactive agent session inside the task workspace.
+	// to launch the interactive task session inside the task workspace.
 	BootstrapTaskWorkspace(ctx context.Context, task *Task, bootstrapSpec WorkspaceBootstrapSpec) error
 }

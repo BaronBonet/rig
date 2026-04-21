@@ -13,7 +13,7 @@ import (
 	"rig/internal/pkg/subprocess"
 	"syscall"
 
-	codexagent "rig/internal/adapters/client/codexagent"
+	codexprovider "rig/internal/adapters/client/codexprovider"
 	gitworktree "rig/internal/adapters/client/gitworktree"
 	tmuxsession "rig/internal/adapters/client/tmuxsession"
 
@@ -62,8 +62,8 @@ func execute() error {
 	}
 
 	adapter := taskdaemon.New(taskdaemon.Config{
-		SocketPath:     cfg.TaskDaemon.SocketPath,
-		HookListenAddr: cfg.TaskDaemon.HookListenAddr,
+		SocketPath:     cfg.Daemon.SocketPath,
+		HookListenAddr: cfg.Daemon.HookListenAddr,
 		ExecPath:       execPath,
 		Env: []string{
 			// Passed to the re-executed child so it serves the daemon instead of
@@ -102,19 +102,19 @@ func serveTaskDaemon(
 	}
 
 	// TODO: why not just
-	// taskRepo, err := sqlite.New(sqlite.Config{Path: cfg.TaskSQLite.Path})
-	taskRepo, err := sqlite.New(cfg.TaskSQLite)
+	// taskRepo, err := sqlite.New(sqlite.Config{Path: cfg.SQLite.Path})
+	taskRepo, err := sqlite.New(cfg.SQLite)
 	if err != nil {
 		return err
 	}
 
 	runner := subprocess.ExecRunner{}
 
-	agents := map[core.AgentProvider]core.AgentClient{
-		core.AgentProviderCodex: codexagent.New(
+	providers := map[core.Provider]core.ProviderClient{
+		core.ProviderCodex: codexprovider.New(
 			runner,
 			cfg.Codex,
-			codexagent.HookForwardingConfig{
+			codexprovider.HookForwardingConfig{
 				RigBinaryPath: execPath,
 				SourceRoot:    sourceRoot,
 			},
@@ -125,14 +125,14 @@ func serveTaskDaemon(
 		Tasks:                taskRepo,
 		GitWorktree:          gitworktree.New(runner),
 		TmuxSession:          tmuxsession.New(runner),
-		Agents:               agents,
+		Providers:            providers,
 		Workspace:            repositoryworkspace.New(),
 		EnableWorkspaceSetup: true,
 		DefaultProvider:      cfg.Provider,
 	})
 
-	codexHooks := codexagent.NewHookHTTPHandler(service, nil)
-	adapter := taskdaemon.New(cfg.TaskDaemon)
+	codexHooks := codexprovider.NewHookHTTPHandler(service, nil)
+	adapter := taskdaemon.New(cfg.Daemon)
 
 	return adapter.Serve(ctx, service, []core.TaskDaemonHookRoute{
 		{Path: "/hook", Handler: codexHooks},

@@ -2,9 +2,8 @@ package infrastructure
 
 import (
 	"path/filepath"
-	"testing"
-
 	"rig/internal/core"
+	"testing"
 
 	"github.com/stretchr/testify/require"
 )
@@ -12,22 +11,20 @@ import (
 func TestLoadConfig_DefaultsAndOverrides(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
-	t.Setenv("AGENT_PROVIDER", "codex")
-	t.Setenv("AGENT_SQLITE_PATH", filepath.Join(home, "custom.db"))
-	t.Setenv("AGENT_TASK_SQLITE_PATH", filepath.Join(home, "task-custom.db"))
-	t.Setenv("AGENT_CODEX_BINARY", "codex-custom")
-	t.Setenv("TASK_DAEMON_OBSERVER_SOCKET_PATH", filepath.Join(home, "task-daemon.sock"))
-	t.Setenv("TASK_DAEMON_HOOK_LISTEN_ADDRESS", "127.0.0.1:4999")
+	t.Setenv("RIG_PROVIDER", "codex")
+	t.Setenv("RIG_SQLITE_PATH", filepath.Join(home, "task-custom.db"))
+	t.Setenv("RIG_CODEX_BINARY", "codex-custom")
+	t.Setenv("RIG_DAEMON_SOCKET_PATH", filepath.Join(home, "task-daemon.sock"))
+	t.Setenv("RIG_DAEMON_HOOK_LISTEN_ADDRESS", "127.0.0.1:4999")
 
 	cfg, err := LoadConfig()
 	require.NoError(t, err)
 
-	require.Equal(t, core.AgentProviderCodex, cfg.Provider)
-	require.Equal(t, filepath.Join(home, "custom.db"), cfg.SQLite.Path)
-	require.Equal(t, filepath.Join(home, "task-custom.db"), cfg.TaskSQLite.Path)
+	require.Equal(t, core.ProviderCodex, cfg.Provider)
+	require.Equal(t, filepath.Join(home, "task-custom.db"), cfg.SQLite.Path)
 	require.Equal(t, "codex-custom", cfg.Codex.Binary)
-	require.Equal(t, filepath.Join(home, "task-daemon.sock"), cfg.TaskDaemon.SocketPath)
-	require.Equal(t, "127.0.0.1:4999", cfg.TaskDaemon.HookListenAddr)
+	require.Equal(t, filepath.Join(home, "task-daemon.sock"), cfg.Daemon.SocketPath)
+	require.Equal(t, "127.0.0.1:4999", cfg.Daemon.HookListenAddr)
 }
 
 func TestLoadConfig_DefaultSQLitePathWhenUnset(t *testing.T) {
@@ -37,17 +34,16 @@ func TestLoadConfig_DefaultSQLitePathWhenUnset(t *testing.T) {
 	cfg, err := LoadConfig()
 	require.NoError(t, err)
 
-	require.Equal(t, filepath.Join(home, ".local", "share", "agent", "state.db"), cfg.SQLite.Path)
-	require.Equal(t, filepath.Join(home, ".local", "share", "agent", "tasks.db"), cfg.TaskSQLite.Path)
-	require.Equal(t, filepath.Join(home, ".local", "share", "agent", "observer.sock"), cfg.TaskDaemon.SocketPath)
-	require.Equal(t, "127.0.0.1:4123", cfg.TaskDaemon.HookListenAddr)
+	require.Equal(t, filepath.Join(home, ".local", "share", "rig", "tasks.db"), cfg.SQLite.Path)
+	require.Equal(t, filepath.Join(home, ".local", "share", "rig", "daemon.sock"), cfg.Daemon.SocketPath)
+	require.Equal(t, "127.0.0.1:4124", cfg.Daemon.HookListenAddr)
 }
 
 func TestLoadConfig_RejectsUnknownProvider(t *testing.T) {
-	t.Setenv("AGENT_PROVIDER", "unknown")
+	t.Setenv("RIG_PROVIDER", "unknown")
 
 	cfg, err := LoadConfig()
 	require.Nil(t, cfg)
 	require.Error(t, err)
-	require.Contains(t, err.Error(), "AGENT_PROVIDER")
+	require.Contains(t, err.Error(), "RIG_PROVIDER")
 }

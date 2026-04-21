@@ -1,4 +1,4 @@
-package codexagent
+package codexprovider
 
 import (
 	"context"
@@ -42,6 +42,7 @@ func TestRepositoryBuildWorkspaceBootstrapSpec_RendersCodexHooksAndForwarderScri
 	require.Equal(t, os.FileMode(0o755), spec.Files[1].FileMode)
 	require.Contains(t, string(spec.Files[1].Content), "/tmp/rig-bin")
 	require.Contains(t, string(spec.Files[1].Content), "/tmp/source")
+	require.Contains(t, string(spec.Files[1].Content), "http://127.0.0.1:4124/codex-hook")
 	require.NotContains(t, string(spec.Files[1].Content), "status-ingest")
 }
 

@@ -1,4 +1,4 @@
-package codexagent
+package codexprovider
 
 import (
 	"bytes"
@@ -39,7 +39,7 @@ func TestNewHookHTTPHandler_DecodesCodexHookAndDelegatesToTaskService(t *testing
 	require.Equal(t, core.HookEventInput{
 		OccurredAt:     now,
 		EventName:      "SessionStart",
-		Provider:       core.AgentProviderCodex,
+		Provider:       core.ProviderCodex,
 		RawPayloadJSON: `{"cwd":"/tmp/repo-task","hook_event_name":"SessionStart","prompt":"fix the retry flow","session_id":"session-1"}`,
 		SessionID:      "session-1",
 		Cwd:            "/tmp/repo-task",
@@ -54,13 +54,13 @@ func TestRepositoryHookEventToTaskStatus_MapsCodexEvent(t *testing.T) {
 		TaskID:     "task-123",
 		OccurredAt: time.Date(2026, time.April, 20, 11, 1, 0, 0, time.UTC),
 		EventName:  "PostToolUse",
-		Provider:   core.AgentProviderCodex,
+		Provider:   core.ProviderCodex,
 	})
 	require.NoError(t, err)
 	require.NotNil(t, update)
 	require.Equal(t, &core.TaskStatusUpdate{
 		TaskID:       "task-123",
-		Provider:     core.AgentProviderCodex,
+		Provider:     core.ProviderCodex,
 		Phase:        core.TaskStatusPhaseWorking,
 		RawEventName: "PostToolUse",
 		ObservedAt:   time.Date(2026, time.April, 20, 11, 1, 0, 0, time.UTC),

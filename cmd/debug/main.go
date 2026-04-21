@@ -14,7 +14,7 @@ import (
 	"rig/internal/infrastructure"
 	"rig/internal/pkg/subprocess"
 
-	codexagent "rig/internal/adapters/client/codexagent"
+	codexprovider "rig/internal/adapters/client/codexprovider"
 	gitworktree "rig/internal/adapters/client/gitworktree"
 	tmuxsession "rig/internal/adapters/client/tmuxsession"
 	sqlite "rig/internal/adapters/repository/sqlite"
@@ -25,15 +25,15 @@ import (
 var debugCreate = debugCreateConfig{
 	Cwd:              "/Users/ebon/personal_software/rig",
 	Prompt:           "print hi 10 times then stop",
-	Provider:         core.AgentProviderCodex,
+	Provider:         core.ProviderCodex,
 	PrepareWorkspace: false,
 }
 
-var debugCodexAgentConfig = codexagent.Config{
-	Binary: string(core.AgentProviderCodex),
+var debugCodexProviderConfig = codexprovider.Config{
+	Binary: string(core.ProviderCodex),
 }
 
-var debugCodexHookForwarding = codexagent.HookForwardingConfig{
+var debugCodexHookForwarding = codexprovider.HookForwardingConfig{
 	RigBinaryPath: "/Users/ebon/personal_software/rig/local/bin/rig",
 	SourceRoot:    "/Users/ebon/personal_software/rig",
 }
@@ -47,7 +47,7 @@ var debugTaskDaemon = debugTaskDaemonConfig{
 type debugCreateConfig struct {
 	Cwd              string
 	Prompt           string
-	Provider         core.AgentProvider
+	Provider         core.Provider
 	PrepareWorkspace bool
 }
 
@@ -64,7 +64,7 @@ func main() {
 		os.Exit(1)
 	}
 
-	taskStore, err := sqlite.New(sqlite.Config{Path: cfg.TaskSQLite.Path})
+	taskStore, err := sqlite.New(cfg.SQLite)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		os.Exit(1)
@@ -77,20 +77,20 @@ func main() {
 	}
 
 	runner := subprocess.ExecRunner{}
-	codexCfg := debugCodexAgentConfig
+	codexCfg := debugCodexProviderConfig
 	codexCfg.Binary = cfg.Codex.Binary
 	debugHookForwarding := debugCodexHookForwarding
 	debugHookForwarding.RigBinaryPath = execPath
 
-	agents := map[core.AgentProvider]core.AgentClient{
-		core.AgentProviderCodex: codexagent.New(runner, codexCfg, debugHookForwarding),
+	providers := map[core.Provider]core.ProviderClient{
+		core.ProviderCodex: codexprovider.New(runner, codexCfg, debugHookForwarding),
 	}
 
 	service := core.NewTaskService(core.TaskServiceDependencies{
 		Tasks:                taskStore,
 		GitWorktree:          gitworktree.New(runner),
 		TmuxSession:          tmuxsession.New(runner),
-		Agents:               agents,
+		Providers:            providers,
 		Workspace:            repositoryworkspace.New(),
 		EnableWorkspaceSetup: debugCreate.PrepareWorkspace,
 		DefaultProvider:      cfg.Provider,
@@ -101,7 +101,7 @@ func main() {
 		ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 		defer cancel()
 
-		adapter := taskdaemon.New(cfg.TaskDaemon)
+		adapter := taskdaemon.New(cfg.Daemon)
 		if err := adapter.Serve(
 			ctx,
 			service,
@@ -115,8 +115,8 @@ func main() {
 	}
 
 	adapter := taskdaemon.New(taskdaemon.Config{
-		SocketPath:     cfg.TaskDaemon.SocketPath,
-		HookListenAddr: cfg.TaskDaemon.HookListenAddr,
+		SocketPath:     cfg.Daemon.SocketPath,
+		HookListenAddr: cfg.Daemon.HookListenAddr,
 		ExecPath:       execPath,
 		Env: []string{
 			debugTaskDaemon.ModeEnvKey + "=" + debugTaskDaemon.ModeEnvValue,
@@ -240,7 +240,7 @@ func main() {
 }
 
 func debugDaemonHookRoutes(service core.TaskService) []core.TaskDaemonHookRoute {
-	codexHooks := codexagent.NewHookHTTPHandler(service, nil)
+	codexHooks := codexprovider.NewHookHTTPHandler(service, nil)
 
 	return []core.TaskDaemonHookRoute{
 		{Path: "/hook", Handler: codexHooks},
