@@ -2,9 +2,10 @@ package tui
 
 import (
 	"fmt"
-	"rig/internal/core"
 	"strings"
 	"time"
+
+	"rig/internal/core"
 
 	"charm.land/lipgloss/v2"
 )

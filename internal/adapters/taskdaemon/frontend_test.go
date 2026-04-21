@@ -8,9 +8,10 @@ import (
 	"net"
 	"os"
 	"reflect"
-	"rig/internal/core"
 	"testing"
 	"time"
+
+	"rig/internal/core"
 
 	"github.com/stretchr/testify/require"
 )
@@ -62,23 +63,27 @@ func TestFrontend_CreateTaskStreamLatestTaskStatusAndSubscribeTaskStatus(t *test
 		}
 		expectedTask := &core.Task{ID: "task-123", DisplayName: "Ship it"}
 		requestCh := make(chan socketRequest, 1)
-		serverErrCh := serveStreamingFrontendSocket(t, socketPath, func(req socketRequest, encoder *json.Encoder) error {
-			requestCh <- req
-			if err := encoder.Encode(socketEnvelope{
-				Type: "task_create_progress",
-				OK:   true,
-				CreateProgress: &core.TaskCreateProgressEvent{
-					Step: core.TaskCreateProgressSuggestingName,
-				},
-			}); err != nil {
-				return err
-			}
-			return encoder.Encode(socketEnvelope{
-				Type: "task_created",
-				OK:   true,
-				Task: expectedTask,
-			})
-		})
+		serverErrCh := serveStreamingFrontendSocket(
+			t,
+			socketPath,
+			func(req socketRequest, encoder *json.Encoder) error {
+				requestCh <- req
+				if err := encoder.Encode(socketEnvelope{
+					Type: "task_create_progress",
+					OK:   true,
+					CreateProgress: &core.TaskCreateProgressEvent{
+						Step: core.TaskCreateProgressSuggestingName,
+					},
+				}); err != nil {
+					return err
+				}
+				return encoder.Encode(socketEnvelope{
+					Type: "task_created",
+					OK:   true,
+					Task: expectedTask,
+				})
+			},
+		)
 
 		frontend := New(Config{SocketPath: socketPath}).Frontend()
 
@@ -316,19 +321,23 @@ func TestFrontend_CreateTaskStreamLatestTaskStatusAndSubscribeTaskStatus(t *test
 
 		socketPath := frontendTestSocketPath(t)
 		requestCh := make(chan socketRequest, 1)
-		serverErrCh := serveStreamingFrontendSocket(t, socketPath, func(req socketRequest, encoder *json.Encoder) error {
-			requestCh <- req
-			if err := encoder.Encode(socketEnvelope{
-				Type: "task_create_progress",
-				OK:   true,
-				CreateProgress: &core.TaskCreateProgressEvent{
-					Step: core.TaskCreateProgressCreatingWorktree,
-				},
-			}); err != nil {
-				return err
-			}
-			return encoder.Encode(socketEnvelope{Type: "error", Error: "create failed"})
-		})
+		serverErrCh := serveStreamingFrontendSocket(
+			t,
+			socketPath,
+			func(req socketRequest, encoder *json.Encoder) error {
+				requestCh <- req
+				if err := encoder.Encode(socketEnvelope{
+					Type: "task_create_progress",
+					OK:   true,
+					CreateProgress: &core.TaskCreateProgressEvent{
+						Step: core.TaskCreateProgressCreatingWorktree,
+					},
+				}); err != nil {
+					return err
+				}
+				return encoder.Encode(socketEnvelope{Type: "error", Error: "create failed"})
+			},
+		)
 
 		frontend := New(Config{SocketPath: socketPath}).Frontend()
 
@@ -412,9 +421,13 @@ func TestFrontend_ReturnsExplicitErrorsOnErrorEnvelopesAndUnexpectedTypes(t *tes
 		t.Parallel()
 
 		socketPath := frontendTestSocketPath(t)
-		serverErrCh := serveStreamingFrontendSocket(t, socketPath, func(req socketRequest, encoder *json.Encoder) error {
-			return encoder.Encode(socketEnvelope{Type: "tasks_list", OK: true})
-		})
+		serverErrCh := serveStreamingFrontendSocket(
+			t,
+			socketPath,
+			func(req socketRequest, encoder *json.Encoder) error {
+				return encoder.Encode(socketEnvelope{Type: "tasks_list", OK: true})
+			},
+		)
 
 		frontend := New(Config{SocketPath: socketPath}).Frontend()
 
@@ -425,7 +438,7 @@ func TestFrontend_ReturnsExplicitErrorsOnErrorEnvelopesAndUnexpectedTypes(t *tes
 		case event, ok := <-events:
 			require.True(t, ok)
 			require.Nil(t, event.Task)
-			require.NotNil(t, event.Err)
+			require.Error(t, event.Err)
 			require.EqualError(t, event.Err, `unexpected create_task response "tasks_list"`)
 		case <-time.After(2 * time.Second):
 			t.Fatal("timed out waiting for create stream error")

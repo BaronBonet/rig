@@ -448,7 +448,7 @@ func TestModel_CreateTaskReloadsAuthoritativeTaskSnapshotWhenCreateResponseIsPar
 
 	initialMsgs := runBatchCmd(t, cmd)
 	progressMsg := requireMsgType[taskCreateEventMsg](t, initialMsgs)
-	next, follow := submitted.Update(progressMsg)
+	_, follow := submitted.Update(progressMsg)
 	require.NotNil(t, follow)
 
 	taskCreated := runCmd(t, follow)

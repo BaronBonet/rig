@@ -31,9 +31,11 @@ type model struct {
 	statusContext context.Context
 	err           error
 	createErr     error
-	prompt        string
 	cancelStatus  context.CancelFunc
 	rows          []taskRow
+	prompt        string
+	createActive  core.TaskCreateProgressStep
+	createDone    []core.TaskCreateProgressStep
 	selected      int
 	width         int
 	shimmerTick   int
@@ -41,8 +43,6 @@ type model struct {
 	loading       bool
 	createPending bool
 	deletePending bool
-	createActive  core.TaskCreateProgressStep
-	createDone    []core.TaskCreateProgressStep
 }
 
 type tasksLoadedMsg struct {
@@ -227,7 +227,8 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		m.resetCreateProgress()
 		m.clampSelection()
-		cmds := append([]tea.Cmd{loadTasksCmd(m.statusContext, m.frontend)}, m.taskStatusTrackingCmds(taskID(msg.task))...)
+		cmds := []tea.Cmd{loadTasksCmd(m.statusContext, m.frontend)}
+		cmds = append(cmds, m.taskStatusTrackingCmds(taskID(msg.task))...)
 		return m, tea.Batch(cmds...)
 	case taskCreateStreamStartFailedMsg:
 		m.createPending = false

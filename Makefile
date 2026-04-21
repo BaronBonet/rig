@@ -29,23 +29,19 @@ build: generate
 	@go build -ldflags "$(LDFLAGS)" -o ./local/bin/rig ./cmd/rig
 
 ################################################################################
-## Test
+## Test Lint
 ################################################################################
 
 .PHONY: test
 test:
 	@go tool gotestsum --format pkgname --format-hide-empty-pkg -- ./...
 
-################################################################################
-## Local Development
-################################################################################
-
 .PHONY: format
 format:
 	@./scripts/ci/format.sh
 
 .PHONY: lint-go
-lint-go: generate
+lint-go:
 	@./scripts/ci/lint-go.sh
 
 .PHONY: lint-all

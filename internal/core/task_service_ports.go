@@ -89,6 +89,7 @@ type TaskDaemonHookRoute struct {
 	Path    string
 }
 
+// TODO: is all of this information in the struct required?
 type HookEventInput struct {
 	OccurredAt           time.Time
 	TaskID               string

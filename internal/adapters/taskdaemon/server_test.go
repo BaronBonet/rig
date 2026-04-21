@@ -483,7 +483,11 @@ func createTaskViaSocket(ctx context.Context, socketPath string, input core.Crea
 	return resp.Task, nil
 }
 
-func createTaskStreamViaSocket(ctx context.Context, socketPath string, input core.CreateTaskInput) ([]socketEnvelope, error) {
+func createTaskStreamViaSocket(
+	ctx context.Context,
+	socketPath string,
+	input core.CreateTaskInput,
+) ([]socketEnvelope, error) {
 	conn, err := dialDaemonSocket(ctx, socketPath)
 	if err != nil {
 		return nil, err

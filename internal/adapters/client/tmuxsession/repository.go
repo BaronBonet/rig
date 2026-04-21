@@ -5,10 +5,11 @@ import (
 	"errors"
 	"fmt"
 	"os"
-	"rig/internal/core"
-	"rig/internal/pkg/subprocess"
 	"strings"
 	"time"
+
+	"rig/internal/core"
+	"rig/internal/pkg/subprocess"
 )
 
 const (
