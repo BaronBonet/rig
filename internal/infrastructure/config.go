@@ -4,8 +4,8 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"rig/internal/adapters/handler/taskdaemon"
 	tasksqlite "rig/internal/adapters/repository/tasksqlite"
+	"rig/internal/adapters/taskdaemon"
 	"rig/internal/core"
 
 	claudeclient "rig/internal/adapters/client/claude"

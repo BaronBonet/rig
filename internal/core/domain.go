@@ -181,14 +181,6 @@ func (u SessionTokenUsage) IsZero() bool {
 		u.TotalTokens == 0
 }
 
-type TaskView struct {
-	Task        *Task
-	HookSession *HookSessionSummary
-	Observer    *ObserverSummary
-	PR          *PRStatus
-	TokenUsage  *SessionTokenUsage
-}
-
 type TaskProgressStep string
 
 const (

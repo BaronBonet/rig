@@ -73,3 +73,50 @@ func TestDebugMode_SourceUsesTaskDaemonConfigInsteadOfObserverConfig(t *testing.
 		t.Fatal("main.go should use cfg.TaskDaemon instead of the removed observer config")
 	}
 }
+
+func TestDebugMode_SourceUsesUnifiedTaskdaemonAdapterOnly(t *testing.T) {
+	content, err := os.ReadFile(filepath.Join(".", "main.go"))
+	if err != nil {
+		t.Fatalf("read main.go: %v", err)
+	}
+
+	source := string(content)
+	for _, legacyImport := range []string{
+		"internal/adapters/client/taskdaemonfrontend",
+		"internal/adapters/client/taskdaemonprocess",
+		"internal/adapters/handler/taskdaemon",
+	} {
+		if strings.Contains(source, legacyImport) {
+			t.Fatalf("main.go should not import legacy taskdaemon package %q", legacyImport)
+		}
+	}
+
+	if !strings.Contains(source, "\"rig/internal/adapters/taskdaemon\"") {
+		t.Fatal("main.go should import the unified internal/adapters/taskdaemon package")
+	}
+
+	if strings.Contains(source, "taskdaemon.New(cfg.TaskDaemon).Serve(") {
+		t.Fatal("main.go should serve daemon mode through an adapter variable, not an inline New(...).Serve(...) chain")
+	}
+	if !strings.Contains(source, "adapter := taskdaemon.New(cfg.TaskDaemon)") {
+		t.Fatal("main.go should construct a taskdaemon adapter variable for daemon-mode serving")
+	}
+	if !strings.Contains(source, "adapter.Serve(") {
+		t.Fatal("main.go should call adapter.Serve for daemon-mode serving")
+	}
+}
+
+func TestDebugDaemonHookRoutes_IncludeClaudeHookRoute(t *testing.T) {
+	t.Parallel()
+
+	routes := debugDaemonHookRoutes(nil)
+	if len(routes) != 3 {
+		t.Fatalf("expected 3 hook routes, got %d", len(routes))
+	}
+
+	got := []string{routes[0].Path, routes[1].Path, routes[2].Path}
+	want := []string{"/hook", "/codex-hook", "/claude-hook"}
+	if strings.Join(got, ",") != strings.Join(want, ",") {
+		t.Fatalf("unexpected hook routes: got %v want %v", got, want)
+	}
+}

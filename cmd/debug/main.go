@@ -5,7 +5,7 @@ import (
 	"fmt"
 	"os"
 	"os/signal"
-	taskdaemon "rig/internal/adapters/handler/taskdaemon"
+	"rig/internal/adapters/taskdaemon"
 	"rig/internal/core"
 	"rig/internal/infrastructure"
 	"rig/internal/pkg/subprocess"
@@ -18,6 +18,7 @@ import (
 	codexagent "rig/internal/adapters/client/codexagent"
 	gitworktree "rig/internal/adapters/client/gitworktree"
 	tmuxsession "rig/internal/adapters/client/tmuxsession"
+	claudehooks "rig/internal/adapters/observability/claudehooks"
 	tasksqlite "rig/internal/adapters/repository/tasksqlite"
 	repositoryworkspace "rig/internal/adapters/repository/workspace"
 )
@@ -106,37 +107,37 @@ func main() {
 		ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 		defer cancel()
 
-		codexHooks := codexagent.NewHookHTTPHandler(service, nil)
-		if err := taskdaemon.New(cfg.TaskDaemon, taskdaemon.Dependencies{
-			Service: service,
-			HookRoutes: []taskdaemon.HookRoute{
-				{Path: "/hook", Handler: codexHooks},
-				{Path: "/codex-hook", Handler: codexHooks},
-			},
-			Stop: cancel,
-		}).Serve(ctx); err != nil {
+		adapter := taskdaemon.New(cfg.TaskDaemon)
+		if err := adapter.Serve(
+			ctx,
+			service,
+			debugDaemonHookRoutes(service),
+			cancel,
+		); err != nil {
 			fmt.Fprintln(os.Stderr, err)
 			os.Exit(1)
 		}
 		return
 	}
 
-	manager := newTaskDaemonProcessManager(taskDaemonProcessConfig{
-		SocketPath: cfg.TaskDaemon.SocketPath,
-		ExecPath:   execPath,
+	adapter := taskdaemon.New(taskdaemon.Config{
+		SocketPath:     cfg.TaskDaemon.SocketPath,
+		HookListenAddr: cfg.TaskDaemon.HookListenAddr,
+		ExecPath:       execPath,
 		Env: []string{
 			debugTaskDaemon.ModeEnvKey + "=" + debugTaskDaemon.ModeEnvValue,
 		},
 	})
-	if err := manager.Restart(context.Background()); err != nil {
+	if err := adapter.Restart(context.Background()); err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		os.Exit(1)
 	}
 
 	statusCtx, cancelStatus := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer cancelStatus()
+	frontend := adapter.Frontend()
 
-	task, err := createTaskViaDaemon(context.Background(), cfg.TaskDaemon.SocketPath, core.CreateTaskInput{
+	task, err := frontend.CreateTask(context.Background(), core.CreateTaskInput{
 		Cwd:      strings.TrimSpace(debugCreate.Cwd),
 		Prompt:   strings.TrimSpace(debugCreate.Prompt),
 		Provider: debugCreate.Provider,
@@ -165,18 +166,17 @@ func main() {
 		os.Exit(1)
 	}
 
-	latest, err := latestTaskStatusViaDaemon(context.Background(), cfg.TaskDaemon.SocketPath, task.ID)
+	latest, err := frontend.LatestTaskStatus(context.Background(), task.ID)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		os.Exit(1)
 	}
 
-	updates, cleanup, err := subscribeTaskStatusViaDaemon(statusCtx, cfg.TaskDaemon.SocketPath, task.ID)
+	updates, err := frontend.SubscribeTaskStatus(statusCtx, task.ID)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		os.Exit(1)
 	}
-	defer cleanup()
 
 	if _, err := fmt.Fprintf(
 		os.Stdout,
@@ -243,4 +243,34 @@ func main() {
 			return
 		}
 	}
+}
+
+func debugDaemonHookRoutes(service core.TaskService) []taskdaemon.HookRoute {
+	codexHooks := codexagent.NewHookHTTPHandler(service, nil)
+	claudeHooks := claudehooks.NewHTTPHandler(debugTaskServiceHookIngestor{service: service}, nil)
+
+	return []taskdaemon.HookRoute{
+		{Path: "/hook", Handler: codexHooks},
+		{Path: "/codex-hook", Handler: codexHooks},
+		{Path: "/claude-hook", Handler: claudeHooks},
+	}
+}
+
+type debugTaskServiceHookIngestor struct {
+	service core.TaskService
+}
+
+func (i debugTaskServiceHookIngestor) IngestHookEvent(
+	ctx context.Context,
+	input core.HookEventInput,
+) (*core.HookSessionSummary, error) {
+	if i.service == nil {
+		return nil, fmt.Errorf("task service not configured")
+	}
+
+	if err := i.service.HandleHookEvent(ctx, input); err != nil {
+		return nil, err
+	}
+
+	return nil, nil
 }
