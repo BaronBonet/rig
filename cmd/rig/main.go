@@ -5,19 +5,18 @@ import (
 	"fmt"
 	"os"
 	"os/signal"
-	"syscall"
-
 	"rig/internal/adapters/handler/tui"
+	"rig/internal/adapters/repository/sqlite"
 	"rig/internal/adapters/taskdaemon"
 	"rig/internal/core"
 	"rig/internal/infrastructure"
 	"rig/internal/pkg/subprocess"
+	"syscall"
 
 	codexagent "rig/internal/adapters/client/codexagent"
 	gitworktree "rig/internal/adapters/client/gitworktree"
 	tmuxsession "rig/internal/adapters/client/tmuxsession"
 
-	tasksqlite "rig/internal/adapters/repository/tasksqlite"
 	repositoryworkspace "rig/internal/adapters/repository/workspace"
 
 	tea "charm.land/bubbletea/v2"
@@ -102,7 +101,9 @@ func serveTaskDaemon(
 		return fmt.Errorf("application config not configured")
 	}
 
-	taskRepo, err := tasksqlite.New(tasksqlite.Config{Path: cfg.TaskSQLite.Path})
+	// TODO: why not just
+	// taskRepo, err := sqlite.New(sqlite.Config{Path: cfg.TaskSQLite.Path})
+	taskRepo, err := sqlite.New(cfg.TaskSQLite)
 	if err != nil {
 		return err
 	}

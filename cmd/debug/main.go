@@ -17,7 +17,7 @@ import (
 	codexagent "rig/internal/adapters/client/codexagent"
 	gitworktree "rig/internal/adapters/client/gitworktree"
 	tmuxsession "rig/internal/adapters/client/tmuxsession"
-	tasksqlite "rig/internal/adapters/repository/tasksqlite"
+	sqlite "rig/internal/adapters/repository/sqlite"
 	repositoryworkspace "rig/internal/adapters/repository/workspace"
 )
 
@@ -64,7 +64,7 @@ func main() {
 		os.Exit(1)
 	}
 
-	taskStore, err := tasksqlite.New(tasksqlite.Config{Path: cfg.TaskSQLite.Path})
+	taskStore, err := sqlite.New(sqlite.Config{Path: cfg.TaskSQLite.Path})
 	if err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		os.Exit(1)

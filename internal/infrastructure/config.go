@@ -5,7 +5,7 @@ import (
 	"os"
 	"path/filepath"
 
-	tasksqlite "rig/internal/adapters/repository/tasksqlite"
+	sqlite "rig/internal/adapters/repository/sqlite"
 	"rig/internal/adapters/taskdaemon"
 	"rig/internal/core"
 
@@ -21,7 +21,7 @@ type SQLiteConfig struct {
 type ApplicationConfig struct {
 	Provider   core.AgentProvider `env:"AGENT_PROVIDER" envDefault:"codex"`
 	SQLite     SQLiteConfig
-	TaskSQLite tasksqlite.Config
+	TaskSQLite sqlite.Config
 	Codex      codexagent.Config
 	TaskDaemon taskdaemon.Config
 }
@@ -32,8 +32,8 @@ func LoadConfig() (*ApplicationConfig, error) {
 		SQLite: SQLiteConfig{
 			Path: defaultSQLitePath(),
 		},
-		TaskSQLite: tasksqlite.Config{
-			Path: tasksqlite.DefaultSQLitePath(),
+		TaskSQLite: sqlite.Config{
+			Path: sqlite.DefaultSQLitePath(),
 		},
 		TaskDaemon: taskdaemon.Config{
 			SocketPath: defaultObserverSocketPath(),

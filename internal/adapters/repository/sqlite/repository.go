@@ -1,4 +1,4 @@
-package tasksqlite
+package sqlite
 
 import (
 	"context"
@@ -10,7 +10,7 @@ import (
 	"strings"
 	"sync"
 
-	"rig/internal/adapters/repository/tasksqlite/generated"
+	"rig/internal/adapters/repository/sqlite/generated"
 	"rig/internal/core"
 
 	// Register the "sqlite" database/sql driver used by sql.Open.
@@ -249,7 +249,7 @@ func hasStaleTasksSchema(ctx context.Context, db *sql.DB) (bool, error) {
 func removeSQLiteFiles(path string) error {
 	for _, candidate := range []string{path, path + "-wal", path + "-shm"} {
 		if err := os.Remove(candidate); err != nil && !errors.Is(err, os.ErrNotExist) {
-			return fmt.Errorf("remove disposable tasksqlite file %s: %w", candidate, err)
+			return fmt.Errorf("remove disposable sqlite file %s: %w", candidate, err)
 		}
 	}
 	return nil
