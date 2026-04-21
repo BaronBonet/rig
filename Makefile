@@ -6,16 +6,12 @@
 dependencies-install:
 	@./scripts/dependencies/install.sh
 
-.PHONY: dependencies-check
-dependencies-check:
-	@./scripts/dependencies/check.sh
-
 ################################################################################
 ## Generation
 ################################################################################
 
 .PHONY: generate
-generate: dependencies-check
+generate:
 	@./scripts/generate/go.sh
 
 ################################################################################

@@ -25,7 +25,7 @@ func TestModel_InitLoadsAllTasksAcrossRepos(t *testing.T) {
 			ID:          "task-2",
 			RepoName:    "repo-b",
 			DisplayName: "second task",
-			Provider:    core.AgentProviderClaude,
+			Provider:    core.AgentProviderCodex,
 		},
 	}
 
@@ -71,7 +71,7 @@ func TestModel_AfterLoadRequestsLatestStatusAndSubscriptionsForEachTask(t *testi
 	frontend := newStubFrontend()
 	frontend.listTasks = []*core.Task{
 		{ID: "task-1", RepoName: "repo-a", DisplayName: "first task", Provider: core.AgentProviderCodex},
-		{ID: "task-2", RepoName: "repo-b", DisplayName: "second task", Provider: core.AgentProviderClaude},
+		{ID: "task-2", RepoName: "repo-b", DisplayName: "second task", Provider: core.AgentProviderCodex},
 	}
 	frontend.subscribeTaskStatus = map[string]chan core.TaskStatusUpdate{
 		"task-1": make(chan core.TaskStatusUpdate, 1),
@@ -171,7 +171,7 @@ func TestModel_StatusEnrichmentFailuresDoNotCollapseListView(t *testing.T) {
 	frontend := newStubFrontend()
 	frontend.listTasks = []*core.Task{
 		{ID: "task-1", RepoName: "repo-a", DisplayName: "first task", Provider: core.AgentProviderCodex},
-		{ID: "task-2", RepoName: "repo-b", DisplayName: "second task", Provider: core.AgentProviderClaude},
+		{ID: "task-2", RepoName: "repo-b", DisplayName: "second task", Provider: core.AgentProviderCodex},
 	}
 	frontend.latestTaskStatus = map[string]*core.TaskStatusUpdate{
 		"task-2": {
@@ -249,7 +249,7 @@ func TestModel_CreateTaskFromPromptAppendsTaskAndStartsStatusTracking(t *testing
 	frontend := newStubFrontend()
 	frontend.listTasks = []*core.Task{
 		{ID: "task-1", DisplayName: "first task", RepoName: "repo-a", Provider: core.AgentProviderCodex},
-		{ID: "task-2", DisplayName: "second task", RepoName: "repo-b", Provider: core.AgentProviderClaude},
+		{ID: "task-2", DisplayName: "second task", RepoName: "repo-b", Provider: core.AgentProviderCodex},
 	}
 	frontend.createdTask = &core.Task{
 		ID:          "task-3",
@@ -332,7 +332,7 @@ func TestModel_CreateTaskFailureKeepsPromptRecoverableAndPreservesListView(t *te
 	frontend := newStubFrontend()
 	frontend.listTasks = []*core.Task{
 		{ID: "task-1", DisplayName: "first task", RepoName: "repo-a", Provider: core.AgentProviderCodex},
-		{ID: "task-2", DisplayName: "second task", RepoName: "repo-b", Provider: core.AgentProviderClaude},
+		{ID: "task-2", DisplayName: "second task", RepoName: "repo-b", Provider: core.AgentProviderCodex},
 	}
 	frontend.createTaskErr = errors.New("create failed")
 

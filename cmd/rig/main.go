@@ -13,13 +13,10 @@ import (
 	"rig/internal/infrastructure"
 	"rig/internal/pkg/subprocess"
 
-	claudeclient "rig/internal/adapters/client/claude"
-	claudeagent "rig/internal/adapters/client/claudeagent"
 	codexagent "rig/internal/adapters/client/codexagent"
 	gitworktree "rig/internal/adapters/client/gitworktree"
 	tmuxsession "rig/internal/adapters/client/tmuxsession"
 
-	claudehooks "rig/internal/adapters/observability/claudehooks"
 	tasksqlite "rig/internal/adapters/repository/tasksqlite"
 	repositoryworkspace "rig/internal/adapters/repository/workspace"
 
@@ -146,32 +143,11 @@ func serveTaskDaemon(
 
 func daemonHookRoutes(service core.TaskService) []taskdaemon.HookRoute {
 	codexHooks := codexagent.NewHookHTTPHandler(service, nil)
-	claudeHooks := claudehooks.NewHTTPHandler(taskServiceHookIngestor{service: service}, nil)
 
 	return []taskdaemon.HookRoute{
 		{Path: "/hook", Handler: codexHooks},
 		{Path: "/codex-hook", Handler: codexHooks},
-		{Path: "/claude-hook", Handler: claudeHooks},
 	}
-}
-
-type taskServiceHookIngestor struct {
-	service core.TaskService
-}
-
-func (i taskServiceHookIngestor) IngestHookEvent(
-	ctx context.Context,
-	input core.HookEventInput,
-) (*core.HookSessionSummary, error) {
-	if i.service == nil {
-		return nil, fmt.Errorf("task service not configured")
-	}
-
-	if err := i.service.HandleHookEvent(ctx, input); err != nil {
-		return nil, err
-	}
-
-	return nil, nil
 }
 
 func newTaskService(
@@ -198,10 +174,6 @@ func newTaskService(
 				SourceRoot:    sourceRoot,
 			},
 		),
-		core.AgentProviderClaude: claudeagent.New(runner, claudeclient.Config{
-			Binary:         cfg.Claude.Binary,
-			HookListenAddr: cfg.TaskDaemon.HookListenAddr,
-		}),
 	}
 
 	return core.NewTaskService(core.TaskServiceDependencies{

@@ -78,11 +78,6 @@ func TestRepositorySetupAndBootstrapTaskWorkspace(t *testing.T) {
 			Content:  []byte("{\"hooks\":{}}\n"),
 			FileMode: 0o640,
 		},
-		{
-			Path:     ".claude/settings.local.json",
-			Content:  []byte("{\"hooks\":{}}\n"),
-			FileMode: 0o600,
-		},
 	}})
 	require.NoError(t, err)
 
@@ -97,8 +92,4 @@ func TestRepositorySetupAndBootstrapTaskWorkspace(t *testing.T) {
 	hooksInfo, err := os.Stat(filepath.Join(worktreePath, ".codex", "hooks", "hooks.json"))
 	require.NoError(t, err)
 	require.Equal(t, os.FileMode(0o640), hooksInfo.Mode().Perm())
-
-	settingsInfo, err := os.Stat(filepath.Join(worktreePath, ".claude", "settings.local.json"))
-	require.NoError(t, err)
-	require.Equal(t, os.FileMode(0o600), settingsInfo.Mode().Perm())
 }

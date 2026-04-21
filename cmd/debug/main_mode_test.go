@@ -109,16 +109,16 @@ func TestDebugMode_SourceUsesUnifiedTaskdaemonAdapterOnly(t *testing.T) {
 	}
 }
 
-func TestDebugDaemonHookRoutes_IncludeClaudeHookRoute(t *testing.T) {
+func TestDebugDaemonHookRoutes_ExposeCodexHooksOnly(t *testing.T) {
 	t.Parallel()
 
 	routes := debugDaemonHookRoutes(nil)
-	if len(routes) != 3 {
-		t.Fatalf("expected 3 hook routes, got %d", len(routes))
+	if len(routes) != 2 {
+		t.Fatalf("expected 2 hook routes, got %d", len(routes))
 	}
 
-	got := []string{routes[0].Path, routes[1].Path, routes[2].Path}
-	want := []string{"/hook", "/codex-hook", "/claude-hook"}
+	got := []string{routes[0].Path, routes[1].Path}
+	want := []string{"/hook", "/codex-hook"}
 	if strings.Join(got, ",") != strings.Join(want, ",") {
 		t.Fatalf("unexpected hook routes: got %v want %v", got, want)
 	}

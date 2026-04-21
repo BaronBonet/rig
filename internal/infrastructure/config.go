@@ -9,7 +9,6 @@ import (
 	"rig/internal/adapters/taskdaemon"
 	"rig/internal/core"
 
-	claudeclient "rig/internal/adapters/client/claude"
 	codexagent "rig/internal/adapters/client/codexagent"
 
 	"github.com/caarlos0/env/v11"
@@ -24,7 +23,6 @@ type ApplicationConfig struct {
 	SQLite     SQLiteConfig
 	TaskSQLite tasksqlite.Config
 	Codex      codexagent.Config
-	Claude     claudeclient.Config
 	TaskDaemon taskdaemon.Config
 }
 
@@ -54,10 +52,10 @@ func LoadConfig() (*ApplicationConfig, error) {
 
 func validateProvider(provider core.AgentProvider) error {
 	switch provider {
-	case core.AgentProviderCodex, core.AgentProviderClaude:
+	case core.AgentProviderCodex:
 		return nil
 	default:
-		return fmt.Errorf("invalid AGENT_PROVIDER %q: expected codex or claude", provider)
+		return fmt.Errorf("invalid AGENT_PROVIDER %q: expected codex", provider)
 	}
 }
 
