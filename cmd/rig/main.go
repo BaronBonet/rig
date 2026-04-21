@@ -5,12 +5,13 @@ import (
 	"fmt"
 	"os"
 	"os/signal"
+	"syscall"
+
 	"rig/internal/adapters/handler/tui"
 	"rig/internal/adapters/taskdaemon"
 	"rig/internal/core"
 	"rig/internal/infrastructure"
 	"rig/internal/pkg/subprocess"
-	"syscall"
 
 	codexagent "rig/internal/adapters/client/codexagent"
 	gitworktree "rig/internal/adapters/client/gitworktree"
@@ -132,7 +133,7 @@ func serveTaskDaemon(
 	codexHooks := codexagent.NewHookHTTPHandler(service, nil)
 	adapter := taskdaemon.New(cfg.TaskDaemon)
 
-	return adapter.Serve(ctx, service, []taskdaemon.HookRoute{
+	return adapter.Serve(ctx, service, []core.TaskDaemonHookRoute{
 		{Path: "/hook", Handler: codexHooks},
 		{Path: "/codex-hook", Handler: codexHooks},
 	},

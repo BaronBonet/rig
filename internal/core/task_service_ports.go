@@ -1,6 +1,9 @@
 package core
 
-import "context"
+import (
+	"context"
+	"net/http"
+)
 
 type CreateTaskSource struct {
 	PullRequest *RepoPullRequest
@@ -38,6 +41,25 @@ type TaskFrontend interface {
 type TaskFrontendServer interface {
 	TaskFrontend
 	Serve(ctx context.Context) error
+}
+
+// TaskDaemonHookRoute describes one provider hook endpoint the local task
+// daemon should expose alongside its frontend socket transport.
+type TaskDaemonHookRoute struct {
+	Path    string
+	Handler http.Handler
+}
+
+// TaskDaemon is the application port for the local daemon-backed task
+// frontend. It can ensure the long-lived daemon process is available for the
+// UI, expose the daemon-backed frontend client, restart the daemon when
+// needed, and serve the daemon runtime when the current process is acting as
+// the daemon.
+type TaskDaemon interface {
+	Frontend() TaskFrontend
+	EnsureRunning(ctx context.Context) error
+	Restart(ctx context.Context) error
+	Serve(ctx context.Context, service TaskService, hookRoutes []TaskDaemonHookRoute, stop func()) error
 }
 
 type TaskService interface {

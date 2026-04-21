@@ -11,7 +11,7 @@ type server struct {
 	socketPath     string
 	hookListenAddr string
 	service        core.TaskService
-	hookRoutes     []HookRoute
+	hookRoutes     []core.TaskDaemonHookRoute
 	stop           func()
 }
 

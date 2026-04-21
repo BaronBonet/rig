@@ -5,12 +5,9 @@ import (
 	"net"
 	"net/http"
 	"strings"
-)
 
-type HookRoute struct {
-	Path    string
-	Handler http.Handler
-}
+	"rig/internal/core"
+)
 
 func listenForHTTPHooks(addr string) (net.Listener, error) {
 	if strings.TrimSpace(addr) == "" {
@@ -25,7 +22,7 @@ func listenForHTTPHooks(addr string) (net.Listener, error) {
 	return listener, nil
 }
 
-func newHTTPHookServer(routes []HookRoute) http.Handler {
+func newHTTPHookServer(routes []core.TaskDaemonHookRoute) http.Handler {
 	mux := http.NewServeMux()
 	for _, route := range routes {
 		path := strings.TrimSpace(route.Path)
