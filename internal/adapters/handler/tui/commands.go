@@ -2,11 +2,14 @@ package tui
 
 import (
 	"context"
+	"time"
 
 	"rig/internal/core"
 
 	tea "charm.land/bubbletea/v2"
 )
+
+const shimmerTickInterval = 90 * time.Millisecond
 
 func loadTasksCmd(ctx context.Context, frontend core.TaskFrontend) tea.Cmd {
 	return func() tea.Msg {
@@ -43,6 +46,12 @@ func deleteTaskCmd(ctx context.Context, frontend core.TaskFrontend, taskID strin
 			err:    err,
 		}
 	}
+}
+
+func shimmerTickCmd() tea.Cmd {
+	return tea.Tick(shimmerTickInterval, func(time.Time) tea.Msg {
+		return shimmerTickMsg{}
+	})
 }
 
 func latestTaskStatusCmd(ctx context.Context, frontend core.TaskFrontend, taskID string) tea.Cmd {
