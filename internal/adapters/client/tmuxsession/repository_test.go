@@ -77,6 +77,19 @@ func TestRepositoryStartTaskSession_CleansUpSessionWhenEditorWindowCreationFails
 	require.EqualError(t, err, "new-window failed")
 }
 
+func TestRepositoryDeleteTaskSession_KillsSession(t *testing.T) {
+	runner := subprocess.NewMockRunner(t)
+	repo := New(runner).(*repository)
+
+	expectTmuxRun(runner, subprocess.Result{}, nil, "kill-session", "-t", "=repo-billing-retry-flow")
+
+	err := repo.DeleteTaskSession(context.Background(), &core.Task{
+		TmuxSession: "repo-billing-retry-flow",
+	})
+
+	require.NoError(t, err)
+}
+
 func expectTmuxRun(runner *subprocess.MockRunner, result subprocess.Result, err error, args ...string) *mock.Call {
 	callArgs := make([]interface{}, 0, len(args)+3)
 	callArgs = append(callArgs, mock.Anything, "", "tmux")

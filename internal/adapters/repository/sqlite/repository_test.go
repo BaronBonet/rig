@@ -112,6 +112,59 @@ func TestRepositoryUpdateTask_PersistsMutations(t *testing.T) {
 	}
 }
 
+func TestRepositoryDeleteTask_RemovesTaskAndCascadesLatestStatus(t *testing.T) {
+	repo := newTestRepository(t)
+	now := time.Now().UTC()
+
+	task := &core.Task{
+		ID:           "task-1",
+		Slug:         "task-one",
+		Prompt:       "prompt",
+		DisplayName:  "task one",
+		RepoRoot:     "/tmp/repo",
+		RepoName:     "repo",
+		BranchName:   "feat/task-one",
+		WorktreePath: "/tmp/repo-task-one",
+		TmuxSession:  "repo_task_one",
+		Provider:     core.AgentProviderCodex,
+		CreatedAt:    now,
+		UpdatedAt:    now,
+	}
+	if err := repo.CreateTask(context.Background(), task); err != nil {
+		t.Fatalf("create task: %v", err)
+	}
+
+	if err := repo.UpsertTaskStatus(context.Background(), core.TaskStatusUpdate{
+		TaskID:       "task-1",
+		Provider:     core.AgentProviderCodex,
+		Phase:        core.TaskStatusPhaseWorking,
+		RawEventName: "PostToolUse",
+		ObservedAt:   now,
+	}); err != nil {
+		t.Fatalf("upsert status: %v", err)
+	}
+
+	if err := repo.DeleteTask(context.Background(), "task-1"); err != nil {
+		t.Fatalf("delete task: %v", err)
+	}
+
+	tasks, err := repo.ListTasks(context.Background())
+	if err != nil {
+		t.Fatalf("list tasks: %v", err)
+	}
+	if len(tasks) != 0 {
+		t.Fatalf("expected no tasks after delete, got %#v", tasks)
+	}
+
+	got, err := repo.LatestTaskStatus(context.Background(), "task-1")
+	if err != nil {
+		t.Fatalf("latest task status: %v", err)
+	}
+	if got != nil {
+		t.Fatalf("expected nil latest status after delete, got %#v", got)
+	}
+}
+
 func TestRepositoryUpsertTaskStatus_PersistsLatestAndPublishesToSubscribers(t *testing.T) {
 	repo := newTestRepository(t)
 	ctx, cancel := context.WithCancel(context.Background())

@@ -18,9 +18,15 @@ generate:
 ## Build
 ################################################################################
 
+GIT_EXACT_TAG := $(shell git describe --tags --exact-match 2>/dev/null)
+GIT_SHA := $(shell git rev-parse --short HEAD 2>/dev/null)
+GIT_DIRTY := $(shell test -n "$$(git status --porcelain 2>/dev/null)" && echo -dirty)
+BUILD_VERSION ?= $(if $(GIT_EXACT_TAG),$(GIT_EXACT_TAG),$(if $(GIT_SHA),dev-$(GIT_SHA)$(GIT_DIRTY),dev))
+LDFLAGS := -X rig/internal/adapters/taskdaemon.currentFrontendBuildVersion=$(BUILD_VERSION)
+
 .PHONY: build
 build: generate
-	@go build -o ./local/bin/rig ./cmd/rig
+	@go build -ldflags "$(LDFLAGS)" -o ./local/bin/rig ./cmd/rig
 
 ################################################################################
 ## Test

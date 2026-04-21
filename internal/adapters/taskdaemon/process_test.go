@@ -119,6 +119,18 @@ func TestAdapterEnsureRunning_UsesDefaultExecutableAndConfiguredEnvToStartDaemon
 	require.NoError(t, waitForSocketRemoval(socketPath, 2*time.Second))
 }
 
+func TestFrontendBuildVersion_DefaultsToDev(t *testing.T) {
+	t.Parallel()
+
+	require.NotEmpty(t, currentFrontendBuildVersion)
+	require.Equal(
+		t,
+		"dev",
+		currentFrontendBuildVersion,
+		"default build version should be safe for local test binaries",
+	)
+}
+
 func TestAdapterEnsureRunning_RestartsStaleHealthyDaemonMissingFrontendProtocol(t *testing.T) {
 	t.Parallel()
 
@@ -395,9 +407,9 @@ func handleTestDaemonConnection(conn net.Conn, stopSeen *atomic.Bool) error {
 	switch req.Command {
 	case "health":
 		resp.Type = "health"
-	case "protocol_version":
-		resp.Type = "protocol_version"
-		resp.Version = currentFrontendProtocolVersion
+	case "frontend_build_version":
+		resp.Type = "frontend_build_version"
+		resp.Version = currentFrontendBuildVersion
 	case "stop":
 		resp.Type = "stopping"
 		stopSeen.Store(true)

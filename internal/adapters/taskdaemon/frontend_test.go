@@ -81,6 +81,27 @@ func TestFrontend_CreateTaskLatestTaskStatusAndSubscribeTaskStatus(t *testing.T)
 		require.NoError(t, <-serverErrCh)
 	})
 
+	t.Run("delete task", func(t *testing.T) {
+		t.Parallel()
+
+		socketPath := frontendTestSocketPath(t)
+		requestCh := make(chan socketRequest, 1)
+		serverErrCh := serveOneShotFrontendSocket(t, socketPath, func(req socketRequest, encoder *json.Encoder) error {
+			requestCh <- req
+			return encoder.Encode(socketEnvelope{
+				Type: "task_deleted",
+				OK:   true,
+			})
+		})
+
+		frontend := New(Config{SocketPath: socketPath}).Frontend()
+
+		err := frontend.DeleteTask(t.Context(), "task-123")
+		require.NoError(t, err)
+		require.Equal(t, socketRequest{Command: "delete_task", TaskID: "task-123"}, <-requestCh)
+		require.NoError(t, <-serverErrCh)
+	})
+
 	t.Run("latest task status", func(t *testing.T) {
 		t.Parallel()
 

@@ -23,31 +23,37 @@ type testTaskServiceHarness struct {
 }
 
 type taskRepositoryState struct {
-	createErr    error
-	updateErr    error
-	updateErrAt  int
-	updateCount  int
-	listTasks    []*Task
-	createdTask  *Task
-	updatedTask  *Task
-	mu           sync.Mutex
-	latestByTask map[string]TaskStatusUpdate
-	subscribers  map[string][]chan TaskStatusUpdate
+	createErr     error
+	updateErr     error
+	deleteErr     error
+	updateErrAt   int
+	updateCount   int
+	listTasks     []*Task
+	createdTask   *Task
+	updatedTask   *Task
+	deletedTaskID string
+	mu            sync.Mutex
+	latestByTask  map[string]TaskStatusUpdate
+	subscribers   map[string][]chan TaskStatusUpdate
 }
 
 type repoClientState struct {
 	detectRepoErr  error
 	branchInUseErr error
 	createErr      error
+	removeErr      error
 	repoContext    RepoContext
 	repoResources  RepoResources
 	branchInUse    map[string]bool
 	createdTask    *Task
+	removedTask    *Task
 }
 
 type sessionClientState struct {
 	startErr         error
+	deleteErr        error
 	startedTask      *Task
+	deletedTask      *Task
 	startedLaunch    TaskSessionLaunchSpec
 	sessionResources SessionResources
 }
@@ -213,6 +219,7 @@ func newTestTaskService(t *testing.T) *testTaskServiceHarness {
 	return h
 }
 
+// TODO: these stubs should all be make by mockery
 func (s *stubGitWorktreeClient) DetectRepo(context.Context, string) (RepoContext, error) {
 	if s.state.detectRepoErr != nil {
 		return RepoContext{}, s.state.detectRepoErr
@@ -251,6 +258,16 @@ func (s *stubGitWorktreeClient) CreateTaskWorkspaceFromBranch(_ context.Context,
 	return nil
 }
 
+func (s *stubGitWorktreeClient) RemoveTaskWorkspace(_ context.Context, task *Task) error {
+	s.state.removedTask = cloneTask(task)
+	if s.state.removeErr != nil {
+		return s.state.removeErr
+	}
+
+	s.state.repoResources.WorktreeExists = false
+	return nil
+}
+
 func (s *stubTmuxSessionClient) StartTaskSession(_ context.Context, task *Task, launch TaskSessionLaunchSpec) error {
 	s.state.startedTask = cloneTask(task)
 	s.state.startedLaunch = launch
@@ -270,7 +287,12 @@ func (s *stubTmuxSessionClient) OpenTaskSession(context.Context, *Task) error {
 	return nil
 }
 
-func (s *stubTmuxSessionClient) DeleteTaskSession(context.Context, *Task) error {
+func (s *stubTmuxSessionClient) DeleteTaskSession(_ context.Context, task *Task) error {
+	if s.state.deleteErr != nil {
+		return s.state.deleteErr
+	}
+	s.state.deletedTask = cloneTask(task)
+	s.state.sessionResources = SessionResources{}
 	return nil
 }
 
@@ -299,6 +321,27 @@ func (s *stubTaskRepository) UpdateTask(_ context.Context, task *Task) error {
 	}
 
 	s.state.updatedTask = cloneTask(task)
+	return nil
+}
+
+func (s *stubTaskRepository) DeleteTask(_ context.Context, taskID string) error {
+	if s.state.deleteErr != nil {
+		return s.state.deleteErr
+	}
+
+	s.state.deletedTaskID = taskID
+	filtered := s.state.listTasks[:0]
+	for _, task := range s.state.listTasks {
+		if task == nil || task.ID == taskID {
+			continue
+		}
+		filtered = append(filtered, cloneTask(task))
+	}
+	s.state.listTasks = filtered
+
+	s.state.mu.Lock()
+	delete(s.state.latestByTask, taskID)
+	s.state.mu.Unlock()
 	return nil
 }
 

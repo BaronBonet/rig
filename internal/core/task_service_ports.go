@@ -25,6 +25,9 @@ type TaskFrontend interface {
 	// CreateTask creates a new task and returns the durable task record that the
 	// frontend should render immediately.
 	CreateTask(ctx context.Context, input CreateTaskInput) (*Task, error)
+	// DeleteTask deletes the task and its local runtime resources while keeping
+	// the Git branch.
+	DeleteTask(ctx context.Context, taskID string) error
 	// ListTasks returns all known tasks for the frontend to render.
 	ListTasks(ctx context.Context) ([]*Task, error)
 	// LatestTaskStatus returns the latest published live status for a task, or
@@ -76,12 +79,17 @@ type TaskService interface {
 	// HandleHookEvent resolves and publishes any task status update implied by a
 	// provider hook event.
 	HandleHookEvent(ctx context.Context, input HookEventInput) error
+	// DeleteTask deletes the task and its local runtime resources while keeping
+	// the Git branch.
+	DeleteTask(ctx context.Context, taskID string) error
 }
 
 // TaskRepository persists task records and returns their durable state.
 type TaskRepository interface {
 	// CreateTask stores a newly created task record.
 	CreateTask(ctx context.Context, task *Task) error
+	// DeleteTask removes a persisted task record.
+	DeleteTask(ctx context.Context, taskID string) error
 	// UpdateTask persists changes to an existing task record.
 	UpdateTask(ctx context.Context, task *Task) error
 	// ListTasks returns all known tasks.
@@ -130,6 +138,8 @@ type GitWorktreeClient interface {
 	// CreateTaskWorkspaceFromBranch creates a task worktree by checking out an
 	// already existing branch, such as a branch associated with a pull request.
 	CreateTaskWorkspaceFromBranch(ctx context.Context, task *Task) error
+	// RemoveTaskWorkspace deletes a task worktree while keeping its branch.
+	RemoveTaskWorkspace(ctx context.Context, task *Task) error
 }
 
 // TmuxSessionClient manages tmux session lifecycle for a task.

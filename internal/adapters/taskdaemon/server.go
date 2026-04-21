@@ -19,6 +19,10 @@ func (s *server) CreateTask(ctx context.Context, input core.CreateTaskInput) (*c
 	return s.service.CreateTask(ctx, input)
 }
 
+func (s *server) DeleteTask(ctx context.Context, taskID string) error {
+	return s.service.DeleteTask(ctx, taskID)
+}
+
 func (s *server) ListTasks(ctx context.Context) ([]*core.Task, error) {
 	return s.service.ListTasks(ctx)
 }

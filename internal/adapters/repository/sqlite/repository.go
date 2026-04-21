@@ -73,6 +73,10 @@ func (r *repository) CreateTask(ctx context.Context, task *core.Task) error {
 	return r.queries.CreateTask(ctx, createTaskParams(task))
 }
 
+func (r *repository) DeleteTask(ctx context.Context, taskID string) error {
+	return r.queries.DeleteTask(ctx, strings.TrimSpace(taskID))
+}
+
 func (r *repository) UpdateTask(ctx context.Context, task *core.Task) error {
 	return r.queries.UpdateTask(ctx, updateTaskParams(task))
 }

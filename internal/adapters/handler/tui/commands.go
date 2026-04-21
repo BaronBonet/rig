@@ -28,6 +28,16 @@ func createTaskCmd(ctx context.Context, frontend core.TaskFrontend, input core.C
 	}
 }
 
+func deleteTaskCmd(ctx context.Context, frontend core.TaskFrontend, taskID string) tea.Cmd {
+	return func() tea.Msg {
+		err := frontend.DeleteTask(ctx, taskID)
+		return taskDeletedMsg{
+			taskID: taskID,
+			err:    err,
+		}
+	}
+}
+
 func latestTaskStatusCmd(ctx context.Context, frontend core.TaskFrontend, taskID string) tea.Cmd {
 	return func() tea.Msg {
 		status, err := frontend.LatestTaskStatus(ctx, taskID)
