@@ -18,14 +18,14 @@ func TestCreateTaskInput_SupportsPromptAndPullRequestSources(t *testing.T) {
 	promptCreate := CreateTaskInput{
 		Cwd:      "/tmp/repo",
 		Prompt:   "add billing retry flow",
-		Provider: AgentProviderCodex,
+		Provider: ProviderCodex,
 	}
 	if promptCreate.Prompt == "" {
 		t.Fatal("expected prompt-based creation input to carry a prompt")
 	}
 
 	prCreate := CreateTaskInput{
-		Provider: AgentProviderCodex,
+		Provider: ProviderCodex,
 		Source: CreateTaskSource{
 			PullRequest: &RepoPullRequest{
 				Number:     42,
@@ -87,11 +87,11 @@ func TestTaskServiceCreateTask_FailsWhenRequestedProviderIsUnavailable(t *testin
 	task, err := svc.service.CreateTask(t.Context(), CreateTaskInput{
 		Cwd:      "/tmp/repo",
 		Prompt:   "add billing retry flow",
-		Provider: AgentProvider("gemini"),
+		Provider: Provider("gemini"),
 	})
 
 	require.Nil(t, task)
-	require.EqualError(t, err, `agent provider "gemini" unavailable`)
+	require.EqualError(t, err, `provider "gemini" unavailable`)
 	require.Nil(t, svc.taskRepo.createdTask)
 	require.Nil(t, svc.repoClient.createdTask)
 	require.False(t, svc.workspace.setupCalled)
@@ -193,12 +193,12 @@ func TestTaskServiceCreateTask_BootstrapsWorkspaceWhenRepoSetupIsDisabled(t *tes
 		Tasks:       svc.taskRepoMock,
 		GitWorktree: svc.repoClientMock,
 		TmuxSession: svc.sessionClientMock,
-		Agents: map[AgentProvider]AgentClient{
-			AgentProviderCodex: &recordingAgentClient{state: &svc.providerRepo},
+		Providers: map[Provider]ProviderClient{
+			ProviderCodex: &recordingProviderClient{state: &svc.providerRepo},
 		},
 		Workspace:            &recordingWorkspaceManager{state: &svc.workspace, session: &svc.sessionClient},
 		EnableWorkspaceSetup: false,
-		DefaultProvider:      AgentProviderCodex,
+		DefaultProvider:      ProviderCodex,
 	})
 
 	task, err := svc.service.CreateTask(t.Context(), CreateTaskInput{
@@ -223,7 +223,7 @@ func TestTaskServiceCreateTask_FromPullRequestBootstrapsWorkspaceBeforeStartingS
 
 	task, err := svc.service.CreateTask(t.Context(), CreateTaskInput{
 		Cwd:      "/tmp/repo",
-		Provider: AgentProviderCodex,
+		Provider: ProviderCodex,
 		Source: CreateTaskSource{
 			PullRequest: &RepoPullRequest{
 				Number:     42,
@@ -252,7 +252,7 @@ func TestTaskServiceCreateTask_RejectsDuplicatePullRequestBranchBeforePersist(t 
 
 	task, err := svc.service.CreateTask(t.Context(), CreateTaskInput{
 		Cwd:      "/tmp/repo",
-		Provider: AgentProviderCodex,
+		Provider: ProviderCodex,
 		Source: CreateTaskSource{
 			PullRequest: &RepoPullRequest{
 				Number:     42,

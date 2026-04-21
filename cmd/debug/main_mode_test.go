@@ -73,7 +73,7 @@ func TestDebugMode_SourceUsesTaskDaemonConfigInsteadOfObserverConfig(t *testing.
 		t.Fatalf("read main.go: %v", err)
 	}
 	if strings.Contains(string(content), "cfg.Observer.") {
-		t.Fatal("main.go should use cfg.TaskDaemon instead of the removed observer config")
+		t.Fatal("main.go should use cfg.Daemon instead of the removed observer config")
 	}
 }
 
@@ -98,10 +98,10 @@ func TestDebugMode_SourceUsesUnifiedTaskdaemonAdapterOnly(t *testing.T) {
 		t.Fatal("main.go should import the unified internal/adapters/taskdaemon package")
 	}
 
-	if strings.Contains(source, "taskdaemon.New(cfg.TaskDaemon).Serve(") {
+	if strings.Contains(source, "taskdaemon.New(cfg.Daemon).Serve(") {
 		t.Fatal("main.go should serve daemon mode through an adapter variable, not an inline New(...).Serve(...) chain")
 	}
-	if !strings.Contains(source, "adapter := taskdaemon.New(cfg.TaskDaemon)") {
+	if !strings.Contains(source, "adapter := taskdaemon.New(cfg.Daemon)") {
 		t.Fatal("main.go should construct a taskdaemon adapter variable for daemon-mode serving")
 	}
 	if !strings.Contains(source, "adapter.Serve(") {

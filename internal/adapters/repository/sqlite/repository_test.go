@@ -39,7 +39,7 @@ func TestRepositoryCreateTaskAndListTasks_PersistsCoreTaskFields(t *testing.T) {
 		BranchName:   "feat/one",
 		WorktreePath: "/tmp/repo-one",
 		TmuxSession:  "repo_one",
-		Provider:     core.AgentProviderCodex,
+		Provider:     core.ProviderCodex,
 		CreatedAt:    now,
 		UpdatedAt:    now,
 	}
@@ -53,7 +53,7 @@ func TestRepositoryCreateTaskAndListTasks_PersistsCoreTaskFields(t *testing.T) {
 		BranchName:   "feat/two",
 		WorktreePath: "/tmp/repo-two",
 		TmuxSession:  "repo_two",
-		Provider:     core.AgentProviderCodex,
+		Provider:     core.ProviderCodex,
 		CreatedAt:    now.Add(time.Second),
 		UpdatedAt:    now.Add(time.Second),
 	}
@@ -88,7 +88,7 @@ func TestRepositoryUpdateTask_PersistsMutations(t *testing.T) {
 		BranchName:   "feat/task-name",
 		WorktreePath: "/tmp/repo-task-name",
 		TmuxSession:  "repo_task_name",
-		Provider:     core.AgentProviderCodex,
+		Provider:     core.ProviderCodex,
 		CreatedAt:    now,
 		UpdatedAt:    now,
 	}
@@ -126,7 +126,7 @@ func TestRepositoryDeleteTask_RemovesTaskAndCascadesLatestStatus(t *testing.T) {
 		BranchName:   "feat/task-one",
 		WorktreePath: "/tmp/repo-task-one",
 		TmuxSession:  "repo_task_one",
-		Provider:     core.AgentProviderCodex,
+		Provider:     core.ProviderCodex,
 		CreatedAt:    now,
 		UpdatedAt:    now,
 	}
@@ -136,7 +136,7 @@ func TestRepositoryDeleteTask_RemovesTaskAndCascadesLatestStatus(t *testing.T) {
 
 	if err := repo.UpsertTaskStatus(context.Background(), core.TaskStatusUpdate{
 		TaskID:       "task-1",
-		Provider:     core.AgentProviderCodex,
+		Provider:     core.ProviderCodex,
 		Phase:        core.TaskStatusPhaseWorking,
 		RawEventName: "PostToolUse",
 		ObservedAt:   now,
@@ -180,7 +180,7 @@ func TestRepositoryUpsertTaskStatus_PersistsLatestAndPublishesToSubscribers(t *t
 		BranchName:   "feat/task-one",
 		WorktreePath: "/tmp/repo-task-one",
 		TmuxSession:  "repo_task_one",
-		Provider:     core.AgentProviderCodex,
+		Provider:     core.ProviderCodex,
 		CreatedAt:    time.Now().UTC(),
 		UpdatedAt:    time.Now().UTC(),
 	}
@@ -195,14 +195,14 @@ func TestRepositoryUpsertTaskStatus_PersistsLatestAndPublishesToSubscribers(t *t
 
 	first := core.TaskStatusUpdate{
 		TaskID:       "task-1",
-		Provider:     core.AgentProviderCodex,
+		Provider:     core.ProviderCodex,
 		Phase:        core.TaskStatusPhaseStarting,
 		RawEventName: "SessionStart",
 		ObservedAt:   time.Date(2026, time.April, 19, 12, 0, 0, 0, time.UTC),
 	}
 	second := core.TaskStatusUpdate{
 		TaskID:       "task-1",
-		Provider:     core.AgentProviderCodex,
+		Provider:     core.ProviderCodex,
 		Phase:        core.TaskStatusPhaseWaitingForInput,
 		RawEventName: "Stop",
 		ObservedAt:   time.Date(2026, time.April, 19, 12, 1, 0, 0, time.UTC),
@@ -326,7 +326,7 @@ func TestRepositoryNew_ResetsDisposableDBWhenSchemaIsStale(t *testing.T) {
 		BranchName:   "feat/task-name",
 		WorktreePath: "/tmp/repo-task-name",
 		TmuxSession:  "repo_task_name",
-		Provider:     core.AgentProviderCodex,
+		Provider:     core.ProviderCodex,
 		CreatedAt:    time.Now().UTC(),
 		UpdatedAt:    time.Now().UTC(),
 	}

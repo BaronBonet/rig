@@ -13,6 +13,7 @@ import (
 )
 
 const promptSubmitDelay = 500 * time.Millisecond
+const taskWindowName = "task"
 
 type repository struct {
 	runner subprocess.Runner
@@ -35,7 +36,7 @@ func (r *repository) StartTaskSession(ctx context.Context, task *core.Task, laun
 		return err
 	}
 
-	if err := r.sendKeysToWindow(ctx, task.TmuxSession, "agent", launch.Command); err != nil {
+	if err := r.sendKeysToWindow(ctx, task.TmuxSession, taskWindowName, launch.Command); err != nil {
 		return err
 	}
 
@@ -43,11 +44,11 @@ func (r *repository) StartTaskSession(ctx context.Context, task *core.Task, laun
 		return nil
 	}
 
-	if err := r.waitForPrompt(ctx, task.TmuxSession, "agent", launch.ReadyMarker); err != nil {
+	if err := r.waitForPrompt(ctx, task.TmuxSession, taskWindowName, launch.ReadyMarker); err != nil {
 		return err
 	}
 
-	return r.typeInWindow(ctx, task.TmuxSession, "agent", launch.PrefillInput)
+	return r.typeInWindow(ctx, task.TmuxSession, taskWindowName, launch.PrefillInput)
 }
 
 func (r *repository) OpenTaskSession(ctx context.Context, task *core.Task) error {
@@ -111,7 +112,7 @@ func (r *repository) createSession(ctx context.Context, sessionName, workingDir 
 		"-s",
 		sessionName,
 		"-n",
-		"agent",
+		taskWindowName,
 		"-c",
 		workingDir,
 	)

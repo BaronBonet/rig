@@ -20,14 +20,14 @@ func TestTaskStatusUpdate_HoldsFirstSliceFields(t *testing.T) {
 
 	update := core.TaskStatusUpdate{
 		TaskID:       "task-123",
-		Provider:     core.AgentProviderCodex,
+		Provider:     core.ProviderCodex,
 		Phase:        core.TaskStatusPhaseWorking,
 		RawEventName: "PreToolUse",
 		ObservedAt:   now,
 	}
 
 	require.Equal(t, "task-123", update.TaskID)
-	require.Equal(t, core.AgentProviderCodex, update.Provider)
+	require.Equal(t, core.ProviderCodex, update.Provider)
 	require.Equal(t, core.TaskStatusPhaseWorking, update.Phase)
 	require.Equal(t, "PreToolUse", update.RawEventName)
 	require.Equal(t, now, update.ObservedAt)

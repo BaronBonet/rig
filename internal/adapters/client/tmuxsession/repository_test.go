@@ -22,19 +22,19 @@ func TestRepositoryStartTaskSession_LaunchesCommandAndPrefillsInputWithoutSubmit
 
 	mock.InOrder(
 		expectTmuxRun(runner, subprocess.Result{}, nil,
-			"new-session", "-d", "-s", "repo_task", "-n", "agent", "-c", "/tmp/repo-task",
+			"new-session", "-d", "-s", "repo_task", "-n", "task", "-c", "/tmp/repo-task",
 		),
 		expectTmuxRun(runner, subprocess.Result{}, nil,
 			"new-window", "-d", "-t", "=repo_task", "-n", "editor", "-c", "/tmp/repo-task",
 		),
 		expectTmuxRun(runner, subprocess.Result{}, nil,
-			"send-keys", "-t", "=repo_task:agent", "codex", "C-m",
+			"send-keys", "-t", "=repo_task:task", "codex", "C-m",
 		),
 		expectTmuxRun(runner, subprocess.Result{Stdout: "›"}, nil,
-			"capture-pane", "-t", "=repo_task:agent", "-p",
+			"capture-pane", "-t", "=repo_task:task", "-p",
 		),
 		expectTmuxRun(runner, subprocess.Result{}, nil,
-			"send-keys", "-t", "=repo_task:agent", "fix billing retry flow",
+			"send-keys", "-t", "=repo_task:task", "fix billing retry flow",
 		),
 	)
 
@@ -57,7 +57,7 @@ func TestRepositoryStartTaskSession_CleansUpSessionWhenEditorWindowCreationFails
 
 	mock.InOrder(
 		expectTmuxRun(runner, subprocess.Result{}, nil,
-			"new-session", "-d", "-s", "repo-billing-retry-flow", "-n", "agent", "-c", "/tmp/repo-billing-retry-flow",
+			"new-session", "-d", "-s", "repo-billing-retry-flow", "-n", "task", "-c", "/tmp/repo-billing-retry-flow",
 		),
 		expectTmuxRun(runner, subprocess.Result{}, errors.New("new-window failed"),
 			"new-window", "-d", "-t", "=repo-billing-retry-flow", "-n", "editor", "-c", "/tmp/repo-billing-retry-flow",

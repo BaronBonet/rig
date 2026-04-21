@@ -3,7 +3,7 @@ package core
 import "time"
 
 type Config struct {
-	Provider AgentProvider
+	Provider Provider
 }
 
 type RuntimeState string
@@ -150,7 +150,7 @@ type HookEventInput struct {
 	SessionID            string
 	TurnID               string
 	EventName            string
-	Provider             AgentProvider
+	Provider             Provider
 	RawPayloadJSON       string
 	LastAssistantMessage string
 	PromptText           string
@@ -190,7 +190,7 @@ const (
 	TaskProgressWorkspaceSeeding   TaskProgressStep = "workspace_seeding"
 	TaskProgressWorkspaceSeeded    TaskProgressStep = "workspace_seeded"
 	TaskProgressTmuxStarting       TaskProgressStep = "tmux_starting"
-	TaskProgressAgentLaunching     TaskProgressStep = "agent_launching"
+	TaskProgressProviderLaunching  TaskProgressStep = "provider_launching"
 	TaskProgressTaskCreated        TaskProgressStep = "task_created"
 	TaskProgressSetupScriptRunning TaskProgressStep = "setup_script_running"
 	TaskProgressSessionOpening     TaskProgressStep = "session_opening"

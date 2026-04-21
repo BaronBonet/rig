@@ -4,39 +4,31 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-
-	sqlite "rig/internal/adapters/repository/sqlite"
 	"rig/internal/adapters/taskdaemon"
 	"rig/internal/core"
 
-	codexagent "rig/internal/adapters/client/codexagent"
+	sqlite "rig/internal/adapters/repository/sqlite"
+
+	codexprovider "rig/internal/adapters/client/codexprovider"
 
 	"github.com/caarlos0/env/v11"
 )
 
-type SQLiteConfig struct {
-	Path string `env:"AGENT_SQLITE_PATH"`
-}
-
 type ApplicationConfig struct {
-	Provider   core.AgentProvider `env:"AGENT_PROVIDER" envDefault:"codex"`
-	SQLite     SQLiteConfig
-	TaskSQLite sqlite.Config
-	Codex      codexagent.Config
-	TaskDaemon taskdaemon.Config
+	Provider core.Provider `env:"RIG_PROVIDER" envDefault:"codex"`
+	SQLite   sqlite.Config
+	Codex    codexprovider.Config
+	Daemon   taskdaemon.Config
 }
 
 // LoadConfig loads the application configuration from environment variables.
 func LoadConfig() (*ApplicationConfig, error) {
 	config := ApplicationConfig{
-		SQLite: SQLiteConfig{
-			Path: defaultSQLitePath(),
-		},
-		TaskSQLite: sqlite.Config{
+		SQLite: sqlite.Config{
 			Path: sqlite.DefaultSQLitePath(),
 		},
-		TaskDaemon: taskdaemon.Config{
-			SocketPath: defaultObserverSocketPath(),
+		Daemon: taskdaemon.Config{
+			SocketPath: defaultDaemonSocketPath(),
 		},
 	}
 
@@ -50,29 +42,20 @@ func LoadConfig() (*ApplicationConfig, error) {
 	return &config, nil
 }
 
-func validateProvider(provider core.AgentProvider) error {
+func validateProvider(provider core.Provider) error {
 	switch provider {
-	case core.AgentProviderCodex:
+	case core.ProviderCodex:
 		return nil
 	default:
-		return fmt.Errorf("invalid AGENT_PROVIDER %q: expected codex", provider)
+		return fmt.Errorf("invalid RIG_PROVIDER %q: expected codex", provider)
 	}
 }
 
-func defaultObserverSocketPath() string {
+func defaultDaemonSocketPath() string {
 	home, err := os.UserHomeDir()
 	if err != nil || home == "" {
-		return ".agent/observer.sock"
+		return ".rig/daemon.sock"
 	}
 
-	return filepath.Join(home, ".local", "share", "agent", "observer.sock")
-}
-
-func defaultSQLitePath() string {
-	home, err := os.UserHomeDir()
-	if err != nil || home == "" {
-		return ".agent/state.db"
-	}
-
-	return filepath.Join(home, ".local", "share", "agent", "state.db")
+	return filepath.Join(home, ".local", "share", "rig", "daemon.sock")
 }

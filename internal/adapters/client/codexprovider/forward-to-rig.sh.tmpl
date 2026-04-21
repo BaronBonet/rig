@@ -1,9 +1,9 @@
 #!/bin/sh
 set -eu
 
-collector_url=${CODEX_HOOK_COLLECTOR_URL:-http://127.0.0.1:4123/codex-hook}
-agent_exec={{ .AgentExecQuoted }}
-agent_source_root={{ .SourceRootQuoted }}
+collector_url=${CODEX_HOOK_COLLECTOR_URL:-http://127.0.0.1:4124/codex-hook}
+rig_exec={{ .RigExecQuoted }}
+rig_source_root={{ .RigSourceRootQuoted }}
 event_name=$1
 payload_file=$(mktemp "${TMPDIR:-/tmp}/codex-hook.XXXXXX")
 trap 'rm -f "$payload_file"' EXIT INT TERM

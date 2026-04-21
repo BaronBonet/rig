@@ -51,7 +51,7 @@ Hexagonal architecture (Ports & Adapters) with dependency injection.
 - `observability/` — Hook HTTP server (claude hooks), observer daemon (tmux monitoring)
 
 ### Infrastructure (`internal/infrastructure/`)
-- `config.go` — Env var parsing (`AGENT_PROVIDER`, `AGENT_SQLITE_PATH`, `AGENT_HOOK_LISTEN_ADDR`, etc.)
+- `config.go` — Env var parsing (`RIG_PROVIDER`, `RIG_SQLITE_PATH`, `RIG_DAEMON_HOOK_LISTEN_ADDRESS`, etc.)
 
 ### Entry point (`cmd/rig/main.go`)
 - Wires all adapters into `core.Service` via constructor injection

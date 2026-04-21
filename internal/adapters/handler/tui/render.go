@@ -152,7 +152,7 @@ func (m model) selectedTaskDetailView() string {
 	if provider := strings.TrimSpace(string(task.Provider)); provider != "" {
 		sessionLines = append(
 			sessionLines,
-			mutedStyle.Render("agent")+"  "+providerStyle(provider).Render(provider),
+			mutedStyle.Render("provider")+"  "+providerStyle(provider).Render(provider),
 		)
 	}
 

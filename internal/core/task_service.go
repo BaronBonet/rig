@@ -14,20 +14,20 @@ type TaskServiceDependencies struct {
 	Tasks                TaskRepository
 	GitWorktree          GitWorktreeClient
 	TmuxSession          TmuxSessionClient
-	Agents               map[AgentProvider]AgentClient
+	Providers            map[Provider]ProviderClient
 	Workspace            TaskWorkspaceManager
 	EnableWorkspaceSetup bool
-	DefaultProvider      AgentProvider
+	DefaultProvider      Provider
 }
 
 type taskService struct {
 	tasks                TaskRepository
 	gitWorktree          GitWorktreeClient
 	tmuxSession          TmuxSessionClient
-	agents               map[AgentProvider]AgentClient
+	providers            map[Provider]ProviderClient
 	workspace            TaskWorkspaceManager
 	enableWorkspaceSetup bool
-	defaultProvider      AgentProvider
+	defaultProvider      Provider
 }
 
 func NewTaskService(deps TaskServiceDependencies) TaskService {
@@ -35,7 +35,7 @@ func NewTaskService(deps TaskServiceDependencies) TaskService {
 		tasks:                deps.Tasks,
 		gitWorktree:          deps.GitWorktree,
 		tmuxSession:          deps.TmuxSession,
-		agents:               deps.Agents,
+		providers:            deps.Providers,
 		workspace:            deps.Workspace,
 		enableWorkspaceSetup: deps.EnableWorkspaceSetup,
 		defaultProvider:      deps.DefaultProvider,
@@ -94,7 +94,7 @@ func (s *taskService) HandleHookEvent(ctx context.Context, input HookEventInput)
 		return ErrUnmanagedHookEvent
 	}
 
-	agent, err := s.agentFor(input.Provider)
+	providerClient, err := s.providerClientFor(input.Provider)
 	if err != nil {
 		return err
 	}
@@ -108,7 +108,7 @@ func (s *taskService) HandleHookEvent(ctx context.Context, input HookEventInput)
 		input.TaskID = resolvedTaskID
 	}
 
-	update, err := agent.HookEventToTaskStatus(input)
+	update, err := providerClient.HookEventToTaskStatus(input)
 	if err != nil {
 		return err
 	}
@@ -138,12 +138,12 @@ func (s *taskService) createTaskFromPrompt(
 	repoCtx RepoContext,
 	input CreateTaskInput,
 ) (*Task, error) {
-	agent, err := s.agentFor(input.Provider)
+	providerClient, err := s.providerClientFor(input.Provider)
 	if err != nil {
 		return nil, err
 	}
 
-	suggestion, err := s.suggestTaskName(ctx, agent, input.Prompt)
+	suggestion, err := s.suggestTaskName(ctx, providerClient, input.Prompt)
 	if err != nil {
 		return nil, err
 	}
@@ -226,8 +226,8 @@ func (s *taskService) createTaskFromPullRequest(
 	return s.startTaskRuntime(ctx, task)
 }
 
-func (s *taskService) suggestTaskName(ctx context.Context, agent AgentClient, prompt string) (TaskSuggestion, error) {
-	suggestion, err := agent.SuggestTaskName(ctx, prompt)
+func (s *taskService) suggestTaskName(ctx context.Context, providerClient ProviderClient, prompt string) (TaskSuggestion, error) {
+	suggestion, err := providerClient.SuggestTaskName(ctx, prompt)
 	if err != nil {
 		return TaskSuggestion{}, fmt.Errorf("suggest task name: %w", err)
 	}
@@ -240,26 +240,26 @@ func (s *taskService) suggestTaskName(ctx context.Context, agent AgentClient, pr
 	return suggestion, nil
 }
 
-func (s *taskService) agentFor(provider AgentProvider) (AgentClient, error) {
+func (s *taskService) providerClientFor(provider Provider) (ProviderClient, error) {
 	if provider == "" {
 		provider = s.defaultProvider
 	}
 
-	agent, ok := s.agents[provider]
+	providerClient, ok := s.providers[provider]
 	if !ok {
-		return nil, fmt.Errorf("agent provider %q unavailable", provider)
+		return nil, fmt.Errorf("provider %q unavailable", provider)
 	}
 
-	return agent, nil
+	return providerClient, nil
 }
 
 func (s *taskService) startTaskRuntime(ctx context.Context, task *Task) (*Task, error) {
-	agent, err := s.agentFor(task.Provider)
+	providerClient, err := s.providerClientFor(task.Provider)
 	if err != nil {
 		return task, err
 	}
 
-	launch, err := agent.BuildTaskSessionLaunchSpec(task)
+	launch, err := providerClient.BuildTaskSessionLaunchSpec(task)
 	if err != nil {
 		return task, fmt.Errorf("build task session launch spec: %w", err)
 	}
@@ -294,12 +294,12 @@ func (s *taskService) prepareTaskWorkspace(ctx context.Context, task *Task, repo
 }
 
 func (s *taskService) buildWorkspaceBootstrapSpec(ctx context.Context, task *Task) (WorkspaceBootstrapSpec, error) {
-	agent, err := s.agentFor(task.Provider)
+	providerClient, err := s.providerClientFor(task.Provider)
 	if err != nil {
 		return WorkspaceBootstrapSpec{}, err
 	}
 
-	return agent.BuildWorkspaceBootstrapSpec(task)
+	return providerClient.BuildWorkspaceBootstrapSpec(task)
 }
 
 func (s *taskService) resolveTaskIDFromCwd(ctx context.Context, cwd string) (string, error) {
@@ -344,8 +344,8 @@ func (s *taskService) taskByID(ctx context.Context, taskID string) (*Task, error
 
 func newPromptTaskRecord(
 	repoCtx RepoContext,
-	provider AgentProvider,
-	defaultProvider AgentProvider,
+	provider Provider,
+	defaultProvider Provider,
 	displayName string,
 	taskSlug string,
 	branchType string,
@@ -374,8 +374,8 @@ func newPromptTaskRecord(
 
 func newPullRequestTaskRecord(
 	repoCtx RepoContext,
-	provider AgentProvider,
-	defaultProvider AgentProvider,
+	provider Provider,
+	defaultProvider Provider,
 	displayName string,
 	taskSlug string,
 	branchName string,

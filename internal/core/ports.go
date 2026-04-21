@@ -20,7 +20,7 @@ type RepoResources struct {
 
 type SessionResources struct {
 	SessionExists      bool
-	AgentWindowExists  bool
+	TaskWindowExists   bool
 	EditorWindowExists bool
 }
 
@@ -34,7 +34,7 @@ type CreateWorktreeInput struct {
 type CreateSessionInput struct {
 	SessionName      string
 	WorkingDir       string
-	AgentWindowName  string
+	TaskWindowName   string
 	EditorWindowName string
 }
 
@@ -83,7 +83,7 @@ type RuntimeMonitor interface {
 	Close() error
 }
 
-type ProviderClient interface {
+type RuntimeProviderClient interface {
 	IsAvailable(ctx context.Context) error
 	SuggestTaskName(ctx context.Context, prompt string) (TaskSuggestion, error)
 	BuildTaskSessionLaunchSpec(task *Task) (TaskSessionLaunchSpec, error)

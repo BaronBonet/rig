@@ -59,7 +59,7 @@ func TestFrontend_CreateTaskLatestTaskStatusAndSubscribeTaskStatus(t *testing.T)
 		input := core.CreateTaskInput{
 			Cwd:      "/repo",
 			Prompt:   "ship it",
-			Provider: core.AgentProviderCodex,
+			Provider: core.ProviderCodex,
 		}
 		expectedTask := &core.Task{ID: "task-123", DisplayName: "Ship it"}
 		requestCh := make(chan socketRequest, 1)
@@ -125,7 +125,7 @@ func TestFrontend_CreateTaskLatestTaskStatusAndSubscribeTaskStatus(t *testing.T)
 		socketPath := frontendTestSocketPath(t)
 		expectedUpdate := &core.TaskStatusUpdate{
 			TaskID:       "task-123",
-			Provider:     core.AgentProviderCodex,
+			Provider:     core.ProviderCodex,
 			Phase:        core.TaskStatusPhaseWorking,
 			RawEventName: "turn.completed",
 			ObservedAt:   time.Unix(1710000000, 0).UTC(),
@@ -155,7 +155,7 @@ func TestFrontend_CreateTaskLatestTaskStatusAndSubscribeTaskStatus(t *testing.T)
 		socketPath := frontendTestSocketPath(t)
 		expectedUpdate := core.TaskStatusUpdate{
 			TaskID:       "task-123",
-			Provider:     core.AgentProviderCodex,
+			Provider:     core.ProviderCodex,
 			Phase:        core.TaskStatusPhaseWaitingForInput,
 			RawEventName: "turn.waiting",
 			ObservedAt:   time.Unix(1710000100, 0).UTC(),

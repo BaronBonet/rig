@@ -46,7 +46,7 @@ func TestCorePublicTypesRemainUsable(t *testing.T) {
 	}
 	snapshot := core.RuntimeSnapshot{
 		SessionName:       "repo_billing-retry-flow",
-		WindowName:        "agent",
+		WindowName:        "task",
 		ForegroundCommand: "codex",
 	}
 	input := core.NewTaskInput{
@@ -63,7 +63,7 @@ func TestCorePublicTypesRemainUsable(t *testing.T) {
 	require.False(t, task.Status.IsTerminal())
 	require.Same(t, &task, progress.Task)
 	require.Equal(t, core.TaskProgressAgentLaunching, progress.Step)
-	require.Equal(t, "agent", snapshot.WindowName)
+	require.Equal(t, "task", snapshot.WindowName)
 	require.Equal(t, "codex", snapshot.ForegroundCommand)
 	require.Equal(t, "fix billing retries", input.Prompt)
 	require.True(t, options.OpenSession)

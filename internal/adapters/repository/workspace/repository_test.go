@@ -17,7 +17,7 @@ func TestRepositorySeedWorkspaceCopiesFilesAndDirectories(t *testing.T) {
 
 	require.NoError(t, os.WriteFile(filepath.Join(repoRoot, ".env"), []byte("API_KEY=1\n"), 0o600))
 	require.NoError(t, os.MkdirAll(filepath.Join(repoRoot, "local", "scripts"), 0o755))
-	require.NoError(t, os.WriteFile(filepath.Join(repoRoot, "local", "config.json"), []byte(`{"name":"agent"}`), 0o644))
+	require.NoError(t, os.WriteFile(filepath.Join(repoRoot, "local", "config.json"), []byte(`{"name":"rig"}`), 0o644))
 	require.NoError(
 		t,
 		os.WriteFile(filepath.Join(repoRoot, "local", "scripts", "setup.sh"), []byte("#!/bin/sh\necho setup\n"), 0o755),
