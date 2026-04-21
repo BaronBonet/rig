@@ -214,7 +214,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 		m.err = nil
-		return m, tea.Quit
+		return m, nil
 	case taskDeletedMsg:
 		m.deletePending = false
 		m.mode = modeBrowse
