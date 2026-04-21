@@ -40,6 +40,26 @@ type TaskSuggestion struct {
 	BranchType string
 }
 
+var validBranchTypes = map[string]bool{
+	"feat":     true,
+	"fix":      true,
+	"chore":    true,
+	"refactor": true,
+	"docs":     true,
+	"test":     true,
+	"style":    true,
+	"perf":     true,
+	"ci":       true,
+	"build":    true,
+}
+
+func (s TaskSuggestion) BranchTypeOrDefault() string {
+	if s.BranchType != "" && validBranchTypes[s.BranchType] {
+		return s.BranchType
+	}
+	return "feat"
+}
+
 type WorkspaceBootstrapSpec struct {
 	Files []WorkspaceBootstrapFile
 }

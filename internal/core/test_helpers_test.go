@@ -43,7 +43,6 @@ type repoClientState struct {
 	createErr      error
 	removeErr      error
 	repoContext    RepoContext
-	repoResources  RepoResources
 	branchInUse    map[string]bool
 	createdTask    *Task
 	removedTask    *Task
@@ -241,9 +240,6 @@ func (s *stubGitWorktreeClient) CreateTaskWorkspace(_ context.Context, task *Tas
 	if s.state.createErr != nil {
 		return s.state.createErr
 	}
-
-	s.state.repoResources.WorktreeExists = true
-	s.state.repoResources.BranchExists = true
 	return nil
 }
 
@@ -252,9 +248,6 @@ func (s *stubGitWorktreeClient) CreateTaskWorkspaceFromBranch(_ context.Context,
 	if s.state.createErr != nil {
 		return s.state.createErr
 	}
-
-	s.state.repoResources.WorktreeExists = true
-	s.state.repoResources.BranchExists = true
 	return nil
 }
 
@@ -263,8 +256,6 @@ func (s *stubGitWorktreeClient) RemoveTaskWorkspace(_ context.Context, task *Tas
 	if s.state.removeErr != nil {
 		return s.state.removeErr
 	}
-
-	s.state.repoResources.WorktreeExists = false
 	return nil
 }
 

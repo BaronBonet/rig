@@ -9,11 +9,15 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
-
-	"rig/internal/core"
 )
 
-func seedWorkspace(ctx context.Context, in core.SeedWorkspaceInput, progress func(string)) error {
+type seedWorkspaceInput struct {
+	RepoRoot      string
+	WorktreePath  string
+	RelativePaths []string
+}
+
+func seedWorkspace(ctx context.Context, in seedWorkspaceInput, progress func(string)) error {
 	paths, err := prepareSeedPaths(in.RepoRoot, in.RelativePaths)
 	if err != nil {
 		return err

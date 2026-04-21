@@ -25,7 +25,7 @@ func TestRepositorySeedWorkspaceCopiesFilesAndDirectories(t *testing.T) {
 
 	var copied []string
 
-	err := seedWorkspace(context.Background(), core.SeedWorkspaceInput{
+	err := seedWorkspace(context.Background(), seedWorkspaceInput{
 		RepoRoot:      repoRoot,
 		WorktreePath:  worktreePath,
 		RelativePaths: []string{".env", "local/"},

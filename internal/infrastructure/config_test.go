@@ -2,8 +2,9 @@ package infrastructure
 
 import (
 	"path/filepath"
-	"rig/internal/core"
 	"testing"
+
+	"rig/internal/core"
 
 	"github.com/stretchr/testify/require"
 )

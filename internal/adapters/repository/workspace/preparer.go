@@ -33,7 +33,7 @@ func (p *preparer) SetupTaskWorkspace(ctx context.Context, task *core.Task, repo
 		if err := validateSeedPaths(ctx, repoRoot, repoConfig.Seed.Copy); err != nil {
 			return fmt.Errorf("seed workspace: %w", err)
 		}
-		if err := seedWorkspace(ctx, core.SeedWorkspaceInput{
+		if err := seedWorkspace(ctx, seedWorkspaceInput{
 			RepoRoot:      repoRoot,
 			WorktreePath:  task.WorktreePath,
 			RelativePaths: repoConfig.Seed.Copy,
@@ -46,7 +46,7 @@ func (p *preparer) SetupTaskWorkspace(ctx context.Context, task *core.Task, repo
 		if err := validateSetupScript(repoRoot, repoConfig.Seed.SetupScript); err != nil {
 			return fmt.Errorf("setup script: %w", err)
 		}
-		if err := runSetupScript(ctx, core.RunSetupScriptInput{
+		if err := runSetupScript(ctx, runSetupScriptInput{
 			RepoRoot:     repoRoot,
 			WorktreePath: task.WorktreePath,
 			ScriptPath:   repoConfig.Seed.SetupScript,

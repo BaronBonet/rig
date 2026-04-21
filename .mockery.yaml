@@ -13,14 +13,8 @@ packages:
   rig/internal/core:
     interfaces:
       TaskRepository:
-      RepoConfigLoader:
-      WorkspaceSeeder:
-      SetupScriptRunner:
-      RepoClient:
       TmuxSessionClient:
-      RuntimeMonitor:
       ProviderClient:
-      PRStatusChecker:
   rig/internal/pkg/subprocess:
     interfaces:
       Runner:

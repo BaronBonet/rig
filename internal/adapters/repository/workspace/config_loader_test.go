@@ -8,7 +8,7 @@ import (
 
 func TestWorkspacePackage_ExposesRepoConfigLoader(t *testing.T) {
 	repoRoot := t.TempDir()
-	if err := os.WriteFile(filepath.Join(repoRoot, "rig.yaml"), []byte("seed:\n  copy: []\n"), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(repoRoot, ".rig.yaml"), []byte("seed:\n  copy: []\n"), 0o644); err != nil {
 		t.Fatalf("write config: %v", err)
 	}
 

@@ -7,42 +7,46 @@ import (
 	"path/filepath"
 	"strings"
 
-	"rig/internal/core"
-
 	"gopkg.in/yaml.v3"
 )
 
 const (
 	hiddenConfigName = ".rig.yaml"
-	legacyConfigName = "rig.yaml"
 )
 
-func loadRepoConfig(repoRoot string) (core.RepoConfig, error) {
+type repoConfig struct {
+	Seed seedConfig
+}
+
+type seedConfig struct {
+	Copy        []string
+	SetupScript string
+}
+
+func loadRepoConfig(repoRoot string) (repoConfig, error) {
 	configName, raw, err := readRepoConfig(repoRoot)
 	if err != nil {
-		return core.RepoConfig{}, err
+		return repoConfig{}, err
 	}
 	if configName == "" {
-		return core.RepoConfig{}, nil
+		return repoConfig{}, nil
 	}
 
 	var doc yaml.Node
 	if err := yaml.Unmarshal(raw, &doc); err != nil {
-		return core.RepoConfig{}, fmt.Errorf("parse %s: %w", configName, err)
+		return repoConfig{}, fmt.Errorf("parse %s: %w", configName, err)
 	}
 	if err := validateDuplicateKeys(&doc, configName); err != nil {
-		return core.RepoConfig{}, err
+		return repoConfig{}, err
 	}
 
 	seed, err := parseSeed(&doc, configName)
 	if err != nil {
-		return core.RepoConfig{}, err
+		return repoConfig{}, err
 	}
 
-	return core.RepoConfig{
-		Exists:         true,
-		ConfigFileName: configName,
-		Seed:           seed,
+	return repoConfig{
+		Seed: seed,
 	}, nil
 }
 
@@ -51,22 +55,11 @@ func readRepoConfig(repoRoot string) (string, []byte, error) {
 	if err != nil {
 		return "", nil, err
 	}
-	legacyExists, err := fileExists(filepath.Join(repoRoot, legacyConfigName))
-	if err != nil {
-		return "", nil, err
-	}
-
-	if hiddenExists && legacyExists {
-		return "", nil, fmt.Errorf("only one of %s or %s may exist", hiddenConfigName, legacyConfigName)
-	}
 
 	configName := ""
-	switch {
-	case hiddenExists:
+	if hiddenExists {
 		configName = hiddenConfigName
-	case legacyExists:
-		configName = legacyConfigName
-	default:
+	} else {
 		return "", nil, nil
 	}
 
@@ -92,46 +85,46 @@ func fileExists(path string) (bool, error) {
 	return false, err
 }
 
-func parseSeed(doc *yaml.Node, configName string) (core.SeedConfig, error) {
+func parseSeed(doc *yaml.Node, configName string) (seedConfig, error) {
 	root, err := documentRoot(doc, configName)
 	if err != nil {
-		return core.SeedConfig{}, err
+		return seedConfig{}, err
 	}
 	if root == nil {
-		return core.SeedConfig{}, nil
+		return seedConfig{}, nil
 	}
 	if root.Kind != yaml.MappingNode {
-		return core.SeedConfig{}, fmt.Errorf("invalid %s: root must be a mapping", configName)
+		return seedConfig{}, fmt.Errorf("invalid %s: root must be a mapping", configName)
 	}
 	if err := validateAllowedKeys(root, configName, configName, "seed"); err != nil {
-		return core.SeedConfig{}, err
+		return seedConfig{}, err
 	}
 
 	seedNode, ok, err := lookupMapping(root, "seed", configName)
 	if err != nil {
-		return core.SeedConfig{}, err
+		return seedConfig{}, err
 	}
 	if !ok {
-		return core.SeedConfig{}, nil
+		return seedConfig{}, nil
 	}
 	if seedNode.Kind != yaml.MappingNode {
-		return core.SeedConfig{}, fmt.Errorf("invalid %s: seed must be a mapping", configName)
+		return seedConfig{}, fmt.Errorf("invalid %s: seed must be a mapping", configName)
 	}
 	if err := validateAllowedKeys(seedNode, configName, "seed", "copy", "setup_script"); err != nil {
-		return core.SeedConfig{}, err
+		return seedConfig{}, err
 	}
 
 	copyPaths, err := parseSeedCopy(seedNode, configName)
 	if err != nil {
-		return core.SeedConfig{}, err
+		return seedConfig{}, err
 	}
 
 	setupScript, err := parseSeedSetupScript(seedNode, configName)
 	if err != nil {
-		return core.SeedConfig{}, err
+		return seedConfig{}, err
 	}
 
-	return core.SeedConfig{
+	return seedConfig{
 		Copy:        copyPaths,
 		SetupScript: setupScript,
 	}, nil
