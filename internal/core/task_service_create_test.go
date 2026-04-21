@@ -99,6 +99,23 @@ func TestTaskServiceCreateTask_FailsWhenRequestedProviderIsUnavailable(t *testin
 	require.Nil(t, svc.sessionClient.startedTask)
 }
 
+func TestTaskServiceCreateTask_FailsWhenProviderSessionEnvironmentSetupFails(t *testing.T) {
+	svc := newTestTaskService(t)
+	svc.providerRepo.suggestedName = "billing retry flow"
+	svc.providerRepo.sessionEnvErr = errors.New("codex hooks install failed")
+
+	task, err := svc.service.CreateTaskWithProgress(t.Context(), CreateTaskInput{
+		Cwd:    "/tmp/repo",
+		Prompt: "add billing retry flow",
+	}, nil)
+
+	require.Error(t, err)
+	require.NotNil(t, task)
+	require.EqualError(t, err, "ensure task session environment: codex hooks install failed")
+	require.Equal(t, 1, svc.providerRepo.sessionEnvCalls)
+	require.Nil(t, svc.sessionClient.startedTask)
+}
+
 func TestTaskServiceCreateTask_FailsWhenTaskNameSuggestionFails(t *testing.T) {
 	svc := newTestTaskService(t)
 	svc.providerRepo.suggestErr = errors.New("codex unavailable")

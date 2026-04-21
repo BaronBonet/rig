@@ -9,7 +9,7 @@ import (
 
 func TestTaskFrontendContract_ExposesCreateListAndStatusMethods(t *testing.T) {
 	var _ interface {
-		OpenTaskSession(context.Context, *Task) error
+		AttachTaskSession(context.Context, *Task) error
 		CreateTaskStream(context.Context, CreateTaskInput) (<-chan TaskCreateEvent, error)
 		DeleteTask(context.Context, string) error
 		ListTasks(context.Context) ([]*Task, error)

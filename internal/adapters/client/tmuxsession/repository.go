@@ -53,7 +53,7 @@ func (r *repository) StartTaskSession(ctx context.Context, task *core.Task, laun
 	return r.typeInWindow(ctx, task.TmuxSession, taskWindowName, launch.PrefillInput)
 }
 
-func (r *repository) OpenTaskSession(ctx context.Context, task *core.Task) error {
+func (r *repository) AttachTaskSession(ctx context.Context, task *core.Task) error {
 	if task == nil || strings.TrimSpace(task.TmuxSession) == "" {
 		return fmt.Errorf("task tmux session is required")
 	}
@@ -63,7 +63,7 @@ func (r *repository) OpenTaskSession(ctx context.Context, task *core.Task) error
 		command = "switch-client"
 	}
 
-	_, err := r.runner.Run(
+	result, err := r.runner.Run(
 		ctx,
 		"",
 		"tmux",
@@ -71,6 +71,9 @@ func (r *repository) OpenTaskSession(ctx context.Context, task *core.Task) error
 		"-t",
 		exactSessionTarget(task.TmuxSession),
 	)
+	if isMissingSessionError(err, result) {
+		return core.ErrTaskSessionNotFound
+	}
 	return err
 }
 

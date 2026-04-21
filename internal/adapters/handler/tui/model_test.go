@@ -292,9 +292,9 @@ func TestModel_EnterOpensSelectedTaskAndKeepsRigRunningOnSuccess(t *testing.T) {
 	require.True(t, ok)
 	require.Equal(t, modeBrowse, got.mode)
 	require.NoError(t, got.err)
-	require.NotNil(t, frontend.openedTask)
-	require.Equal(t, "task-2", frontend.openedTask.ID)
-	require.Equal(t, 1, frontend.openTaskSessionCalls)
+	require.NotNil(t, frontend.attachedTask)
+	require.Equal(t, "task-2", frontend.attachedTask.ID)
+	require.Equal(t, 1, frontend.attachTaskSessionCalls)
 }
 
 func TestModel_OpenTaskFailureShowsErrorAndStaysInList(t *testing.T) {
@@ -302,7 +302,7 @@ func TestModel_OpenTaskFailureShowsErrorAndStaysInList(t *testing.T) {
 	frontend.listTasks = []*core.Task{
 		{ID: "task-1", DisplayName: "first task", TmuxSession: "repo_task_1", Provider: core.ProviderCodex},
 	}
-	frontend.openTaskSessionErr = errors.New("open failed")
+	frontend.attachTaskSessionErr = errors.New("open failed")
 
 	m := newLoadedModel(frontend)
 
@@ -320,7 +320,44 @@ func TestModel_OpenTaskFailureShowsErrorAndStaysInList(t *testing.T) {
 	require.True(t, ok)
 	require.Equal(t, modeBrowse, got.mode)
 	require.ErrorContains(t, got.err, "open failed")
-	require.Equal(t, 1, frontend.openTaskSessionCalls)
+	require.Equal(t, 1, frontend.attachTaskSessionCalls)
+}
+
+func TestModel_EnterReconnectsWhenSessionIsMissing(t *testing.T) {
+	frontend := newStubFrontend()
+	frontend.listTasks = []*core.Task{
+		{ID: "task-1", DisplayName: "first task", TmuxSession: "repo_task_1", Provider: core.ProviderCodex},
+	}
+	attempts := 0
+	frontend.attachTaskSessionFn = func(context.Context, *core.Task) error {
+		attempts++
+		if attempts == 1 {
+			return core.ErrTaskSessionNotFound
+		}
+		return nil
+	}
+	frontend.reconnectTaskSessionFn = func(_ context.Context, taskID string) error {
+		require.Equal(t, "task-1", taskID)
+		return nil
+	}
+
+	m := newLoadedModel(frontend)
+
+	next, cmd := m.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
+	require.NotNil(t, cmd)
+
+	pending, ok := next.(model)
+	require.True(t, ok)
+
+	msg := runCmd(t, cmd)
+	next, follow := pending.Update(msg)
+	require.Nil(t, follow)
+
+	got, ok := next.(model)
+	require.True(t, ok)
+	require.NoError(t, got.err)
+	require.Equal(t, 2, frontend.attachTaskSessionCalls)
+	require.Equal(t, 1, frontend.reconnectTaskSessionCalls)
 }
 
 func TestModel_CreateTaskFromPromptAppendsTaskAndStartsStatusTracking(t *testing.T) {
@@ -764,35 +801,50 @@ func stripANSI(s string) string {
 }
 
 type stubFrontend struct {
-	listTasks                []*core.Task
-	listTasksContext         context.Context
-	listTasksErr             error
-	listTasksCalls           int
-	openedTask               *core.Task
-	openTaskSessionErr       error
-	openTaskSessionCalls     int
-	createInput              core.CreateTaskInput
-	createTaskEvents         []core.TaskCreateEvent
-	createTaskStreamErr      error
-	createTaskStreamCalls    int
-	deleteTaskErr            error
-	deleteTaskIDs            []string
-	latestTaskStatus         map[string]*core.TaskStatusUpdate
-	latestTaskStatusErr      map[string]error
-	latestTaskStatusCalls    []string
-	subscribeTaskStatus      map[string]chan core.TaskStatusUpdate
-	subscribeTaskStatusErr   map[string]error
-	subscribeTaskStatusCalls []string
+	listTasks                 []*core.Task
+	listTasksContext          context.Context
+	listTasksErr              error
+	listTasksCalls            int
+	attachedTask              *core.Task
+	attachTaskSessionErr      error
+	attachTaskSessionCalls    int
+	attachTaskSessionFn       func(context.Context, *core.Task) error
+	reconnectTaskSessionErr   error
+	reconnectTaskSessionFn    func(context.Context, string) error
+	reconnectTaskSessionCalls int
+	createInput               core.CreateTaskInput
+	createTaskEvents          []core.TaskCreateEvent
+	createTaskStreamErr       error
+	createTaskStreamCalls     int
+	deleteTaskErr             error
+	deleteTaskIDs             []string
+	latestTaskStatus          map[string]*core.TaskStatusUpdate
+	latestTaskStatusErr       map[string]error
+	latestTaskStatusCalls     []string
+	subscribeTaskStatus       map[string]chan core.TaskStatusUpdate
+	subscribeTaskStatusErr    map[string]error
+	subscribeTaskStatusCalls  []string
 }
 
 func newStubFrontend() *stubFrontend {
 	return &stubFrontend{}
 }
 
-func (s *stubFrontend) OpenTaskSession(_ context.Context, task *core.Task) error {
-	s.openTaskSessionCalls++
-	s.openedTask = task
-	return s.openTaskSessionErr
+func (s *stubFrontend) AttachTaskSession(ctx context.Context, task *core.Task) error {
+	s.attachTaskSessionCalls++
+	s.attachedTask = task
+	if s.attachTaskSessionFn != nil {
+		return s.attachTaskSessionFn(ctx, task)
+	}
+	return s.attachTaskSessionErr
+}
+
+func (s *stubFrontend) ReconnectTaskSession(ctx context.Context, taskID string) error {
+	s.reconnectTaskSessionCalls++
+	if s.reconnectTaskSessionFn != nil {
+		return s.reconnectTaskSessionFn(ctx, taskID)
+	}
+	return s.reconnectTaskSessionErr
 }
 
 func (s *stubFrontend) CreateTaskStream(

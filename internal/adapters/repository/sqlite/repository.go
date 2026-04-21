@@ -114,6 +114,15 @@ func (r *repository) UpsertTaskStatus(ctx context.Context, update core.TaskStatu
 	return nil
 }
 
+func (r *repository) UpsertTaskResumeMetadata(ctx context.Context, metadata core.TaskResumeMetadata) error {
+	metadata.TaskID = strings.TrimSpace(metadata.TaskID)
+	if metadata.TaskID == "" {
+		return fmt.Errorf("task resume metadata task ID is required")
+	}
+
+	return r.queries.UpsertTaskResumeMetadata(ctx, upsertTaskResumeMetadataParams(metadata))
+}
+
 func (r *repository) LatestTaskStatus(ctx context.Context, taskID string) (*core.TaskStatusUpdate, error) {
 	row, err := r.queries.LatestTaskStatus(ctx, strings.TrimSpace(taskID))
 	if errors.Is(err, sql.ErrNoRows) {
@@ -124,6 +133,18 @@ func (r *repository) LatestTaskStatus(ctx context.Context, taskID string) (*core
 	}
 
 	return taskStatusUpdateFromRow(row), nil
+}
+
+func (r *repository) LatestTaskResumeMetadata(ctx context.Context, taskID string) (*core.TaskResumeMetadata, error) {
+	row, err := r.queries.LatestTaskResumeMetadata(ctx, strings.TrimSpace(taskID))
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+
+	return taskResumeMetadataFromRow(row), nil
 }
 
 func (r *repository) SubscribeTaskStatus(ctx context.Context, taskID string) (<-chan core.TaskStatusUpdate, error) {

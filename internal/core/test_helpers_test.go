@@ -23,18 +23,21 @@ type testTaskServiceHarness struct {
 }
 
 type taskRepositoryState struct {
-	createErr     error
-	updateErr     error
-	deleteErr     error
-	updateErrAt   int
-	updateCount   int
-	listTasks     []*Task
-	createdTask   *Task
-	updatedTask   *Task
-	deletedTaskID string
-	mu            sync.Mutex
-	latestByTask  map[string]TaskStatusUpdate
-	subscribers   map[string][]chan TaskStatusUpdate
+	createErr           error
+	updateErr           error
+	deleteErr           error
+	resumeMetadataErr   error
+	updateErrAt         int
+	updateCount         int
+	listTasks           []*Task
+	createdTask         *Task
+	updatedTask         *Task
+	deletedTaskID       string
+	savedResumeMetadata *TaskResumeMetadata
+	latestResumeByTask  map[string]TaskResumeMetadata
+	mu                  sync.Mutex
+	latestByTask        map[string]TaskStatusUpdate
+	subscribers         map[string][]chan TaskStatusUpdate
 }
 
 type repoClientState struct {
@@ -60,11 +63,15 @@ type providerClientState struct {
 	suggestErr          error
 	suggestedName       string
 	suggestedSuggestion TaskSuggestion
+	sessionEnvErr       error
+	sessionEnvCalls     int
 	bootstrapErr        error
 	bootstrapSpec       WorkspaceBootstrapSpec
 	bootstrapRequest    *Task
 	launchErr           error
 	launchRequest       TaskSessionLaunchSpec
+	reconnectLaunchErr  error
+	reconnectLaunch     TaskSessionLaunchSpec
 	hookErr             error
 	hookUpdate          *TaskStatusUpdate
 	hookInput           HookEventInput
@@ -115,6 +122,11 @@ func (c *recordingProviderClient) SuggestTaskName(_ context.Context, _ string) (
 	return TaskSuggestion{Name: c.state.suggestedName, BranchType: "feat"}, nil
 }
 
+func (c *recordingProviderClient) EnsureTaskSessionEnvironment(context.Context) error {
+	c.state.sessionEnvCalls++
+	return c.state.sessionEnvErr
+}
+
 func (c *recordingProviderClient) BuildWorkspaceBootstrapSpec(task *Task) (WorkspaceBootstrapSpec, error) {
 	c.state.bootstrapRequest = cloneTask(task)
 	if c.state.bootstrapErr != nil {
@@ -135,6 +147,23 @@ func (c *recordingProviderClient) BuildTaskSessionLaunchSpec(task *Task) (TaskSe
 		Command:      []string{"codex"},
 		ReadyMarker:  "›",
 		PrefillInput: []string{task.Prompt},
+	}, nil
+}
+
+func (c *recordingProviderClient) BuildReconnectTaskSessionLaunchSpec(
+	_ *Task,
+	sessionID string,
+) (TaskSessionLaunchSpec, error) {
+	if c.state.reconnectLaunchErr != nil {
+		return TaskSessionLaunchSpec{}, c.state.reconnectLaunchErr
+	}
+	if hasCustomLaunchSpec(c.state.reconnectLaunch) {
+		return c.state.reconnectLaunch, nil
+	}
+
+	return TaskSessionLaunchSpec{
+		Command:     []string{"codex", "resume", sessionID},
+		ReadyMarker: "›",
 	}, nil
 }
 
@@ -197,6 +226,7 @@ func newTestTaskService(t *testing.T) *testTaskServiceHarness {
 		},
 	}
 	h.taskRepo.latestByTask = make(map[string]TaskStatusUpdate)
+	h.taskRepo.latestResumeByTask = make(map[string]TaskResumeMetadata)
 	h.taskRepo.subscribers = make(map[string][]chan TaskStatusUpdate)
 	h.taskRepoMock = &stubTaskRepository{state: &h.taskRepo}
 	h.repoClientMock = &stubGitWorktreeClient{state: &h.repoClient}
@@ -269,7 +299,7 @@ func (s *stubTmuxSessionClient) StartTaskSession(_ context.Context, task *Task, 
 }
 
 // TODO: we should use mockery
-func (s *stubTmuxSessionClient) OpenTaskSession(context.Context, *Task) error {
+func (s *stubTmuxSessionClient) AttachTaskSession(context.Context, *Task) error {
 	return nil
 }
 
@@ -343,6 +373,20 @@ func (s *stubTaskRepository) UpsertTaskStatus(_ context.Context, update TaskStat
 	return nil
 }
 
+func (s *stubTaskRepository) UpsertTaskResumeMetadata(_ context.Context, metadata TaskResumeMetadata) error {
+	if s.state.resumeMetadataErr != nil {
+		return s.state.resumeMetadataErr
+	}
+
+	copy := metadata
+	s.state.savedResumeMetadata = &copy
+
+	s.state.mu.Lock()
+	s.state.latestResumeByTask[metadata.TaskID] = metadata
+	s.state.mu.Unlock()
+	return nil
+}
+
 func (s *stubTaskRepository) LatestTaskStatus(_ context.Context, taskID string) (*TaskStatusUpdate, error) {
 	s.state.mu.Lock()
 	defer s.state.mu.Unlock()
@@ -352,6 +396,18 @@ func (s *stubTaskRepository) LatestTaskStatus(_ context.Context, taskID string) 
 		return nil, nil
 	}
 	copy := update
+	return &copy, nil
+}
+
+func (s *stubTaskRepository) LatestTaskResumeMetadata(_ context.Context, taskID string) (*TaskResumeMetadata, error) {
+	s.state.mu.Lock()
+	defer s.state.mu.Unlock()
+
+	metadata, ok := s.state.latestResumeByTask[taskID]
+	if !ok {
+		return nil, nil
+	}
+	copy := metadata
 	return &copy, nil
 }
 

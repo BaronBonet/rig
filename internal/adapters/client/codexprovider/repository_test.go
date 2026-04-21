@@ -2,7 +2,9 @@ package codexprovider
 
 import (
 	"context"
+	"encoding/json"
 	"os"
+	"path/filepath"
 	"testing"
 
 	"rig/internal/core"
@@ -23,27 +25,93 @@ func TestRepositoryBuildTaskSessionLaunchSpec_StartsCodexAndPrefillsTaskPrompt(t
 	}, launch)
 }
 
-func TestRepositoryBuildWorkspaceBootstrapSpec_RendersCodexHooksAndForwarderScript(t *testing.T) {
+func TestRepositoryBuildReconnectTaskSessionLaunchSpec_UsesCodexResume(t *testing.T) {
+	repo := New(stubRunner{}, Config{Binary: "codex"}, HookForwardingConfig{})
+
+	launch, err := repo.BuildReconnectTaskSessionLaunchSpec(&core.Task{}, "sess-1")
+	require.NoError(t, err)
+	require.Equal(t, core.TaskSessionLaunchSpec{
+		Command:     []string{"codex", "resume", "sess-1"},
+		ReadyMarker: "›",
+	}, launch)
+}
+
+func TestRepositoryBuildWorkspaceBootstrapSpec_ReturnsNoWorkspaceFiles(t *testing.T) {
 	repo := New(stubRunner{}, Config{
 		Binary: "codex",
 	}, HookForwardingConfig{
-		RigBinaryPath: "/tmp/rig-bin",
-		SourceRoot:    "/tmp/source",
+		CollectorURL: "http://127.0.0.1:4124/codex-hook",
 	})
 
 	spec, err := repo.BuildWorkspaceBootstrapSpec(&core.Task{})
 	require.NoError(t, err)
-	require.Len(t, spec.Files, 2)
-	require.Equal(t, ".codex/hooks.json", spec.Files[0].Path)
-	require.Equal(t, os.FileMode(0o644), spec.Files[0].FileMode)
-	require.Contains(t, string(spec.Files[0].Content), `"SessionStart"`)
-	require.NotContains(t, string(spec.Files[0].Content), `"PermissionRequest"`)
-	require.Equal(t, ".codex/hooks/forward-to-rig.sh", spec.Files[1].Path)
-	require.Equal(t, os.FileMode(0o755), spec.Files[1].FileMode)
-	require.Contains(t, string(spec.Files[1].Content), "/tmp/rig-bin")
-	require.Contains(t, string(spec.Files[1].Content), "/tmp/source")
-	require.Contains(t, string(spec.Files[1].Content), "http://127.0.0.1:4124/codex-hook")
-	require.NotContains(t, string(spec.Files[1].Content), "status-ingest")
+	require.Empty(t, spec.Files)
+}
+
+func TestRepositoryEnsureTaskSessionEnvironment_InstallsRigHooksIntoCodexHome(t *testing.T) {
+	tempDir := t.TempDir()
+	repo := New(stubRunner{}, Config{Binary: "codex"}, HookForwardingConfig{
+		CollectorURL: "http://127.0.0.1:4124/codex-hook",
+	}).(*repository)
+	repo.codexHomeDir = func() (string, error) { return tempDir, nil }
+
+	err := repo.EnsureTaskSessionEnvironment(t.Context())
+
+	require.NoError(t, err)
+
+	hooksJSON, err := os.ReadFile(filepath.Join(tempDir, "hooks.json"))
+	require.NoError(t, err)
+
+	var cfg hookConfig
+	require.NoError(t, json.Unmarshal(hooksJSON, &cfg))
+	require.Contains(t, cfg.Hooks, "SessionStart")
+	require.Contains(t, cfg.Hooks, "UserPromptSubmit")
+	require.Contains(t, cfg.Hooks, "Stop")
+	require.Contains(t, cfg.Hooks, "PreToolUse")
+	require.Contains(t, cfg.Hooks, "PostToolUse")
+
+	scriptPath := filepath.Join(tempDir, "hooks", "forward-to-rig.sh")
+	scriptBytes, err := os.ReadFile(scriptPath)
+	require.NoError(t, err)
+	require.Contains(t, string(scriptBytes), "http://127.0.0.1:4124/codex-hook")
+	require.Contains(t, string(hooksJSON), scriptPath)
+}
+
+func TestRepositoryEnsureTaskSessionEnvironment_MergesExistingHooks(t *testing.T) {
+	tempDir := t.TempDir()
+	require.NoError(t, os.WriteFile(filepath.Join(tempDir, "hooks.json"), []byte(`{
+  "hooks": {
+    "SessionStart": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "/bin/sh -c 'echo existing >> /tmp/existing-hook'"
+          }
+        ]
+      }
+    ]
+  }
+}`), 0o644))
+
+	repo := New(stubRunner{}, Config{Binary: "codex"}, HookForwardingConfig{
+		CollectorURL: "http://127.0.0.1:4124/codex-hook",
+	}).(*repository)
+	repo.codexHomeDir = func() (string, error) { return tempDir, nil }
+
+	err := repo.EnsureTaskSessionEnvironment(t.Context())
+	require.NoError(t, err)
+	err = repo.EnsureTaskSessionEnvironment(t.Context())
+	require.NoError(t, err)
+
+	hooksJSON, err := os.ReadFile(filepath.Join(tempDir, "hooks.json"))
+	require.NoError(t, err)
+
+	var cfg hookConfig
+	require.NoError(t, json.Unmarshal(hooksJSON, &cfg))
+	require.Len(t, cfg.Hooks["SessionStart"], 2)
+	require.Contains(t, string(hooksJSON), "/tmp/existing-hook")
+	require.Len(t, cfg.Hooks["UserPromptSubmit"], 1)
 }
 
 func TestRepositorySuggestTaskName_DelegatesToCodexProposal(t *testing.T) {

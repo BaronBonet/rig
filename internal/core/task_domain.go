@@ -90,6 +90,15 @@ type TaskStatusUpdate struct {
 	Phase        TaskStatusPhase `json:"phase"`
 }
 
+// TaskResumeMetadata is the minimal provider runtime state needed to reconnect
+// a task session after its tmux session has been lost.
+type TaskResumeMetadata struct {
+	ObservedAt time.Time `json:"observed_at"`
+	TaskID     string    `json:"task_id"`
+	SessionID  string    `json:"session_id"`
+	Provider   Provider  `json:"provider"`
+}
+
 // Provider identifies the supported interactive runtime backing a task.
 type Provider string
 

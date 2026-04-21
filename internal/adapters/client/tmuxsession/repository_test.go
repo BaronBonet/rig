@@ -77,7 +77,7 @@ func TestRepositoryStartTaskSession_CleansUpSessionWhenEditorWindowCreationFails
 	require.EqualError(t, err, "new-window failed")
 }
 
-func TestRepositoryOpenTaskSession_SwitchesClientWhenInsideTmux(t *testing.T) {
+func TestRepositoryAttachTaskSession_SwitchesClientWhenInsideTmux(t *testing.T) {
 	runner := subprocess.NewMockRunner(t)
 	repo := New(runner).(*repository)
 	repo.getenv = func(key string) string {
@@ -89,25 +89,51 @@ func TestRepositoryOpenTaskSession_SwitchesClientWhenInsideTmux(t *testing.T) {
 
 	expectTmuxRun(runner, subprocess.Result{}, nil, "switch-client", "-t", "=repo_task")
 
-	err := repo.OpenTaskSession(context.Background(), &core.Task{
+	err := repo.AttachTaskSession(context.Background(), &core.Task{
 		TmuxSession: "repo_task",
 	})
 
 	require.NoError(t, err)
 }
 
-func TestRepositoryOpenTaskSession_AttachesWhenOutsideTmux(t *testing.T) {
+func TestRepositoryAttachTaskSession_AttachesWhenOutsideTmux(t *testing.T) {
 	runner := subprocess.NewMockRunner(t)
 	repo := New(runner).(*repository)
 	repo.getenv = func(string) string { return "" }
 
 	expectTmuxRun(runner, subprocess.Result{}, nil, "attach-session", "-t", "=repo_task")
 
-	err := repo.OpenTaskSession(context.Background(), &core.Task{
+	err := repo.AttachTaskSession(context.Background(), &core.Task{
 		TmuxSession: "repo_task",
 	})
 
 	require.NoError(t, err)
+}
+
+func TestRepositoryAttachTaskSession_ReturnsErrTaskSessionNotFoundWhenSessionIsMissing(t *testing.T) {
+	runner := subprocess.NewMockRunner(t)
+	repo := New(runner).(*repository)
+	repo.getenv = func(string) string { return "" }
+
+	expectTmuxRun(
+		runner,
+		subprocess.Result{Stderr: "can't find session: repo_task"},
+		subprocess.CommandError{
+			Name:   "tmux",
+			Args:   []string{"attach-session", "-t", "=repo_task"},
+			Stderr: "can't find session: repo_task",
+			Err:    errors.New("exit status 1"),
+		},
+		"attach-session",
+		"-t",
+		"=repo_task",
+	)
+
+	err := repo.AttachTaskSession(context.Background(), &core.Task{
+		TmuxSession: "repo_task",
+	})
+
+	require.ErrorIs(t, err, core.ErrTaskSessionNotFound)
 }
 
 func TestRepositoryDeleteTaskSession_KillsSession(t *testing.T) {

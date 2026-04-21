@@ -16,12 +16,27 @@ type frontend struct {
 	socketPath string
 }
 
-func (f *frontend) OpenTaskSession(ctx context.Context, task *core.Task) error {
+func (f *frontend) AttachTaskSession(ctx context.Context, task *core.Task) error {
 	if f.sessions == nil {
 		return fmt.Errorf("task session client not configured")
 	}
 
-	return f.sessions.OpenTaskSession(ctx, task)
+	return f.sessions.AttachTaskSession(ctx, task)
+}
+
+func (f *frontend) ReconnectTaskSession(ctx context.Context, taskID string) error {
+	resp, err := f.send(ctx, socketRequest{
+		Command: "reconnect_task_session",
+		TaskID:  taskID,
+	})
+	if err != nil {
+		return err
+	}
+	if resp.Type != "task_session_reconnected" || !resp.OK {
+		return unexpectedResponseError("reconnect_task_session", *resp)
+	}
+
+	return nil
 }
 
 func (f *frontend) CreateTaskStream(

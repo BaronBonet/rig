@@ -274,6 +274,55 @@ func TestRepositoryLatestTaskStatus_ReturnsNilWhenTaskHasNoStatus(t *testing.T) 
 	}
 }
 
+func TestRepositoryUpsertAndLatestTaskResumeMetadata(t *testing.T) {
+	repo := newTestRepository(t)
+	task := &core.Task{
+		ID:           "task-1",
+		Slug:         "task-one",
+		Prompt:       "prompt",
+		DisplayName:  "task one",
+		RepoRoot:     "/tmp/repo",
+		RepoName:     "repo",
+		BranchName:   "feat/task-one",
+		WorktreePath: "/tmp/repo-task-one",
+		TmuxSession:  "repo_task_one",
+		Provider:     core.ProviderCodex,
+		CreatedAt:    time.Now().UTC(),
+		UpdatedAt:    time.Now().UTC(),
+	}
+	if err := repo.CreateTask(context.Background(), task); err != nil {
+		t.Fatalf("create task: %v", err)
+	}
+
+	first := core.TaskResumeMetadata{
+		TaskID:     "task-1",
+		Provider:   core.ProviderCodex,
+		SessionID:  "sess-1",
+		ObservedAt: time.Date(2026, time.April, 20, 10, 0, 0, 0, time.UTC),
+	}
+	second := core.TaskResumeMetadata{
+		TaskID:     "task-1",
+		Provider:   core.ProviderCodex,
+		SessionID:  "sess-2",
+		ObservedAt: time.Date(2026, time.April, 20, 10, 1, 0, 0, time.UTC),
+	}
+
+	if err := repo.UpsertTaskResumeMetadata(context.Background(), first); err != nil {
+		t.Fatalf("upsert first resume metadata: %v", err)
+	}
+	if err := repo.UpsertTaskResumeMetadata(context.Background(), second); err != nil {
+		t.Fatalf("upsert second resume metadata: %v", err)
+	}
+
+	got, err := repo.LatestTaskResumeMetadata(context.Background(), "task-1")
+	if err != nil {
+		t.Fatalf("latest task resume metadata: %v", err)
+	}
+	if got == nil || !reflect.DeepEqual(*got, second) {
+		t.Fatalf("unexpected latest resume metadata:\n got: %#v\nwant: %#v", got, second)
+	}
+}
+
 func TestRepositoryNew_ReturnsErrorForInvalidConfig(t *testing.T) {
 	repo, err := New(Config{Path: "state.db"})
 	if err == nil {
@@ -368,6 +417,17 @@ func TestRepositoryNew_CreatesSchemaForTasksAndLatestStatuses(t *testing.T) {
 	}
 	if !reflect.DeepEqual(statusNames, wantStatus) {
 		t.Fatalf("unexpected task_status columns:\n got: %#v\nwant: %#v", statusNames, wantStatus)
+	}
+
+	resumeNames := tableColumnNames(t, repo.db, "task_resume_metadata")
+	wantResume := []string{
+		"task_id",
+		"provider",
+		"session_id",
+		"observed_at",
+	}
+	if !reflect.DeepEqual(resumeNames, wantResume) {
+		t.Fatalf("unexpected task_resume_metadata columns:\n got: %#v\nwant: %#v", resumeNames, wantResume)
 	}
 }
 

@@ -63,8 +63,12 @@ type TaskCreateEvent struct {
 // port; it does not know about sockets, daemon startup, or in-process service
 // wiring.
 type TaskFrontend interface {
-	// OpenTaskSession opens an existing task session in tmux for interactive use.
-	OpenTaskSession(ctx context.Context, task *Task) error
+	// AttachTaskSession attaches to an existing task session in tmux for
+	// interactive use.
+	AttachTaskSession(ctx context.Context, task *Task) error
+	// ReconnectTaskSession recreates a missing task runtime session from
+	// persisted provider resume metadata.
+	ReconnectTaskSession(ctx context.Context, taskID string) error
 	// CreateTaskStream creates a new task and streams progress events followed by
 	// one terminal result event.
 	CreateTaskStream(ctx context.Context, input CreateTaskInput) (<-chan TaskCreateEvent, error)
@@ -150,6 +154,9 @@ type TaskService interface {
 	// DeleteTask deletes the task and its local runtime resources while keeping
 	// the Git branch.
 	DeleteTask(ctx context.Context, taskID string) error
+	// ReconnectTaskSession recreates a missing task runtime session from
+	// persisted provider resume metadata.
+	ReconnectTaskSession(ctx context.Context, taskID string) error
 }
 
 // TaskRepository persists task records and returns their durable state.
@@ -164,9 +171,14 @@ type TaskRepository interface {
 	ListTasks(ctx context.Context) ([]*Task, error)
 	// UpsertTaskStatus stores the latest known live status for a task.
 	UpsertTaskStatus(ctx context.Context, update TaskStatusUpdate) error
+	// UpsertTaskResumeMetadata stores the latest reconnect metadata for a task.
+	UpsertTaskResumeMetadata(ctx context.Context, metadata TaskResumeMetadata) error
 	// LatestTaskStatus returns the latest known live status for a task, or nil
 	// when no status has been recorded yet.
 	LatestTaskStatus(ctx context.Context, taskID string) (*TaskStatusUpdate, error)
+	// LatestTaskResumeMetadata returns the latest known reconnect metadata for a
+	// task, or nil when none has been recorded yet.
+	LatestTaskResumeMetadata(ctx context.Context, taskID string) (*TaskResumeMetadata, error)
 	// SubscribeTaskStatus subscribes to live status updates for a task. The
 	// subscription lifetime is owned by ctx; cancelling it removes the
 	// subscription and closes the update channel.
@@ -178,12 +190,18 @@ type TaskRepository interface {
 type ProviderClient interface {
 	// SuggestTaskName derives a task display name and branch type from a prompt.
 	SuggestTaskName(ctx context.Context, prompt string) (TaskSuggestion, error)
+	// EnsureTaskSessionEnvironment applies any provider-specific runtime
+	// configuration required before launching or resuming an interactive session.
+	EnsureTaskSessionEnvironment(ctx context.Context) error
 	// BuildWorkspaceBootstrapSpec describes the provider-specific files that
 	// should be written into the task workspace before launch.
 	BuildWorkspaceBootstrapSpec(task *Task) (WorkspaceBootstrapSpec, error)
 	// BuildTaskSessionLaunchSpec describes how the provider's CLI should be
 	// started inside the task's tmux session.
 	BuildTaskSessionLaunchSpec(task *Task) (TaskSessionLaunchSpec, error)
+	// BuildReconnectTaskSessionLaunchSpec describes how the provider's CLI
+	// should resume an existing logical session inside a recreated tmux session.
+	BuildReconnectTaskSessionLaunchSpec(task *Task, sessionID string) (TaskSessionLaunchSpec, error)
 	// HookEventToTaskStatus normalizes a provider hook event into a task status
 	// update when the event contributes to the live task status stream.
 	HookEventToTaskStatus(input HookEventInput) (*TaskStatusUpdate, error)
@@ -219,8 +237,8 @@ type TmuxSessionClient interface {
 	// StartTaskSession starts the runtime session for a task using the provider's
 	// task session launch spec.
 	StartTaskSession(ctx context.Context, task *Task, launch TaskSessionLaunchSpec) error
-	// OpenTaskSession attaches to an existing task session.
-	OpenTaskSession(ctx context.Context, task *Task) error
+	// AttachTaskSession attaches to an existing task session.
+	AttachTaskSession(ctx context.Context, task *Task) error
 	// DeleteTaskSession tears down the task session during task deletion.
 	DeleteTaskSession(ctx context.Context, task *Task) error
 }
