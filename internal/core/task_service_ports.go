@@ -3,7 +3,25 @@ package core
 import (
 	"context"
 	"net/http"
+	"time"
 )
+
+type PRState string
+
+const (
+	PRStateOpen   PRState = "open"
+	PRStateDraft  PRState = "draft"
+	PRStateMerged PRState = "merged"
+	PRStateClosed PRState = "closed"
+)
+
+type RepoPullRequest struct {
+	Number          int
+	Title           string
+	BranchName      string
+	State           PRState
+	HasExistingTask bool
+}
 
 type CreateTaskSource struct {
 	PullRequest *RepoPullRequest
@@ -46,6 +64,42 @@ type TaskFrontend interface {
 type TaskDaemonHookRoute struct {
 	Path    string
 	Handler http.Handler
+}
+
+type HookEventInput struct {
+	OccurredAt           time.Time
+	TaskID               string
+	SessionID            string
+	TurnID               string
+	EventName            string
+	Provider             Provider
+	RawPayloadJSON       string
+	LastAssistantMessage string
+	PromptText           string
+	CommandText          string
+	CommandResultText    string
+	ToolUseID            string
+	Model                string
+	Cwd                  string
+	TranscriptPath       string
+	StartSource          string
+}
+
+type SessionResources struct {
+	SessionExists      bool
+	TaskWindowExists   bool
+	EditorWindowExists bool
+}
+
+type RuntimeSnapshot struct {
+	SessionName       string
+	WindowName        string
+	PaneID            string
+	HadAgentBinding   bool
+	ForegroundCommand string
+	Content           string
+	ObservedAt        time.Time
+	LastOutputAt      time.Time
 }
 
 // TaskDaemon is the application port for the local daemon-backed task

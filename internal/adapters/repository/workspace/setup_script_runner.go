@@ -9,11 +9,15 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
-
-	"rig/internal/core"
 )
 
 const outputTailLineLimit = 20
+
+type runSetupScriptInput struct {
+	RepoRoot     string
+	WorktreePath string
+	ScriptPath   string
+}
 
 func validateSetupScript(repoRoot string, scriptPath string) error {
 	absPath := filepath.Join(repoRoot, scriptPath)
@@ -44,7 +48,7 @@ func validateSetupScript(repoRoot string, scriptPath string) error {
 	return nil
 }
 
-func runSetupScript(ctx context.Context, in core.RunSetupScriptInput, output func(string)) error {
+func runSetupScript(ctx context.Context, in runSetupScriptInput, output func(string)) error {
 	scriptAbsPath := filepath.Join(in.RepoRoot, in.ScriptPath)
 
 	cmd := exec.CommandContext(ctx, "bash", scriptAbsPath)

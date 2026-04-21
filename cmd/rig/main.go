@@ -5,13 +5,14 @@ import (
 	"fmt"
 	"os"
 	"os/signal"
+	"syscall"
+
 	"rig/internal/adapters/handler/tui"
 	"rig/internal/adapters/repository/sqlite"
 	"rig/internal/adapters/taskdaemon"
 	"rig/internal/core"
 	"rig/internal/infrastructure"
 	"rig/internal/pkg/subprocess"
-	"syscall"
 
 	codexprovider "rig/internal/adapters/client/codexprovider"
 	gitworktree "rig/internal/adapters/client/gitworktree"

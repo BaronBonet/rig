@@ -226,7 +226,11 @@ func (s *taskService) createTaskFromPullRequest(
 	return s.startTaskRuntime(ctx, task)
 }
 
-func (s *taskService) suggestTaskName(ctx context.Context, providerClient ProviderClient, prompt string) (TaskSuggestion, error) {
+func (s *taskService) suggestTaskName(
+	ctx context.Context,
+	providerClient ProviderClient,
+	prompt string,
+) (TaskSuggestion, error) {
 	suggestion, err := providerClient.SuggestTaskName(ctx, prompt)
 	if err != nil {
 		return TaskSuggestion{}, fmt.Errorf("suggest task name: %w", err)
