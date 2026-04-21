@@ -1,113 +1,56 @@
 package main
 
 import (
-	"context"
+	"os"
 	"path/filepath"
-	"reflect"
 	"testing"
-
-	"rig/internal/adapters/taskdaemon"
-	"rig/internal/core"
-	"rig/internal/infrastructure"
 
 	"github.com/stretchr/testify/require"
 )
 
-func TestRun_EnsuresTaskDaemonBeforeLaunchingTUI(t *testing.T) {
+func TestExecuteSource_InlinesClientRuntimeFlow(t *testing.T) {
 	t.Parallel()
 
-	frontend := &stubTaskFrontend{}
-	calls := make([]string, 0, 2)
-
-	err := run(context.Background(), dependencies{
-		Daemon: stubTaskDaemonRuntime{
-			ensureRunning: func(context.Context) error {
-				calls = append(calls, "ensure")
-				return nil
-			},
-			frontend: frontend,
-		},
-		RunUI: func(got core.TaskFrontend) error {
-			calls = append(calls, "ui")
-			require.Same(t, frontend, got)
-			require.Equal(t, []string{"ensure", "ui"}, calls)
-			return nil
-		},
-	})
-
+	content, err := os.ReadFile(filepath.Join(".", "main.go"))
 	require.NoError(t, err)
-	require.Equal(t, []string{"ensure", "ui"}, calls)
+	source := string(content)
+
+	for _, forbidden := range []string{
+		"type dependencies struct",
+		"type taskDaemonRuntime interface",
+		"func run(",
+		"func newRuntimeDependencies(",
+		"func isDaemonMode(",
+	} {
+		require.NotContains(t, source, forbidden)
+	}
+
+	require.Contains(t, source, `os.Getenv(daemonModeEnvKey) == daemonModeEnvValue`)
+	require.Contains(t, source, `if err := adapter.EnsureRunning(ctx); err != nil`)
+	require.Contains(t, source, `program := tui.NewProgram(`)
 }
 
 func TestDaemonHookRoutes_ExposeCodexHooksOnly(t *testing.T) {
 	t.Parallel()
 
-	routes := daemonHookRoutes(nil)
-	require.Len(t, routes, 2)
-	require.Equal(t, []string{"/hook", "/codex-hook"}, []string{
-		routes[0].Path,
-		routes[1].Path,
-	})
-}
-
-func TestNewRuntimeDependencies_UsesUnifiedTaskdaemonAdapter(t *testing.T) {
-	t.Parallel()
-
-	cfg := &infrastructure.ApplicationConfig{
-		TaskDaemon: taskdaemon.Config{
-			SocketPath: filepath.Join(t.TempDir(), "taskdaemon.sock"),
-			ExecPath:   "/tmp/rig",
-			Env:        []string{"RIG_MODE=task-daemon"},
-		},
-	}
-
-	deps, err := newRuntimeDependencies(cfg, "/tmp/rig")
+	content, err := os.ReadFile(filepath.Join(".", "main.go"))
 	require.NoError(t, err)
-	require.NotNil(t, deps.Daemon)
-	require.IsType(t, &taskdaemon.Adapter{}, deps.Daemon)
-	require.NotNil(t, deps.Daemon.Frontend())
+	source := string(content)
+
+	require.NotContains(t, source, "func daemonHookRoutes(")
+	require.Contains(t, source, `{Path: "/hook", Handler: codexHooks}`)
+	require.Contains(t, source, `{Path: "/codex-hook", Handler: codexHooks}`)
 }
 
-func TestDependenciesShape_UsesUnifiedDaemonObjectAndRunUIOnly(t *testing.T) {
+func TestExecuteSource_ConstructsSingleTaskdaemonAdapterForClientPath(t *testing.T) {
 	t.Parallel()
 
-	typ := reflect.TypeOf(dependencies{})
-	require.Equal(t, 2, typ.NumField())
-	require.Equal(t, "Daemon", typ.Field(0).Name)
-	require.Equal(t, "RunUI", typ.Field(1).Name)
-}
+	content, err := os.ReadFile(filepath.Join(".", "main.go"))
+	require.NoError(t, err)
+	source := string(content)
 
-type stubTaskFrontend struct{}
-
-type stubTaskDaemonRuntime struct {
-	ensureRunning func(context.Context) error
-	frontend      core.TaskFrontend
-}
-
-func (s stubTaskDaemonRuntime) EnsureRunning(ctx context.Context) error {
-	if s.ensureRunning != nil {
-		return s.ensureRunning(ctx)
-	}
-
-	return nil
-}
-
-func (s stubTaskDaemonRuntime) Frontend() core.TaskFrontend {
-	return s.frontend
-}
-
-func (*stubTaskFrontend) CreateTask(context.Context, core.CreateTaskInput) (*core.Task, error) {
-	return nil, nil
-}
-
-func (*stubTaskFrontend) ListTasks(context.Context) ([]*core.Task, error) {
-	return nil, nil
-}
-
-func (*stubTaskFrontend) LatestTaskStatus(context.Context, string) (*core.TaskStatusUpdate, error) {
-	return nil, nil
-}
-
-func (*stubTaskFrontend) SubscribeTaskStatus(context.Context, string) (<-chan core.TaskStatusUpdate, error) {
-	return nil, nil
+	require.Contains(t, source, `adapter := taskdaemon.New(taskdaemon.Config{`)
+	require.Contains(t, source, `frontend := adapter.Frontend()`)
+	require.NotContains(t, source, `deps :=`)
+	require.NotContains(t, source, `return run(ctx,`)
 }

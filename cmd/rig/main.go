@@ -5,13 +5,12 @@ import (
 	"fmt"
 	"os"
 	"os/signal"
-	"syscall"
-
 	"rig/internal/adapters/handler/tui"
 	"rig/internal/adapters/taskdaemon"
 	"rig/internal/core"
 	"rig/internal/infrastructure"
 	"rig/internal/pkg/subprocess"
+	"syscall"
 
 	codexagent "rig/internal/adapters/client/codexagent"
 	gitworktree "rig/internal/adapters/client/gitworktree"
@@ -24,19 +23,12 @@ import (
 )
 
 const (
+	// The task daemon is a re-executed child of the same rig binary. The
+	// client invocation sets this env var on the spawned child so execute()
+	// can choose daemon serving instead of the normal TUI flow.
 	daemonModeEnvKey   = "RIG_MODE"
 	daemonModeEnvValue = "task-daemon"
 )
-
-type dependencies struct {
-	Daemon taskDaemonRuntime
-	RunUI  func(core.TaskFrontend) error
-}
-
-type taskDaemonRuntime interface {
-	EnsureRunning(context.Context) error
-	Frontend() core.TaskFrontend
-}
 
 func main() {
 	if err := execute(); err != nil {
@@ -63,61 +55,39 @@ func execute() error {
 	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer cancel()
 
-	// TODO: what is the point of this? don't we always want to serve teh task daemon?
-	if isDaemonMode() {
+	// The daemon is not a separate executable. EnsureRunning re-execs this same
+	// binary with RIG_MODE=task-daemon, and that child process takes this path.
+	if os.Getenv(daemonModeEnvKey) == daemonModeEnvValue {
 		return serveTaskDaemon(ctx, cfg, execPath, sourceRoot, cancel)
 	}
 
-	deps, err := newRuntimeDependencies(cfg, execPath)
-	if err != nil {
-		return err
-	}
-
-	return run(ctx, deps)
-}
-
-func run(ctx context.Context, deps dependencies) error {
-	if deps.Daemon == nil {
-		return fmt.Errorf("task daemon not configured")
-	}
-	if deps.RunUI == nil {
-		return fmt.Errorf("task tui runner not configured")
-	}
-
-	frontend := deps.Daemon.Frontend()
-	if frontend == nil {
-		return fmt.Errorf("task frontend not configured")
-	}
-
-	if err := deps.Daemon.EnsureRunning(ctx); err != nil {
-		return err
-	}
-
-	return deps.RunUI(frontend)
-}
-
-func newRuntimeDependencies(cfg *infrastructure.ApplicationConfig, execPath string) (dependencies, error) {
-	daemon := taskdaemon.New(taskdaemon.Config{
+	adapter := taskdaemon.New(taskdaemon.Config{
 		SocketPath:     cfg.TaskDaemon.SocketPath,
 		HookListenAddr: cfg.TaskDaemon.HookListenAddr,
 		ExecPath:       execPath,
 		Env: []string{
+			// Passed to the re-executed child so it serves the daemon instead of
+			// recursively trying to ensure another daemon and launch the TUI.
 			daemonModeEnvKey + "=" + daemonModeEnvValue,
 		},
 	})
 
-	return dependencies{
-		Daemon: daemon,
-		RunUI: func(frontend core.TaskFrontend) error {
-			program := tui.NewProgram(
-				frontend,
-				tea.WithInput(os.Stdin),
-				tea.WithOutput(os.Stdout),
-			)
-			_, err := program.Run()
-			return err
-		},
-	}, nil
+	if err := adapter.EnsureRunning(ctx); err != nil {
+		return err
+	}
+
+	frontend := adapter.Frontend()
+	if frontend == nil {
+		return fmt.Errorf("task frontend not configured")
+	}
+
+	program := tui.NewProgram(
+		frontend,
+		tea.WithInput(os.Stdin),
+		tea.WithOutput(os.Stdout),
+	)
+	_, err = program.Run()
+	return err
 }
 
 func serveTaskDaemon(
@@ -131,39 +101,12 @@ func serveTaskDaemon(
 		return fmt.Errorf("application config not configured")
 	}
 
-	service, err := newTaskService(cfg, execPath, sourceRoot)
+	taskRepo, err := tasksqlite.New(tasksqlite.Config{Path: cfg.TaskSQLite.Path})
 	if err != nil {
 		return err
 	}
 
-	hookRoutes := daemonHookRoutes(service)
-	adapter := taskdaemon.New(cfg.TaskDaemon)
-	return adapter.Serve(ctx, service, hookRoutes, stop)
-}
-
-func daemonHookRoutes(service core.TaskService) []taskdaemon.HookRoute {
-	codexHooks := codexagent.NewHookHTTPHandler(service, nil)
-
-	return []taskdaemon.HookRoute{
-		{Path: "/hook", Handler: codexHooks},
-		{Path: "/codex-hook", Handler: codexHooks},
-	}
-}
-
-func newTaskService(
-	cfg *infrastructure.ApplicationConfig,
-	execPath string,
-	sourceRoot string,
-) (core.TaskService, error) {
-	if cfg == nil {
-		return nil, fmt.Errorf("application config not configured")
-	}
-
 	runner := subprocess.ExecRunner{}
-	taskRepo, err := tasksqlite.New(tasksqlite.Config{Path: cfg.TaskSQLite.Path})
-	if err != nil {
-		return nil, err
-	}
 
 	agents := map[core.AgentProvider]core.AgentClient{
 		core.AgentProviderCodex: codexagent.New(
@@ -176,7 +119,7 @@ func newTaskService(
 		),
 	}
 
-	return core.NewTaskService(core.TaskServiceDependencies{
+	service := core.NewTaskService(core.TaskServiceDependencies{
 		Tasks:                taskRepo,
 		GitWorktree:          gitworktree.New(runner),
 		TmuxSession:          tmuxsession.New(runner),
@@ -184,9 +127,14 @@ func newTaskService(
 		Workspace:            repositoryworkspace.New(),
 		EnableWorkspaceSetup: true,
 		DefaultProvider:      cfg.Provider,
-	}), nil
-}
+	})
 
-func isDaemonMode() bool {
-	return os.Getenv(daemonModeEnvKey) == daemonModeEnvValue
+	codexHooks := codexagent.NewHookHTTPHandler(service, nil)
+	adapter := taskdaemon.New(cfg.TaskDaemon)
+
+	return adapter.Serve(ctx, service, []taskdaemon.HookRoute{
+		{Path: "/hook", Handler: codexHooks},
+		{Path: "/codex-hook", Handler: codexHooks},
+	},
+		stop)
 }
