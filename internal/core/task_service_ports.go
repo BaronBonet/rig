@@ -17,9 +17,10 @@ type CreateTaskInput struct {
 }
 
 // TaskFrontend is the frontend-facing task application port used by the TUI.
-// The transport layer that serves the frontend, such as the local status
-// daemon, implements this port and forwards requests into the underlying task
-// application service.
+// In the active runtime, `rig` gets a daemon-backed implementation from the
+// taskdaemon adapter and passes it into the TUI. The TUI only knows about this
+// port; it does not know about sockets, daemon startup, or in-process service
+// wiring.
 type TaskFrontend interface {
 	// CreateTask creates a new task and returns the durable task record that the
 	// frontend should render immediately.
@@ -35,14 +36,6 @@ type TaskFrontend interface {
 	SubscribeTaskStatus(ctx context.Context, taskID string) (<-chan TaskStatusUpdate, error)
 }
 
-// TaskFrontendServer is the runtime application port for a long-lived
-// frontend-facing transport, such as the local task daemon. It exposes the
-// frontend task API and the lifecycle hook needed to start serving requests.
-type TaskFrontendServer interface {
-	TaskFrontend
-	Serve(ctx context.Context) error
-}
-
 // TaskDaemonHookRoute describes one provider hook endpoint the local task
 // daemon should expose alongside its frontend socket transport.
 type TaskDaemonHookRoute struct {
@@ -51,10 +44,16 @@ type TaskDaemonHookRoute struct {
 }
 
 // TaskDaemon is the application port for the local daemon-backed task
-// frontend. It can ensure the long-lived daemon process is available for the
-// UI, expose the daemon-backed frontend client, restart the daemon when
-// needed, and serve the daemon runtime when the current process is acting as
-// the daemon.
+// frontend subsystem.
+//
+// Frontend returns the daemon-backed TaskFrontend client that the TUI uses to
+// talk to the backend over the local socket.
+//
+// EnsureRunning and Restart are lifecycle operations used by composition code
+// to manage the long-lived daemon process.
+//
+// Serve runs the daemon-side transports in the current process. This is used
+// only by the re-executed daemon child process, not by the TUI client path.
 type TaskDaemon interface {
 	Frontend() TaskFrontend
 	EnsureRunning(ctx context.Context) error
