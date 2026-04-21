@@ -8,8 +8,9 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
-	"rig/internal/core"
 	"strings"
+
+	"rig/internal/core"
 )
 
 const outputTailLineLimit = 20

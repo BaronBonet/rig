@@ -8,9 +8,10 @@ import (
 	"net"
 	"os"
 	"reflect"
-	"rig/internal/core"
 	"testing"
 	"time"
+
+	"rig/internal/core"
 
 	"github.com/stretchr/testify/require"
 )
@@ -122,13 +123,17 @@ func TestFrontend_CreateTaskLatestTaskStatusAndSubscribeTaskStatus(t *testing.T)
 			ObservedAt:   time.Unix(1710000100, 0).UTC(),
 		}
 		requestCh := make(chan socketRequest, 1)
-		serverErrCh := serveStreamingFrontendSocket(t, socketPath, func(req socketRequest, encoder *json.Encoder) error {
-			requestCh <- req
-			if err := encoder.Encode(socketEnvelope{Type: "subscribed", OK: true}); err != nil {
-				return err
-			}
-			return encoder.Encode(socketEnvelope{Type: "task_status_update", Update: &expectedUpdate})
-		})
+		serverErrCh := serveStreamingFrontendSocket(
+			t,
+			socketPath,
+			func(req socketRequest, encoder *json.Encoder) error {
+				requestCh <- req
+				if err := encoder.Encode(socketEnvelope{Type: "subscribed", OK: true}); err != nil {
+					return err
+				}
+				return encoder.Encode(socketEnvelope{Type: "task_status_update", Update: &expectedUpdate})
+			},
+		)
 
 		frontend := New(Config{SocketPath: socketPath}).Frontend()
 		ctx, cancel := context.WithCancel(t.Context())
@@ -157,16 +162,20 @@ func TestFrontend_CreateTaskLatestTaskStatusAndSubscribeTaskStatus(t *testing.T)
 		socketPath := frontendTestSocketPath(t)
 		requestCh := make(chan socketRequest, 1)
 		serverReady := make(chan struct{})
-		serverErrCh := serveStreamingFrontendSocketWithConn(t, socketPath, func(req socketRequest, encoder *json.Encoder, conn net.Conn) error {
-			requestCh <- req
-			if err := encoder.Encode(socketEnvelope{Type: "subscribed", OK: true}); err != nil {
+		serverErrCh := serveStreamingFrontendSocketWithConn(
+			t,
+			socketPath,
+			func(req socketRequest, encoder *json.Encoder, conn net.Conn) error {
+				requestCh <- req
+				if err := encoder.Encode(socketEnvelope{Type: "subscribed", OK: true}); err != nil {
+					return err
+				}
+				close(serverReady)
+				var buf [1]byte
+				_, err := conn.Read(buf[:])
 				return err
-			}
-			close(serverReady)
-			var buf [1]byte
-			_, err := conn.Read(buf[:])
-			return err
-		})
+			},
+		)
 
 		frontend := New(Config{SocketPath: socketPath}).Frontend()
 		ctx, cancel := context.WithCancel(context.Background())
@@ -193,13 +202,17 @@ func TestFrontend_CreateTaskLatestTaskStatusAndSubscribeTaskStatus(t *testing.T)
 		socketPath := frontendTestSocketPath(t)
 		requestCh := make(chan socketRequest, 1)
 		serverReady := make(chan struct{})
-		serverErrCh := serveStreamingFrontendSocketWithConn(t, socketPath, func(req socketRequest, encoder *json.Encoder, conn net.Conn) error {
-			requestCh <- req
-			close(serverReady)
-			var buf [1]byte
-			_, err := conn.Read(buf[:])
-			return err
-		})
+		serverErrCh := serveStreamingFrontendSocketWithConn(
+			t,
+			socketPath,
+			func(req socketRequest, encoder *json.Encoder, conn net.Conn) error {
+				requestCh <- req
+				close(serverReady)
+				var buf [1]byte
+				_, err := conn.Read(buf[:])
+				return err
+			},
+		)
 
 		frontend := New(Config{SocketPath: socketPath}).Frontend()
 		ctx, cancel := context.WithCancel(context.Background())
@@ -264,9 +277,13 @@ func TestFrontend_ReturnsExplicitErrorsOnErrorEnvelopesAndUnexpectedTypes(t *tes
 		t.Parallel()
 
 		socketPath := frontendTestSocketPath(t)
-		serverErrCh := serveStreamingFrontendSocket(t, socketPath, func(req socketRequest, encoder *json.Encoder) error {
-			return encoder.Encode(socketEnvelope{Type: "error", Error: "subscribe failed"})
-		})
+		serverErrCh := serveStreamingFrontendSocket(
+			t,
+			socketPath,
+			func(req socketRequest, encoder *json.Encoder) error {
+				return encoder.Encode(socketEnvelope{Type: "error", Error: "subscribe failed"})
+			},
+		)
 
 		frontend := New(Config{SocketPath: socketPath}).Frontend()
 
@@ -281,13 +298,17 @@ func TestFrontend_ReturnsExplicitErrorsOnErrorEnvelopesAndUnexpectedTypes(t *tes
 
 		socketPath := frontendTestSocketPath(t)
 		requestCh := make(chan socketRequest, 1)
-		serverErrCh := serveStreamingFrontendSocket(t, socketPath, func(req socketRequest, encoder *json.Encoder) error {
-			requestCh <- req
-			if err := encoder.Encode(socketEnvelope{Type: "subscribed", OK: true}); err != nil {
-				return err
-			}
-			return encoder.Encode(socketEnvelope{Type: "tasks_list", OK: true})
-		})
+		serverErrCh := serveStreamingFrontendSocket(
+			t,
+			socketPath,
+			func(req socketRequest, encoder *json.Encoder) error {
+				requestCh <- req
+				if err := encoder.Encode(socketEnvelope{Type: "subscribed", OK: true}); err != nil {
+					return err
+				}
+				return encoder.Encode(socketEnvelope{Type: "tasks_list", OK: true})
+			},
+		)
 
 		frontend := New(Config{SocketPath: socketPath}).Frontend()
 

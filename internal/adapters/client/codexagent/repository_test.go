@@ -69,7 +69,10 @@ func TestRepositorySuggestTaskName_DelegatesToCodexProposal(t *testing.T) {
 func TestRepositorySuggestTaskName_PrefersOutputFileOverStdout(t *testing.T) {
 	runner := stubRunner{
 		runFn: func(_ context.Context, _ string, _ string, args ...string) (subprocess.Result, error) {
-			require.NoError(t, os.WriteFile(args[3], []byte("{\"name\":\"File Result\",\"branch_type\":\"feat\"}\n"), 0o600))
+			require.NoError(
+				t,
+				os.WriteFile(args[3], []byte("{\"name\":\"File Result\",\"branch_type\":\"feat\"}\n"), 0o600),
+			)
 			return subprocess.Result{Stdout: "stdout result\n"}, nil
 		},
 	}

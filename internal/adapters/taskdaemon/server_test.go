@@ -273,7 +273,10 @@ func (s *stubTaskService) LatestTaskStatus(ctx context.Context, taskID string) (
 	return s.latestTaskStatusFn(ctx, taskID)
 }
 
-func (s *stubTaskService) SubscribeTaskStatus(ctx context.Context, taskID string) (<-chan core.TaskStatusUpdate, error) {
+func (s *stubTaskService) SubscribeTaskStatus(
+	ctx context.Context,
+	taskID string,
+) (<-chan core.TaskStatusUpdate, error) {
 	return s.subscribeTaskStatusFn(ctx, taskID)
 }
 

@@ -8,8 +8,9 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
-	"rig/internal/core"
 	"strings"
+
+	"rig/internal/core"
 )
 
 func seedWorkspace(ctx context.Context, in core.SeedWorkspaceInput, progress func(string)) error {

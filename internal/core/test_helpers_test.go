@@ -199,10 +199,12 @@ func newTestTaskService(t *testing.T) *testTaskServiceHarness {
 	h.sessionClientMock = &stubTmuxSessionClient{state: &h.sessionClient}
 
 	h.service = NewTaskService(TaskServiceDependencies{
-		Tasks:                h.taskRepoMock,
-		GitWorktree:          h.repoClientMock,
-		TmuxSession:          h.sessionClientMock,
-		Agents:               map[AgentProvider]AgentClient{AgentProviderCodex: &recordingAgentClient{state: &h.providerRepo}},
+		Tasks:       h.taskRepoMock,
+		GitWorktree: h.repoClientMock,
+		TmuxSession: h.sessionClientMock,
+		Agents: map[AgentProvider]AgentClient{
+			AgentProviderCodex: &recordingAgentClient{state: &h.providerRepo},
+		},
 		Workspace:            &recordingWorkspaceManager{state: &h.workspace, session: &h.sessionClient},
 		EnableWorkspaceSetup: true,
 		DefaultProvider:      AgentProviderCodex,

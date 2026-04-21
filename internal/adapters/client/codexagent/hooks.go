@@ -10,9 +10,10 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
-	"rig/internal/core"
 	"strings"
 	"time"
+
+	"rig/internal/core"
 )
 
 type HookEventIngestor interface {

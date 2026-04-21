@@ -8,8 +8,9 @@ import (
 	"fmt"
 	"io"
 	"net"
-	"rig/internal/core"
 	"sync"
+
+	"rig/internal/core"
 )
 
 type socketRequest struct {

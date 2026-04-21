@@ -8,12 +8,10 @@ export PATH="${PROJECT_ROOT_DIR}/local/bin:${PATH}"
 cd "${PROJECT_ROOT_DIR}"
 
 echo "Cleaning generated artifacts..."
-rm -rf ./internal/adapters/repository/sqlite/generated
 rm -rf ./internal/adapters/repository/tasksqlite/generated
 find . -type f -name 'mock_*.go' -delete
 
 echo "Generating sqlite code..."
-go tool sqlc generate -f ./internal/adapters/repository/sqlite/sqlc.yaml
 go tool sqlc generate -f ./internal/adapters/repository/tasksqlite/sqlc.yaml
 
 echo "Generating mocks..."
