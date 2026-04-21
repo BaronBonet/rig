@@ -143,12 +143,33 @@ func TestFrontend_CreateTaskStreamLatestTaskStatusAndSubscribeTaskStatus(t *test
 		require.NoError(t, <-serverErrCh)
 	})
 
-	t.Run("open task session", func(t *testing.T) {
+	t.Run("reconnect task session", func(t *testing.T) {
+		t.Parallel()
+
+		socketPath := frontendTestSocketPath(t)
+		requestCh := make(chan socketRequest, 1)
+		serverErrCh := serveOneShotFrontendSocket(t, socketPath, func(req socketRequest, encoder *json.Encoder) error {
+			requestCh <- req
+			return encoder.Encode(socketEnvelope{
+				Type: "task_session_reconnected",
+				OK:   true,
+			})
+		})
+
+		frontend := New(Config{SocketPath: socketPath}).Frontend()
+
+		err := frontend.ReconnectTaskSession(t.Context(), "task-123")
+		require.NoError(t, err)
+		require.Equal(t, socketRequest{Command: "reconnect_task_session", TaskID: "task-123"}, <-requestCh)
+		require.NoError(t, <-serverErrCh)
+	})
+
+	t.Run("attach task session", func(t *testing.T) {
 		t.Parallel()
 
 		task := &core.Task{ID: "task-123", TmuxSession: "repo_task"}
 		sessions := &stubTaskSessionClient{
-			openTaskSessionFn: func(_ context.Context, got *core.Task) error {
+			attachTaskSessionFn: func(_ context.Context, got *core.Task) error {
 				require.Same(t, task, got)
 				return nil
 			},
@@ -156,7 +177,7 @@ func TestFrontend_CreateTaskStreamLatestTaskStatusAndSubscribeTaskStatus(t *test
 
 		frontend := &frontend{sessions: sessions}
 
-		err := frontend.OpenTaskSession(t.Context(), task)
+		err := frontend.AttachTaskSession(t.Context(), task)
 		require.NoError(t, err)
 	})
 
@@ -380,16 +401,16 @@ func TestFrontend_CreateTaskStreamLatestTaskStatusAndSubscribeTaskStatus(t *test
 }
 
 type stubTaskSessionClient struct {
-	openTaskSessionFn func(context.Context, *core.Task) error
+	attachTaskSessionFn func(context.Context, *core.Task) error
 }
 
 func (s *stubTaskSessionClient) StartTaskSession(context.Context, *core.Task, core.TaskSessionLaunchSpec) error {
 	panic("unexpected StartTaskSession call")
 }
 
-func (s *stubTaskSessionClient) OpenTaskSession(ctx context.Context, task *core.Task) error {
-	if s.openTaskSessionFn != nil {
-		return s.openTaskSessionFn(ctx, task)
+func (s *stubTaskSessionClient) AttachTaskSession(ctx context.Context, task *core.Task) error {
+	if s.attachTaskSessionFn != nil {
+		return s.attachTaskSessionFn(ctx, task)
 	}
 	return nil
 }

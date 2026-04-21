@@ -17,8 +17,16 @@ type server struct {
 	hookRoutes     []core.TaskDaemonHookRoute
 }
 
-func (s *server) OpenTaskSession(context.Context, *core.Task) error {
-	return fmt.Errorf("open task session unsupported on daemon server")
+func (s *server) AttachTaskSession(context.Context, *core.Task) error {
+	return fmt.Errorf("attach task session unsupported on daemon server")
+}
+
+func (s *server) ReconnectTaskSession(ctx context.Context, taskID string) error {
+	if s.service == nil {
+		return fmt.Errorf("task service not configured")
+	}
+
+	return s.service.ReconnectTaskSession(ctx, taskID)
 }
 
 type taskCreateEventReporter struct {

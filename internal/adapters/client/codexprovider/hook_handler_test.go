@@ -88,6 +88,10 @@ func (s *stubTaskService) DeleteTask(context.Context, string) error {
 	return nil
 }
 
+func (s *stubTaskService) ReconnectTaskSession(context.Context, string) error {
+	return nil
+}
+
 func (s *stubTaskService) LatestTaskStatus(context.Context, string) (*core.TaskStatusUpdate, error) {
 	return nil, nil
 }

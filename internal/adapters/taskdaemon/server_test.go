@@ -234,6 +234,39 @@ func TestUnixSocketServer_DeleteTaskCallsTaskService(t *testing.T) {
 	require.NoError(t, <-errCh)
 }
 
+func TestUnixSocketServer_ReconnectTaskSessionCallsTaskService(t *testing.T) {
+	t.Parallel()
+
+	socketPath := serverTestSocketPath(t)
+	reconnectedTaskIDs := make(chan string, 1)
+	svc := &stubTaskService{
+		reconnectTaskSessionFn: func(_ context.Context, taskID string) error {
+			reconnectedTaskIDs <- taskID
+			return nil
+		},
+	}
+	adapter := New(Config{
+		SocketPath:     socketPath,
+		HookListenAddr: "127.0.0.1:0",
+	})
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	errCh := make(chan error, 1)
+	go func() {
+		errCh <- adapter.Serve(ctx, svc, nil, nil)
+	}()
+	waitForUnixSocketServer(t, socketPath)
+
+	err := reconnectTaskSessionViaSocket(context.Background(), socketPath, "task-1")
+	require.NoError(t, err)
+	require.Equal(t, "task-1", <-reconnectedTaskIDs)
+
+	cancel()
+	require.NoError(t, <-errCh)
+}
+
 func TestUnixSocketServer_SubscribeTaskStatusStreamsMatchingUpdates(t *testing.T) {
 	t.Parallel()
 
@@ -387,6 +420,7 @@ func TestHTTPHookServer_DelegatesToInjectedHookHandler(t *testing.T) {
 type stubTaskService struct {
 	createTaskWithProgressFn func(context.Context, core.CreateTaskInput, core.TaskCreateProgressReporter) (*core.Task, error)
 	deleteTaskFn             func(context.Context, string) error
+	reconnectTaskSessionFn   func(context.Context, string) error
 	listTasksFn              func(context.Context) ([]*core.Task, error)
 	latestTaskStatusFn       func(context.Context, string) (*core.TaskStatusUpdate, error)
 	subscribeTaskStatusFn    func(context.Context, string) (<-chan core.TaskStatusUpdate, error)
@@ -406,6 +440,13 @@ func (s *stubTaskService) DeleteTask(ctx context.Context, taskID string) error {
 		return nil
 	}
 	return s.deleteTaskFn(ctx, taskID)
+}
+
+func (s *stubTaskService) ReconnectTaskSession(ctx context.Context, taskID string) error {
+	if s.reconnectTaskSessionFn == nil {
+		return nil
+	}
+	return s.reconnectTaskSessionFn(ctx, taskID)
 }
 
 func (s *stubTaskService) ListTasks(ctx context.Context) ([]*core.Task, error) {
@@ -540,6 +581,34 @@ func deleteTaskViaSocket(ctx context.Context, socketPath string, taskID string) 
 	}
 	if resp.Type != "task_deleted" || !resp.OK {
 		return assertiveError("unexpected delete response")
+	}
+
+	return nil
+}
+
+func reconnectTaskSessionViaSocket(ctx context.Context, socketPath string, taskID string) error {
+	conn, err := dialDaemonSocket(ctx, socketPath)
+	if err != nil {
+		return err
+	}
+	defer conn.Close()
+
+	if err := json.NewEncoder(conn).Encode(socketRequest{
+		Command: "reconnect_task_session",
+		TaskID:  taskID,
+	}); err != nil {
+		return err
+	}
+
+	var resp socketEnvelope
+	if err := json.NewDecoder(conn).Decode(&resp); err != nil {
+		return err
+	}
+	if resp.Type == "error" && resp.Error != "" {
+		return assertiveError(resp.Error)
+	}
+	if resp.Type != "task_session_reconnected" || !resp.OK {
+		return assertiveError("unexpected reconnect response")
 	}
 
 	return nil

@@ -94,6 +94,8 @@ func (s *unixSocketServer) handleConn(ctx context.Context, conn net.Conn) {
 		s.handleCreateTask(ctx, encoder, req)
 	case "delete_task":
 		s.handleDeleteTask(connCtx, encoder, req)
+	case "reconnect_task_session":
+		s.handleReconnectTaskSession(connCtx, encoder, req)
 	case "list_tasks":
 		s.handleListTasks(ctx, encoder)
 	case "latest_task_status":
@@ -164,6 +166,24 @@ func (s *unixSocketServer) handleDeleteTask(ctx context.Context, encoder *json.E
 	}
 
 	_ = writeSocketEnvelope(encoder, socketEnvelope{Type: "task_deleted", OK: true})
+}
+
+func (s *unixSocketServer) handleReconnectTaskSession(ctx context.Context, encoder *json.Encoder, req socketRequest) {
+	taskID := strings.TrimSpace(req.TaskID)
+	if taskID == "" {
+		_ = writeSocketEnvelope(
+			encoder,
+			socketEnvelope{Type: "error", Error: "reconnect_task_session task_id required"},
+		)
+		return
+	}
+
+	if err := s.frontend.ReconnectTaskSession(ctx, taskID); err != nil {
+		_ = writeSocketEnvelope(encoder, socketEnvelope{Type: "error", Error: err.Error()})
+		return
+	}
+
+	_ = writeSocketEnvelope(encoder, socketEnvelope{Type: "task_session_reconnected", OK: true})
 }
 
 func (s *unixSocketServer) handleListTasks(ctx context.Context, encoder *json.Encoder) {

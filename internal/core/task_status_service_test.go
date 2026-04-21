@@ -18,7 +18,7 @@ func TestTaskServiceContract_ExposesStatusMethods(t *testing.T) {
 
 func TestTaskFrontendContract_ExposesCreateAndStatusReadMethods(t *testing.T) {
 	var _ interface {
-		OpenTaskSession(context.Context, *Task) error
+		AttachTaskSession(context.Context, *Task) error
 		CreateTaskStream(context.Context, CreateTaskInput) (<-chan TaskCreateEvent, error)
 		LatestTaskStatus(context.Context, string) (*TaskStatusUpdate, error)
 		SubscribeTaskStatus(context.Context, string) (<-chan TaskStatusUpdate, error)
@@ -140,4 +140,28 @@ func TestTaskStatusService_HandleHookEventResolvesTaskIDAndPublishesMappedUpdate
 		RawEventName: "SessionStart",
 		ObservedAt:   time.Date(2026, time.April, 20, 9, 0, 0, 0, time.UTC),
 	}, *update)
+}
+
+func TestTaskStatusService_HandleHookEventPersistsResumeMetadataWhenSessionIDPresent(t *testing.T) {
+	svc := newTestTaskService(t)
+	svc.taskRepo.listTasks = []*Task{{
+		ID:           "task-123",
+		WorktreePath: "/tmp/repo-task",
+	}}
+
+	err := svc.service.HandleHookEvent(t.Context(), HookEventInput{
+		OccurredAt: time.Date(2026, time.April, 20, 9, 5, 0, 0, time.UTC),
+		Provider:   ProviderCodex,
+		Cwd:        "/tmp/repo-task",
+		EventName:  "SessionStart",
+		SessionID:  "sess-1",
+	})
+	require.NoError(t, err)
+	require.NotNil(t, svc.taskRepo.savedResumeMetadata)
+	require.Equal(t, TaskResumeMetadata{
+		TaskID:     "task-123",
+		Provider:   ProviderCodex,
+		SessionID:  "sess-1",
+		ObservedAt: time.Date(2026, time.April, 20, 9, 5, 0, 0, time.UTC),
+	}, *svc.taskRepo.savedResumeMetadata)
 }

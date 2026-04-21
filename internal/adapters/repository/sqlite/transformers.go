@@ -51,6 +51,15 @@ func upsertTaskStatusParams(update core.TaskStatusUpdate) generated.UpsertTaskSt
 	}
 }
 
+func upsertTaskResumeMetadataParams(metadata core.TaskResumeMetadata) generated.UpsertTaskResumeMetadataParams {
+	return generated.UpsertTaskResumeMetadataParams{
+		TaskID:     metadata.TaskID,
+		Provider:   string(metadata.Provider),
+		SessionID:  metadata.SessionID,
+		ObservedAt: formatTime(metadata.ObservedAt),
+	}
+}
+
 func formatTime(ts time.Time) string {
 	if ts.IsZero() {
 		return ""
@@ -104,5 +113,14 @@ func taskStatusUpdateFromRow(row generated.TaskStatus) *core.TaskStatusUpdate {
 		Phase:        core.TaskStatusPhase(row.Phase),
 		RawEventName: row.RawEventName,
 		ObservedAt:   parseTime(row.ObservedAt),
+	}
+}
+
+func taskResumeMetadataFromRow(row generated.TaskResumeMetadatum) *core.TaskResumeMetadata {
+	return &core.TaskResumeMetadata{
+		TaskID:     row.TaskID,
+		Provider:   core.Provider(row.Provider),
+		SessionID:  row.SessionID,
+		ObservedAt: parseTime(row.ObservedAt),
 	}
 }

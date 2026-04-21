@@ -23,22 +23,28 @@ var forwarderScriptTemplateText string
 var forwarderScriptTemplate = template.Must(template.New("forward-to-rig.sh").Parse(forwarderScriptTemplateText))
 
 const (
-	readyMarker = "›"
+	readyMarker          = "›"
+	defaultCodexHooksURL = "http://127.0.0.1:4124/codex-hook"
 )
 
 type repository struct {
-	runner        subprocess.Runner
-	binary        string
-	rigBinaryPath string
-	sourceRoot    string
+	runner       subprocess.Runner
+	codexHomeDir func() (string, error)
+	binary       string
+	collectorURL string
 }
 
 func New(runner subprocess.Runner, cfg Config, hooks HookForwardingConfig) core.ProviderClient {
+	collectorURL := strings.TrimSpace(hooks.CollectorURL)
+	if collectorURL == "" {
+		collectorURL = defaultCodexHooksURL
+	}
+
 	return &repository{
-		runner:        runner,
-		binary:        cfg.Binary,
-		rigBinaryPath: strings.TrimSpace(hooks.RigBinaryPath),
-		sourceRoot:    strings.TrimSpace(hooks.SourceRoot),
+		runner:       runner,
+		binary:       cfg.Binary,
+		collectorURL: collectorURL,
+		codexHomeDir: defaultCodexHomeDir,
 	}
 }
 
@@ -75,31 +81,49 @@ func (r *repository) SuggestTaskName(ctx context.Context, prompt string) (core.T
 	return core.TaskSuggestion{}, fmt.Errorf("codex did not return a usable task title")
 }
 
+func (r *repository) EnsureTaskSessionEnvironment(context.Context) error {
+	codexHome, err := r.resolveCodexHomeDir()
+	if err != nil {
+		return err
+	}
+
+	scriptPath := filepath.Join(codexHome, "hooks", "forward-to-rig.sh")
+	if err := os.MkdirAll(filepath.Dir(scriptPath), 0o755); err != nil {
+		return fmt.Errorf("create codex hooks dir: %w", err)
+	}
+
+	scriptBytes, err := r.renderForwarderScript()
+	if err != nil {
+		return err
+	}
+	if err := os.WriteFile(scriptPath, scriptBytes, 0o755); err != nil {
+		return fmt.Errorf("write codex forwarder script: %w", err)
+	}
+
+	hooksPath := filepath.Join(codexHome, "hooks.json")
+	cfg, err := r.loadHookConfig(hooksPath)
+	if err != nil {
+		return err
+	}
+
+	if err := r.ensureRigHookRules(&cfg, scriptPath); err != nil {
+		return err
+	}
+
+	hooksJSON, err := json.MarshalIndent(cfg, "", "  ")
+	if err != nil {
+		return fmt.Errorf("marshal codex hooks config: %w", err)
+	}
+	hooksJSON = append(hooksJSON, '\n')
+	if err := os.WriteFile(hooksPath, hooksJSON, 0o644); err != nil {
+		return fmt.Errorf("write codex hooks config: %w", err)
+	}
+
+	return nil
+}
+
 func (r *repository) BuildWorkspaceBootstrapSpec(_ *core.Task) (core.WorkspaceBootstrapSpec, error) {
-	hooksJSON, err := r.renderHooksJSON()
-	if err != nil {
-		return core.WorkspaceBootstrapSpec{}, err
-	}
-
-	forwarderScript, err := r.renderForwarderScript()
-	if err != nil {
-		return core.WorkspaceBootstrapSpec{}, err
-	}
-
-	return core.WorkspaceBootstrapSpec{
-		Files: []core.WorkspaceBootstrapFile{
-			{
-				Path:     filepath.Join(".codex", "hooks.json"),
-				Content:  hooksJSON,
-				FileMode: 0o644,
-			},
-			{
-				Path:     filepath.Join(".codex", "hooks", "forward-to-rig.sh"),
-				Content:  forwarderScript,
-				FileMode: 0o755,
-			},
-		},
-	}, nil
+	return core.WorkspaceBootstrapSpec{}, nil
 }
 
 func (r *repository) BuildTaskSessionLaunchSpec(task *core.Task) (core.TaskSessionLaunchSpec, error) {
@@ -112,6 +136,21 @@ func (r *repository) BuildTaskSessionLaunchSpec(task *core.Task) (core.TaskSessi
 		Command:      []string{r.binary},
 		ReadyMarker:  readyMarker,
 		PrefillInput: prefillInput,
+	}, nil
+}
+
+func (r *repository) BuildReconnectTaskSessionLaunchSpec(
+	_ *core.Task,
+	sessionID string,
+) (core.TaskSessionLaunchSpec, error) {
+	sessionID = strings.TrimSpace(sessionID)
+	if sessionID == "" {
+		return core.TaskSessionLaunchSpec{}, fmt.Errorf("session ID is required")
+	}
+
+	return core.TaskSessionLaunchSpec{
+		Command:     []string{r.binary, "resume", sessionID},
+		ReadyMarker: readyMarker,
 	}, nil
 }
 
@@ -161,26 +200,32 @@ func parseCodexSuggestion(raw string) (core.TaskSuggestion, bool) {
 
 // renderHooksJSON writes the Codex hook config file that tells Codex which
 // events should call back into rig's observer ingestion flow.
-func (r *repository) renderHooksJSON() ([]byte, error) {
+func (r *repository) renderHooksJSON(scriptPath string) ([]byte, error) {
 	config := hookConfig{
 		Hooks: map[string][]hookRule{
 			"SessionStart": {
 				{
 					Matcher: "startup|resume",
-					Hooks:   []hookCommand{{Type: "command", Command: r.commandForEvent("SessionStart")}},
+					Hooks:   []hookCommand{{Type: "command", Command: r.commandForEvent(scriptPath, "SessionStart")}},
 				},
 			},
 			"PreToolUse": {
-				{Matcher: "Bash", Hooks: []hookCommand{{Type: "command", Command: r.commandForEvent("PreToolUse")}}},
+				{
+					Matcher: "Bash",
+					Hooks:   []hookCommand{{Type: "command", Command: r.commandForEvent(scriptPath, "PreToolUse")}},
+				},
 			},
 			"PostToolUse": {
-				{Matcher: "Bash", Hooks: []hookCommand{{Type: "command", Command: r.commandForEvent("PostToolUse")}}},
+				{
+					Matcher: "Bash",
+					Hooks:   []hookCommand{{Type: "command", Command: r.commandForEvent(scriptPath, "PostToolUse")}},
+				},
 			},
 			"UserPromptSubmit": {
-				{Hooks: []hookCommand{{Type: "command", Command: r.commandForEvent("UserPromptSubmit")}}},
+				{Hooks: []hookCommand{{Type: "command", Command: r.commandForEvent(scriptPath, "UserPromptSubmit")}}},
 			},
 			"Stop": {
-				{Hooks: []hookCommand{{Type: "command", Command: r.commandForEvent("Stop")}}},
+				{Hooks: []hookCommand{{Type: "command", Command: r.commandForEvent(scriptPath, "Stop")}}},
 			},
 		},
 	}
@@ -196,22 +241,103 @@ func (r *repository) renderHooksJSON() ([]byte, error) {
 	return buf.Bytes(), nil
 }
 
-func (r *repository) commandForEvent(eventName string) string {
-	eventName = strings.TrimSpace(eventName)
+func (r *repository) commandForEvent(scriptPath string, eventName string) string {
+	return "/bin/sh " + shellQuote(scriptPath) + " " + shellQuote(strings.TrimSpace(eventName))
+}
 
-	cmd := `repo_root=$(git rev-parse --show-toplevel 2>/dev/null) || exit 0;` +
-		` exec /bin/sh "$repo_root/.codex/hooks/forward-to-rig.sh" ` + shellQuote(eventName)
-	return "/bin/sh -c " + shellQuote(cmd)
+func (r *repository) loadHookConfig(path string) (hookConfig, error) {
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return hookConfig{Hooks: map[string][]hookRule{}}, nil
+		}
+		return hookConfig{}, fmt.Errorf("read codex hooks config: %w", err)
+	}
+
+	var cfg hookConfig
+	if err := json.Unmarshal(raw, &cfg); err != nil {
+		return hookConfig{}, fmt.Errorf("decode codex hooks config: %w", err)
+	}
+	if cfg.Hooks == nil {
+		cfg.Hooks = map[string][]hookRule{}
+	}
+
+	return cfg, nil
+}
+
+func (r *repository) ensureRigHookRules(cfg *hookConfig, scriptPath string) error {
+	if cfg == nil {
+		return nil
+	}
+
+	rigJSON, err := r.renderHooksJSON(scriptPath)
+	if err != nil {
+		return fmt.Errorf("render rig codex hooks config: %w", err)
+	}
+
+	var rigCfg hookConfig
+	if err := json.Unmarshal(rigJSON, &rigCfg); err != nil {
+		return fmt.Errorf("decode rig codex hooks config: %w", err)
+	}
+
+	for eventName, rules := range rigCfg.Hooks {
+		for _, rule := range rules {
+			if !containsHookRule(cfg.Hooks[eventName], rule) {
+				cfg.Hooks[eventName] = append(cfg.Hooks[eventName], rule)
+			}
+		}
+	}
+
+	return nil
+}
+
+func containsHookRule(existing []hookRule, candidate hookRule) bool {
+	for _, rule := range existing {
+		if rule.Matcher != candidate.Matcher || len(rule.Hooks) != len(candidate.Hooks) {
+			continue
+		}
+
+		matches := true
+		for idx := range rule.Hooks {
+			if rule.Hooks[idx] != candidate.Hooks[idx] {
+				matches = false
+				break
+			}
+		}
+		if matches {
+			return true
+		}
+	}
+
+	return false
+}
+
+func (r *repository) resolveCodexHomeDir() (string, error) {
+	if r.codexHomeDir == nil {
+		return defaultCodexHomeDir()
+	}
+	return r.codexHomeDir()
+}
+
+func defaultCodexHomeDir() (string, error) {
+	if custom := strings.TrimSpace(os.Getenv("CODEX_HOME")); custom != "" {
+		return custom, nil
+	}
+
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return "", fmt.Errorf("resolve codex home: %w", err)
+	}
+
+	return filepath.Join(home, ".codex"), nil
 }
 
 func (r *repository) renderForwarderScript() ([]byte, error) {
 	var buf bytes.Buffer
 	if err := forwarderScriptTemplate.Execute(&buf, struct {
-		RigExecQuoted       string
-		RigSourceRootQuoted string
+		CollectorURLQuoted string
 	}{
-		RigExecQuoted:       shellQuote(r.rigBinaryPath),
-		RigSourceRootQuoted: shellQuote(r.sourceRoot),
+		CollectorURLQuoted: shellQuote(r.collectorURL),
 	}); err != nil {
 		return nil, fmt.Errorf("render codex forwarder script: %w", err)
 	}

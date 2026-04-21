@@ -2,6 +2,7 @@ package tui
 
 import (
 	"context"
+	"errors"
 	"time"
 
 	"rig/internal/core"
@@ -23,7 +24,14 @@ func loadTasksCmd(ctx context.Context, frontend core.TaskFrontend) tea.Cmd {
 
 func openTaskSessionCmd(ctx context.Context, frontend core.TaskFrontend, task *core.Task) tea.Cmd {
 	return func() tea.Msg {
-		err := frontend.OpenTaskSession(ctx, task)
+		err := frontend.AttachTaskSession(ctx, task)
+		if errors.Is(err, core.ErrTaskSessionNotFound) && task != nil {
+			if reconnectErr := frontend.ReconnectTaskSession(ctx, task.ID); reconnectErr != nil {
+				err = reconnectErr
+			} else {
+				err = frontend.AttachTaskSession(ctx, task)
+			}
+		}
 		return taskOpenedMsg{err: err}
 	}
 }

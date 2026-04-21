@@ -116,6 +116,7 @@ func serveTaskDaemon(
 			runner,
 			cfg.Codex,
 			codexprovider.HookForwardingConfig{
+				CollectorURL:  "http://" + cfg.Daemon.HookListenAddr + "/codex-hook",
 				RigBinaryPath: execPath,
 				SourceRoot:    sourceRoot,
 			},

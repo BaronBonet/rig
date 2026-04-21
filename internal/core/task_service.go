@@ -90,6 +90,43 @@ func (s *taskService) DeleteTask(ctx context.Context, taskID string) error {
 	return nil
 }
 
+func (s *taskService) ReconnectTaskSession(ctx context.Context, taskID string) error {
+	task, err := s.taskByID(ctx, taskID)
+	if err != nil {
+		return err
+	}
+
+	resumeMetadata, err := s.tasks.LatestTaskResumeMetadata(ctx, task.ID)
+	if err != nil {
+		return fmt.Errorf("load task resume metadata: %w", err)
+	}
+	if resumeMetadata == nil || strings.TrimSpace(resumeMetadata.SessionID) == "" {
+		return fmt.Errorf("reconnect task session: no resume metadata for task %q", task.ID)
+	}
+
+	if err := s.prepareTaskWorkspace(ctx, task, task.RepoRoot); err != nil {
+		return err
+	}
+
+	providerClient, err := s.providerClientFor(task.Provider)
+	if err != nil {
+		return err
+	}
+	if err := providerClient.EnsureTaskSessionEnvironment(ctx); err != nil {
+		return fmt.Errorf("ensure task session environment: %w", err)
+	}
+
+	launch, err := providerClient.BuildReconnectTaskSessionLaunchSpec(task, resumeMetadata.SessionID)
+	if err != nil {
+		return fmt.Errorf("build reconnect task session launch spec: %w", err)
+	}
+	if err := s.tmuxSession.StartTaskSession(ctx, task, launch); err != nil {
+		return fmt.Errorf("reconnect task session: %w", err)
+	}
+
+	return nil
+}
+
 func (s *taskService) LatestTaskStatus(ctx context.Context, taskID string) (*TaskStatusUpdate, error) {
 	return s.tasks.LatestTaskStatus(ctx, strings.TrimSpace(taskID))
 }
@@ -118,6 +155,17 @@ func (s *taskService) HandleHookEvent(ctx context.Context, input HookEventInput)
 			return err
 		}
 		input.TaskID = resolvedTaskID
+	}
+
+	if input.SessionID = strings.TrimSpace(input.SessionID); input.SessionID != "" {
+		if err := s.tasks.UpsertTaskResumeMetadata(ctx, TaskResumeMetadata{
+			TaskID:     input.TaskID,
+			Provider:   input.Provider,
+			SessionID:  input.SessionID,
+			ObservedAt: input.OccurredAt,
+		}); err != nil {
+			return fmt.Errorf("upsert task resume metadata: %w", err)
+		}
 	}
 
 	update, err := providerClient.HookEventToTaskStatus(input)
@@ -278,6 +326,9 @@ func (s *taskService) startTaskRuntime(ctx context.Context, task *Task) (*Task, 
 	providerClient, err := s.providerClientFor(task.Provider)
 	if err != nil {
 		return task, err
+	}
+	if err := providerClient.EnsureTaskSessionEnvironment(ctx); err != nil {
+		return task, fmt.Errorf("ensure task session environment: %w", err)
 	}
 
 	launch, err := providerClient.BuildTaskSessionLaunchSpec(task)
