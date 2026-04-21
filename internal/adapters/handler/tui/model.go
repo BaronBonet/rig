@@ -2,6 +2,7 @@ package tui
 
 import (
 	"context"
+	"errors"
 	"strings"
 
 	"rig/internal/core"
@@ -19,6 +20,7 @@ type modelMode int
 const (
 	modeBrowse modelMode = iota
 	modePromptInput
+	modeCleanupConfirm
 )
 
 const defaultCreateProvider = core.AgentProviderCodex
@@ -36,6 +38,8 @@ type model struct {
 	prompt        string
 	createPending bool
 	createErr     error
+	width         int
+	shimmerTick   int
 }
 
 type tasksLoadedMsg struct {
@@ -70,6 +74,8 @@ type taskCreatedMsg struct {
 	err  error
 }
 
+type shimmerTickMsg struct{}
+
 func newModel(frontend core.TaskFrontend) model {
 	statusContext, cancelStatus := context.WithCancel(context.Background())
 
@@ -88,6 +94,9 @@ func (m model) Init() tea.Cmd {
 
 func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
+	case tea.WindowSizeMsg:
+		m.width = msg.Width
+		return m, nil
 	case tea.KeyPressMsg:
 		if isQuitKey(msg) {
 			if m.cancelStatus != nil {
@@ -99,6 +108,9 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if m.mode == modePromptInput {
 			return m.updatePromptInput(msg)
 		}
+		if m.mode == modeCleanupConfirm {
+			return m.updateCleanupConfirm(msg)
+		}
 
 		switch msg.String() {
 		case "esc":
@@ -106,17 +118,37 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.cancelStatus()
 			}
 			return m, tea.Quit
-		case "a":
+		case "a", "n":
 			m.mode = modePromptInput
 			m.prompt = ""
 			m.createErr = nil
 			m.createPending = false
 			return m, nil
+		case "r":
+			m.loading = true
+			m.err = nil
+			return m, loadTasksCmd(m.statusContext, m.frontend)
+		case "g", "home":
+			m.selected = 0
+		case "G", "end":
+			m.selected = len(m.rows) - 1
 		case "j", "down":
 			m.moveSelection(1)
 		case "k", "up":
 			m.moveSelection(-1)
+		case "x":
+			if len(m.rows) == 0 {
+				return m, nil
+			}
+			m.mode = modeCleanupConfirm
+			return m, nil
+		case "enter":
+			if len(m.rows) == 0 {
+				return m, nil
+			}
+			m.err = errors.New("open task not implemented yet")
 		}
+		m.clampSelection()
 		return m, nil
 	case tasksLoadedMsg:
 		m.loading = false
@@ -147,6 +179,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 	case taskCreatedMsg:
 		m.createPending = false
+		m.shimmerTick = 0
 		if msg.err != nil {
 			m.createErr = msg.err
 			return m, nil
@@ -161,13 +194,29 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		m.clampSelection()
 		return m, tea.Batch(m.taskStatusTrackingCmds(taskID(msg.task))...)
+	case shimmerTickMsg:
+		if !m.createPending {
+			return m, nil
+		}
+		m.shimmerTick++
+		return m, nil
 	default:
 		return m, nil
 	}
 }
 
 func (m model) View() tea.View {
-	return tea.NewView(m.listView())
+	body := m.listView()
+	switch m.mode {
+	case modePromptInput:
+		body = m.promptInputView()
+	case modeCleanupConfirm:
+		body = m.confirmationView()
+	}
+
+	view := tea.NewView(body)
+	view.AltScreen = true
+	return view
 }
 
 func rowsFromTasks(tasks []*core.Task) []taskRow {
@@ -197,6 +246,7 @@ func (m model) submitPrompt() (model, tea.Cmd) {
 
 	m.createPending = true
 	m.createErr = nil
+	m.shimmerTick = 0
 
 	return m, createTaskCmd(m.statusContext, m.frontend, core.CreateTaskInput{
 		Prompt:   prompt,
@@ -229,6 +279,20 @@ func (m model) updatePromptInput(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	}
 
 	return m, nil
+}
+
+func (m model) updateCleanupConfirm(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
+	switch msg.String() {
+	case "q", "n", "esc":
+		m.mode = modeBrowse
+		return m, nil
+	case "y":
+		m.mode = modeBrowse
+		m.err = errors.New("cleanup not implemented yet")
+		return m, nil
+	default:
+		return m, nil
+	}
 }
 
 func (m model) taskStatusTrackingCmds(taskID string) []tea.Cmd {
@@ -299,6 +363,26 @@ func taskID(task *core.Task) string {
 		return ""
 	}
 	return strings.TrimSpace(task.ID)
+}
+
+func (m model) totalWidth() int {
+	if m.width >= 40 {
+		return m.width
+	}
+	return 72
+}
+
+func (m model) selectedRow() *taskRow {
+	if len(m.rows) == 0 {
+		return nil
+	}
+	if m.selected < 0 {
+		return &m.rows[0]
+	}
+	if m.selected >= len(m.rows) {
+		return &m.rows[len(m.rows)-1]
+	}
+	return &m.rows[m.selected]
 }
 
 func trimLastRune(value string) string {

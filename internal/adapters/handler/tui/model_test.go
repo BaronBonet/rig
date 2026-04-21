@@ -5,6 +5,7 @@ import (
 	"errors"
 	"regexp"
 	"testing"
+	"time"
 
 	"rig/internal/core"
 
@@ -50,7 +51,9 @@ func TestModel_ViewRendersTaskMetadata(t *testing.T) {
 			ID:          "task-1",
 			RepoName:    "repo-a",
 			DisplayName: "first task",
+			BranchName:  "feat/first-task",
 			Provider:    core.AgentProviderCodex,
+			CreatedAt:   time.Now().Add(-15 * time.Minute),
 		},
 	}
 
@@ -62,9 +65,15 @@ func TestModel_ViewRendersTaskMetadata(t *testing.T) {
 	require.True(t, ok)
 
 	view := stripANSI(got.View().Content)
+	require.Contains(t, view, "RIG")
+	require.Contains(t, view, "n new   r refresh   x clean   q quit")
 	require.Contains(t, view, "first task")
 	require.Contains(t, view, "repo-a")
+	require.Contains(t, view, "feat/first-task")
 	require.Contains(t, view, "codex")
+	require.Contains(t, view, "WORKSPACE")
+	require.Contains(t, view, "SESSION")
+	require.Contains(t, view, "15m")
 }
 
 func TestModel_AfterLoadRequestsLatestStatusAndSubscriptionsForEachTask(t *testing.T) {
@@ -123,7 +132,7 @@ func TestModel_LatestStatusSeedUpdatesRenderedPhase(t *testing.T) {
 	require.True(t, ok)
 	require.NotNil(t, got.rows[0].status)
 	require.Equal(t, core.TaskStatusPhaseWorking, got.rows[0].status.Phase)
-	require.Contains(t, stripANSI(got.View().Content), "phase: working")
+	require.Contains(t, stripANSI(got.View().Content), "working")
 }
 
 func TestModel_TaskRowUpdatesWhenSubscriptionUpdateArrives(t *testing.T) {
@@ -164,7 +173,7 @@ func TestModel_TaskRowUpdatesWhenSubscriptionUpdateArrives(t *testing.T) {
 	require.NotNil(t, nextCmd)
 	require.NotNil(t, got.rows[0].status)
 	require.Equal(t, core.TaskStatusPhaseWaitingForInput, got.rows[0].status.Phase)
-	require.Contains(t, stripANSI(got.View().Content), "phase: waiting_for_input")
+	require.Contains(t, stripANSI(got.View().Content), "needs input")
 }
 
 func TestModel_StatusEnrichmentFailuresDoNotCollapseListView(t *testing.T) {
@@ -212,7 +221,7 @@ func TestModel_StatusEnrichmentFailuresDoNotCollapseListView(t *testing.T) {
 	view := stripANSI(got.View().Content)
 	require.Contains(t, view, "first task")
 	require.Contains(t, view, "second task")
-	require.Contains(t, view, "phase: working")
+	require.Contains(t, view, "working")
 	require.NotContains(t, view, "latest status unavailable")
 	require.NotContains(t, view, "subscription unavailable")
 }
@@ -236,6 +245,20 @@ func TestModel_KeyAEntersPromptMode(t *testing.T) {
 	m := newLoadedModel(frontend)
 
 	next, cmd := m.Update(tea.KeyPressMsg{Text: "a"})
+
+	require.Nil(t, cmd)
+
+	got, ok := next.(model)
+	require.True(t, ok)
+	require.Equal(t, modePromptInput, got.mode)
+	require.Empty(t, got.prompt)
+}
+
+func TestModel_KeyNEntersPromptMode(t *testing.T) {
+	frontend := newStubFrontend()
+	m := newLoadedModel(frontend)
+
+	next, cmd := m.Update(tea.KeyPressMsg{Text: "n"})
 
 	require.Nil(t, cmd)
 
@@ -363,9 +386,10 @@ func TestModel_CreateTaskFailureKeepsPromptRecoverableAndPreservesListView(t *te
 	require.Zero(t, len(frontend.subscribeTaskStatusCalls))
 
 	view := stripANSI(got.View().Content)
-	require.Contains(t, view, "first task")
-	require.Contains(t, view, "second task")
-	require.Contains(t, view, "New task prompt")
+	require.Contains(t, view, "RIG")
+	require.Contains(t, view, "new task")
+	require.Contains(t, view, "Enter task prompt.")
+	require.Contains(t, view, "provider  codex")
 	require.Contains(t, view, "fix the retry loop")
 	require.Contains(t, view, "create failed")
 	require.NotContains(t, view, "Loading tasks...")
