@@ -17,14 +17,13 @@ import (
 )
 
 func TestServer_ImplementsTaskFrontend(t *testing.T) {
-	var _ core.TaskFrontend = New(Config{}, Dependencies{})
-	var _ core.TaskFrontendServer = New(Config{}, Dependencies{})
+	var _ core.TaskFrontend = &server{}
 }
 
 func TestUnixSocketServer_CreateTaskCallsTaskService(t *testing.T) {
 	t.Parallel()
 
-	socketPath := testSocketPath(t)
+	socketPath := serverTestSocketPath(t)
 	svc := &stubTaskService{
 		createTaskFn: func(_ context.Context, input core.CreateTaskInput) (*core.Task, error) {
 			require.Equal(t, core.CreateTaskInput{
@@ -38,21 +37,21 @@ func TestUnixSocketServer_CreateTaskCallsTaskService(t *testing.T) {
 			}, nil
 		},
 	}
-	server := New(Config{
+	adapter := New(Config{
 		SocketPath:     socketPath,
 		HookListenAddr: "127.0.0.1:0",
-	}, Dependencies{Service: svc})
+	})
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
 	errCh := make(chan error, 1)
 	go func() {
-		errCh <- server.Serve(ctx)
+		errCh <- adapter.Serve(ctx, svc, nil, nil)
 	}()
 	waitForUnixSocketServer(t, socketPath)
 
-	task, err := createTask(context.Background(), socketPath, core.CreateTaskInput{
+	task, err := createTaskViaSocket(context.Background(), socketPath, core.CreateTaskInput{
 		Cwd:      "/tmp/repo",
 		Prompt:   "add retries",
 		Provider: core.AgentProviderCodex,
@@ -66,10 +65,45 @@ func TestUnixSocketServer_CreateTaskCallsTaskService(t *testing.T) {
 	require.NoError(t, <-errCh)
 }
 
+func TestUnixSocketServer_ListTasksReturnsTasksSnapshot(t *testing.T) {
+	t.Parallel()
+
+	socketPath := serverTestSocketPath(t)
+	svc := &stubTaskService{
+		listTasksFn: func(context.Context) ([]*core.Task, error) {
+			return []*core.Task{
+				{ID: "task-1", Slug: "repo-a-task", RepoName: "repo-a"},
+				{ID: "task-2", Slug: "repo-b-task", RepoName: "repo-b"},
+			}, nil
+		},
+	}
+	adapter := New(Config{
+		SocketPath:     socketPath,
+		HookListenAddr: "127.0.0.1:0",
+	})
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	errCh := make(chan error, 1)
+	go func() {
+		errCh <- adapter.Serve(ctx, svc, nil, nil)
+	}()
+	waitForUnixSocketServer(t, socketPath)
+
+	tasks, err := listTasksViaSocket(context.Background(), socketPath)
+	require.NoError(t, err)
+	require.Len(t, tasks, 2)
+	require.Equal(t, []string{"task-1", "task-2"}, []string{tasks[0].ID, tasks[1].ID})
+
+	cancel()
+	require.NoError(t, <-errCh)
+}
+
 func TestUnixSocketServer_SubscribeTaskStatusStreamsMatchingUpdates(t *testing.T) {
 	t.Parallel()
 
-	socketPath := testSocketPath(t)
+	socketPath := serverTestSocketPath(t)
 	updates := make(chan core.TaskStatusUpdate, 1)
 	svc := &stubTaskService{
 		subscribeTaskStatusFn: func(_ context.Context, taskID string) (<-chan core.TaskStatusUpdate, error) {
@@ -77,24 +111,24 @@ func TestUnixSocketServer_SubscribeTaskStatusStreamsMatchingUpdates(t *testing.T
 			return updates, nil
 		},
 	}
-	server := New(Config{
+	adapter := New(Config{
 		SocketPath:     socketPath,
 		HookListenAddr: "127.0.0.1:0",
-	}, Dependencies{Service: svc})
+	})
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
 	errCh := make(chan error, 1)
 	go func() {
-		errCh <- server.Serve(ctx)
+		errCh <- adapter.Serve(ctx, svc, nil, nil)
 	}()
 	waitForUnixSocketServer(t, socketPath)
 
 	streamCtx, cancelStream := context.WithCancel(context.Background())
 	defer cancelStream()
 
-	stream, cleanup, err := subscribeTaskStatus(streamCtx, socketPath, "task-1")
+	stream, cleanup, err := subscribeTaskStatusViaSocket(streamCtx, socketPath, "task-1")
 	require.NoError(t, err)
 	defer cleanup()
 
@@ -112,6 +146,83 @@ func TestUnixSocketServer_SubscribeTaskStatusStreamsMatchingUpdates(t *testing.T
 		require.Equal(t, expected, got)
 	case <-time.After(2 * time.Second):
 		t.Fatal("timed out waiting for streamed task status update")
+	}
+
+	cancel()
+	require.NoError(t, <-errCh)
+}
+
+func TestUnixSocketServer_SubscribeTaskStatusReturnsErrorEnvelopeWhenSubscribeFails(t *testing.T) {
+	t.Parallel()
+
+	socketPath := serverTestSocketPath(t)
+	svc := &stubTaskService{
+		subscribeTaskStatusFn: func(_ context.Context, taskID string) (<-chan core.TaskStatusUpdate, error) {
+			require.Equal(t, "task-1", taskID)
+			return nil, assertiveError("subscribe failed")
+		},
+	}
+	adapter := New(Config{
+		SocketPath:     socketPath,
+		HookListenAddr: "127.0.0.1:0",
+	})
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	errCh := make(chan error, 1)
+	go func() {
+		errCh <- adapter.Serve(ctx, svc, nil, nil)
+	}()
+	waitForUnixSocketServer(t, socketPath)
+
+	resp, err := subscribeTaskStatusHandshake(context.Background(), socketPath, "task-1")
+	require.NoError(t, err)
+	require.Equal(t, "error", resp.Type)
+	require.Equal(t, "subscribe failed", resp.Error)
+	require.False(t, resp.OK)
+
+	cancel()
+	require.NoError(t, <-errCh)
+}
+
+func TestUnixSocketServer_SubscribeTaskStatusCancelsBackendContextOnClientDisconnect(t *testing.T) {
+	t.Parallel()
+
+	socketPath := serverTestSocketPath(t)
+	subscribeCtxDone := make(chan struct{})
+	svc := &stubTaskService{
+		subscribeTaskStatusFn: func(ctx context.Context, taskID string) (<-chan core.TaskStatusUpdate, error) {
+			require.Equal(t, "task-1", taskID)
+			go func() {
+				<-ctx.Done()
+				close(subscribeCtxDone)
+			}()
+			return make(chan core.TaskStatusUpdate), nil
+		},
+	}
+	adapter := New(Config{
+		SocketPath:     socketPath,
+		HookListenAddr: "127.0.0.1:0",
+	})
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	errCh := make(chan error, 1)
+	go func() {
+		errCh <- adapter.Serve(ctx, svc, nil, nil)
+	}()
+	waitForUnixSocketServer(t, socketPath)
+
+	_, cleanup, err := subscribeTaskStatusViaSocket(context.Background(), socketPath, "task-1")
+	require.NoError(t, err)
+	cleanup()
+
+	select {
+	case <-subscribeCtxDone:
+	case <-time.After(250 * time.Millisecond):
+		t.Fatal("timed out waiting for backend subscribe context cancellation")
 	}
 
 	cancel()
@@ -141,6 +252,7 @@ func TestHTTPHookServer_DelegatesToInjectedHookHandler(t *testing.T) {
 
 type stubTaskService struct {
 	createTaskFn          func(context.Context, core.CreateTaskInput) (*core.Task, error)
+	listTasksFn           func(context.Context) ([]*core.Task, error)
 	latestTaskStatusFn    func(context.Context, string) (*core.TaskStatusUpdate, error)
 	subscribeTaskStatusFn func(context.Context, string) (<-chan core.TaskStatusUpdate, error)
 	handleHookEventFn     func(context.Context, core.HookEventInput) error
@@ -148,6 +260,10 @@ type stubTaskService struct {
 
 func (s *stubTaskService) CreateTask(ctx context.Context, input core.CreateTaskInput) (*core.Task, error) {
 	return s.createTaskFn(ctx, input)
+}
+
+func (s *stubTaskService) ListTasks(ctx context.Context) ([]*core.Task, error) {
+	return s.listTasksFn(ctx)
 }
 
 func (s *stubTaskService) LatestTaskStatus(ctx context.Context, taskID string) (*core.TaskStatusUpdate, error) {
@@ -173,7 +289,7 @@ func waitForUnixSocketServer(t *testing.T, socketPath string) {
 
 	deadline := time.Now().Add(2 * time.Second)
 	for time.Now().Before(deadline) {
-		if err := dialSocketHealth(context.Background(), socketPath); err == nil {
+		if err := probeSocketHealth(context.Background(), socketPath); err == nil {
 			return
 		}
 		time.Sleep(20 * time.Millisecond)
@@ -182,7 +298,7 @@ func waitForUnixSocketServer(t *testing.T, socketPath string) {
 	t.Fatalf("unix socket server at %s did not become healthy", socketPath)
 }
 
-func testSocketPath(t *testing.T) string {
+func serverTestSocketPath(t *testing.T) string {
 	t.Helper()
 
 	path := filepath.Join(os.TempDir(), "rig-taskdaemon-"+time.Now().UTC().Format("20060102150405.000000000")+".sock")
@@ -193,7 +309,7 @@ func testSocketPath(t *testing.T) string {
 	return path
 }
 
-func createTask(ctx context.Context, socketPath string, input core.CreateTaskInput) (*core.Task, error) {
+func createTaskViaSocket(ctx context.Context, socketPath string, input core.CreateTaskInput) (*core.Task, error) {
 	conn, err := net.Dial("unix", socketPath)
 	if err != nil {
 		return nil, err
@@ -218,9 +334,36 @@ func createTask(ctx context.Context, socketPath string, input core.CreateTaskInp
 	return resp.Task, nil
 }
 
-func subscribeTaskStatus(ctx context.Context, socketPath string, taskID string) (<-chan core.TaskStatusUpdate, func(), error) {
-	var d net.Dialer
-	conn, err := d.DialContext(ctx, "unix", socketPath)
+func listTasksViaSocket(ctx context.Context, socketPath string) ([]*core.Task, error) {
+	conn, err := net.Dial("unix", socketPath)
+	if err != nil {
+		return nil, err
+	}
+	defer conn.Close()
+
+	if err := json.NewEncoder(conn).Encode(socketRequest{
+		Command: "list_tasks",
+	}); err != nil {
+		return nil, err
+	}
+
+	var resp socketEnvelope
+	if err := json.NewDecoder(conn).Decode(&resp); err != nil {
+		return nil, err
+	}
+	if resp.Type != "tasks_list" {
+		return nil, nil
+	}
+
+	return resp.Tasks, nil
+}
+
+func subscribeTaskStatusViaSocket(
+	ctx context.Context,
+	socketPath string,
+	taskID string,
+) (<-chan core.TaskStatusUpdate, func(), error) {
+	conn, err := dialDaemonSocket(ctx, socketPath)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -261,6 +404,34 @@ func subscribeTaskStatus(ctx context.Context, socketPath string, taskID string) 
 	}()
 
 	return updates, func() { _ = conn.Close() }, nil
+}
+
+func subscribeTaskStatusHandshake(ctx context.Context, socketPath string, taskID string) (*socketEnvelope, error) {
+	conn, err := dialDaemonSocket(ctx, socketPath)
+	if err != nil {
+		return nil, err
+	}
+	defer conn.Close()
+
+	if err := json.NewEncoder(conn).Encode(socketRequest{
+		Command: "subscribe_task_status",
+		TaskID:  taskID,
+	}); err != nil {
+		return nil, err
+	}
+
+	var resp socketEnvelope
+	if err := json.NewDecoder(conn).Decode(&resp); err != nil {
+		return nil, err
+	}
+
+	return &resp, nil
+}
+
+type assertiveError string
+
+func (e assertiveError) Error() string {
+	return string(e)
 }
 
 type recorder struct {

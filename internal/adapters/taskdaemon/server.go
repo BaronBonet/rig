@@ -3,14 +3,9 @@ package taskdaemon
 import (
 	"context"
 	"net/http"
+
 	"rig/internal/core"
 )
-
-type Dependencies struct {
-	Service    core.TaskService
-	HookRoutes []HookRoute
-	Stop       func()
-}
 
 type server struct {
 	socketPath     string
@@ -20,18 +15,12 @@ type server struct {
 	stop           func()
 }
 
-func New(cfg Config, deps Dependencies) core.TaskFrontendServer {
-	return &server{
-		socketPath:     cfg.SocketPath,
-		hookListenAddr: cfg.HookListenAddr,
-		service:        deps.Service,
-		hookRoutes:     deps.HookRoutes,
-		stop:           deps.Stop,
-	}
-}
-
 func (s *server) CreateTask(ctx context.Context, input core.CreateTaskInput) (*core.Task, error) {
 	return s.service.CreateTask(ctx, input)
+}
+
+func (s *server) ListTasks(ctx context.Context) ([]*core.Task, error) {
+	return s.service.ListTasks(ctx)
 }
 
 func (s *server) LatestTaskStatus(ctx context.Context, taskID string) (*core.TaskStatusUpdate, error) {
@@ -49,11 +38,11 @@ func (s *server) Serve(ctx context.Context) error {
 	}
 	defer httpHookListener.Close()
 
-	unixSocketServer := NewUnixSocketServer(UnixSocketServerConfig{
-		SocketPath: s.socketPath,
-		Frontend:   s,
-		Stop:       s.stop,
-	})
+	unixSocketServer := &unixSocketServer{
+		socketPath: s.socketPath,
+		frontend:   s,
+		stop:       s.stop,
+	}
 
 	httpHookServer := &http.Server{Handler: newHTTPHookServer(s.hookRoutes)}
 
@@ -67,13 +56,17 @@ func (s *server) Serve(ctx context.Context) error {
 
 	select {
 	case <-ctx.Done():
-	case err := <-errCh:
-		if err != nil && err != http.ErrServerClosed {
+	case serveErr := <-errCh:
+		if serveErr != nil && !errorsIsHTTPServerClosed(serveErr) {
 			_ = httpHookServer.Shutdown(context.Background())
-			return err
+			return serveErr
 		}
 	}
 
 	_ = httpHookServer.Shutdown(context.Background())
 	return nil
+}
+
+func errorsIsHTTPServerClosed(err error) bool {
+	return err == http.ErrServerClosed
 }

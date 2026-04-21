@@ -54,6 +54,10 @@ func (s *taskService) CreateTask(ctx context.Context, input CreateTaskInput) (*T
 	return s.createTaskFromPrompt(ctx, repoCtx, input)
 }
 
+func (s *taskService) ListTasks(ctx context.Context) ([]*Task, error) {
+	return s.tasks.ListTasks(ctx)
+}
+
 func (s *taskService) LatestTaskStatus(ctx context.Context, taskID string) (*TaskStatusUpdate, error) {
 	return s.tasks.LatestTaskStatus(ctx, strings.TrimSpace(taskID))
 }

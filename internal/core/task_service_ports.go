@@ -21,6 +21,8 @@ type TaskFrontend interface {
 	// CreateTask creates a new task and returns the durable task record that the
 	// frontend should render immediately.
 	CreateTask(ctx context.Context, input CreateTaskInput) (*Task, error)
+	// ListTasks returns all known tasks for the frontend to render.
+	ListTasks(ctx context.Context) ([]*Task, error)
 	// LatestTaskStatus returns the latest published live status for a task, or
 	// nil when no status has been published yet.
 	LatestTaskStatus(ctx context.Context, taskID string) (*TaskStatusUpdate, error)
@@ -41,6 +43,8 @@ type TaskFrontendServer interface {
 type TaskService interface {
 	// CreateTask creates a new task from either a prompt or a pull request source.
 	CreateTask(ctx context.Context, input CreateTaskInput) (*Task, error)
+	// ListTasks returns all known tasks.
+	ListTasks(ctx context.Context) ([]*Task, error)
 	// LatestTaskStatus returns the latest published live status for a task, or
 	// nil when no status has been published yet.
 	LatestTaskStatus(ctx context.Context, taskID string) (*TaskStatusUpdate, error)
