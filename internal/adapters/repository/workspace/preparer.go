@@ -5,8 +5,9 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"rig/internal/core"
 	"strings"
+
+	"rig/internal/core"
 )
 
 type preparer struct{}

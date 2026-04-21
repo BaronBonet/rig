@@ -140,7 +140,11 @@ func waitForHealthyTaskDaemon(ctx context.Context, socketPath string) error {
 		select {
 		case <-waitCtx.Done():
 			if lastErr != nil {
-				return fmt.Errorf("task daemon did not become healthy: %w (last health error: %v)", waitCtx.Err(), lastErr)
+				return fmt.Errorf(
+					"task daemon did not become healthy: %w (last health error: %v)",
+					waitCtx.Err(),
+					lastErr,
+				)
 			}
 			return fmt.Errorf("task daemon did not become healthy: %w", waitCtx.Err())
 		case <-ticker.C:

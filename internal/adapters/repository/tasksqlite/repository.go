@@ -6,11 +6,12 @@ import (
 	"errors"
 	"fmt"
 	"os"
-	"rig/internal/adapters/repository/tasksqlite/generated"
-	"rig/internal/core"
 	"slices"
 	"strings"
 	"sync"
+
+	"rig/internal/adapters/repository/tasksqlite/generated"
+	"rig/internal/core"
 
 	// Register the "sqlite" database/sql driver used by sql.Open.
 	_ "modernc.org/sqlite"

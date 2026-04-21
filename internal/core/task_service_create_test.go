@@ -190,10 +190,12 @@ func TestTaskServiceCreateTask_BootstrapsWorkspaceWhenRepoSetupIsDisabled(t *tes
 		FileMode: 0o644,
 	}}}
 	svc.service = NewTaskService(TaskServiceDependencies{
-		Tasks:                svc.taskRepoMock,
-		GitWorktree:          svc.repoClientMock,
-		TmuxSession:          svc.sessionClientMock,
-		Agents:               map[AgentProvider]AgentClient{AgentProviderCodex: &recordingAgentClient{state: &svc.providerRepo}},
+		Tasks:       svc.taskRepoMock,
+		GitWorktree: svc.repoClientMock,
+		TmuxSession: svc.sessionClientMock,
+		Agents: map[AgentProvider]AgentClient{
+			AgentProviderCodex: &recordingAgentClient{state: &svc.providerRepo},
+		},
 		Workspace:            &recordingWorkspaceManager{state: &svc.workspace, session: &svc.sessionClient},
 		EnableWorkspaceSetup: false,
 		DefaultProvider:      AgentProviderCodex,

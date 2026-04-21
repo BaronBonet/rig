@@ -5,12 +5,13 @@ import (
 	"fmt"
 	"os"
 	"os/signal"
+	"syscall"
+
 	"rig/internal/adapters/handler/tui"
 	"rig/internal/adapters/taskdaemon"
 	"rig/internal/core"
 	"rig/internal/infrastructure"
 	"rig/internal/pkg/subprocess"
-	"syscall"
 
 	claudeclient "rig/internal/adapters/client/claude"
 	claudeagent "rig/internal/adapters/client/claudeagent"
@@ -173,7 +174,11 @@ func (i taskServiceHookIngestor) IngestHookEvent(
 	return nil, nil
 }
 
-func newTaskService(cfg *infrastructure.ApplicationConfig, execPath string, sourceRoot string) (core.TaskService, error) {
+func newTaskService(
+	cfg *infrastructure.ApplicationConfig,
+	execPath string,
+	sourceRoot string,
+) (core.TaskService, error) {
 	if cfg == nil {
 		return nil, fmt.Errorf("application config not configured")
 	}

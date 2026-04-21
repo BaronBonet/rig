@@ -3,10 +3,11 @@ package tmuxsession
 import (
 	"context"
 	"errors"
-	"rig/internal/core"
-	"rig/internal/pkg/subprocess"
 	"strings"
 	"time"
+
+	"rig/internal/core"
+	"rig/internal/pkg/subprocess"
 )
 
 const promptSubmitDelay = 500 * time.Millisecond

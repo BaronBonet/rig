@@ -8,12 +8,13 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"rig/internal/core"
-	"rig/internal/pkg/prompts"
-	"rig/internal/pkg/subprocess"
 	"strings"
 	"text/template"
 	"unicode"
+
+	"rig/internal/core"
+	"rig/internal/pkg/prompts"
+	"rig/internal/pkg/subprocess"
 )
 
 //go:embed forward-to-rig.sh.tmpl

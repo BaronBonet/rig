@@ -5,13 +5,14 @@ import (
 	"fmt"
 	"os"
 	"os/signal"
+	"strings"
+	"syscall"
+	"time"
+
 	"rig/internal/adapters/taskdaemon"
 	"rig/internal/core"
 	"rig/internal/infrastructure"
 	"rig/internal/pkg/subprocess"
-	"strings"
-	"syscall"
-	"time"
 
 	claudeclient "rig/internal/adapters/client/claude"
 	claudeagent "rig/internal/adapters/client/claudeagent"

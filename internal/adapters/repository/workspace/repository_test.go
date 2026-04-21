@@ -44,9 +44,23 @@ func TestRepositorySetupAndBootstrapTaskWorkspace(t *testing.T) {
 	repoRoot := t.TempDir()
 	worktreePath := t.TempDir()
 
-	require.NoError(t, os.WriteFile(filepath.Join(repoRoot, ".rig.yaml"), []byte("seed:\n  copy:\n    - .env\n  setup_script: setup.sh\n"), 0o644))
+	require.NoError(
+		t,
+		os.WriteFile(
+			filepath.Join(repoRoot, ".rig.yaml"),
+			[]byte("seed:\n  copy:\n    - .env\n  setup_script: setup.sh\n"),
+			0o644,
+		),
+	)
 	require.NoError(t, os.WriteFile(filepath.Join(repoRoot, ".env"), []byte("API_KEY=1\n"), 0o600))
-	require.NoError(t, os.WriteFile(filepath.Join(repoRoot, "setup.sh"), []byte("#!/bin/sh\nset -eu\nprintf setup-ran > \"$PWD/setup-ran.txt\"\n"), 0o755))
+	require.NoError(
+		t,
+		os.WriteFile(
+			filepath.Join(repoRoot, "setup.sh"),
+			[]byte("#!/bin/sh\nset -eu\nprintf setup-ran > \"$PWD/setup-ran.txt\"\n"),
+			0o755,
+		),
+	)
 
 	manager := New()
 	err := manager.SetupTaskWorkspace(context.Background(), &core.Task{

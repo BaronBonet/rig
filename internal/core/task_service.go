@@ -4,9 +4,10 @@ import (
 	"context"
 	"fmt"
 	"path/filepath"
-	slugpkg "rig/internal/pkg/slug"
 	"strings"
 	"time"
+
+	slugpkg "rig/internal/pkg/slug"
 )
 
 type TaskServiceDependencies struct {
@@ -134,7 +135,14 @@ func (s *taskService) createTaskFromPrompt(
 	}
 
 	taskSlug := uniqueTaskSlug(repoCtx.Root, suggestion.Name, existingTasks)
-	task := newPromptTaskRecord(repoCtx, input.Provider, s.defaultProvider, suggestion.Name, taskSlug, suggestion.BranchType)
+	task := newPromptTaskRecord(
+		repoCtx,
+		input.Provider,
+		s.defaultProvider,
+		suggestion.Name,
+		taskSlug,
+		suggestion.BranchType,
+	)
 	task.Prompt = input.Prompt
 
 	if err := s.tasks.CreateTask(ctx, task); err != nil {
