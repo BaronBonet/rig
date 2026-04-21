@@ -1,4 +1,4 @@
-package tasksqlite
+package sqlite
 
 import "embed"
 

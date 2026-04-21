@@ -107,7 +107,7 @@ The active runtime shape is now:
   - `LatestTaskStatus`
   - `SubscribeTaskStatus`
   - `HandleHookEvent`
-- `tasksqlite` is the active durable task repository
+- `sqlite` is the active durable task repository
 - `gitworktree`, `tmuxsession`, and `codexagent` are the active operational adapters
 - `workspace` owns repo-local setup plus provider bootstrap file writing
 

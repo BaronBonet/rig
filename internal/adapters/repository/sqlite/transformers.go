@@ -1,9 +1,9 @@
-package tasksqlite
+package sqlite
 
 import (
 	"time"
 
-	"rig/internal/adapters/repository/tasksqlite/generated"
+	"rig/internal/adapters/repository/sqlite/generated"
 	"rig/internal/core"
 )
 

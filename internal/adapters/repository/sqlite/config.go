@@ -1,4 +1,4 @@
-package tasksqlite
+package sqlite
 
 import (
 	"fmt"
@@ -21,7 +21,7 @@ func DefaultSQLitePath() string {
 
 func ValidateConfig(cfg Config) error {
 	if filepath.Dir(cfg.Path) == "." {
-		return fmt.Errorf("tasksqlite path %q must include a parent directory", cfg.Path)
+		return fmt.Errorf("sqlite path %q must include a parent directory", cfg.Path)
 	}
 
 	return os.MkdirAll(filepath.Dir(cfg.Path), 0o755)
