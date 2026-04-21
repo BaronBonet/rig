@@ -268,7 +268,7 @@ func TestModel_KeyNEntersPromptMode(t *testing.T) {
 	require.Empty(t, got.prompt)
 }
 
-func TestModel_EnterOpensSelectedTaskAndQuitsOnSuccess(t *testing.T) {
+func TestModel_EnterOpensSelectedTaskAndKeepsRigRunningOnSuccess(t *testing.T) {
 	frontend := newStubFrontend()
 	frontend.listTasks = []*core.Task{
 		{ID: "task-1", DisplayName: "first task", TmuxSession: "repo_task_1", Provider: core.AgentProviderCodex},
@@ -286,18 +286,15 @@ func TestModel_EnterOpensSelectedTaskAndQuitsOnSuccess(t *testing.T) {
 
 	msg := runCmd(t, cmd)
 	next, follow := pending.Update(msg)
-	require.NotNil(t, follow)
+	require.Nil(t, follow)
 
 	got, ok := next.(model)
 	require.True(t, ok)
+	require.Equal(t, modeBrowse, got.mode)
 	require.NoError(t, got.err)
 	require.NotNil(t, frontend.openedTask)
 	require.Equal(t, "task-2", frontend.openedTask.ID)
 	require.Equal(t, 1, frontend.openTaskSessionCalls)
-
-	quitMsg := runCmd(t, follow)
-	_, ok = quitMsg.(tea.QuitMsg)
-	require.True(t, ok)
 }
 
 func TestModel_OpenTaskFailureShowsErrorAndStaysInList(t *testing.T) {
