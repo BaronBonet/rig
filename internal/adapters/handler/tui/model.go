@@ -2,7 +2,6 @@ package tui
 
 import (
 	"context"
-	"errors"
 	"strings"
 
 	"rig/internal/core"
@@ -73,6 +72,10 @@ type taskStatusSubscriptionClosedMsg struct {
 type taskCreatedMsg struct {
 	task *core.Task
 	err  error
+}
+
+type taskOpenedMsg struct {
+	err error
 }
 
 type taskDeletedMsg struct {
@@ -152,7 +155,12 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			if len(m.rows) == 0 {
 				return m, nil
 			}
-			m.err = errors.New("open task not implemented yet")
+			row := m.selectedRow()
+			if row == nil || row.task == nil {
+				return m, nil
+			}
+			m.err = nil
+			return m, openTaskSessionCmd(m.statusContext, m.frontend, row.task)
 		}
 		m.clampSelection()
 		return m, nil
@@ -200,6 +208,13 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		m.clampSelection()
 		return m, tea.Batch(m.taskStatusTrackingCmds(taskID(msg.task))...)
+	case taskOpenedMsg:
+		if msg.err != nil {
+			m.err = msg.err
+			return m, nil
+		}
+		m.err = nil
+		return m, tea.Quit
 	case taskDeletedMsg:
 		m.deletePending = false
 		m.mode = modeBrowse

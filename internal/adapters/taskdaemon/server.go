@@ -2,6 +2,7 @@ package taskdaemon
 
 import (
 	"context"
+	"fmt"
 	"net/http"
 
 	"rig/internal/core"
@@ -13,6 +14,10 @@ type server struct {
 	service        core.TaskService
 	hookRoutes     []core.TaskDaemonHookRoute
 	stop           func()
+}
+
+func (s *server) OpenTaskSession(context.Context, *core.Task) error {
+	return fmt.Errorf("open task session unsupported on daemon server")
 }
 
 func (s *server) CreateTask(ctx context.Context, input core.CreateTaskInput) (*core.Task, error) {

@@ -12,6 +12,15 @@ import (
 
 type frontend struct {
 	socketPath string
+	sessions   core.TmuxSessionClient
+}
+
+func (f *frontend) OpenTaskSession(ctx context.Context, task *core.Task) error {
+	if f.sessions == nil {
+		return fmt.Errorf("task session client not configured")
+	}
+
+	return f.sessions.OpenTaskSession(ctx, task)
 }
 
 func (f *frontend) CreateTask(ctx context.Context, input core.CreateTaskInput) (*core.Task, error) {

@@ -18,6 +18,13 @@ func loadTasksCmd(ctx context.Context, frontend core.TaskFrontend) tea.Cmd {
 	}
 }
 
+func openTaskSessionCmd(ctx context.Context, frontend core.TaskFrontend, task *core.Task) tea.Cmd {
+	return func() tea.Msg {
+		err := frontend.OpenTaskSession(ctx, task)
+		return taskOpenedMsg{err: err}
+	}
+}
+
 func createTaskCmd(ctx context.Context, frontend core.TaskFrontend, input core.CreateTaskInput) tea.Cmd {
 	return func() tea.Msg {
 		task, err := frontend.CreateTask(ctx, input)

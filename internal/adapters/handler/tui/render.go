@@ -22,7 +22,7 @@ func (m model) listView() string {
 	var builder strings.Builder
 	builder.WriteString(renderHeader(
 		headerLabelStyle.Render("RIG"),
-		mutedStyle.Render("n new   r refresh   x clean   q quit"),
+		mutedStyle.Render("enter open   n new   r refresh   x clean   q quit"),
 		totalWidth,
 	) + "\n")
 	builder.WriteString(dividerStyle.Render(strings.Repeat("─", totalWidth)) + "\n")

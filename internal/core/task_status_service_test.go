@@ -18,6 +18,7 @@ func TestTaskServiceContract_ExposesStatusMethods(t *testing.T) {
 
 func TestTaskFrontendContract_ExposesCreateAndStatusReadMethods(t *testing.T) {
 	var _ interface {
+		OpenTaskSession(context.Context, *Task) error
 		CreateTask(context.Context, CreateTaskInput) (*Task, error)
 		LatestTaskStatus(context.Context, string) (*TaskStatusUpdate, error)
 		SubscribeTaskStatus(context.Context, string) (<-chan TaskStatusUpdate, error)

@@ -77,6 +77,39 @@ func TestRepositoryStartTaskSession_CleansUpSessionWhenEditorWindowCreationFails
 	require.EqualError(t, err, "new-window failed")
 }
 
+func TestRepositoryOpenTaskSession_SwitchesClientWhenInsideTmux(t *testing.T) {
+	runner := subprocess.NewMockRunner(t)
+	repo := New(runner).(*repository)
+	repo.getenv = func(key string) string {
+		if key == "TMUX" {
+			return "/tmp/tmux-1000/default,123,0"
+		}
+		return ""
+	}
+
+	expectTmuxRun(runner, subprocess.Result{}, nil, "switch-client", "-t", "=repo_task")
+
+	err := repo.OpenTaskSession(context.Background(), &core.Task{
+		TmuxSession: "repo_task",
+	})
+
+	require.NoError(t, err)
+}
+
+func TestRepositoryOpenTaskSession_AttachesWhenOutsideTmux(t *testing.T) {
+	runner := subprocess.NewMockRunner(t)
+	repo := New(runner).(*repository)
+	repo.getenv = func(string) string { return "" }
+
+	expectTmuxRun(runner, subprocess.Result{}, nil, "attach-session", "-t", "=repo_task")
+
+	err := repo.OpenTaskSession(context.Background(), &core.Task{
+		TmuxSession: "repo_task",
+	})
+
+	require.NoError(t, err)
+}
+
 func TestRepositoryDeleteTaskSession_KillsSession(t *testing.T) {
 	runner := subprocess.NewMockRunner(t)
 	repo := New(runner).(*repository)
