@@ -11,33 +11,33 @@ import (
 // checks. Those belong in separate runtime/read-side types rather than on the
 // core task record itself.
 type Task struct {
-	CreatedAt time.Time
-	UpdatedAt time.Time
-	ID        string
+	CreatedAt time.Time `json:"created_at"`
+	UpdatedAt time.Time `json:"updated_at"`
+	ID        string    `json:"id"`
 	// Slug is the stable workspace identifier derived once at task creation from
 	// DisplayName and then persisted so branch/worktree/session naming remains
 	// stable even if display names collide or later change.
-	Slug         string
-	Prompt       string
-	DisplayName  string
-	RepoRoot     string
-	RepoName     string
-	BranchName   string
-	WorktreePath string
-	TmuxSession  string
-	Provider     Provider
+	Slug         string   `json:"slug"`
+	Prompt       string   `json:"prompt"`
+	DisplayName  string   `json:"display_name"`
+	RepoRoot     string   `json:"repo_root"`
+	RepoName     string   `json:"repo_name"`
+	BranchName   string   `json:"branch_name"`
+	WorktreePath string   `json:"worktree_path"`
+	TmuxSession  string   `json:"tmux_session"`
+	Provider     Provider `json:"provider"`
 }
 
 type RepoContext struct {
 	// Root is the canonical absolute path to the repository root on disk.
-	Root       string
-	Name       string
-	BaseBranch string
+	Root       string `json:"root"`
+	Name       string `json:"name"`
+	BaseBranch string `json:"base_branch"`
 }
 
 type TaskSuggestion struct {
-	Name       string
-	BranchType string
+	Name       string `json:"name"`
+	BranchType string `json:"branch_type"`
 }
 
 var validBranchTypes = map[string]bool{
@@ -83,11 +83,11 @@ const (
 // TaskStatusUpdate is the live status message published by the observer
 // process. It is intentionally separate from the durable Task record.
 type TaskStatusUpdate struct {
-	TaskID       string
-	Provider     Provider
-	Phase        TaskStatusPhase
-	RawEventName string
-	ObservedAt   time.Time
+	ObservedAt   time.Time       `json:"observed_at"`
+	TaskID       string          `json:"task_id"`
+	RawEventName string          `json:"raw_event_name"`
+	Provider     Provider        `json:"provider"`
+	Phase        TaskStatusPhase `json:"phase"`
 }
 
 // Provider identifies the supported interactive runtime backing a task.

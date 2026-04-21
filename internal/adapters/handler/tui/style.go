@@ -9,17 +9,16 @@ import (
 )
 
 var (
-	colorPrimary  = lipgloss.Color("#b8bcc8")
-	colorDimmed   = lipgloss.Color("#5a5e70")
-	colorMuted    = lipgloss.Color("#3d4050")
-	colorDivider  = lipgloss.Color("#2a2d3a")
-	colorAccent   = lipgloss.Color("#7c8af6")
-	colorHealthy  = lipgloss.Color("#4aba7a")
-	colorWarning  = lipgloss.Color("#c4a24e")
-	colorError    = lipgloss.Color("#c05050")
-	colorClaude   = lipgloss.Color("#d4956a")
-	colorCodex    = lipgloss.Color("#5ac4a0")
-	colorPRMerged = lipgloss.Color("#9b7ce8")
+	colorPrimary = lipgloss.Color("#b8bcc8")
+	colorDimmed  = lipgloss.Color("#5a5e70")
+	colorMuted   = lipgloss.Color("#3d4050")
+	colorDivider = lipgloss.Color("#2a2d3a")
+	colorAccent  = lipgloss.Color("#7c8af6")
+	colorHealthy = lipgloss.Color("#4aba7a")
+	colorWarning = lipgloss.Color("#c4a24e")
+	colorError   = lipgloss.Color("#c05050")
+	colorClaude  = lipgloss.Color("#d4956a")
+	colorCodex   = lipgloss.Color("#5ac4a0")
 )
 
 const (
@@ -30,10 +29,6 @@ const (
 )
 
 var (
-	titleStyle = lipgloss.NewStyle().
-			Foreground(colorAccent).
-			Bold(true)
-
 	dimStyle = lipgloss.NewStyle().
 			Foreground(colorDimmed)
 
@@ -72,9 +67,6 @@ var (
 
 	dividerStyle = lipgloss.NewStyle().
 			Foreground(colorDivider)
-
-	prMergedStyle = lipgloss.NewStyle().
-			Foreground(colorPRMerged)
 
 	headerLabelStyle = lipgloss.NewStyle().
 				Foreground(lipgloss.Color("#8b8fa3")).

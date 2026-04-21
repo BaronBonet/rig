@@ -16,22 +16,22 @@ const (
 )
 
 type RepoPullRequest struct {
-	Number          int
-	Title           string
-	BranchName      string
-	State           PRState
-	HasExistingTask bool
+	Title           string  `json:"title"`
+	BranchName      string  `json:"branch_name"`
+	State           PRState `json:"state"`
+	Number          int     `json:"number"`
+	HasExistingTask bool    `json:"has_existing_task"`
 }
 
 type CreateTaskSource struct {
-	PullRequest *RepoPullRequest
+	PullRequest *RepoPullRequest `json:"pull_request,omitempty"`
 }
 
 type CreateTaskInput struct {
-	Cwd      string
-	Prompt   string
-	Provider Provider
-	Source   CreateTaskSource
+	Source   CreateTaskSource `json:"source"`
+	Cwd      string           `json:"cwd"`
+	Prompt   string           `json:"prompt"`
+	Provider Provider         `json:"provider"`
 }
 
 // TaskFrontend is the frontend-facing task application port used by the TUI.
@@ -62,8 +62,8 @@ type TaskFrontend interface {
 // TaskDaemonHookRoute describes one provider hook endpoint the local task
 // daemon should expose alongside its frontend socket transport.
 type TaskDaemonHookRoute struct {
-	Path    string
 	Handler http.Handler
+	Path    string
 }
 
 type HookEventInput struct {
@@ -92,14 +92,14 @@ type SessionResources struct {
 }
 
 type RuntimeSnapshot struct {
+	ObservedAt        time.Time
+	LastOutputAt      time.Time
 	SessionName       string
 	WindowName        string
 	PaneID            string
-	HadAgentBinding   bool
 	ForegroundCommand string
 	Content           string
-	ObservedAt        time.Time
-	LastOutputAt      time.Time
+	HadAgentBinding   bool
 }
 
 // TaskDaemon is the application port for the local daemon-backed task

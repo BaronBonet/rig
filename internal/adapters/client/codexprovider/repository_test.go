@@ -49,7 +49,7 @@ func TestRepositoryBuildWorkspaceBootstrapSpec_RendersCodexHooksAndForwarderScri
 func TestRepositorySuggestTaskName_DelegatesToCodexProposal(t *testing.T) {
 	runner := stubRunner{
 		runFn: func(_ context.Context, cwd string, name string, args ...string) (subprocess.Result, error) {
-			require.Equal(t, "", cwd)
+			require.Empty(t, cwd)
 			require.Equal(t, "codex", name)
 			require.Equal(
 				t,

@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
-	"net"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -354,7 +353,7 @@ func serverTestSocketPath(t *testing.T) string {
 }
 
 func createTaskViaSocket(ctx context.Context, socketPath string, input core.CreateTaskInput) (*core.Task, error) {
-	conn, err := net.Dial("unix", socketPath)
+	conn, err := dialDaemonSocket(ctx, socketPath)
 	if err != nil {
 		return nil, err
 	}
@@ -379,7 +378,7 @@ func createTaskViaSocket(ctx context.Context, socketPath string, input core.Crea
 }
 
 func deleteTaskViaSocket(ctx context.Context, socketPath string, taskID string) error {
-	conn, err := net.Dial("unix", socketPath)
+	conn, err := dialDaemonSocket(ctx, socketPath)
 	if err != nil {
 		return err
 	}
@@ -407,7 +406,7 @@ func deleteTaskViaSocket(ctx context.Context, socketPath string, taskID string) 
 }
 
 func listTasksViaSocket(ctx context.Context, socketPath string) ([]*core.Task, error) {
-	conn, err := net.Dial("unix", socketPath)
+	conn, err := dialDaemonSocket(ctx, socketPath)
 	if err != nil {
 		return nil, err
 	}
@@ -537,7 +536,7 @@ func httptestNewRequest(t *testing.T, method string, target string, payload map[
 	body, err := json.Marshal(payload)
 	require.NoError(t, err)
 
-	req, err := http.NewRequest(method, target, bytes.NewReader(body))
+	req, err := http.NewRequestWithContext(t.Context(), method, target, bytes.NewReader(body))
 	require.NoError(t, err)
 	return req
 }

@@ -23,7 +23,8 @@ func TestNewHookHTTPHandler_DecodesCodexHookAndDelegatesToTaskService(t *testing
 		},
 	}, func() time.Time { return now })
 
-	req := httptest.NewRequest(
+	req := httptest.NewRequestWithContext(
+		context.Background(),
 		http.MethodPost,
 		"/hook",
 		bytes.NewBufferString(

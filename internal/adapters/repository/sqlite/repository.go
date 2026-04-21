@@ -18,10 +18,10 @@ import (
 )
 
 type repository struct {
-	db      *sql.DB
 	queries *generated.Queries
-	mu      sync.Mutex
+	db      *sql.DB
 	subs    map[string][]chan core.TaskStatusUpdate
+	mu      sync.Mutex
 }
 
 func New(cfg Config) (core.TaskRepository, error) {

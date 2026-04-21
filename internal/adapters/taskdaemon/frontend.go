@@ -11,8 +11,8 @@ import (
 )
 
 type frontend struct {
-	socketPath string
 	sessions   core.TmuxSessionClient
+	socketPath string
 }
 
 func (f *frontend) OpenTaskSession(ctx context.Context, task *core.Task) error {

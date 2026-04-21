@@ -16,19 +16,19 @@ import (
 var currentFrontendBuildVersion = "dev"
 
 type socketRequest struct {
+	Input   *core.CreateTaskInput `json:"input,omitempty"`
 	Command string                `json:"command"`
 	TaskID  string                `json:"task_id,omitempty"`
-	Input   *core.CreateTaskInput `json:"input,omitempty"`
 }
 
 type socketEnvelope struct {
 	Type    string                 `json:"type"`
-	OK      bool                   `json:"ok,omitempty"`
 	Error   string                 `json:"error,omitempty"`
-	Task    *core.Task             `json:"task,omitempty"`
-	Tasks   []*core.Task           `json:"tasks,omitempty"`
-	Update  *core.TaskStatusUpdate `json:"update,omitempty"`
 	Version string                 `json:"version,omitempty"`
+	Task    *core.Task             `json:"task,omitempty"`
+	Update  *core.TaskStatusUpdate `json:"update,omitempty"`
+	Tasks   []*core.Task           `json:"tasks,omitempty"`
+	OK      bool                   `json:"ok,omitempty"`
 }
 
 func dialDaemonSocket(ctx context.Context, socketPath string) (net.Conn, error) {

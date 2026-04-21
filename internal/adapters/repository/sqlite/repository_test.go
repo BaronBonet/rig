@@ -291,7 +291,7 @@ func TestRepositoryNew_ResetsDisposableDBWhenSchemaIsStale(t *testing.T) {
 	if err != nil {
 		t.Fatalf("open stale db: %v", err)
 	}
-	_, err = db.Exec(`
+	_, err = db.ExecContext(context.Background(), `
 		create table tasks (
 			id text primary key,
 			slug text not null,

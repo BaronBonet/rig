@@ -16,8 +16,8 @@ type TaskServiceDependencies struct {
 	TmuxSession          TmuxSessionClient
 	Providers            map[Provider]ProviderClient
 	Workspace            TaskWorkspaceManager
-	EnableWorkspaceSetup bool
 	DefaultProvider      Provider
+	EnableWorkspaceSetup bool
 }
 
 type taskService struct {
@@ -26,8 +26,8 @@ type taskService struct {
 	tmuxSession          TmuxSessionClient
 	providers            map[Provider]ProviderClient
 	workspace            TaskWorkspaceManager
-	enableWorkspaceSetup bool
 	defaultProvider      Provider
+	enableWorkspaceSetup bool
 }
 
 func NewTaskService(deps TaskServiceDependencies) TaskService {
