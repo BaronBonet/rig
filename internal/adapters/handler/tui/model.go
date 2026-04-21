@@ -171,8 +171,13 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 
+		selectedTaskID := ""
+		if row := m.selectedRow(); row != nil {
+			selectedTaskID = taskID(row.task)
+		}
 		m.rows = rowsFromTasks(msg.tasks)
 		m.clampSelection()
+		m.selectTask(selectedTaskID)
 		return m, tea.Batch(m.afterTasksLoadedCmds()...)
 	case latestTaskStatusLoadedMsg:
 		if msg.err != nil {
@@ -207,7 +212,8 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.selected = index
 		}
 		m.clampSelection()
-		return m, tea.Batch(m.taskStatusTrackingCmds(taskID(msg.task))...)
+		cmds := append([]tea.Cmd{loadTasksCmd(m.statusContext, m.frontend)}, m.taskStatusTrackingCmds(taskID(msg.task))...)
+		return m, tea.Batch(cmds...)
 	case taskOpenedMsg:
 		if msg.err != nil {
 			m.err = msg.err
@@ -217,6 +223,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 	case taskDeletedMsg:
 		m.deletePending = false
+		m.shimmerTick = 0
 		m.mode = modeBrowse
 		if msg.err != nil {
 			m.err = msg.err
@@ -232,7 +239,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 		m.shimmerTick++
-		return m, nil
+		return m, shimmerTickCmd()
 	default:
 		return m, nil
 	}
@@ -281,10 +288,13 @@ func (m model) submitPrompt() (model, tea.Cmd) {
 	m.createErr = nil
 	m.shimmerTick = 0
 
-	return m, createTaskCmd(m.statusContext, m.frontend, core.CreateTaskInput{
-		Prompt:   prompt,
-		Provider: defaultCreateProvider,
-	})
+	return m, tea.Batch(
+		createTaskCmd(m.statusContext, m.frontend, core.CreateTaskInput{
+			Prompt:   prompt,
+			Provider: defaultCreateProvider,
+		}),
+		shimmerTickCmd(),
+	)
 }
 
 func (m model) updatePromptInput(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
@@ -332,7 +342,10 @@ func (m model) updateCleanupConfirm(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		m.deletePending = true
 		m.err = nil
 		m.shimmerTick = 0
-		return m, deleteTaskCmd(m.statusContext, m.frontend, taskID(row.task))
+		return m, tea.Batch(
+			deleteTaskCmd(m.statusContext, m.frontend, taskID(row.task)),
+			shimmerTickCmd(),
+		)
 	default:
 		return m, nil
 	}
@@ -371,6 +384,23 @@ func (m *model) clampSelection() {
 	if m.selected >= len(m.rows) {
 		m.selected = len(m.rows) - 1
 	}
+}
+
+func (m *model) selectTask(targetTaskID string) bool {
+	targetTaskID = strings.TrimSpace(targetTaskID)
+	if targetTaskID == "" {
+		return false
+	}
+
+	for index, row := range m.rows {
+		if taskID(row.task) != targetTaskID {
+			continue
+		}
+		m.selected = index
+		return true
+	}
+
+	return false
 }
 
 func (m *model) setTaskStatus(taskID string, status *core.TaskStatusUpdate) {

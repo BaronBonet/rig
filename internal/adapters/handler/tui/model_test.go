@@ -360,8 +360,11 @@ func TestModel_CreateTaskFromPromptAppendsTaskAndStartsStatusTracking(t *testing
 	require.Equal(t, "fix the retry loop", submitted.prompt)
 	require.True(t, submitted.createPending)
 
-	msg := runCmd(t, cmd)
-	next, follow := submitted.Update(msg)
+	initialMsgs := runBatchCmd(t, cmd)
+	taskCreated := requireMsgType[taskCreatedMsg](t, initialMsgs)
+	requireMsgType[shimmerTickMsg](t, initialMsgs)
+
+	next, follow := submitted.Update(taskCreated)
 	require.NotNil(t, follow)
 
 	got, ok := next.(model)
@@ -375,10 +378,17 @@ func TestModel_CreateTaskFromPromptAppendsTaskAndStartsStatusTracking(t *testing
 	require.Equal(t, core.ProviderCodex, frontend.createInput.Provider)
 	require.Equal(t, 1, frontend.createTaskCalls)
 
+	frontend.listTasks = append(frontend.listTasks, frontend.createdTask)
 	msgs := runBatchCmd(t, follow)
-	require.Len(t, msgs, 2)
+	require.Len(t, msgs, 3)
+	tasksLoaded := requireMsgType[tasksLoadedMsg](t, msgs)
+	next, _ = got.Update(tasksLoaded)
+	got, ok = next.(model)
+	require.True(t, ok)
+	require.Len(t, got.rows, 3)
 	require.Equal(t, []string{"task-3"}, frontend.latestTaskStatusCalls)
 	require.Equal(t, []string{"task-3"}, frontend.subscribeTaskStatusCalls)
+	require.Equal(t, 1, frontend.listTasksCalls)
 
 	latestMsg := requireMsgType[latestTaskStatusLoadedMsg](t, msgs)
 	next, _ = got.Update(latestMsg)
@@ -386,6 +396,77 @@ func TestModel_CreateTaskFromPromptAppendsTaskAndStartsStatusTracking(t *testing
 	require.True(t, ok)
 	require.NotNil(t, got.rows[2].status)
 	require.Equal(t, core.TaskStatusPhaseWorking, got.rows[2].status.Phase)
+}
+
+func TestModel_CreateTaskReloadsAuthoritativeTaskSnapshotWhenCreateResponseIsPartial(t *testing.T) {
+	frontend := newStubFrontend()
+	frontend.listTasks = []*core.Task{
+		{ID: "task-1", DisplayName: "first task", RepoName: "repo-a", Provider: core.ProviderCodex},
+	}
+	frontend.createdTask = &core.Task{
+		ID:       "task-2",
+		Prompt:   "testing if new rig things work",
+		Provider: core.ProviderCodex,
+	}
+	frontend.latestTaskStatus = map[string]*core.TaskStatusUpdate{
+		"task-2": {
+			TaskID: "task-2",
+			Phase:  core.TaskStatusPhaseStarting,
+		},
+	}
+	frontend.subscribeTaskStatus = map[string]chan core.TaskStatusUpdate{
+		"task-2": make(chan core.TaskStatusUpdate, 1),
+	}
+
+	m := newLoadedModel(frontend)
+	m.mode = modePromptInput
+	m.prompt = "testing if new rig things work"
+
+	next, cmd := m.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
+	submitted, ok := next.(model)
+	require.True(t, ok)
+
+	initialMsgs := runBatchCmd(t, cmd)
+	taskCreated := requireMsgType[taskCreatedMsg](t, initialMsgs)
+	next, follow := submitted.Update(taskCreated)
+	require.NotNil(t, follow)
+
+	pendingReload, ok := next.(model)
+	require.True(t, ok)
+	require.Equal(t, "task-2", pendingReload.rows[len(pendingReload.rows)-1].task.ID)
+
+	frontend.listTasks = []*core.Task{
+		{ID: "task-1", DisplayName: "first task", RepoName: "repo-a", Provider: core.ProviderCodex},
+		{
+			ID:           "task-2",
+			DisplayName:  "verify new rig behavior",
+			Prompt:       "testing if new rig things work",
+			RepoName:     "rig",
+			BranchName:   "feat/verify-new-rig-behavior",
+			WorktreePath: "/tmp/rig-verify-new-rig-behavior",
+			Provider:     core.ProviderCodex,
+		},
+	}
+
+	followMsgs := runBatchCmd(t, follow)
+	tasksLoaded := requireMsgType[tasksLoadedMsg](t, followMsgs)
+	next, _ = pendingReload.Update(tasksLoaded)
+	reloaded, ok := next.(model)
+	require.True(t, ok)
+
+	selected := reloaded.selectedRow()
+	require.NotNil(t, selected)
+	require.NotNil(t, selected.task)
+	require.Equal(t, "task-2", selected.task.ID)
+	require.Equal(t, "verify new rig behavior", selected.task.DisplayName)
+	require.Equal(t, "rig", selected.task.RepoName)
+	require.Equal(t, "feat/verify-new-rig-behavior", selected.task.BranchName)
+	require.Equal(t, "/tmp/rig-verify-new-rig-behavior", selected.task.WorktreePath)
+
+	view := stripANSI(reloaded.View().Content)
+	require.Contains(t, view, "verify new rig behavior")
+	require.Contains(t, view, "feat/verify-new-rig-behavior")
+	require.Contains(t, view, "testing if new rig things work")
 }
 
 func TestModel_EnterWithBlankPromptDoesNothing(t *testing.T) {
@@ -425,8 +506,11 @@ func TestModel_CreateTaskFailureKeepsPromptRecoverableAndPreservesListView(t *te
 	require.True(t, ok)
 	require.True(t, pending.createPending)
 
-	msg := runCmd(t, cmd)
-	next, follow := pending.Update(msg)
+	initialMsgs := runBatchCmd(t, cmd)
+	taskCreated := requireMsgType[taskCreatedMsg](t, initialMsgs)
+	requireMsgType[shimmerTickMsg](t, initialMsgs)
+
+	next, follow := pending.Update(taskCreated)
 	require.Nil(t, follow)
 
 	got, ok := next.(model)
@@ -472,6 +556,23 @@ func TestModel_PendingCreateStillAllowsQuitKeys(t *testing.T) {
 		_, ok = quitMsg.(tea.QuitMsg)
 		require.True(t, ok)
 	}
+}
+
+func TestModel_ShimmerTickAdvancesAndReschedulesWhilePending(t *testing.T) {
+	frontend := newStubFrontend()
+	m := newLoadedModel(frontend)
+	m.createPending = true
+
+	next, cmd := m.Update(shimmerTickMsg{})
+	require.NotNil(t, cmd)
+
+	got, ok := next.(model)
+	require.True(t, ok)
+	require.Equal(t, 1, got.shimmerTick)
+
+	msg := runCmd(t, cmd)
+	_, ok = msg.(shimmerTickMsg)
+	require.True(t, ok)
 }
 
 func TestModel_EscCancelsPromptMode(t *testing.T) {
@@ -526,8 +627,11 @@ func TestModel_ConfirmCleanupDeletesTaskAndRemovesRow(t *testing.T) {
 	require.True(t, pending.deletePending)
 	require.Equal(t, modeCleanupConfirm, pending.mode)
 
-	msg := runCmd(t, cmd)
-	next, follow := pending.Update(msg)
+	initialMsgs := runBatchCmd(t, cmd)
+	taskDeleted := requireMsgType[taskDeletedMsg](t, initialMsgs)
+	requireMsgType[shimmerTickMsg](t, initialMsgs)
+
+	next, follow := pending.Update(taskDeleted)
 	require.Nil(t, follow)
 
 	got, ok := next.(model)
@@ -557,8 +661,11 @@ func TestModel_CleanupFailurePreservesRowsAndShowsError(t *testing.T) {
 	require.True(t, ok)
 	require.True(t, pending.deletePending)
 
-	msg := runCmd(t, cmd)
-	next, _ = pending.Update(msg)
+	initialMsgs := runBatchCmd(t, cmd)
+	taskDeleted := requireMsgType[taskDeletedMsg](t, initialMsgs)
+	requireMsgType[shimmerTickMsg](t, initialMsgs)
+
+	next, _ = pending.Update(taskDeleted)
 
 	got, ok := next.(model)
 	require.True(t, ok)
