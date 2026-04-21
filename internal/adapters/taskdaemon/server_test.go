@@ -100,6 +100,39 @@ func TestUnixSocketServer_ListTasksReturnsTasksSnapshot(t *testing.T) {
 	require.NoError(t, <-errCh)
 }
 
+func TestUnixSocketServer_DeleteTaskCallsTaskService(t *testing.T) {
+	t.Parallel()
+
+	socketPath := serverTestSocketPath(t)
+	deletedTaskIDs := make(chan string, 1)
+	svc := &stubTaskService{
+		deleteTaskFn: func(_ context.Context, taskID string) error {
+			deletedTaskIDs <- taskID
+			return nil
+		},
+	}
+	adapter := New(Config{
+		SocketPath:     socketPath,
+		HookListenAddr: "127.0.0.1:0",
+	})
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	errCh := make(chan error, 1)
+	go func() {
+		errCh <- adapter.Serve(ctx, svc, nil, nil)
+	}()
+	waitForUnixSocketServer(t, socketPath)
+
+	err := deleteTaskViaSocket(context.Background(), socketPath, "task-1")
+	require.NoError(t, err)
+	require.Equal(t, "task-1", <-deletedTaskIDs)
+
+	cancel()
+	require.NoError(t, <-errCh)
+}
+
 func TestUnixSocketServer_SubscribeTaskStatusStreamsMatchingUpdates(t *testing.T) {
 	t.Parallel()
 
@@ -252,6 +285,7 @@ func TestHTTPHookServer_DelegatesToInjectedHookHandler(t *testing.T) {
 
 type stubTaskService struct {
 	createTaskFn          func(context.Context, core.CreateTaskInput) (*core.Task, error)
+	deleteTaskFn          func(context.Context, string) error
 	listTasksFn           func(context.Context) ([]*core.Task, error)
 	latestTaskStatusFn    func(context.Context, string) (*core.TaskStatusUpdate, error)
 	subscribeTaskStatusFn func(context.Context, string) (<-chan core.TaskStatusUpdate, error)
@@ -260,6 +294,13 @@ type stubTaskService struct {
 
 func (s *stubTaskService) CreateTask(ctx context.Context, input core.CreateTaskInput) (*core.Task, error) {
 	return s.createTaskFn(ctx, input)
+}
+
+func (s *stubTaskService) DeleteTask(ctx context.Context, taskID string) error {
+	if s.deleteTaskFn == nil {
+		return nil
+	}
+	return s.deleteTaskFn(ctx, taskID)
 }
 
 func (s *stubTaskService) ListTasks(ctx context.Context) ([]*core.Task, error) {
@@ -335,6 +376,34 @@ func createTaskViaSocket(ctx context.Context, socketPath string, input core.Crea
 	}
 
 	return resp.Task, nil
+}
+
+func deleteTaskViaSocket(ctx context.Context, socketPath string, taskID string) error {
+	conn, err := net.Dial("unix", socketPath)
+	if err != nil {
+		return err
+	}
+	defer conn.Close()
+
+	if err := json.NewEncoder(conn).Encode(socketRequest{
+		Command: "delete_task",
+		TaskID:  taskID,
+	}); err != nil {
+		return err
+	}
+
+	var resp socketEnvelope
+	if err := json.NewDecoder(conn).Decode(&resp); err != nil {
+		return err
+	}
+	if resp.Type == "error" && resp.Error != "" {
+		return assertiveError(resp.Error)
+	}
+	if resp.Type != "task_deleted" || !resp.OK {
+		return assertiveError("unexpected delete response")
+	}
+
+	return nil
 }
 
 func listTasksViaSocket(ctx context.Context, socketPath string) ([]*core.Task, error) {

@@ -78,14 +78,16 @@ func (s *unixSocketServer) handleConn(ctx context.Context, conn net.Conn) {
 	switch req.Command {
 	case "health":
 		_ = encoder.Encode(socketEnvelope{Type: "health", OK: true})
-	case "protocol_version":
+	case "frontend_build_version":
 		_ = encoder.Encode(socketEnvelope{
-			Type:    "protocol_version",
+			Type:    "frontend_build_version",
 			OK:      true,
-			Version: currentFrontendProtocolVersion,
+			Version: currentFrontendBuildVersion,
 		})
 	case "create_task":
 		s.handleCreateTask(ctx, encoder, req)
+	case "delete_task":
+		s.handleDeleteTask(connCtx, encoder, req)
 	case "list_tasks":
 		s.handleListTasks(ctx, encoder)
 	case "latest_task_status":
@@ -116,6 +118,21 @@ func (s *unixSocketServer) handleCreateTask(ctx context.Context, encoder *json.E
 	}
 
 	_ = encoder.Encode(socketEnvelope{Type: "task_created", OK: true, Task: task})
+}
+
+func (s *unixSocketServer) handleDeleteTask(ctx context.Context, encoder *json.Encoder, req socketRequest) {
+	taskID := strings.TrimSpace(req.TaskID)
+	if taskID == "" {
+		_ = encoder.Encode(socketEnvelope{Type: "error", Error: "delete_task task_id required"})
+		return
+	}
+
+	if err := s.frontend.DeleteTask(ctx, taskID); err != nil {
+		_ = encoder.Encode(socketEnvelope{Type: "error", Error: err.Error()})
+		return
+	}
+
+	_ = encoder.Encode(socketEnvelope{Type: "task_deleted", OK: true})
 }
 
 func (s *unixSocketServer) handleListTasks(ctx context.Context, encoder *json.Encoder) {

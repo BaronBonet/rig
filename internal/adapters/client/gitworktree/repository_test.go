@@ -2,6 +2,8 @@ package gitworktree
 
 import (
 	"context"
+	"os"
+	"path/filepath"
 	"testing"
 
 	"rig/internal/core"
@@ -115,6 +117,22 @@ func TestRepositoryCreateTaskWorkspaceFromBranch_UsesExistingBranch(t *testing.T
 		RepoRoot:     "/tmp/repo",
 		BranchName:   "feat/auth-rewrite",
 		WorktreePath: "/tmp/repo-auth-rewrite",
+	})
+	require.NoError(t, err)
+}
+
+func TestRepositoryRemoveTaskWorkspace_RemovesWorktreePath(t *testing.T) {
+	runner := subprocess.NewMockRunner(t)
+	worktreePath := filepath.Join(t.TempDir(), "repo-auth-rewrite")
+	require.NoError(t, os.Mkdir(worktreePath, 0o755))
+	runner.EXPECT().
+		Run(mock.Anything, "/tmp/repo", "git", "worktree", "remove", "--force", worktreePath).
+		Return(subprocess.Result{}, nil).
+		Once()
+
+	err := New(runner).RemoveTaskWorkspace(context.Background(), &core.Task{
+		RepoRoot:     "/tmp/repo",
+		WorktreePath: worktreePath,
 	})
 	require.NoError(t, err)
 }

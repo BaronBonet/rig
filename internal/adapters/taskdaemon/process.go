@@ -31,7 +31,7 @@ func ensureRunning(ctx context.Context, cfg Config) error {
 	}
 
 	if err := probeSocketHealth(ctx, cfg.SocketPath); err == nil {
-		if err := probeFrontendProtocol(ctx, cfg.SocketPath); err == nil {
+		if err := probeFrontendBuildVersion(ctx, cfg.SocketPath); err == nil {
 			return nil
 		}
 		return restartDaemon(ctx, cfg)

@@ -2,6 +2,7 @@ package gitworktree
 
 import (
 	"context"
+	"os"
 	"path/filepath"
 	"strings"
 
@@ -86,6 +87,29 @@ func (r *repository) CreateTaskWorkspaceFromBranch(ctx context.Context, task *co
 		"add",
 		task.WorktreePath,
 		task.BranchName,
+	)
+	return err
+}
+
+func (r *repository) RemoveTaskWorkspace(ctx context.Context, task *core.Task) error {
+	if task == nil || strings.TrimSpace(task.WorktreePath) == "" {
+		return nil
+	}
+	if _, err := os.Stat(task.WorktreePath); err != nil {
+		if os.IsNotExist(err) {
+			return nil
+		}
+		return err
+	}
+
+	_, err := r.runner.Run(
+		ctx,
+		task.RepoRoot,
+		"git",
+		"worktree",
+		"remove",
+		"--force",
+		task.WorktreePath,
 	)
 	return err
 }

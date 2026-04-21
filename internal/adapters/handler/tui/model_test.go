@@ -438,6 +438,81 @@ func TestModel_EscCancelsPromptMode(t *testing.T) {
 	require.Zero(t, frontend.createTaskCalls)
 }
 
+func TestModel_KeyXEntersCleanupConfirmMode(t *testing.T) {
+	frontend := newStubFrontend()
+	frontend.listTasks = []*core.Task{{ID: "task-1", DisplayName: "first task"}}
+
+	m := newLoadedModel(frontend)
+	next, cmd := m.Update(tea.KeyPressMsg{Text: "x"})
+
+	require.Nil(t, cmd)
+
+	got, ok := next.(model)
+	require.True(t, ok)
+	require.Equal(t, modeCleanupConfirm, got.mode)
+}
+
+func TestModel_ConfirmCleanupDeletesTaskAndRemovesRow(t *testing.T) {
+	frontend := newStubFrontend()
+	frontend.listTasks = []*core.Task{
+		{ID: "task-1", DisplayName: "first task", Provider: core.AgentProviderCodex},
+		{ID: "task-2", DisplayName: "second task", Provider: core.AgentProviderCodex},
+	}
+
+	m := newLoadedModel(frontend)
+	m.selected = 1
+	m.mode = modeCleanupConfirm
+
+	next, cmd := m.Update(tea.KeyPressMsg{Text: "y"})
+	require.NotNil(t, cmd)
+
+	pending, ok := next.(model)
+	require.True(t, ok)
+	require.True(t, pending.deletePending)
+	require.Equal(t, modeCleanupConfirm, pending.mode)
+
+	msg := runCmd(t, cmd)
+	next, follow := pending.Update(msg)
+	require.Nil(t, follow)
+
+	got, ok := next.(model)
+	require.True(t, ok)
+	require.False(t, got.deletePending)
+	require.Equal(t, modeBrowse, got.mode)
+	require.Len(t, got.rows, 1)
+	require.Equal(t, "task-1", got.rows[0].task.ID)
+	require.Equal(t, 0, got.selected)
+	require.Equal(t, []string{"task-2"}, frontend.deleteTaskIDs)
+}
+
+func TestModel_CleanupFailurePreservesRowsAndShowsError(t *testing.T) {
+	frontend := newStubFrontend()
+	frontend.listTasks = []*core.Task{
+		{ID: "task-1", DisplayName: "first task", Provider: core.AgentProviderCodex},
+	}
+	frontend.deleteTaskErr = errors.New("cleanup failed")
+
+	m := newLoadedModel(frontend)
+	m.mode = modeCleanupConfirm
+
+	next, cmd := m.Update(tea.KeyPressMsg{Text: "y"})
+	require.NotNil(t, cmd)
+
+	pending, ok := next.(model)
+	require.True(t, ok)
+	require.True(t, pending.deletePending)
+
+	msg := runCmd(t, cmd)
+	next, _ = pending.Update(msg)
+
+	got, ok := next.(model)
+	require.True(t, ok)
+	require.False(t, got.deletePending)
+	require.Equal(t, modeBrowse, got.mode)
+	require.Len(t, got.rows, 1)
+	require.ErrorContains(t, got.err, "cleanup failed")
+}
+
 func newLoadedModel(frontend *stubFrontend) model {
 	return model{
 		frontend:      frontend,
@@ -496,6 +571,8 @@ type stubFrontend struct {
 	createInput              core.CreateTaskInput
 	createTaskErr            error
 	createTaskCalls          int
+	deleteTaskErr            error
+	deleteTaskIDs            []string
 	latestTaskStatus         map[string]*core.TaskStatusUpdate
 	latestTaskStatusErr      map[string]error
 	latestTaskStatusCalls    []string
@@ -512,6 +589,11 @@ func (s *stubFrontend) CreateTask(_ context.Context, input core.CreateTaskInput)
 	s.createTaskCalls++
 	s.createInput = input
 	return s.createdTask, s.createTaskErr
+}
+
+func (s *stubFrontend) DeleteTask(_ context.Context, taskID string) error {
+	s.deleteTaskIDs = append(s.deleteTaskIDs, taskID)
+	return s.deleteTaskErr
 }
 
 func (s *stubFrontend) ListTasks(ctx context.Context) ([]*core.Task, error) {

@@ -50,8 +50,20 @@ func (r *repository) OpenTaskSession(context.Context, *core.Task) error {
 	panic("tmuxsession.Repository.OpenTaskSession not implemented")
 }
 
-func (r *repository) DeleteTaskSession(context.Context, *core.Task) error {
-	panic("tmuxsession.Repository.DeleteTaskSession not implemented")
+func (r *repository) DeleteTaskSession(ctx context.Context, task *core.Task) error {
+	if task == nil || strings.TrimSpace(task.TmuxSession) == "" {
+		return nil
+	}
+
+	_, err := r.runner.Run(
+		ctx,
+		"",
+		"tmux",
+		"kill-session",
+		"-t",
+		exactSessionTarget(task.TmuxSession),
+	)
+	return err
 }
 
 func (r *repository) InspectTaskSession(context.Context, *core.Task) (core.SessionResources, error) {

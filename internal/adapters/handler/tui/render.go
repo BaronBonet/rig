@@ -248,6 +248,9 @@ func (m model) confirmationView() string {
 
 	builder.WriteString(dimStyle.Render("The tmux session and worktree will be deleted.") + "\n")
 	builder.WriteString(dimStyle.Render("The branch will be kept.") + "\n\n")
+	if m.deletePending {
+		builder.WriteString(warningStyle.Render("●") + " " + renderShimmer("Cleaning up task...", m.shimmerTick) + "\n\n")
+	}
 	builder.WriteString(
 		keybindStyle.Render("y") + mutedStyle.Render(" confirm · ") +
 			keybindStyle.Render("n") + mutedStyle.Render(" cancel"),

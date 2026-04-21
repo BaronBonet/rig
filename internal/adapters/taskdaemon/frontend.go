@@ -29,6 +29,21 @@ func (f *frontend) CreateTask(ctx context.Context, input core.CreateTaskInput) (
 	return resp.Task, nil
 }
 
+func (f *frontend) DeleteTask(ctx context.Context, taskID string) error {
+	resp, err := f.send(ctx, socketRequest{
+		Command: "delete_task",
+		TaskID:  taskID,
+	})
+	if err != nil {
+		return err
+	}
+	if resp.Type != "task_deleted" || !resp.OK {
+		return unexpectedResponseError("delete_task", *resp)
+	}
+
+	return nil
+}
+
 func (f *frontend) ListTasks(ctx context.Context) ([]*core.Task, error) {
 	resp, err := f.send(ctx, socketRequest{Command: "list_tasks"})
 	if err != nil {

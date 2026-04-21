@@ -4,6 +4,10 @@ insert into tasks (
   worktree_path, tmux_session, provider, created_at, updated_at
 ) values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
 
+-- name: DeleteTask :exec
+delete from tasks
+where id = ?;
+
 -- name: UpdateTask :exec
 update tasks set
   slug = ?,

@@ -59,6 +59,25 @@ func (s *taskService) ListTasks(ctx context.Context) ([]*Task, error) {
 	return s.tasks.ListTasks(ctx)
 }
 
+func (s *taskService) DeleteTask(ctx context.Context, taskID string) error {
+	task, err := s.taskByID(ctx, taskID)
+	if err != nil {
+		return err
+	}
+
+	if err := s.tmuxSession.DeleteTaskSession(ctx, task); err != nil {
+		return fmt.Errorf("delete task session: %w", err)
+	}
+	if err := s.gitWorktree.RemoveTaskWorkspace(ctx, task); err != nil {
+		return fmt.Errorf("remove task workspace: %w", err)
+	}
+	if err := s.tasks.DeleteTask(ctx, task.ID); err != nil {
+		return fmt.Errorf("delete task record: %w", err)
+	}
+
+	return nil
+}
+
 func (s *taskService) LatestTaskStatus(ctx context.Context, taskID string) (*TaskStatusUpdate, error) {
 	return s.tasks.LatestTaskStatus(ctx, strings.TrimSpace(taskID))
 }
@@ -301,6 +320,26 @@ func (s *taskService) resolveTaskIDFromCwd(ctx context.Context, cwd string) (str
 	}
 
 	return "", ErrUnmanagedHookEvent
+}
+
+func (s *taskService) taskByID(ctx context.Context, taskID string) (*Task, error) {
+	taskID = strings.TrimSpace(taskID)
+	if taskID == "" {
+		return nil, ErrTaskNotFound
+	}
+
+	tasks, err := s.tasks.ListTasks(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("list tasks for delete: %w", err)
+	}
+
+	for _, task := range tasks {
+		if task != nil && strings.TrimSpace(task.ID) == taskID {
+			return task, nil
+		}
+	}
+
+	return nil, ErrTaskNotFound
 }
 
 func newPromptTaskRecord(

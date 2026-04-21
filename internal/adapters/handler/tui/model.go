@@ -38,6 +38,7 @@ type model struct {
 	prompt        string
 	createPending bool
 	createErr     error
+	deletePending bool
 	width         int
 	shimmerTick   int
 }
@@ -72,6 +73,11 @@ type taskStatusSubscriptionClosedMsg struct {
 type taskCreatedMsg struct {
 	task *core.Task
 	err  error
+}
+
+type taskDeletedMsg struct {
+	taskID string
+	err    error
 }
 
 type shimmerTickMsg struct{}
@@ -194,8 +200,20 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		m.clampSelection()
 		return m, tea.Batch(m.taskStatusTrackingCmds(taskID(msg.task))...)
+	case taskDeletedMsg:
+		m.deletePending = false
+		m.mode = modeBrowse
+		if msg.err != nil {
+			m.err = msg.err
+			return m, nil
+		}
+
+		m.err = nil
+		m.removeTaskRow(msg.taskID)
+		m.clampSelection()
+		return m, nil
 	case shimmerTickMsg:
-		if !m.createPending {
+		if !m.createPending && !m.deletePending {
 			return m, nil
 		}
 		m.shimmerTick++
@@ -282,14 +300,24 @@ func (m model) updatePromptInput(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 }
 
 func (m model) updateCleanupConfirm(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
+	if m.deletePending {
+		return m, nil
+	}
+
 	switch msg.String() {
 	case "q", "n", "esc":
 		m.mode = modeBrowse
 		return m, nil
 	case "y":
-		m.mode = modeBrowse
-		m.err = errors.New("cleanup not implemented yet")
-		return m, nil
+		row := m.selectedRow()
+		if row == nil || row.task == nil {
+			m.mode = modeBrowse
+			return m, nil
+		}
+		m.deletePending = true
+		m.err = nil
+		m.shimmerTick = 0
+		return m, deleteTaskCmd(m.statusContext, m.frontend, taskID(row.task))
 	default:
 		return m, nil
 	}
@@ -356,6 +384,17 @@ func (m *model) upsertTaskRow(task *core.Task) int {
 
 	m.rows = append(m.rows, taskRow{task: task})
 	return len(m.rows) - 1
+}
+
+func (m *model) removeTaskRow(targetTaskID string) {
+	filtered := m.rows[:0]
+	for _, row := range m.rows {
+		if taskID(row.task) == targetTaskID {
+			continue
+		}
+		filtered = append(filtered, row)
+	}
+	m.rows = filtered
 }
 
 func taskID(task *core.Task) string {
