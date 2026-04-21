@@ -4,7 +4,9 @@ import (
 	"context"
 	"fmt"
 
+	tmuxsession "rig/internal/adapters/client/tmuxsession"
 	"rig/internal/core"
+	"rig/internal/pkg/subprocess"
 )
 
 type adapter struct {
@@ -14,8 +16,11 @@ type adapter struct {
 
 func New(cfg Config) core.TaskDaemon {
 	return &adapter{
-		cfg:      cfg,
-		frontend: &frontend{socketPath: cfg.SocketPath},
+		cfg: cfg,
+		frontend: &frontend{
+			socketPath: cfg.SocketPath,
+			sessions:   tmuxsession.New(subprocess.ExecRunner{}),
+		},
 	}
 }
 

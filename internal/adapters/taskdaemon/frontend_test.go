@@ -102,6 +102,23 @@ func TestFrontend_CreateTaskLatestTaskStatusAndSubscribeTaskStatus(t *testing.T)
 		require.NoError(t, <-serverErrCh)
 	})
 
+	t.Run("open task session", func(t *testing.T) {
+		t.Parallel()
+
+		task := &core.Task{ID: "task-123", TmuxSession: "repo_task"}
+		sessions := &stubTaskSessionClient{
+			openTaskSessionFn: func(_ context.Context, got *core.Task) error {
+				require.Same(t, task, got)
+				return nil
+			},
+		}
+
+		frontend := &frontend{sessions: sessions}
+
+		err := frontend.OpenTaskSession(t.Context(), task)
+		require.NoError(t, err)
+	})
+
 	t.Run("latest task status", func(t *testing.T) {
 		t.Parallel()
 
@@ -257,6 +274,33 @@ func TestFrontend_CreateTaskLatestTaskStatusAndSubscribeTaskStatus(t *testing.T)
 
 		require.ErrorIs(t, <-serverErrCh, io.EOF)
 	})
+}
+
+type stubTaskSessionClient struct {
+	openTaskSessionFn func(context.Context, *core.Task) error
+}
+
+func (s *stubTaskSessionClient) StartTaskSession(context.Context, *core.Task, core.TaskSessionLaunchSpec) error {
+	panic("unexpected StartTaskSession call")
+}
+
+func (s *stubTaskSessionClient) OpenTaskSession(ctx context.Context, task *core.Task) error {
+	if s.openTaskSessionFn != nil {
+		return s.openTaskSessionFn(ctx, task)
+	}
+	return nil
+}
+
+func (s *stubTaskSessionClient) DeleteTaskSession(context.Context, *core.Task) error {
+	panic("unexpected DeleteTaskSession call")
+}
+
+func (s *stubTaskSessionClient) InspectTaskSession(context.Context, *core.Task) (core.SessionResources, error) {
+	panic("unexpected InspectTaskSession call")
+}
+
+func (s *stubTaskSessionClient) SnapshotTaskSession(context.Context, *core.Task) (core.RuntimeSnapshot, error) {
+	panic("unexpected SnapshotTaskSession call")
 }
 
 func TestFrontend_ReturnsExplicitErrorsOnErrorEnvelopesAndUnexpectedTypes(t *testing.T) {

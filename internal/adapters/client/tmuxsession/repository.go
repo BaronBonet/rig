@@ -3,6 +3,8 @@ package tmuxsession
 import (
 	"context"
 	"errors"
+	"fmt"
+	"os"
 	"strings"
 	"time"
 
@@ -16,6 +18,7 @@ type repository struct {
 	runner subprocess.Runner
 	now    func() time.Time
 	sleep  func(time.Duration)
+	getenv func(string) string
 }
 
 func New(runner subprocess.Runner) core.TmuxSessionClient {
@@ -23,6 +26,7 @@ func New(runner subprocess.Runner) core.TmuxSessionClient {
 		runner: runner,
 		now:    time.Now,
 		sleep:  time.Sleep,
+		getenv: os.Getenv,
 	}
 }
 
@@ -46,8 +50,25 @@ func (r *repository) StartTaskSession(ctx context.Context, task *core.Task, laun
 	return r.typeInWindow(ctx, task.TmuxSession, "agent", launch.PrefillInput)
 }
 
-func (r *repository) OpenTaskSession(context.Context, *core.Task) error {
-	panic("tmuxsession.Repository.OpenTaskSession not implemented")
+func (r *repository) OpenTaskSession(ctx context.Context, task *core.Task) error {
+	if task == nil || strings.TrimSpace(task.TmuxSession) == "" {
+		return fmt.Errorf("task tmux session is required")
+	}
+
+	command := "attach-session"
+	if r.getenv != nil && strings.TrimSpace(r.getenv("TMUX")) != "" {
+		command = "switch-client"
+	}
+
+	_, err := r.runner.Run(
+		ctx,
+		"",
+		"tmux",
+		command,
+		"-t",
+		exactSessionTarget(task.TmuxSession),
+	)
+	return err
 }
 
 func (r *repository) DeleteTaskSession(ctx context.Context, task *core.Task) error {

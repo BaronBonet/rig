@@ -22,6 +22,8 @@ type CreateTaskInput struct {
 // port; it does not know about sockets, daemon startup, or in-process service
 // wiring.
 type TaskFrontend interface {
+	// OpenTaskSession opens an existing task session in tmux for interactive use.
+	OpenTaskSession(ctx context.Context, task *Task) error
 	// CreateTask creates a new task and returns the durable task record that the
 	// frontend should render immediately.
 	CreateTask(ctx context.Context, input CreateTaskInput) (*Task, error)

@@ -268,6 +268,64 @@ func TestModel_KeyNEntersPromptMode(t *testing.T) {
 	require.Empty(t, got.prompt)
 }
 
+func TestModel_EnterOpensSelectedTaskAndQuitsOnSuccess(t *testing.T) {
+	frontend := newStubFrontend()
+	frontend.listTasks = []*core.Task{
+		{ID: "task-1", DisplayName: "first task", TmuxSession: "repo_task_1", Provider: core.AgentProviderCodex},
+		{ID: "task-2", DisplayName: "second task", TmuxSession: "repo_task_2", Provider: core.AgentProviderCodex},
+	}
+
+	m := newLoadedModel(frontend)
+	m.selected = 1
+
+	next, cmd := m.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
+	require.NotNil(t, cmd)
+
+	pending, ok := next.(model)
+	require.True(t, ok)
+
+	msg := runCmd(t, cmd)
+	next, follow := pending.Update(msg)
+	require.NotNil(t, follow)
+
+	got, ok := next.(model)
+	require.True(t, ok)
+	require.NoError(t, got.err)
+	require.NotNil(t, frontend.openedTask)
+	require.Equal(t, "task-2", frontend.openedTask.ID)
+	require.Equal(t, 1, frontend.openTaskSessionCalls)
+
+	quitMsg := runCmd(t, follow)
+	_, ok = quitMsg.(tea.QuitMsg)
+	require.True(t, ok)
+}
+
+func TestModel_OpenTaskFailureShowsErrorAndStaysInList(t *testing.T) {
+	frontend := newStubFrontend()
+	frontend.listTasks = []*core.Task{
+		{ID: "task-1", DisplayName: "first task", TmuxSession: "repo_task_1", Provider: core.AgentProviderCodex},
+	}
+	frontend.openTaskSessionErr = errors.New("open failed")
+
+	m := newLoadedModel(frontend)
+
+	next, cmd := m.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
+	require.NotNil(t, cmd)
+
+	pending, ok := next.(model)
+	require.True(t, ok)
+
+	msg := runCmd(t, cmd)
+	next, follow := pending.Update(msg)
+	require.Nil(t, follow)
+
+	got, ok := next.(model)
+	require.True(t, ok)
+	require.Equal(t, modeBrowse, got.mode)
+	require.ErrorContains(t, got.err, "open failed")
+	require.Equal(t, 1, frontend.openTaskSessionCalls)
+}
+
 func TestModel_CreateTaskFromPromptAppendsTaskAndStartsStatusTracking(t *testing.T) {
 	frontend := newStubFrontend()
 	frontend.listTasks = []*core.Task{
@@ -567,6 +625,9 @@ type stubFrontend struct {
 	listTasksContext         context.Context
 	listTasksErr             error
 	listTasksCalls           int
+	openedTask               *core.Task
+	openTaskSessionErr       error
+	openTaskSessionCalls     int
 	createdTask              *core.Task
 	createInput              core.CreateTaskInput
 	createTaskErr            error
@@ -583,6 +644,12 @@ type stubFrontend struct {
 
 func newStubFrontend() *stubFrontend {
 	return &stubFrontend{}
+}
+
+func (s *stubFrontend) OpenTaskSession(_ context.Context, task *core.Task) error {
+	s.openTaskSessionCalls++
+	s.openedTask = task
+	return s.openTaskSessionErr
 }
 
 func (s *stubFrontend) CreateTask(_ context.Context, input core.CreateTaskInput) (*core.Task, error) {
