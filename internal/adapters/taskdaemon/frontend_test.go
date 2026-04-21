@@ -49,37 +49,8 @@ func TestFrontend_ListTasksSendsListTasksAndReturnsTasks(t *testing.T) {
 	require.NoError(t, <-serverErrCh)
 }
 
-func TestFrontend_CreateTaskLatestTaskStatusAndSubscribeTaskStatus(t *testing.T) {
+func TestFrontend_CreateTaskStreamLatestTaskStatusAndSubscribeTaskStatus(t *testing.T) {
 	t.Parallel()
-
-	t.Run("create task", func(t *testing.T) {
-		t.Parallel()
-
-		socketPath := frontendTestSocketPath(t)
-		input := core.CreateTaskInput{
-			Cwd:      "/repo",
-			Prompt:   "ship it",
-			Provider: core.ProviderCodex,
-		}
-		expectedTask := &core.Task{ID: "task-123", DisplayName: "Ship it"}
-		requestCh := make(chan socketRequest, 1)
-		serverErrCh := serveOneShotFrontendSocket(t, socketPath, func(req socketRequest, encoder *json.Encoder) error {
-			requestCh <- req
-			return encoder.Encode(socketEnvelope{
-				Type: "task_created",
-				OK:   true,
-				Task: expectedTask,
-			})
-		})
-
-		frontend := New(Config{SocketPath: socketPath}).Frontend()
-
-		task, err := frontend.CreateTask(t.Context(), input)
-		require.NoError(t, err)
-		require.Equal(t, socketRequest{Command: "create_task", Input: &input}, <-requestCh)
-		require.Equal(t, expectedTask, task)
-		require.NoError(t, <-serverErrCh)
-	})
 
 	t.Run("create task stream", func(t *testing.T) {
 		t.Parallel()
@@ -446,19 +417,35 @@ func TestFrontend_ReturnsExplicitErrorsOnErrorEnvelopesAndUnexpectedTypes(t *tes
 		require.NoError(t, <-serverErrCh)
 	})
 
-	t.Run("create task returns unexpected response type", func(t *testing.T) {
+	t.Run("create task stream returns unexpected response type", func(t *testing.T) {
 		t.Parallel()
 
 		socketPath := frontendTestSocketPath(t)
-		serverErrCh := serveOneShotFrontendSocket(t, socketPath, func(req socketRequest, encoder *json.Encoder) error {
+		serverErrCh := serveStreamingFrontendSocket(t, socketPath, func(req socketRequest, encoder *json.Encoder) error {
 			return encoder.Encode(socketEnvelope{Type: "tasks_list", OK: true})
 		})
 
 		frontend := New(Config{SocketPath: socketPath}).Frontend()
 
-		task, err := frontend.CreateTask(t.Context(), core.CreateTaskInput{Prompt: "hello"})
-		require.Nil(t, task)
-		require.EqualError(t, err, `unexpected create_task response "tasks_list"`)
+		events, err := frontend.CreateTaskStream(t.Context(), core.CreateTaskInput{Prompt: "hello"})
+		require.NoError(t, err)
+
+		select {
+		case event, ok := <-events:
+			require.True(t, ok)
+			require.Nil(t, event.Task)
+			require.NotNil(t, event.Err)
+			require.EqualError(t, event.Err, `unexpected create_task response "tasks_list"`)
+		case <-time.After(2 * time.Second):
+			t.Fatal("timed out waiting for create stream error")
+		}
+
+		select {
+		case _, ok := <-events:
+			require.False(t, ok)
+		case <-time.After(2 * time.Second):
+			t.Fatal("timed out waiting for create stream close")
+		}
 		require.NoError(t, <-serverErrCh)
 	})
 

@@ -10,7 +10,7 @@ import (
 func TestTaskFrontendContract_ExposesCreateListAndStatusMethods(t *testing.T) {
 	var _ interface {
 		OpenTaskSession(context.Context, *Task) error
-		CreateTask(context.Context, CreateTaskInput) (*Task, error)
+		CreateTaskStream(context.Context, CreateTaskInput) (<-chan TaskCreateEvent, error)
 		DeleteTask(context.Context, string) error
 		ListTasks(context.Context) ([]*Task, error)
 		LatestTaskStatus(context.Context, string) (*TaskStatusUpdate, error)
@@ -20,6 +20,7 @@ func TestTaskFrontendContract_ExposesCreateListAndStatusMethods(t *testing.T) {
 
 func TestTaskServiceContract_ExposesListTasks(t *testing.T) {
 	var _ interface {
+		CreateTaskWithProgress(context.Context, CreateTaskInput, TaskCreateProgressReporter) (*Task, error)
 		DeleteTask(context.Context, string) error
 		ListTasks(context.Context) ([]*Task, error)
 	} = (TaskService)(nil)

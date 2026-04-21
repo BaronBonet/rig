@@ -72,7 +72,11 @@ type stubTaskService struct {
 	handleHookEventFn func(context.Context, core.HookEventInput) error
 }
 
-func (s *stubTaskService) CreateTask(context.Context, core.CreateTaskInput) (*core.Task, error) {
+func (s *stubTaskService) CreateTaskWithProgress(
+	context.Context,
+	core.CreateTaskInput,
+	core.TaskCreateProgressReporter,
+) (*core.Task, error) {
 	return nil, nil
 }
 

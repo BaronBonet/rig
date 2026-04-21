@@ -47,6 +47,10 @@ type TaskCreateProgressEvent struct {
 	Step TaskCreateProgressStep `json:"step"`
 }
 
+type TaskCreateProgressReporter interface {
+	ReportTaskCreateProgress(step TaskCreateProgressStep)
+}
+
 type TaskCreateEvent struct {
 	Err      error                    `json:"-"`
 	Progress *TaskCreateProgressEvent `json:"progress,omitempty"`
@@ -61,9 +65,6 @@ type TaskCreateEvent struct {
 type TaskFrontend interface {
 	// OpenTaskSession opens an existing task session in tmux for interactive use.
 	OpenTaskSession(ctx context.Context, task *Task) error
-	// CreateTask creates a new task and returns the durable task record that the
-	// frontend should render immediately.
-	CreateTask(ctx context.Context, input CreateTaskInput) (*Task, error)
 	// CreateTaskStream creates a new task and streams progress events followed by
 	// one terminal result event.
 	CreateTaskStream(ctx context.Context, input CreateTaskInput) (<-chan TaskCreateEvent, error)
@@ -143,8 +144,13 @@ type TaskDaemon interface {
 }
 
 type TaskService interface {
-	// CreateTask creates a new task from either a prompt or a pull request source.
-	CreateTask(ctx context.Context, input CreateTaskInput) (*Task, error)
+	// CreateTaskWithProgress creates a new task while reporting coarse-grained
+	// creation milestones to the provided reporter when non-nil.
+	CreateTaskWithProgress(
+		ctx context.Context,
+		input CreateTaskInput,
+		reporter TaskCreateProgressReporter,
+	) (*Task, error)
 	// ListTasks returns all known tasks.
 	ListTasks(ctx context.Context) ([]*Task, error)
 	// LatestTaskStatus returns the latest published live status for a task, or

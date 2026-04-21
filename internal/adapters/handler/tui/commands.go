@@ -28,16 +28,6 @@ func openTaskSessionCmd(ctx context.Context, frontend core.TaskFrontend, task *c
 	}
 }
 
-func createTaskCmd(ctx context.Context, frontend core.TaskFrontend, input core.CreateTaskInput) tea.Cmd {
-	return func() tea.Msg {
-		task, err := frontend.CreateTask(ctx, input)
-		return taskCreatedMsg{
-			task: task,
-			err:  err,
-		}
-	}
-}
-
 func createTaskStreamCmd(ctx context.Context, frontend core.TaskFrontend, input core.CreateTaskInput) tea.Cmd {
 	return func() tea.Msg {
 		events, err := frontend.CreateTaskStream(ctx, input)

@@ -24,24 +24,6 @@ func (f *frontend) OpenTaskSession(ctx context.Context, task *core.Task) error {
 	return f.sessions.OpenTaskSession(ctx, task)
 }
 
-func (f *frontend) CreateTask(ctx context.Context, input core.CreateTaskInput) (*core.Task, error) {
-	events, err := f.CreateTaskStream(ctx, input)
-	if err != nil {
-		return nil, err
-	}
-
-	for event := range events {
-		if event.Err != nil {
-			return nil, event.Err
-		}
-		if event.Task != nil {
-			return event.Task, nil
-		}
-	}
-
-	return nil, fmt.Errorf("create task stream closed without terminal result")
-}
-
 func (f *frontend) CreateTaskStream(
 	ctx context.Context,
 	input core.CreateTaskInput,
