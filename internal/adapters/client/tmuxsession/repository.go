@@ -5,15 +5,16 @@ import (
 	"errors"
 	"fmt"
 	"os"
-	"strings"
-	"time"
-
 	"rig/internal/core"
 	"rig/internal/pkg/subprocess"
+	"strings"
+	"time"
 )
 
-const promptSubmitDelay = 500 * time.Millisecond
-const taskWindowName = "task"
+const (
+	promptSubmitDelay = 500 * time.Millisecond
+	taskWindowName    = "task"
+)
 
 type repository struct {
 	runner subprocess.Runner
@@ -90,14 +91,6 @@ func (r *repository) DeleteTaskSession(ctx context.Context, task *core.Task) err
 	}
 
 	return err
-}
-
-func (r *repository) InspectTaskSession(context.Context, *core.Task) (core.SessionResources, error) {
-	panic("tmuxsession.Repository.InspectTaskSession not implemented")
-}
-
-func (r *repository) SnapshotTaskSession(context.Context, *core.Task) (core.RuntimeSnapshot, error) {
-	panic("tmuxsession.Repository.SnapshotTaskSession not implemented")
 }
 
 func (r *repository) createSession(ctx context.Context, sessionName, workingDir string) error {

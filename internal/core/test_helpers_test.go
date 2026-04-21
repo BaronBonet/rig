@@ -49,12 +49,11 @@ type repoClientState struct {
 }
 
 type sessionClientState struct {
-	startErr         error
-	deleteErr        error
-	startedTask      *Task
-	deletedTask      *Task
-	startedLaunch    TaskSessionLaunchSpec
-	sessionResources SessionResources
+	startErr      error
+	deleteErr     error
+	startedTask   *Task
+	deletedTask   *Task
+	startedLaunch TaskSessionLaunchSpec
 }
 
 type providerClientState struct {
@@ -266,14 +265,10 @@ func (s *stubTmuxSessionClient) StartTaskSession(_ context.Context, task *Task, 
 		return s.state.startErr
 	}
 
-	s.state.sessionResources = SessionResources{
-		SessionExists:      true,
-		TaskWindowExists:   true,
-		EditorWindowExists: true,
-	}
 	return nil
 }
 
+// TODO: we should use mockery
 func (s *stubTmuxSessionClient) OpenTaskSession(context.Context, *Task) error {
 	return nil
 }
@@ -283,16 +278,7 @@ func (s *stubTmuxSessionClient) DeleteTaskSession(_ context.Context, task *Task)
 		return s.state.deleteErr
 	}
 	s.state.deletedTask = cloneTask(task)
-	s.state.sessionResources = SessionResources{}
 	return nil
-}
-
-func (s *stubTmuxSessionClient) InspectTaskSession(context.Context, *Task) (SessionResources, error) {
-	return s.state.sessionResources, nil
-}
-
-func (s *stubTmuxSessionClient) SnapshotTaskSession(context.Context, *Task) (RuntimeSnapshot, error) {
-	return RuntimeSnapshot{}, nil
 }
 
 func (s *stubTaskRepository) CreateTask(_ context.Context, task *Task) error {
