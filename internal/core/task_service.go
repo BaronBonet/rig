@@ -10,6 +10,18 @@ import (
 	slugpkg "rig/internal/pkg/slug"
 )
 
+type taskCreateProgressSink interface {
+	Emit(TaskCreateProgressStep)
+}
+
+type taskCreateProgressSinkKey struct{}
+
+type taskCreateProgressSinkFunc func(TaskCreateProgressStep)
+
+func (f taskCreateProgressSinkFunc) Emit(step TaskCreateProgressStep) {
+	f(step)
+}
+
 type TaskServiceDependencies struct {
 	Tasks                TaskRepository
 	GitWorktree          GitWorktreeClient
@@ -40,6 +52,35 @@ func NewTaskService(deps TaskServiceDependencies) TaskService {
 		enableWorkspaceSetup: deps.EnableWorkspaceSetup,
 		defaultProvider:      deps.DefaultProvider,
 	}
+}
+
+func ContextWithTaskCreateProgressSink(
+	ctx context.Context,
+	emit func(TaskCreateProgressStep),
+) context.Context {
+	if emit == nil {
+		return ctx
+	}
+
+	return context.WithValue(ctx, taskCreateProgressSinkKey{}, taskCreateProgressSinkFunc(emit))
+}
+
+func taskCreateProgressSinkFromContext(ctx context.Context) taskCreateProgressSink {
+	if ctx == nil {
+		return nil
+	}
+
+	sink, _ := ctx.Value(taskCreateProgressSinkKey{}).(taskCreateProgressSink)
+	return sink
+}
+
+func ReportTaskCreateProgress(ctx context.Context, step TaskCreateProgressStep) {
+	sink := taskCreateProgressSinkFromContext(ctx)
+	if sink == nil {
+		return
+	}
+
+	sink.Emit(step)
 }
 
 func (s *taskService) CreateTask(ctx context.Context, input CreateTaskInput) (*Task, error) {
@@ -143,6 +184,7 @@ func (s *taskService) createTaskFromPrompt(
 		return nil, err
 	}
 
+	ReportTaskCreateProgress(ctx, TaskCreateProgressSuggestingName)
 	suggestion, err := s.suggestTaskName(ctx, providerClient, input.Prompt)
 	if err != nil {
 		return nil, err
@@ -167,14 +209,17 @@ func (s *taskService) createTaskFromPrompt(
 	if err := s.tasks.CreateTask(ctx, task); err != nil {
 		return nil, err
 	}
+	ReportTaskCreateProgress(ctx, TaskCreateProgressCreatingWorktree)
 	if err := s.gitWorktree.CreateTaskWorkspace(ctx, task); err != nil {
 		return task, fmt.Errorf("create worktree: %w", err)
 	}
 
+	ReportTaskCreateProgress(ctx, TaskCreateProgressPreparingWorkspace)
 	if err := s.prepareTaskWorkspace(ctx, task, repoCtx.Root); err != nil {
 		return task, err
 	}
 
+	ReportTaskCreateProgress(ctx, TaskCreateProgressStartingSession)
 	return s.startTaskRuntime(ctx, task)
 }
 

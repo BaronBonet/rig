@@ -134,6 +134,12 @@ func TestFrontendBuildVersion_DefaultsToDev(t *testing.T) {
 	)
 }
 
+func TestFrontendProtocolVersion_DefaultsToCurrentValue(t *testing.T) {
+	t.Parallel()
+
+	require.Equal(t, 2, currentFrontendProtocolVersion)
+}
+
 func TestAdapterEnsureRunning_RestartsStaleHealthyDaemonMissingFrontendProtocol(t *testing.T) {
 	t.Parallel()
 
@@ -426,6 +432,9 @@ func handleTestDaemonConnection(conn net.Conn, stopSeen *atomic.Bool) error {
 	switch req.Command {
 	case "health":
 		resp.Type = "health"
+	case "protocol_version":
+		resp.Type = "protocol_version"
+		resp.ProtocolVersion = currentFrontendProtocolVersion
 	case "frontend_build_version":
 		resp.Type = "frontend_build_version"
 		resp.Version = currentFrontendBuildVersion

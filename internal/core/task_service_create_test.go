@@ -310,3 +310,52 @@ func TestTaskServiceCreateTask_AppendsNumericSuffixWhenSlugAlreadyExists(t *test
 	require.Equal(t, "/tmp/repo-billing-retry-flow-2", task.WorktreePath)
 	require.Equal(t, "repo_billing_retry_flow_2", task.TmuxSession)
 }
+
+func TestTaskServiceCreateTask_EmitsProgressStepsInOrder(t *testing.T) {
+	svc := newTestTaskService(t)
+	svc.providerRepo.suggestedName = "task creation workflow tests"
+	svc.providerRepo.bootstrapSpec = WorkspaceBootstrapSpec{Files: []WorkspaceBootstrapFile{{
+		Path:     ".codex/hooks/hooks.json",
+		Content:  []byte("hooks"),
+		FileMode: 0o644,
+	}}}
+
+	var got []TaskCreateProgressStep
+	ctx := ContextWithTaskCreateProgressSink(t.Context(), func(step TaskCreateProgressStep) {
+		got = append(got, step)
+	})
+
+	task, err := svc.service.CreateTask(ctx, CreateTaskInput{
+		Cwd:      "/tmp/repo",
+		Prompt:   "testing creating a new task",
+		Provider: ProviderCodex,
+	})
+
+	require.NoError(t, err)
+	require.NotNil(t, task)
+	require.Equal(t, []TaskCreateProgressStep{
+		TaskCreateProgressSuggestingName,
+		TaskCreateProgressCreatingWorktree,
+		TaskCreateProgressPreparingWorkspace,
+		TaskCreateProgressStartingSession,
+	}, got)
+}
+
+func TestTaskServiceCreateTask_AllowsMissingProgressSink(t *testing.T) {
+	svc := newTestTaskService(t)
+	svc.providerRepo.suggestedName = "task creation workflow tests"
+	svc.providerRepo.bootstrapSpec = WorkspaceBootstrapSpec{Files: []WorkspaceBootstrapFile{{
+		Path:     ".codex/hooks/hooks.json",
+		Content:  []byte("hooks"),
+		FileMode: 0o644,
+	}}}
+
+	task, err := svc.service.CreateTask(t.Context(), CreateTaskInput{
+		Cwd:      "/tmp/repo",
+		Prompt:   "testing creating a new task",
+		Provider: ProviderCodex,
+	})
+
+	require.NoError(t, err)
+	require.NotNil(t, task)
+}

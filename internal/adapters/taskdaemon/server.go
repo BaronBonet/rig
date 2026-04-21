@@ -25,6 +25,38 @@ func (s *server) CreateTask(ctx context.Context, input core.CreateTaskInput) (*c
 	return s.service.CreateTask(ctx, input)
 }
 
+func (s *server) CreateTaskStream(ctx context.Context, input core.CreateTaskInput) (<-chan core.TaskCreateEvent, error) {
+	events := make(chan core.TaskCreateEvent, 8)
+
+	go func() {
+		defer close(events)
+
+		progressCtx := core.ContextWithTaskCreateProgressSink(ctx, func(step core.TaskCreateProgressStep) {
+			select {
+			case <-ctx.Done():
+				return
+			case events <- core.TaskCreateEvent{Progress: &core.TaskCreateProgressEvent{Step: step}}:
+			}
+		})
+
+		task, err := s.service.CreateTask(progressCtx, input)
+		if err != nil {
+			select {
+			case <-ctx.Done():
+			case events <- core.TaskCreateEvent{Err: err}:
+			}
+			return
+		}
+
+		select {
+		case <-ctx.Done():
+		case events <- core.TaskCreateEvent{Task: task}:
+		}
+	}()
+
+	return events, nil
+}
+
 func (s *server) DeleteTask(ctx context.Context, taskID string) error {
 	return s.service.DeleteTask(ctx, taskID)
 }

@@ -335,6 +335,10 @@ func TestModel_CreateTaskFromPromptAppendsTaskAndStartsStatusTracking(t *testing
 		RepoName:    "repo-c",
 		Provider:    core.ProviderCodex,
 	}
+	frontend.createTaskEvents = []core.TaskCreateEvent{
+		{Progress: &core.TaskCreateProgressEvent{Step: core.TaskCreateProgressSuggestingName}},
+		{Task: frontend.createdTask},
+	}
 	frontend.latestTaskStatus = map[string]*core.TaskStatusUpdate{
 		"task-3": {
 			TaskID: "task-3",
@@ -361,13 +365,25 @@ func TestModel_CreateTaskFromPromptAppendsTaskAndStartsStatusTracking(t *testing
 	require.True(t, submitted.createPending)
 
 	initialMsgs := runBatchCmd(t, cmd)
-	taskCreated := requireMsgType[taskCreatedMsg](t, initialMsgs)
+	createEvent := requireMsgType[taskCreateEventMsg](t, initialMsgs)
 	requireMsgType[shimmerTickMsg](t, initialMsgs)
+	require.NotNil(t, createEvent.event.Progress)
+	require.Equal(t, core.TaskCreateProgressSuggestingName, createEvent.event.Progress.Step)
 
-	next, follow := submitted.Update(taskCreated)
+	next, follow := submitted.Update(createEvent)
 	require.NotNil(t, follow)
 
 	got, ok := next.(model)
+	require.True(t, ok)
+	require.True(t, got.createPending)
+	require.Equal(t, core.TaskCreateProgressSuggestingName, got.createActive)
+	require.Contains(t, stripANSI(got.View().Content), "Suggesting name")
+
+	taskCreated := runCmd(t, follow)
+	next, follow = got.Update(taskCreated)
+	require.NotNil(t, follow)
+
+	got, ok = next.(model)
 	require.True(t, ok)
 	require.Len(t, got.rows, 3)
 	require.Equal(t, modeBrowse, got.mode)
@@ -376,7 +392,7 @@ func TestModel_CreateTaskFromPromptAppendsTaskAndStartsStatusTracking(t *testing
 	require.Equal(t, "task-3", got.rows[len(got.rows)-1].task.ID)
 	require.Equal(t, "fix the retry loop", frontend.createInput.Prompt)
 	require.Equal(t, core.ProviderCodex, frontend.createInput.Provider)
-	require.Equal(t, 1, frontend.createTaskCalls)
+	require.Equal(t, 1, frontend.createTaskStreamCalls)
 
 	frontend.listTasks = append(frontend.listTasks, frontend.createdTask)
 	msgs := runBatchCmd(t, follow)
@@ -408,6 +424,10 @@ func TestModel_CreateTaskReloadsAuthoritativeTaskSnapshotWhenCreateResponseIsPar
 		Prompt:   "testing if new rig things work",
 		Provider: core.ProviderCodex,
 	}
+	frontend.createTaskEvents = []core.TaskCreateEvent{
+		{Progress: &core.TaskCreateProgressEvent{Step: core.TaskCreateProgressSuggestingName}},
+		{Task: frontend.createdTask},
+	}
 	frontend.latestTaskStatus = map[string]*core.TaskStatusUpdate{
 		"task-2": {
 			TaskID: "task-2",
@@ -427,8 +447,12 @@ func TestModel_CreateTaskReloadsAuthoritativeTaskSnapshotWhenCreateResponseIsPar
 	require.True(t, ok)
 
 	initialMsgs := runBatchCmd(t, cmd)
-	taskCreated := requireMsgType[taskCreatedMsg](t, initialMsgs)
-	next, follow := submitted.Update(taskCreated)
+	progressMsg := requireMsgType[taskCreateEventMsg](t, initialMsgs)
+	next, follow := submitted.Update(progressMsg)
+	require.NotNil(t, follow)
+
+	taskCreated := runCmd(t, follow)
+	next, follow = submitted.Update(taskCreated)
 	require.NotNil(t, follow)
 
 	pendingReload, ok := next.(model)
@@ -484,7 +508,7 @@ func TestModel_EnterWithBlankPromptDoesNothing(t *testing.T) {
 	require.Equal(t, modePromptInput, got.mode)
 	require.Equal(t, "   ", got.prompt)
 	require.False(t, got.createPending)
-	require.Zero(t, frontend.createTaskCalls)
+	require.Zero(t, frontend.createTaskStreamCalls)
 }
 
 func TestModel_CreateTaskFailureKeepsPromptRecoverableAndPreservesListView(t *testing.T) {
@@ -494,6 +518,10 @@ func TestModel_CreateTaskFailureKeepsPromptRecoverableAndPreservesListView(t *te
 		{ID: "task-2", DisplayName: "second task", RepoName: "repo-b", Provider: core.ProviderCodex},
 	}
 	frontend.createTaskErr = errors.New("create failed")
+	frontend.createTaskEvents = []core.TaskCreateEvent{
+		{Progress: &core.TaskCreateProgressEvent{Step: core.TaskCreateProgressCreatingWorktree}},
+		{Err: errors.New("create failed")},
+	}
 
 	m := newLoadedModel(frontend)
 	m.mode = modePromptInput
@@ -507,10 +535,20 @@ func TestModel_CreateTaskFailureKeepsPromptRecoverableAndPreservesListView(t *te
 	require.True(t, pending.createPending)
 
 	initialMsgs := runBatchCmd(t, cmd)
-	taskCreated := requireMsgType[taskCreatedMsg](t, initialMsgs)
+	progressMsg := requireMsgType[taskCreateEventMsg](t, initialMsgs)
 	requireMsgType[shimmerTickMsg](t, initialMsgs)
+	require.NotNil(t, progressMsg.event.Progress)
 
-	next, follow := pending.Update(taskCreated)
+	next, follow := pending.Update(progressMsg)
+	require.NotNil(t, follow)
+
+	withProgress, ok := next.(model)
+	require.True(t, ok)
+	require.Equal(t, core.TaskCreateProgressCreatingWorktree, withProgress.createActive)
+	require.Contains(t, stripANSI(withProgress.View().Content), "Creating worktree")
+
+	createFailed := runCmd(t, follow)
+	next, follow = withProgress.Update(createFailed)
 	require.Nil(t, follow)
 
 	got, ok := next.(model)
@@ -523,6 +561,7 @@ func TestModel_CreateTaskFailureKeepsPromptRecoverableAndPreservesListView(t *te
 	require.Len(t, got.rows, 2)
 	require.Empty(t, frontend.latestTaskStatusCalls)
 	require.Empty(t, frontend.subscribeTaskStatusCalls)
+	require.Equal(t, core.TaskCreateProgressCreatingWorktree, got.createActive)
 
 	view := stripANSI(got.View().Content)
 	require.Contains(t, view, "RIG")
@@ -530,6 +569,7 @@ func TestModel_CreateTaskFailureKeepsPromptRecoverableAndPreservesListView(t *te
 	require.Contains(t, view, "Enter task prompt.")
 	require.Contains(t, view, "provider  codex")
 	require.Contains(t, view, "fix the retry loop")
+	require.Contains(t, view, "Creating worktree")
 	require.Contains(t, view, "create failed")
 	require.NotContains(t, view, "Loading tasks...")
 }
@@ -591,7 +631,7 @@ func TestModel_EscCancelsPromptMode(t *testing.T) {
 	require.Empty(t, got.prompt)
 	require.False(t, got.createPending)
 	require.NoError(t, got.createErr)
-	require.Zero(t, frontend.createTaskCalls)
+	require.Zero(t, frontend.createTaskStreamCalls)
 }
 
 func TestModel_KeyXEntersCleanupConfirmMode(t *testing.T) {
@@ -736,6 +776,9 @@ type stubFrontend struct {
 	createInput              core.CreateTaskInput
 	createTaskErr            error
 	createTaskCalls          int
+	createTaskEvents         []core.TaskCreateEvent
+	createTaskStreamErr      error
+	createTaskStreamCalls    int
 	deleteTaskErr            error
 	deleteTaskIDs            []string
 	latestTaskStatus         map[string]*core.TaskStatusUpdate
@@ -760,6 +803,24 @@ func (s *stubFrontend) CreateTask(_ context.Context, input core.CreateTaskInput)
 	s.createTaskCalls++
 	s.createInput = input
 	return s.createdTask, s.createTaskErr
+}
+
+func (s *stubFrontend) CreateTaskStream(
+	_ context.Context,
+	input core.CreateTaskInput,
+) (<-chan core.TaskCreateEvent, error) {
+	s.createTaskStreamCalls++
+	s.createInput = input
+	if s.createTaskStreamErr != nil {
+		return nil, s.createTaskStreamErr
+	}
+
+	events := make(chan core.TaskCreateEvent, len(s.createTaskEvents))
+	for _, event := range s.createTaskEvents {
+		events <- event
+	}
+	close(events)
+	return events, nil
 }
 
 func (s *stubFrontend) DeleteTask(_ context.Context, taskID string) error {

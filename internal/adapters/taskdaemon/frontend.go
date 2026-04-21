@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 
 	"rig/internal/core"
 )
@@ -24,18 +25,76 @@ func (f *frontend) OpenTaskSession(ctx context.Context, task *core.Task) error {
 }
 
 func (f *frontend) CreateTask(ctx context.Context, input core.CreateTaskInput) (*core.Task, error) {
-	resp, err := f.send(ctx, socketRequest{
-		Command: "create_task",
-		Input:   &input,
-	})
+	events, err := f.CreateTaskStream(ctx, input)
 	if err != nil {
 		return nil, err
 	}
-	if resp.Type != "task_created" || !resp.OK || resp.Task == nil {
-		return nil, unexpectedResponseError("create_task", *resp)
+
+	for event := range events {
+		if event.Err != nil {
+			return nil, event.Err
+		}
+		if event.Task != nil {
+			return event.Task, nil
+		}
 	}
 
-	return resp.Task, nil
+	return nil, fmt.Errorf("create task stream closed without terminal result")
+}
+
+func (f *frontend) CreateTaskStream(
+	ctx context.Context,
+	input core.CreateTaskInput,
+) (<-chan core.TaskCreateEvent, error) {
+	conn, err := dialDaemonSocket(ctx, f.socketPath)
+	if err != nil {
+		return nil, err
+	}
+
+	if err := json.NewEncoder(conn).Encode(socketRequest{
+		Command: "create_task",
+		Input:   &input,
+	}); err != nil {
+		_ = conn.Close()
+		return nil, err
+	}
+
+	stopCancelWatch := context.AfterFunc(ctx, func() {
+		_ = conn.Close()
+	})
+
+	events := make(chan core.TaskCreateEvent, 16)
+	go func() {
+		defer close(events)
+		defer conn.Close()
+		defer stopCancelWatch()
+
+		decoder := json.NewDecoder(bufio.NewReader(conn))
+		for {
+			event, recvErr := receiveTaskCreateEvent(decoder)
+			if recvErr != nil {
+				if !errors.Is(recvErr, io.EOF) {
+					select {
+					case <-ctx.Done():
+					case events <- core.TaskCreateEvent{Err: recvErr}:
+					}
+				}
+				return
+			}
+
+			select {
+			case <-ctx.Done():
+				return
+			case events <- event:
+			}
+
+			if event.Task != nil || event.Err != nil {
+				return
+			}
+		}
+	}()
+
+	return events, nil
 }
 
 func (f *frontend) DeleteTask(ctx context.Context, taskID string) error {

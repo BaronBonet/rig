@@ -38,6 +38,16 @@ func createTaskCmd(ctx context.Context, frontend core.TaskFrontend, input core.C
 	}
 }
 
+func createTaskStreamCmd(ctx context.Context, frontend core.TaskFrontend, input core.CreateTaskInput) tea.Cmd {
+	return func() tea.Msg {
+		events, err := frontend.CreateTaskStream(ctx, input)
+		if err != nil {
+			return taskCreateStreamStartFailedMsg{err: err}
+		}
+		return waitForTaskCreateEventCmd(events)()
+	}
+}
+
 func deleteTaskCmd(ctx context.Context, frontend core.TaskFrontend, taskID string) tea.Cmd {
 	return func() tea.Msg {
 		err := frontend.DeleteTask(ctx, taskID)
@@ -72,6 +82,24 @@ func subscribeTaskStatusCmd(ctx context.Context, frontend core.TaskFrontend, tas
 			taskID:  taskID,
 			updates: updates,
 			err:     err,
+		}
+	}
+}
+
+func waitForTaskCreateEventCmd(events <-chan core.TaskCreateEvent) tea.Cmd {
+	return func() tea.Msg {
+		if events == nil {
+			return taskCreateStreamClosedMsg{}
+		}
+
+		event, ok := <-events
+		if !ok {
+			return taskCreateStreamClosedMsg{}
+		}
+
+		return taskCreateEventMsg{
+			events: events,
+			event:  event,
 		}
 	}
 }

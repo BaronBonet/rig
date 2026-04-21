@@ -2,6 +2,7 @@ package tui
 
 import (
 	"context"
+	"errors"
 	"strings"
 
 	"rig/internal/core"
@@ -40,6 +41,8 @@ type model struct {
 	loading       bool
 	createPending bool
 	deletePending bool
+	createActive  core.TaskCreateProgressStep
+	createDone    []core.TaskCreateProgressStep
 }
 
 type tasksLoadedMsg struct {
@@ -77,6 +80,17 @@ type taskCreatedMsg struct {
 type taskOpenedMsg struct {
 	err error
 }
+
+type taskCreateStreamStartFailedMsg struct {
+	err error
+}
+
+type taskCreateEventMsg struct {
+	events <-chan core.TaskCreateEvent
+	event  core.TaskCreateEvent
+}
+
+type taskCreateStreamClosedMsg struct{}
 
 type taskDeletedMsg struct {
 	err    error
@@ -211,9 +225,40 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if index >= 0 {
 			m.selected = index
 		}
+		m.resetCreateProgress()
 		m.clampSelection()
 		cmds := append([]tea.Cmd{loadTasksCmd(m.statusContext, m.frontend)}, m.taskStatusTrackingCmds(taskID(msg.task))...)
 		return m, tea.Batch(cmds...)
+	case taskCreateStreamStartFailedMsg:
+		m.createPending = false
+		m.shimmerTick = 0
+		m.createErr = msg.err
+		return m, nil
+	case taskCreateEventMsg:
+		switch {
+		case msg.event.Progress != nil:
+			m.advanceCreateProgress(msg.event.Progress.Step)
+			return m, waitForTaskCreateEventCmd(msg.events)
+		case msg.event.Task != nil:
+			return m.Update(taskCreatedMsg{task: msg.event.Task})
+		case msg.event.Err != nil:
+			m.createPending = false
+			m.shimmerTick = 0
+			m.createErr = msg.event.Err
+			return m, nil
+		default:
+			return m, waitForTaskCreateEventCmd(msg.events)
+		}
+	case taskCreateStreamClosedMsg:
+		if !m.createPending {
+			return m, nil
+		}
+		m.createPending = false
+		m.shimmerTick = 0
+		if m.createErr == nil {
+			m.createErr = errors.New("create task stream closed unexpectedly")
+		}
+		return m, nil
 	case taskOpenedMsg:
 		if msg.err != nil {
 			m.err = msg.err
@@ -287,9 +332,10 @@ func (m model) submitPrompt() (model, tea.Cmd) {
 	m.createPending = true
 	m.createErr = nil
 	m.shimmerTick = 0
+	m.resetCreateProgress()
 
 	return m, tea.Batch(
-		createTaskCmd(m.statusContext, m.frontend, core.CreateTaskInput{
+		createTaskStreamCmd(m.statusContext, m.frontend, core.CreateTaskInput{
 			Prompt:   prompt,
 			Provider: defaultCreateProvider,
 		}),
@@ -307,6 +353,7 @@ func (m model) updatePromptInput(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		m.mode = modeBrowse
 		m.prompt = ""
 		m.createErr = nil
+		m.resetCreateProgress()
 		return m, nil
 	case tea.KeyEnter:
 		return m.submitPrompt()
@@ -431,6 +478,21 @@ func (m *model) upsertTaskRow(task *core.Task) int {
 	return len(m.rows) - 1
 }
 
+func (m *model) resetCreateProgress() {
+	m.createActive = ""
+	m.createDone = nil
+}
+
+func (m *model) advanceCreateProgress(step core.TaskCreateProgressStep) {
+	if step == "" {
+		return
+	}
+	if m.createActive != "" && m.createActive != step && !containsCreateStep(m.createDone, m.createActive) {
+		m.createDone = append(m.createDone, m.createActive)
+	}
+	m.createActive = step
+}
+
 func (m *model) removeTaskRow(targetTaskID string) {
 	filtered := m.rows[:0]
 	for _, row := range m.rows {
@@ -475,6 +537,15 @@ func trimLastRune(value string) string {
 		return ""
 	}
 	return string(runes[:len(runes)-1])
+}
+
+func containsCreateStep(steps []core.TaskCreateProgressStep, target core.TaskCreateProgressStep) bool {
+	for _, step := range steps {
+		if step == target {
+			return true
+		}
+	}
+	return false
 }
 
 func isQuitKey(msg tea.KeyPressMsg) bool {

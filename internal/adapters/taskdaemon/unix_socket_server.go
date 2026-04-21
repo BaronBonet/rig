@@ -78,6 +78,12 @@ func (s *unixSocketServer) handleConn(ctx context.Context, conn net.Conn) {
 	switch req.Command {
 	case "health":
 		_ = writeSocketEnvelope(encoder, socketEnvelope{Type: "health", OK: true})
+	case "protocol_version":
+		_ = writeSocketEnvelope(encoder, socketEnvelope{
+			Type:            "protocol_version",
+			OK:              true,
+			ProtocolVersion: currentFrontendProtocolVersion,
+		})
 	case "frontend_build_version":
 		_ = writeSocketEnvelope(encoder, socketEnvelope{
 			Type:    "frontend_build_version",
@@ -114,13 +120,32 @@ func (s *unixSocketServer) handleCreateTask(ctx context.Context, encoder *json.E
 		return
 	}
 
-	task, err := s.frontend.CreateTask(ctx, *req.Input)
+	events, err := s.frontend.CreateTaskStream(ctx, *req.Input)
 	if err != nil {
 		_ = writeSocketEnvelope(encoder, socketEnvelope{Type: "error", Error: err.Error()})
 		return
 	}
 
-	_ = writeSocketEnvelope(encoder, socketEnvelope{Type: "task_created", OK: true, Task: task})
+	for event := range events {
+		switch {
+		case event.Progress != nil:
+			if err := writeSocketEnvelope(encoder, socketEnvelope{
+				Type:           "task_create_progress",
+				OK:             true,
+				CreateProgress: event.Progress,
+			}); err != nil {
+				return
+			}
+		case event.Task != nil:
+			_ = writeSocketEnvelope(encoder, socketEnvelope{Type: "task_created", OK: true, Task: event.Task})
+			return
+		case event.Err != nil:
+			_ = writeSocketEnvelope(encoder, socketEnvelope{Type: "error", Error: event.Err.Error()})
+			return
+		}
+	}
+
+	_ = writeSocketEnvelope(encoder, socketEnvelope{Type: "error", Error: "create task stream closed without terminal result"})
 }
 
 func (s *unixSocketServer) handleDeleteTask(ctx context.Context, encoder *json.Encoder, req socketRequest) {
