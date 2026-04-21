@@ -1,6 +1,7 @@
 package taskdaemon
 
 import (
+	"context"
 	"fmt"
 	"net"
 	"net/http"
@@ -9,12 +10,12 @@ import (
 	"rig/internal/core"
 )
 
-func listenForHTTPHooks(addr string) (net.Listener, error) {
+func listenForHTTPHooks(ctx context.Context, addr string) (net.Listener, error) {
 	if strings.TrimSpace(addr) == "" {
 		return nil, fmt.Errorf("task daemon hook listen addr not configured")
 	}
 
-	listener, err := net.Listen("tcp", addr)
+	listener, err := (&net.ListenConfig{}).Listen(ctx, "tcp", addr)
 	if err != nil {
 		return nil, fmt.Errorf("listen for task daemon hook ingestion: %w", err)
 	}

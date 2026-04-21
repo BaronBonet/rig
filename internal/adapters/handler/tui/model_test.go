@@ -437,8 +437,8 @@ func TestModel_CreateTaskFailureKeepsPromptRecoverableAndPreservesListView(t *te
 	require.ErrorContains(t, got.createErr, "create failed")
 	require.NoError(t, got.err)
 	require.Len(t, got.rows, 2)
-	require.Zero(t, len(frontend.latestTaskStatusCalls))
-	require.Zero(t, len(frontend.subscribeTaskStatusCalls))
+	require.Empty(t, frontend.latestTaskStatusCalls)
+	require.Empty(t, frontend.subscribeTaskStatusCalls)
 
 	view := stripANSI(got.View().Content)
 	require.Contains(t, view, "RIG")

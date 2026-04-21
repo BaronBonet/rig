@@ -28,41 +28,41 @@ const defaultCreateProvider = core.ProviderCodex
 type model struct {
 	frontend      core.TaskFrontend
 	statusContext context.Context
+	err           error
+	createErr     error
+	prompt        string
 	cancelStatus  context.CancelFunc
 	rows          []taskRow
 	selected      int
-	loading       bool
-	err           error
-	mode          modelMode
-	prompt        string
-	createPending bool
-	createErr     error
-	deletePending bool
 	width         int
 	shimmerTick   int
+	mode          modelMode
+	loading       bool
+	createPending bool
+	deletePending bool
 }
 
 type tasksLoadedMsg struct {
-	tasks []*core.Task
 	err   error
+	tasks []*core.Task
 }
 
 type latestTaskStatusLoadedMsg struct {
-	taskID string
 	status *core.TaskStatusUpdate
 	err    error
+	taskID string
 }
 
 type taskStatusSubscriptionReadyMsg struct {
-	taskID  string
 	updates <-chan core.TaskStatusUpdate
 	err     error
+	taskID  string
 }
 
 type taskStatusUpdatedMsg struct {
-	taskID  string
-	update  core.TaskStatusUpdate
 	updates <-chan core.TaskStatusUpdate
+	update  core.TaskStatusUpdate
+	taskID  string
 }
 
 type taskStatusSubscriptionClosedMsg struct {
@@ -79,8 +79,8 @@ type taskOpenedMsg struct {
 }
 
 type taskDeletedMsg struct {
-	taskID string
 	err    error
+	taskID string
 }
 
 type shimmerTickMsg struct{}

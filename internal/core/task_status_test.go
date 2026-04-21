@@ -10,9 +10,9 @@ import (
 )
 
 func TestTaskStatusPhase_FirstSliceValues(t *testing.T) {
-	require.Equal(t, core.TaskStatusPhase("starting"), core.TaskStatusPhaseStarting)
-	require.Equal(t, core.TaskStatusPhase("working"), core.TaskStatusPhaseWorking)
-	require.Equal(t, core.TaskStatusPhase("waiting_for_input"), core.TaskStatusPhaseWaitingForInput)
+	require.Equal(t, core.TaskStatusPhaseStarting, core.TaskStatusPhase("starting"))
+	require.Equal(t, core.TaskStatusPhaseWorking, core.TaskStatusPhase("working"))
+	require.Equal(t, core.TaskStatusPhaseWaitingForInput, core.TaskStatusPhase("waiting_for_input"))
 }
 
 func TestTaskStatusUpdate_HoldsFirstSliceFields(t *testing.T) {

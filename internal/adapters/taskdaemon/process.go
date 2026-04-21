@@ -101,7 +101,7 @@ func spawnTaskDaemonProcess(ctx context.Context, execPath string, env []string) 
 		return err
 	}
 
-	cmd := exec.Command(execPath)
+	cmd := exec.CommandContext(context.WithoutCancel(ctx), execPath)
 	if len(env) > 0 {
 		cmd.Env = append(os.Environ(), env...)
 	}
@@ -143,11 +143,7 @@ func waitForHealthyTaskDaemon(ctx context.Context, socketPath string) error {
 		select {
 		case <-waitCtx.Done():
 			if lastErr != nil {
-				return fmt.Errorf(
-					"task daemon did not become healthy: %w (last health error: %v)",
-					waitCtx.Err(),
-					lastErr,
-				)
+				return fmt.Errorf("task daemon did not become healthy: %w", errors.Join(waitCtx.Err(), lastErr))
 			}
 			return fmt.Errorf("task daemon did not become healthy: %w", waitCtx.Err())
 		case <-ticker.C:

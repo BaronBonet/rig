@@ -19,8 +19,8 @@ type repoConfig struct {
 }
 
 type seedConfig struct {
-	Copy        []string
 	SetupScript string
+	Copy        []string
 }
 
 func loadRepoConfig(repoRoot string) (repoConfig, error) {

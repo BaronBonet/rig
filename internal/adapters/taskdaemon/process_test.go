@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"context"
 	"encoding/json"
+	"fmt"
 	"net"
 	"os"
 	"os/exec"
@@ -40,7 +41,7 @@ func TestStopTaskDaemon_SendsStopRequestAndAcceptsStoppingResponse(t *testing.T)
 	t.Parallel()
 
 	socketPath := processTestSocketPath(t)
-	listener, err := net.Listen("unix", socketPath)
+	listener, err := listenUnixSocket(t.Context(), socketPath)
 	require.NoError(t, err)
 	defer listener.Close()
 
@@ -61,10 +62,12 @@ func TestStopTaskDaemon_SendsStopRequestAndAcceptsStoppingResponse(t *testing.T)
 		}
 		requestCh <- req
 
-		errCh <- json.NewEncoder(conn).Encode(socketEnvelope{
-			Type: "stopping",
-			OK:   true,
-		})
+		if err := json.NewEncoder(conn).Encode(socketEnvelope{Type: "stopping", OK: true}); err != nil {
+			errCh <- err
+			return
+		}
+
+		errCh <- nil
 	}()
 
 	require.NoError(t, stopTaskDaemon(context.Background(), socketPath))
@@ -137,7 +140,7 @@ func TestAdapterEnsureRunning_RestartsStaleHealthyDaemonMissingFrontendProtocol(
 	socketPath := processTestSocketPath(t)
 	adapter := New(processTestHelperConfig(t, socketPath))
 
-	manualListener, err := net.Listen("unix", socketPath)
+	manualListener, err := listenUnixSocket(t.Context(), socketPath)
 	require.NoError(t, err)
 	defer manualListener.Close()
 
@@ -163,7 +166,7 @@ func TestAdapterRestart_StopsExistingDaemonAndStartsFreshProcess(t *testing.T) {
 	socketPath := processTestSocketPath(t)
 	adapter := New(processTestHelperConfig(t, socketPath))
 
-	manualListener, err := net.Listen("unix", socketPath)
+	manualListener, err := listenUnixSocket(t.Context(), socketPath)
 	require.NoError(t, err)
 	defer manualListener.Close()
 
@@ -186,7 +189,7 @@ func TestAdapterRestart_ReturnsStopErrorWithoutRemovingSocket(t *testing.T) {
 	t.Parallel()
 
 	socketPath := processTestSocketPath(t)
-	listener, err := net.Listen("unix", socketPath)
+	listener, err := listenUnixSocket(t.Context(), socketPath)
 	require.NoError(t, err)
 	defer listener.Close()
 
@@ -205,12 +208,20 @@ func TestAdapterRestart_ReturnsStopErrorWithoutRemovingSocket(t *testing.T) {
 			return
 		}
 
-		require.Equal(t, socketRequest{Command: "stop"}, req)
-		errCh <- json.NewEncoder(conn).Encode(socketEnvelope{
+		if req != (socketRequest{Command: "stop"}) {
+			errCh <- fmt.Errorf("unexpected request: %#v", req)
+			return
+		}
+		if err := json.NewEncoder(conn).Encode(socketEnvelope{
 			Type:  "stopping",
 			OK:    false,
 			Error: "stop failed",
-		})
+		}); err != nil {
+			errCh <- err
+			return
+		}
+
+		errCh <- nil
 	}()
 
 	adapter := New(processTestHelperConfig(t, socketPath))
@@ -227,7 +238,7 @@ func TestAdapterRestart_RemovesStaleSocketPathAndStartsFreshProcess(t *testing.T
 	t.Parallel()
 
 	socketPath := processTestSocketPath(t)
-	listener, err := net.Listen("unix", socketPath)
+	listener, err := listenUnixSocket(t.Context(), socketPath)
 	require.NoError(t, err)
 	require.NoError(t, listener.Close())
 
@@ -243,7 +254,7 @@ func TestWaitForHealthyTaskDaemon_IncludesLastHealthErrorOnTimeout(t *testing.T)
 	t.Parallel()
 
 	socketPath := processTestSocketPath(t)
-	listener, err := net.Listen("unix", socketPath)
+	listener, err := listenUnixSocket(t.Context(), socketPath)
 	require.NoError(t, err)
 	defer listener.Close()
 
@@ -260,7 +271,7 @@ func TestWaitForHealthyTaskDaemon_IncludesLastHealthErrorOnTimeout(t *testing.T)
 
 			conn, acceptErr := listener.Accept()
 			if acceptErr != nil {
-				if ne, ok := acceptErr.(net.Error); ok && ne.Timeout() {
+				if isTimeoutNetError(acceptErr) {
 					select {
 					case <-ctx.Done():
 						errCh <- nil
@@ -273,12 +284,20 @@ func TestWaitForHealthyTaskDaemon_IncludesLastHealthErrorOnTimeout(t *testing.T)
 				return
 			}
 
-			_ = json.NewDecoder(bufio.NewReader(conn)).Decode(&socketRequest{})
-			_ = json.NewEncoder(conn).Encode(socketEnvelope{
+			if err := json.NewDecoder(bufio.NewReader(conn)).Decode(&socketRequest{}); err != nil {
+				errCh <- err
+				_ = conn.Close()
+				return
+			}
+			if err := json.NewEncoder(conn).Encode(socketEnvelope{
 				Type:  "health",
 				OK:    false,
 				Error: "daemon unhealthy for test",
-			})
+			}); err != nil {
+				errCh <- err
+				_ = conn.Close()
+				return
+			}
 			_ = conn.Close()
 		}
 	}()
@@ -326,7 +345,7 @@ func serveTestDaemon(
 
 		conn, acceptErr := listener.Accept()
 		if acceptErr != nil {
-			if ne, ok := acceptErr.(net.Error); ok && ne.Timeout() {
+			if isTimeoutNetError(acceptErr) {
 				select {
 				case <-ctx.Done():
 					errCh <- nil
@@ -370,7 +389,7 @@ func serveLegacyTestDaemon(
 
 		conn, acceptErr := listener.Accept()
 		if acceptErr != nil {
-			if ne, ok := acceptErr.(net.Error); ok && ne.Timeout() {
+			if isTimeoutNetError(acceptErr) {
 				select {
 				case <-ctx.Done():
 					errCh <- nil
@@ -450,7 +469,7 @@ func runHelperDaemon(socketPath string) {
 	}
 
 	_ = os.Remove(socketPath)
-	listener, err := net.Listen("unix", socketPath)
+	listener, err := listenUnixSocket(context.Background(), socketPath)
 	if err != nil {
 		os.Exit(3)
 	}
@@ -471,7 +490,7 @@ func runHelperDaemon(socketPath string) {
 func startHelperDaemonProcess(t *testing.T, socketPath string) {
 	t.Helper()
 
-	cmd := exec.Command(os.Args[0])
+	cmd := exec.CommandContext(t.Context(), os.Args[0])
 	cmd.Env = append(os.Environ(),
 		processTestHelperEnv+"=1",
 		processTestHelperSocketEnv+"="+socketPath,

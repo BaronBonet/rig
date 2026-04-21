@@ -19,7 +19,7 @@ import (
 func TestFrontend_ImplementsTaskFrontend(t *testing.T) {
 	t.Parallel()
 
-	var _ core.TaskFrontend = New(Config{}).Frontend()
+	require.NotNil(t, New(Config{}).Frontend())
 }
 
 func TestFrontend_ListTasksSendsListTasksAndReturnsTasks(t *testing.T) {
@@ -430,7 +430,7 @@ func serveOneShotFrontendSocket(
 ) <-chan error {
 	t.Helper()
 
-	listener, err := net.Listen("unix", socketPath)
+	listener, err := listenUnixSocket(t.Context(), socketPath)
 	require.NoError(t, err)
 
 	errCh := make(chan error, 1)
@@ -479,7 +479,7 @@ func serveStreamingFrontendSocketWithConn(
 ) <-chan error {
 	t.Helper()
 
-	listener, err := net.Listen("unix", socketPath)
+	listener, err := listenUnixSocket(t.Context(), socketPath)
 	require.NoError(t, err)
 
 	errCh := make(chan error, 1)

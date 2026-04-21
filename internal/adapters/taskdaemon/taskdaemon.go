@@ -10,8 +10,8 @@ import (
 )
 
 type adapter struct {
-	cfg      Config
 	frontend core.TaskFrontend
+	cfg      Config
 }
 
 func New(cfg Config) core.TaskDaemon {

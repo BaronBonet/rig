@@ -2,6 +2,7 @@ package taskdaemon
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net/http"
 
@@ -9,11 +10,11 @@ import (
 )
 
 type server struct {
+	service        core.TaskService
 	socketPath     string
 	hookListenAddr string
-	service        core.TaskService
-	hookRoutes     []core.TaskDaemonHookRoute
 	stop           func()
+	hookRoutes     []core.TaskDaemonHookRoute
 }
 
 func (s *server) OpenTaskSession(context.Context, *core.Task) error {
@@ -41,7 +42,7 @@ func (s *server) SubscribeTaskStatus(ctx context.Context, taskID string) (<-chan
 }
 
 func (s *server) Serve(ctx context.Context) error {
-	httpHookListener, err := listenForHTTPHooks(s.hookListenAddr)
+	httpHookListener, err := listenForHTTPHooks(ctx, s.hookListenAddr)
 	if err != nil {
 		return err
 	}
@@ -77,5 +78,5 @@ func (s *server) Serve(ctx context.Context) error {
 }
 
 func errorsIsHTTPServerClosed(err error) bool {
-	return err == http.ErrServerClosed
+	return errors.Is(err, http.ErrServerClosed)
 }
