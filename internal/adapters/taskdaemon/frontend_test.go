@@ -81,6 +81,72 @@ func TestFrontend_CreateTaskLatestTaskStatusAndSubscribeTaskStatus(t *testing.T)
 		require.NoError(t, <-serverErrCh)
 	})
 
+	t.Run("create task stream", func(t *testing.T) {
+		t.Parallel()
+
+		socketPath := frontendTestSocketPath(t)
+		input := core.CreateTaskInput{
+			Cwd:      "/repo",
+			Prompt:   "ship it",
+			Provider: core.ProviderCodex,
+		}
+		expectedTask := &core.Task{ID: "task-123", DisplayName: "Ship it"}
+		requestCh := make(chan socketRequest, 1)
+		serverErrCh := serveStreamingFrontendSocket(t, socketPath, func(req socketRequest, encoder *json.Encoder) error {
+			requestCh <- req
+			if err := encoder.Encode(socketEnvelope{
+				Type: "task_create_progress",
+				OK:   true,
+				CreateProgress: &core.TaskCreateProgressEvent{
+					Step: core.TaskCreateProgressSuggestingName,
+				},
+			}); err != nil {
+				return err
+			}
+			return encoder.Encode(socketEnvelope{
+				Type: "task_created",
+				OK:   true,
+				Task: expectedTask,
+			})
+		})
+
+		frontend := New(Config{SocketPath: socketPath}).Frontend()
+
+		events, err := frontend.CreateTaskStream(t.Context(), input)
+		require.NoError(t, err)
+		require.Equal(t, socketRequest{Command: "create_task", Input: &input}, <-requestCh)
+
+		select {
+		case event, ok := <-events:
+			require.True(t, ok)
+			require.NotNil(t, event.Progress)
+			require.Equal(t, core.TaskCreateProgressSuggestingName, event.Progress.Step)
+			require.Nil(t, event.Task)
+			require.NoError(t, event.Err)
+		case <-time.After(2 * time.Second):
+			t.Fatal("timed out waiting for create progress event")
+		}
+
+		select {
+		case event, ok := <-events:
+			require.True(t, ok)
+			require.Nil(t, event.Progress)
+			require.Equal(t, expectedTask, event.Task)
+			require.NoError(t, event.Err)
+		case <-time.After(2 * time.Second):
+			t.Fatal("timed out waiting for create task result")
+		}
+
+		select {
+		case _, ok := <-events:
+			require.False(t, ok)
+		case <-time.After(2 * time.Second):
+			t.Fatal("timed out waiting for create stream close")
+		}
+
+		require.NoError(t, <-serverErrCh)
+	})
+
 	t.Run("delete task", func(t *testing.T) {
 		t.Parallel()
 
@@ -273,6 +339,64 @@ func TestFrontend_CreateTaskLatestTaskStatusAndSubscribeTaskStatus(t *testing.T)
 		}
 
 		require.ErrorIs(t, <-serverErrCh, io.EOF)
+	})
+
+	t.Run("create task stream yields terminal error", func(t *testing.T) {
+		t.Parallel()
+
+		socketPath := frontendTestSocketPath(t)
+		requestCh := make(chan socketRequest, 1)
+		serverErrCh := serveStreamingFrontendSocket(t, socketPath, func(req socketRequest, encoder *json.Encoder) error {
+			requestCh <- req
+			if err := encoder.Encode(socketEnvelope{
+				Type: "task_create_progress",
+				OK:   true,
+				CreateProgress: &core.TaskCreateProgressEvent{
+					Step: core.TaskCreateProgressCreatingWorktree,
+				},
+			}); err != nil {
+				return err
+			}
+			return encoder.Encode(socketEnvelope{Type: "error", Error: "create failed"})
+		})
+
+		frontend := New(Config{SocketPath: socketPath}).Frontend()
+
+		events, err := frontend.CreateTaskStream(t.Context(), core.CreateTaskInput{Prompt: "ship it"})
+		require.NoError(t, err)
+		require.Equal(
+			t,
+			socketRequest{Command: "create_task", Input: &core.CreateTaskInput{Prompt: "ship it"}},
+			<-requestCh,
+		)
+
+		select {
+		case event, ok := <-events:
+			require.True(t, ok)
+			require.NotNil(t, event.Progress)
+			require.Equal(t, core.TaskCreateProgressCreatingWorktree, event.Progress.Step)
+		case <-time.After(2 * time.Second):
+			t.Fatal("timed out waiting for streamed create progress")
+		}
+
+		select {
+		case event, ok := <-events:
+			require.True(t, ok)
+			require.Nil(t, event.Progress)
+			require.Nil(t, event.Task)
+			require.EqualError(t, event.Err, "create failed")
+		case <-time.After(2 * time.Second):
+			t.Fatal("timed out waiting for terminal create error")
+		}
+
+		select {
+		case _, ok := <-events:
+			require.False(t, ok)
+		case <-time.After(2 * time.Second):
+			t.Fatal("timed out waiting for errored create stream close")
+		}
+
+		require.NoError(t, <-serverErrCh)
 	})
 }
 

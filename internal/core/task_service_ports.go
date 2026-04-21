@@ -34,6 +34,25 @@ type CreateTaskInput struct {
 	Provider Provider         `json:"provider"`
 }
 
+type TaskCreateProgressStep string
+
+const (
+	TaskCreateProgressSuggestingName     TaskCreateProgressStep = "suggesting_name"
+	TaskCreateProgressCreatingWorktree   TaskCreateProgressStep = "creating_worktree"
+	TaskCreateProgressPreparingWorkspace TaskCreateProgressStep = "preparing_workspace"
+	TaskCreateProgressStartingSession    TaskCreateProgressStep = "starting_session"
+)
+
+type TaskCreateProgressEvent struct {
+	Step TaskCreateProgressStep `json:"step"`
+}
+
+type TaskCreateEvent struct {
+	Err      error                    `json:"-"`
+	Progress *TaskCreateProgressEvent `json:"progress,omitempty"`
+	Task     *Task                    `json:"task,omitempty"`
+}
+
 // TaskFrontend is the frontend-facing task application port used by the TUI.
 // In the active runtime, `rig` gets a daemon-backed implementation from the
 // taskdaemon adapter and passes it into the TUI. The TUI only knows about this
@@ -45,6 +64,9 @@ type TaskFrontend interface {
 	// CreateTask creates a new task and returns the durable task record that the
 	// frontend should render immediately.
 	CreateTask(ctx context.Context, input CreateTaskInput) (*Task, error)
+	// CreateTaskStream creates a new task and streams progress events followed by
+	// one terminal result event.
+	CreateTaskStream(ctx context.Context, input CreateTaskInput) (<-chan TaskCreateEvent, error)
 	// DeleteTask deletes the task and its local runtime resources while keeping
 	// the Git branch.
 	DeleteTask(ctx context.Context, taskID string) error

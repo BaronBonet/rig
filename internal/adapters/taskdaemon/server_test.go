@@ -64,6 +64,94 @@ func TestUnixSocketServer_CreateTaskCallsTaskService(t *testing.T) {
 	require.NoError(t, <-errCh)
 }
 
+func TestUnixSocketServer_CreateTaskStreamsProgressBeforeTerminalResult(t *testing.T) {
+	t.Parallel()
+
+	socketPath := serverTestSocketPath(t)
+	svc := &stubTaskService{
+		createTaskFn: func(ctx context.Context, input core.CreateTaskInput) (*core.Task, error) {
+			require.Equal(t, "add retries", input.Prompt)
+			core.ReportTaskCreateProgress(ctx, core.TaskCreateProgressSuggestingName)
+			core.ReportTaskCreateProgress(ctx, core.TaskCreateProgressCreatingWorktree)
+			return &core.Task{
+				ID:          "task-1",
+				DisplayName: "add retries",
+			}, nil
+		},
+	}
+	adapter := New(Config{
+		SocketPath:     socketPath,
+		HookListenAddr: "127.0.0.1:0",
+	})
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	errCh := make(chan error, 1)
+	go func() {
+		errCh <- adapter.Serve(ctx, svc, nil, nil)
+	}()
+	waitForUnixSocketServer(t, socketPath)
+
+	events, err := createTaskStreamViaSocket(context.Background(), socketPath, core.CreateTaskInput{
+		Cwd:      "/tmp/repo",
+		Prompt:   "add retries",
+		Provider: core.ProviderCodex,
+	})
+	require.NoError(t, err)
+	require.Len(t, events, 3)
+	require.NotNil(t, events[0].CreateProgress)
+	require.Equal(t, core.TaskCreateProgressSuggestingName, events[0].CreateProgress.Step)
+	require.NotNil(t, events[1].CreateProgress)
+	require.Equal(t, core.TaskCreateProgressCreatingWorktree, events[1].CreateProgress.Step)
+	require.NotNil(t, events[2].Task)
+	require.Equal(t, "task-1", events[2].Task.ID)
+
+	cancel()
+	require.NoError(t, <-errCh)
+}
+
+func TestUnixSocketServer_CreateTaskStreamsTerminalErrorOnFailure(t *testing.T) {
+	t.Parallel()
+
+	socketPath := serverTestSocketPath(t)
+	svc := &stubTaskService{
+		createTaskFn: func(ctx context.Context, input core.CreateTaskInput) (*core.Task, error) {
+			require.Equal(t, "add retries", input.Prompt)
+			core.ReportTaskCreateProgress(ctx, core.TaskCreateProgressPreparingWorkspace)
+			return nil, assertiveError("create failed")
+		},
+	}
+	adapter := New(Config{
+		SocketPath:     socketPath,
+		HookListenAddr: "127.0.0.1:0",
+	})
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	errCh := make(chan error, 1)
+	go func() {
+		errCh <- adapter.Serve(ctx, svc, nil, nil)
+	}()
+	waitForUnixSocketServer(t, socketPath)
+
+	events, err := createTaskStreamViaSocket(context.Background(), socketPath, core.CreateTaskInput{
+		Cwd:      "/tmp/repo",
+		Prompt:   "add retries",
+		Provider: core.ProviderCodex,
+	})
+	require.NoError(t, err)
+	require.Len(t, events, 2)
+	require.NotNil(t, events[0].CreateProgress)
+	require.Equal(t, core.TaskCreateProgressPreparingWorkspace, events[0].CreateProgress.Step)
+	require.Equal(t, "error", events[1].Type)
+	require.Equal(t, "create failed", events[1].Error)
+
+	cancel()
+	require.NoError(t, <-errCh)
+}
+
 func TestUnixSocketServer_ListTasksReturnsTasksSnapshot(t *testing.T) {
 	t.Parallel()
 
@@ -375,6 +463,36 @@ func createTaskViaSocket(ctx context.Context, socketPath string, input core.Crea
 	}
 
 	return resp.Task, nil
+}
+
+func createTaskStreamViaSocket(ctx context.Context, socketPath string, input core.CreateTaskInput) ([]socketEnvelope, error) {
+	conn, err := dialDaemonSocket(ctx, socketPath)
+	if err != nil {
+		return nil, err
+	}
+	defer conn.Close()
+
+	if err := json.NewEncoder(conn).Encode(socketRequest{
+		Command: "create_task",
+		Input:   &input,
+	}); err != nil {
+		return nil, err
+	}
+
+	decoder := json.NewDecoder(conn)
+	var events []socketEnvelope
+	for {
+		var resp socketEnvelope
+		if err := decoder.Decode(&resp); err != nil {
+			break
+		}
+		events = append(events, resp)
+		if resp.Type == "task_created" || resp.Type == "error" {
+			break
+		}
+	}
+
+	return events, nil
 }
 
 func deleteTaskViaSocket(ctx context.Context, socketPath string, taskID string) error {

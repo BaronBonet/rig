@@ -2,10 +2,9 @@ package tui
 
 import (
 	"fmt"
+	"rig/internal/core"
 	"strings"
 	"time"
-
-	"rig/internal/core"
 
 	"charm.land/lipgloss/v2"
 )
@@ -22,7 +21,7 @@ func (m model) listView() string {
 	var builder strings.Builder
 	builder.WriteString(renderHeader(
 		headerLabelStyle.Render("RIG"),
-		mutedStyle.Render("enter open   n new   r refresh   x clean   q quit"),
+		mutedStyle.Render("n new   r refresh   x clean   q quit"),
 		totalWidth,
 	) + "\n")
 	builder.WriteString(dividerStyle.Render(strings.Repeat("─", totalWidth)) + "\n")
@@ -218,8 +217,8 @@ func (m model) promptInputView() string {
 	}
 	builder.WriteString(prompt)
 
-	if m.createPending {
-		builder.WriteString("\n\n" + warningStyle.Render("●") + " " + renderShimmer("Creating task...", m.shimmerTick))
+	if progress := m.renderCreateProgress(); progress != "" {
+		builder.WriteString("\n\n" + progress)
 	}
 
 	builder.WriteString("\n\n")
@@ -229,6 +228,51 @@ func (m model) promptInputView() string {
 	)
 
 	return builder.String()
+}
+
+func (m model) renderCreateProgress() string {
+	if !m.createPending && len(m.createDone) == 0 && m.createActive == "" {
+		return ""
+	}
+
+	steps := []core.TaskCreateProgressStep{
+		core.TaskCreateProgressSuggestingName,
+		core.TaskCreateProgressCreatingWorktree,
+		core.TaskCreateProgressPreparingWorkspace,
+		core.TaskCreateProgressStartingSession,
+	}
+
+	var lines []string
+	for _, step := range steps {
+		label := taskCreateProgressLabel(step)
+		switch {
+		case containsCreateStep(m.createDone, step):
+			lines = append(lines, healthyStyle.Render("●")+" "+primaryStyle.Render(label))
+		case step == m.createActive && m.createPending:
+			lines = append(lines, warningStyle.Render("●")+" "+renderShimmer(label, m.shimmerTick))
+		case step == m.createActive && m.createErr != nil:
+			lines = append(lines, errorStyle.Render("●")+" "+errorStyle.Render(label))
+		default:
+			lines = append(lines, dimStyle.Render("○ "+label))
+		}
+	}
+
+	return strings.Join(lines, "\n")
+}
+
+func taskCreateProgressLabel(step core.TaskCreateProgressStep) string {
+	switch step {
+	case core.TaskCreateProgressSuggestingName:
+		return "Suggesting name"
+	case core.TaskCreateProgressCreatingWorktree:
+		return "Creating worktree"
+	case core.TaskCreateProgressPreparingWorkspace:
+		return "Preparing workspace"
+	case core.TaskCreateProgressStartingSession:
+		return "Starting session"
+	default:
+		return "Creating task"
+	}
 }
 
 func (m model) confirmationView() string {

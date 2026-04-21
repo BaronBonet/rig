@@ -15,6 +15,8 @@ import (
 
 var currentFrontendBuildVersion = "dev"
 
+const currentFrontendProtocolVersion = 2
+
 type socketRequest struct {
 	Input   *core.CreateTaskInput `json:"input,omitempty"`
 	Command string                `json:"command"`
@@ -22,13 +24,15 @@ type socketRequest struct {
 }
 
 type socketEnvelope struct {
-	Type    string                 `json:"type"`
-	Error   string                 `json:"error,omitempty"`
-	Version string                 `json:"version,omitempty"`
-	Task    *core.Task             `json:"task,omitempty"`
-	Update  *core.TaskStatusUpdate `json:"update,omitempty"`
-	Tasks   []*core.Task           `json:"tasks,omitempty"`
-	OK      bool                   `json:"ok,omitempty"`
+	Type            string                        `json:"type"`
+	Error           string                        `json:"error,omitempty"`
+	Version         string                        `json:"version,omitempty"`
+	ProtocolVersion int                           `json:"protocol_version,omitempty"`
+	Task            *core.Task                    `json:"task,omitempty"`
+	CreateProgress  *core.TaskCreateProgressEvent `json:"create_progress,omitempty"`
+	Update          *core.TaskStatusUpdate        `json:"update,omitempty"`
+	Tasks           []*core.Task                  `json:"tasks,omitempty"`
+	OK              bool                          `json:"ok,omitempty"`
 }
 
 func dialDaemonSocket(ctx context.Context, socketPath string) (net.Conn, error) {
@@ -107,6 +111,59 @@ func probeFrontendBuildVersion(ctx context.Context, socketPath string) error {
 	}
 
 	return nil
+}
+
+func probeFrontendProtocol(ctx context.Context, socketPath string) error {
+	conn, err := dialDaemonSocket(ctx, socketPath)
+	if err != nil {
+		return err
+	}
+	defer conn.Close()
+
+	if err := json.NewEncoder(conn).Encode(socketRequest{Command: "protocol_version"}); err != nil {
+		return err
+	}
+
+	var resp socketEnvelope
+	if err := json.NewDecoder(bufio.NewReader(conn)).Decode(&resp); err != nil {
+		return err
+	}
+	if resp.Type == "error" && resp.Error != "" {
+		return errors.New(resp.Error)
+	}
+	if resp.Type != "protocol_version" || !resp.OK {
+		return fmt.Errorf("task daemon protocol probe failed")
+	}
+	if resp.ProtocolVersion != currentFrontendProtocolVersion {
+		return fmt.Errorf(
+			"task daemon protocol version mismatch: got %d want %d",
+			resp.ProtocolVersion,
+			currentFrontendProtocolVersion,
+		)
+	}
+
+	return nil
+}
+
+func receiveTaskCreateEvent(decoder *json.Decoder) (core.TaskCreateEvent, error) {
+	var msg socketEnvelope
+	if err := decoder.Decode(&msg); err != nil {
+		if errors.Is(err, io.EOF) {
+			return core.TaskCreateEvent{}, err
+		}
+		return core.TaskCreateEvent{}, err
+	}
+
+	switch {
+	case msg.Type == "task_create_progress" && msg.CreateProgress != nil:
+		return core.TaskCreateEvent{Progress: msg.CreateProgress}, nil
+	case msg.Type == "task_created" && msg.Task != nil:
+		return core.TaskCreateEvent{Task: msg.Task}, nil
+	case msg.Type == "error" && msg.Error != "":
+		return core.TaskCreateEvent{Err: errors.New(msg.Error)}, nil
+	default:
+		return core.TaskCreateEvent{}, fmt.Errorf("unexpected create_task response %q", msg.Type)
+	}
 }
 
 func receiveTaskStatusUpdate(decoder *json.Decoder) (*core.TaskStatusUpdate, error) {
