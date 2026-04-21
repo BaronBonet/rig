@@ -233,7 +233,7 @@ func TestHTTPHookServer_DelegatesToInjectedHookHandler(t *testing.T) {
 	t.Parallel()
 
 	called := false
-	server := newHTTPHookServer([]HookRoute{{
+	server := newHTTPHookServer([]core.TaskDaemonHookRoute{{
 		Path: "/hook",
 		Handler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			called = true

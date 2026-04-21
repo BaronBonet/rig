@@ -239,10 +239,10 @@ func main() {
 	}
 }
 
-func debugDaemonHookRoutes(service core.TaskService) []taskdaemon.HookRoute {
+func debugDaemonHookRoutes(service core.TaskService) []core.TaskDaemonHookRoute {
 	codexHooks := codexagent.NewHookHTTPHandler(service, nil)
 
-	return []taskdaemon.HookRoute{
+	return []core.TaskDaemonHookRoute{
 		{Path: "/hook", Handler: codexHooks},
 		{Path: "/codex-hook", Handler: codexHooks},
 	}
