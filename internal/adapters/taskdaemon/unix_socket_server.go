@@ -145,7 +145,10 @@ func (s *unixSocketServer) handleCreateTask(ctx context.Context, encoder *json.E
 		}
 	}
 
-	_ = writeSocketEnvelope(encoder, socketEnvelope{Type: "error", Error: "create task stream closed without terminal result"})
+	_ = writeSocketEnvelope(
+		encoder,
+		socketEnvelope{Type: "error", Error: "create task stream closed without terminal result"},
+	)
 }
 
 func (s *unixSocketServer) handleDeleteTask(ctx context.Context, encoder *json.Encoder, req socketRequest) {

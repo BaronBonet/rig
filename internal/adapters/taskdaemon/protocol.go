@@ -27,11 +27,11 @@ type socketEnvelope struct {
 	Type            string                        `json:"type"`
 	Error           string                        `json:"error,omitempty"`
 	Version         string                        `json:"version,omitempty"`
-	ProtocolVersion int                           `json:"protocol_version,omitempty"`
 	Task            *core.Task                    `json:"task,omitempty"`
 	CreateProgress  *core.TaskCreateProgressEvent `json:"create_progress,omitempty"`
 	Update          *core.TaskStatusUpdate        `json:"update,omitempty"`
 	Tasks           []*core.Task                  `json:"tasks,omitempty"`
+	ProtocolVersion int                           `json:"protocol_version,omitempty"`
 	OK              bool                          `json:"ok,omitempty"`
 }
 

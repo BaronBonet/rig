@@ -34,7 +34,10 @@ func (r taskCreateEventReporter) ReportTaskCreateProgress(step core.TaskCreatePr
 	}
 }
 
-func (s *server) CreateTaskStream(ctx context.Context, input core.CreateTaskInput) (<-chan core.TaskCreateEvent, error) {
+func (s *server) CreateTaskStream(
+	ctx context.Context,
+	input core.CreateTaskInput,
+) (<-chan core.TaskCreateEvent, error) {
 	events := make(chan core.TaskCreateEvent, 8)
 
 	go func() {
