@@ -4,7 +4,7 @@ import (
 	"context"
 	"fmt"
 
-	tmuxsession "rig/internal/adapters/client/tmuxsession"
+	"rig/internal/adapters/client/tmux"
 	"rig/internal/core"
 	"rig/internal/pkg/subprocess"
 )
@@ -19,7 +19,7 @@ func New(cfg Config) core.TaskDaemon {
 		cfg: cfg,
 		frontend: &frontend{
 			socketPath: cfg.SocketPath,
-			sessions:   tmuxsession.New(subprocess.ExecRunner{}),
+			sessions:   tmux.New(subprocess.ExecRunner{}),
 		},
 	}
 }

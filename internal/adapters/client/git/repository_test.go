@@ -1,4 +1,4 @@
-package gitworktree
+package git
 
 import (
 	"context"

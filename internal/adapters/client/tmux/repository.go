@@ -1,4 +1,4 @@
-package tmuxsession
+package tmux
 
 import (
 	"context"

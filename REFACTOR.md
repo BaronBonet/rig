@@ -108,7 +108,7 @@ The active runtime shape is now:
   - `SubscribeTaskStatus`
   - `HandleHookEvent`
 - `sqlite` is the active durable task repository
-- `gitworktree`, `tmuxsession`, and `codexprovider` are the active operational adapters
+- `git`, `tmux`, and `codex` are the active operational adapters
 - `workspace` owns repo-local setup plus provider bootstrap file writing
 
 This slice is intentionally Codex-only for now. Claude support and other legacy
