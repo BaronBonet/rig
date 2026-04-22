@@ -12,6 +12,7 @@ import (
 
 	"rig/internal/core"
 
+	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
 )
 
@@ -23,23 +24,26 @@ func TestUnixSocketServer_CreateTaskCallsTaskService(t *testing.T) {
 	t.Parallel()
 
 	socketPath := serverTestSocketPath(t)
-	svc := &stubTaskService{
-		createTaskWithProgressFn: func(
-			_ context.Context,
-			input core.CreateTaskInput,
-			_ core.TaskCreateProgressReporter,
-		) (*core.Task, error) {
-			require.Equal(t, core.CreateTaskInput{
-				Cwd:      "/tmp/repo",
-				Prompt:   "add retries",
-				Provider: core.ProviderCodex,
-			}, input)
-			return &core.Task{
-				ID:          "task-1",
-				DisplayName: "add retries",
-			}, nil
-		},
-	}
+	svc := core.NewMockTaskService(t)
+	svc.EXPECT().CreateTaskWithProgress(
+		mock.Anything,
+		mock.Anything,
+		mock.Anything,
+	).RunAndReturn(func(
+		_ context.Context,
+		input core.CreateTaskInput,
+		_ core.TaskCreateProgressReporter,
+	) (*core.Task, error) {
+		require.Equal(t, core.CreateTaskInput{
+			Cwd:      "/tmp/repo",
+			Prompt:   "add retries",
+			Provider: core.ProviderCodex,
+		}, input)
+		return &core.Task{
+			ID:          "task-1",
+			DisplayName: "add retries",
+		}, nil
+	})
 	adapter := New(Config{
 		SocketPath:     socketPath,
 		HookListenAddr: "127.0.0.1:0",
@@ -72,22 +76,25 @@ func TestUnixSocketServer_CreateTaskStreamsProgressBeforeTerminalResult(t *testi
 	t.Parallel()
 
 	socketPath := serverTestSocketPath(t)
-	svc := &stubTaskService{
-		createTaskWithProgressFn: func(
-			ctx context.Context,
-			input core.CreateTaskInput,
-			reporter core.TaskCreateProgressReporter,
-		) (*core.Task, error) {
-			require.Equal(t, "add retries", input.Prompt)
-			require.NotNil(t, reporter)
-			reporter.ReportTaskCreateProgress(core.TaskCreateProgressSuggestingName)
-			reporter.ReportTaskCreateProgress(core.TaskCreateProgressCreatingWorktree)
-			return &core.Task{
-				ID:          "task-1",
-				DisplayName: "add retries",
-			}, nil
-		},
-	}
+	svc := core.NewMockTaskService(t)
+	svc.EXPECT().CreateTaskWithProgress(
+		mock.Anything,
+		mock.Anything,
+		mock.Anything,
+	).RunAndReturn(func(
+		ctx context.Context,
+		input core.CreateTaskInput,
+		reporter core.TaskCreateProgressReporter,
+	) (*core.Task, error) {
+		require.Equal(t, "add retries", input.Prompt)
+		require.NotNil(t, reporter)
+		reporter.ReportTaskCreateProgress(core.TaskCreateProgressSuggestingName)
+		reporter.ReportTaskCreateProgress(core.TaskCreateProgressCreatingWorktree)
+		return &core.Task{
+			ID:          "task-1",
+			DisplayName: "add retries",
+		}, nil
+	})
 	adapter := New(Config{
 		SocketPath:     socketPath,
 		HookListenAddr: "127.0.0.1:0",
@@ -124,18 +131,21 @@ func TestUnixSocketServer_CreateTaskStreamsTerminalErrorOnFailure(t *testing.T) 
 	t.Parallel()
 
 	socketPath := serverTestSocketPath(t)
-	svc := &stubTaskService{
-		createTaskWithProgressFn: func(
-			ctx context.Context,
-			input core.CreateTaskInput,
-			reporter core.TaskCreateProgressReporter,
-		) (*core.Task, error) {
-			require.Equal(t, "add retries", input.Prompt)
-			require.NotNil(t, reporter)
-			reporter.ReportTaskCreateProgress(core.TaskCreateProgressPreparingWorkspace)
-			return nil, assertiveError("create failed")
-		},
-	}
+	svc := core.NewMockTaskService(t)
+	svc.EXPECT().CreateTaskWithProgress(
+		mock.Anything,
+		mock.Anything,
+		mock.Anything,
+	).RunAndReturn(func(
+		ctx context.Context,
+		input core.CreateTaskInput,
+		reporter core.TaskCreateProgressReporter,
+	) (*core.Task, error) {
+		require.Equal(t, "add retries", input.Prompt)
+		require.NotNil(t, reporter)
+		reporter.ReportTaskCreateProgress(core.TaskCreateProgressPreparingWorkspace)
+		return nil, assertiveError("create failed")
+	})
 	adapter := New(Config{
 		SocketPath:     socketPath,
 		HookListenAddr: "127.0.0.1:0",
@@ -170,14 +180,15 @@ func TestUnixSocketServer_ListTasksReturnsTasksSnapshot(t *testing.T) {
 	t.Parallel()
 
 	socketPath := serverTestSocketPath(t)
-	svc := &stubTaskService{
-		listTasksFn: func(context.Context) ([]*core.Task, error) {
+	svc := core.NewMockTaskService(t)
+	svc.EXPECT().ListTasks(mock.Anything).RunAndReturn(
+		func(context.Context) ([]*core.Task, error) {
 			return []*core.Task{
 				{ID: "task-1", Slug: "repo-a-task", RepoName: "repo-a"},
 				{ID: "task-2", Slug: "repo-b-task", RepoName: "repo-b"},
 			}, nil
 		},
-	}
+	)
 	adapter := New(Config{
 		SocketPath:     socketPath,
 		HookListenAddr: "127.0.0.1:0",
@@ -201,17 +212,57 @@ func TestUnixSocketServer_ListTasksReturnsTasksSnapshot(t *testing.T) {
 	require.NoError(t, <-errCh)
 }
 
+func TestUnixSocketServer_ListRepoPullRequestsReturnsRepoScopedSnapshot(t *testing.T) {
+	t.Parallel()
+
+	socketPath := serverTestSocketPath(t)
+	svc := core.NewMockTaskService(t)
+	svc.EXPECT().ListRepoPullRequests(mock.Anything, "/tmp/repo").RunAndReturn(
+		func(_ context.Context, cwd string) ([]core.RepoPullRequest, error) {
+			require.Equal(t, "/tmp/repo", cwd)
+			return []core.RepoPullRequest{
+				{Number: 41, Title: "Billing", BranchName: "feat/billing", State: core.PRStateOpen},
+				{Number: 42, Title: "Auth", BranchName: "feat/auth", State: core.PRStateDraft, HasExistingTask: true},
+			}, nil
+		},
+	)
+	adapter := New(Config{
+		SocketPath:     socketPath,
+		HookListenAddr: "127.0.0.1:0",
+	})
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	errCh := make(chan error, 1)
+	go func() {
+		errCh <- adapter.Serve(ctx, svc, nil, nil)
+	}()
+	waitForUnixSocketServer(t, socketPath)
+
+	prs, err := listRepoPullRequestsViaSocket(context.Background(), socketPath, "/tmp/repo")
+	require.NoError(t, err)
+	require.Equal(t, []core.RepoPullRequest{
+		{Number: 41, Title: "Billing", BranchName: "feat/billing", State: core.PRStateOpen},
+		{Number: 42, Title: "Auth", BranchName: "feat/auth", State: core.PRStateDraft, HasExistingTask: true},
+	}, prs)
+
+	cancel()
+	require.NoError(t, <-errCh)
+}
+
 func TestUnixSocketServer_DeleteTaskCallsTaskService(t *testing.T) {
 	t.Parallel()
 
 	socketPath := serverTestSocketPath(t)
 	deletedTaskIDs := make(chan string, 1)
-	svc := &stubTaskService{
-		deleteTaskFn: func(_ context.Context, taskID string) error {
+	svc := core.NewMockTaskService(t)
+	svc.EXPECT().DeleteTask(mock.Anything, "task-1").RunAndReturn(
+		func(_ context.Context, taskID string) error {
 			deletedTaskIDs <- taskID
 			return nil
 		},
-	}
+	)
 	adapter := New(Config{
 		SocketPath:     socketPath,
 		HookListenAddr: "127.0.0.1:0",
@@ -239,12 +290,13 @@ func TestUnixSocketServer_ReconnectTaskSessionCallsTaskService(t *testing.T) {
 
 	socketPath := serverTestSocketPath(t)
 	reconnectedTaskIDs := make(chan string, 1)
-	svc := &stubTaskService{
-		reconnectTaskSessionFn: func(_ context.Context, taskID string) error {
+	svc := core.NewMockTaskService(t)
+	svc.EXPECT().ReconnectTaskSession(mock.Anything, "task-1").RunAndReturn(
+		func(_ context.Context, taskID string) error {
 			reconnectedTaskIDs <- taskID
 			return nil
 		},
-	}
+	)
 	adapter := New(Config{
 		SocketPath:     socketPath,
 		HookListenAddr: "127.0.0.1:0",
@@ -272,12 +324,13 @@ func TestUnixSocketServer_SubscribeTaskStatusStreamsMatchingUpdates(t *testing.T
 
 	socketPath := serverTestSocketPath(t)
 	updates := make(chan core.TaskStatusUpdate, 1)
-	svc := &stubTaskService{
-		subscribeTaskStatusFn: func(_ context.Context, taskID string) (<-chan core.TaskStatusUpdate, error) {
+	svc := core.NewMockTaskService(t)
+	svc.EXPECT().SubscribeTaskStatus(mock.Anything, "task-1").RunAndReturn(
+		func(_ context.Context, taskID string) (<-chan core.TaskStatusUpdate, error) {
 			require.Equal(t, "task-1", taskID)
 			return updates, nil
 		},
-	}
+	)
 	adapter := New(Config{
 		SocketPath:     socketPath,
 		HookListenAddr: "127.0.0.1:0",
@@ -323,12 +376,13 @@ func TestUnixSocketServer_SubscribeTaskStatusReturnsErrorEnvelopeWhenSubscribeFa
 	t.Parallel()
 
 	socketPath := serverTestSocketPath(t)
-	svc := &stubTaskService{
-		subscribeTaskStatusFn: func(_ context.Context, taskID string) (<-chan core.TaskStatusUpdate, error) {
+	svc := core.NewMockTaskService(t)
+	svc.EXPECT().SubscribeTaskStatus(mock.Anything, "task-1").RunAndReturn(
+		func(_ context.Context, taskID string) (<-chan core.TaskStatusUpdate, error) {
 			require.Equal(t, "task-1", taskID)
 			return nil, assertiveError("subscribe failed")
 		},
-	}
+	)
 	adapter := New(Config{
 		SocketPath:     socketPath,
 		HookListenAddr: "127.0.0.1:0",
@@ -358,8 +412,9 @@ func TestUnixSocketServer_SubscribeTaskStatusCancelsBackendContextOnClientDiscon
 
 	socketPath := serverTestSocketPath(t)
 	subscribeCtxDone := make(chan struct{})
-	svc := &stubTaskService{
-		subscribeTaskStatusFn: func(ctx context.Context, taskID string) (<-chan core.TaskStatusUpdate, error) {
+	svc := core.NewMockTaskService(t)
+	svc.EXPECT().SubscribeTaskStatus(mock.Anything, "task-1").RunAndReturn(
+		func(ctx context.Context, taskID string) (<-chan core.TaskStatusUpdate, error) {
 			require.Equal(t, "task-1", taskID)
 			go func() {
 				<-ctx.Done()
@@ -367,7 +422,7 @@ func TestUnixSocketServer_SubscribeTaskStatusCancelsBackendContextOnClientDiscon
 			}()
 			return make(chan core.TaskStatusUpdate), nil
 		},
-	}
+	)
 	adapter := New(Config{
 		SocketPath:     socketPath,
 		HookListenAddr: "127.0.0.1:0",
@@ -415,63 +470,6 @@ func TestHTTPHookServer_DelegatesToInjectedHookHandler(t *testing.T) {
 
 	require.Equal(t, http.StatusAccepted, rec.Code)
 	require.True(t, called)
-}
-
-type stubTaskService struct {
-	createTaskWithProgressFn func(context.Context, core.CreateTaskInput, core.TaskCreateProgressReporter) (*core.Task, error)
-	deleteTaskFn             func(context.Context, string) error
-	reconnectTaskSessionFn   func(context.Context, string) error
-	listTasksFn              func(context.Context) ([]*core.Task, error)
-	latestTaskStatusFn       func(context.Context, string) (*core.TaskStatusUpdate, error)
-	subscribeTaskStatusFn    func(context.Context, string) (<-chan core.TaskStatusUpdate, error)
-	handleHookEventFn        func(context.Context, core.HookEventInput) error
-}
-
-func (s *stubTaskService) CreateTaskWithProgress(
-	ctx context.Context,
-	input core.CreateTaskInput,
-	reporter core.TaskCreateProgressReporter,
-) (*core.Task, error) {
-	return s.createTaskWithProgressFn(ctx, input, reporter)
-}
-
-func (s *stubTaskService) DeleteTask(ctx context.Context, taskID string) error {
-	if s.deleteTaskFn == nil {
-		return nil
-	}
-	return s.deleteTaskFn(ctx, taskID)
-}
-
-func (s *stubTaskService) ReconnectTaskSession(ctx context.Context, taskID string) error {
-	if s.reconnectTaskSessionFn == nil {
-		return nil
-	}
-	return s.reconnectTaskSessionFn(ctx, taskID)
-}
-
-func (s *stubTaskService) ListTasks(ctx context.Context) ([]*core.Task, error) {
-	return s.listTasksFn(ctx)
-}
-
-func (s *stubTaskService) LatestTaskStatus(ctx context.Context, taskID string) (*core.TaskStatusUpdate, error) {
-	if s.latestTaskStatusFn == nil {
-		return nil, nil
-	}
-	return s.latestTaskStatusFn(ctx, taskID)
-}
-
-func (s *stubTaskService) SubscribeTaskStatus(
-	ctx context.Context,
-	taskID string,
-) (<-chan core.TaskStatusUpdate, error) {
-	return s.subscribeTaskStatusFn(ctx, taskID)
-}
-
-func (s *stubTaskService) HandleHookEvent(ctx context.Context, input core.HookEventInput) error {
-	if s.handleHookEventFn == nil {
-		return nil
-	}
-	return s.handleHookEventFn(ctx, input)
 }
 
 func waitForUnixSocketServer(t *testing.T, socketPath string) {
@@ -636,6 +634,31 @@ func listTasksViaSocket(ctx context.Context, socketPath string) ([]*core.Task, e
 	}
 
 	return resp.Tasks, nil
+}
+
+func listRepoPullRequestsViaSocket(ctx context.Context, socketPath string, cwd string) ([]core.RepoPullRequest, error) {
+	conn, err := dialDaemonSocket(ctx, socketPath)
+	if err != nil {
+		return nil, err
+	}
+	defer conn.Close()
+
+	if err := json.NewEncoder(conn).Encode(socketRequest{
+		Command: "list_repo_pull_requests",
+		Cwd:     cwd,
+	}); err != nil {
+		return nil, err
+	}
+
+	var resp socketEnvelope
+	if err := json.NewDecoder(conn).Decode(&resp); err != nil {
+		return nil, err
+	}
+	if resp.Type != "repo_pull_requests_list" {
+		return nil, nil
+	}
+
+	return resp.PullRequests, nil
 }
 
 func subscribeTaskStatusViaSocket(

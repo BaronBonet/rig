@@ -2,6 +2,7 @@ package tui
 
 import (
 	"fmt"
+	"strconv"
 	"strings"
 	"time"
 
@@ -34,10 +35,16 @@ func (m model) listView() string {
 	switch {
 	case m.loading:
 		builder.WriteString(dimStyle.Render("Loading tasks..."))
+		if status := m.listCreateStatusView(); status != "" {
+			builder.WriteString("\n\n" + status)
+		}
 		return builder.String()
 	case len(m.rows) == 0:
 		builder.WriteString(dimStyle.Render("No tasks found.") + "\n")
 		builder.WriteString(dimStyle.Render("Press n to create one."))
+		if status := m.listCreateStatusView(); status != "" {
+			builder.WriteString("\n\n" + status)
+		}
 		return builder.String()
 	}
 
@@ -56,6 +63,10 @@ func (m model) listView() string {
 	if detail := m.selectedTaskDetailView(); detail != "" {
 		builder.WriteString(dividerStyle.Render(strings.Repeat("─", totalWidth)) + "\n")
 		builder.WriteString(detail)
+	}
+	if status := m.listCreateStatusView(); status != "" {
+		builder.WriteString("\n" + dividerStyle.Render(strings.Repeat("─", totalWidth)) + "\n")
+		builder.WriteString(status)
 	}
 
 	return strings.TrimRight(builder.String(), "\n")
@@ -225,13 +236,97 @@ func (m model) promptInputView() string {
 	builder.WriteString("\n\n")
 	builder.WriteString(
 		keybindStyle.Render("enter") + mutedStyle.Render(" submit · ") +
+			keybindStyle.Render("ctrl+p") + mutedStyle.Render(" pull requests · ") +
 			keybindStyle.Render("esc") + mutedStyle.Render(" cancel"),
 	)
 
 	return builder.String()
 }
 
+func (m model) prPickerView() string {
+	totalWidth := m.totalWidth()
+
+	headerSuffix := "PRs"
+	if strings.TrimSpace(m.prRepoName) != "" {
+		headerSuffix = "PRs: " + m.prRepoName
+	}
+
+	var builder strings.Builder
+	builder.WriteString(renderHeader(
+		headerLabelStyle.Render("RIG"),
+		mutedStyle.Render(headerSuffix),
+		totalWidth,
+	) + "\n")
+	builder.WriteString(dividerStyle.Render(strings.Repeat("─", totalWidth)) + "\n")
+
+	if m.createErr != nil {
+		builder.WriteString(errorStyle.Render("Error: "+m.createErr.Error()) + "\n\n")
+	}
+
+	if len(m.prRows) == 0 {
+		builder.WriteString(dimStyle.Render("No pull requests found.") + "\n\n")
+		builder.WriteString(keybindStyle.Render("esc") + mutedStyle.Render(" back"))
+		return builder.String()
+	}
+
+	for i, pr := range m.prRows {
+		title := strings.TrimSpace(pr.Title)
+		if title == "" {
+			title = pr.BranchName
+		}
+
+		state := string(pr.State)
+		if state == "" {
+			state = string(core.PRStateOpen)
+		}
+
+		meta := "#" + strconv.Itoa(pr.Number) + "  " + state + "  " + pr.BranchName
+		if pr.HasExistingTask {
+			meta += "  branch checked out"
+		}
+
+		titleLine := primaryStyle.Render(truncateStr(title, totalWidth-6))
+		metaLine := mutedStyle.Render(truncateStr(meta, totalWidth-6))
+		if pr.HasExistingTask {
+			metaLine = errorStyle.Render(truncateStr(meta, totalWidth-6))
+		}
+
+		block := titleLine + "\n" + metaLine
+		if i == m.prSelected {
+			builder.WriteString(selectedRowStyle.Render(block))
+		} else {
+			builder.WriteString(normalRowStyle.Render(block))
+		}
+		if i < len(m.prRows)-1 {
+			builder.WriteString("\n\n")
+		}
+	}
+
+	builder.WriteString("\n\n")
+	builder.WriteString(
+		keybindStyle.Render("enter") + mutedStyle.Render(" create · ") +
+			keybindStyle.Render("esc") + mutedStyle.Render(" back"),
+	)
+
+	return builder.String()
+}
+
 func (m model) renderCreateProgress() string {
+	if m.createFromPR {
+		if !m.createPending && m.createErr == nil {
+			return ""
+		}
+		label := "Creating task from pull request"
+		switch {
+		case m.createPending:
+			return warningStyle.Render("●") + " " + renderShimmer(label, m.shimmerTick)
+		case m.createErr != nil:
+			return errorStyle.Render("●") + " " + errorStyle.Render(label)
+		default:
+			return ""
+		}
+	}
+
 	if !m.createPending && len(m.createDone) == 0 && m.createActive == "" {
 		return ""
 	}
@@ -259,6 +354,17 @@ func (m model) renderCreateProgress() string {
 	}
 
 	return strings.Join(lines, "\n")
+}
+
+func (m model) listCreateStatusView() string {
+	var lines []string
+	if m.createErr != nil {
+		lines = append(lines, errorStyle.Render("Error: "+m.createErr.Error()))
+	}
+	if progress := m.renderCreateProgress(); progress != "" {
+		lines = append(lines, progress)
+	}
+	return strings.Join(lines, "\n\n")
 }
 
 func taskCreateProgressLabel(step core.TaskCreateProgressStep) string {

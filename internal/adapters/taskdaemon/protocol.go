@@ -15,11 +15,12 @@ import (
 
 var currentFrontendBuildVersion = "dev"
 
-const currentFrontendProtocolVersion = 2
+const currentFrontendProtocolVersion = 3
 
 type socketRequest struct {
 	Input   *core.CreateTaskInput `json:"input,omitempty"`
 	Command string                `json:"command"`
+	Cwd     string                `json:"cwd,omitempty"`
 	TaskID  string                `json:"task_id,omitempty"`
 }
 
@@ -31,6 +32,7 @@ type socketEnvelope struct {
 	CreateProgress  *core.TaskCreateProgressEvent `json:"create_progress,omitempty"`
 	Update          *core.TaskStatusUpdate        `json:"update,omitempty"`
 	Tasks           []*core.Task                  `json:"tasks,omitempty"`
+	PullRequests    []core.RepoPullRequest        `json:"pull_requests,omitempty"`
 	ProtocolVersion int                           `json:"protocol_version,omitempty"`
 	OK              bool                          `json:"ok,omitempty"`
 }

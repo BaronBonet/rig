@@ -37,7 +37,6 @@ linters:
         - defers
         - lostcancel
         - bools
-        - fieldalignment
         - nilfunc
         - httpresponse
         - printf

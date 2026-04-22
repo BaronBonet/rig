@@ -10,11 +10,12 @@ import (
 	"rig/internal/core"
 	"rig/internal/pkg/subprocess"
 
+	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
 )
 
 func TestRepositoryBuildTaskSessionLaunchSpec_StartsCodexAndPrefillsTaskPrompt(t *testing.T) {
-	repo := New(stubRunner{}, Config{Binary: "codex"}, HookForwardingConfig{})
+	repo := New(subprocess.NewMockRunner(t), Config{Binary: "codex"}, HookForwardingConfig{})
 
 	launch, err := repo.BuildTaskSessionLaunchSpec(&core.Task{Prompt: "add billing retry flow"})
 	require.NoError(t, err)
@@ -26,7 +27,7 @@ func TestRepositoryBuildTaskSessionLaunchSpec_StartsCodexAndPrefillsTaskPrompt(t
 }
 
 func TestRepositoryBuildReconnectTaskSessionLaunchSpec_UsesCodexResume(t *testing.T) {
-	repo := New(stubRunner{}, Config{Binary: "codex"}, HookForwardingConfig{})
+	repo := New(subprocess.NewMockRunner(t), Config{Binary: "codex"}, HookForwardingConfig{})
 
 	launch, err := repo.BuildReconnectTaskSessionLaunchSpec(&core.Task{}, "sess-1")
 	require.NoError(t, err)
@@ -37,7 +38,7 @@ func TestRepositoryBuildReconnectTaskSessionLaunchSpec_UsesCodexResume(t *testin
 }
 
 func TestRepositoryBuildWorkspaceBootstrapSpec_ReturnsNoWorkspaceFiles(t *testing.T) {
-	repo := New(stubRunner{}, Config{
+	repo := New(subprocess.NewMockRunner(t), Config{
 		Binary: "codex",
 	}, HookForwardingConfig{
 		CollectorURL: "http://127.0.0.1:4124/codex-hook",
@@ -50,7 +51,7 @@ func TestRepositoryBuildWorkspaceBootstrapSpec_ReturnsNoWorkspaceFiles(t *testin
 
 func TestRepositoryEnsureTaskSessionEnvironment_InstallsRigHooksIntoCodexHome(t *testing.T) {
 	tempDir := t.TempDir()
-	repo := New(stubRunner{}, Config{Binary: "codex"}, HookForwardingConfig{
+	repo := New(subprocess.NewMockRunner(t), Config{Binary: "codex"}, HookForwardingConfig{
 		CollectorURL: "http://127.0.0.1:4124/codex-hook",
 	}).(*repository)
 	repo.codexHomeDir = func() (string, error) { return tempDir, nil }
@@ -94,7 +95,7 @@ func TestRepositoryEnsureTaskSessionEnvironment_MergesExistingHooks(t *testing.T
   }
 }`), 0o644))
 
-	repo := New(stubRunner{}, Config{Binary: "codex"}, HookForwardingConfig{
+	repo := New(subprocess.NewMockRunner(t), Config{Binary: "codex"}, HookForwardingConfig{
 		CollectorURL: "http://127.0.0.1:4124/codex-hook",
 	}).(*repository)
 	repo.codexHomeDir = func() (string, error) { return tempDir, nil }
@@ -115,8 +116,19 @@ func TestRepositoryEnsureTaskSessionEnvironment_MergesExistingHooks(t *testing.T
 }
 
 func TestRepositorySuggestTaskName_DelegatesToCodexProposal(t *testing.T) {
-	runner := stubRunner{
-		runFn: func(_ context.Context, cwd string, name string, args ...string) (subprocess.Result, error) {
+	runner := subprocess.NewMockRunner(t)
+	runner.EXPECT().
+		Run(
+			mock.Anything,
+			"",
+			"codex",
+			"exec",
+			"--skip-git-repo-check",
+			"--output-last-message",
+			mock.Anything,
+			mock.Anything,
+		).
+		RunAndReturn(func(_ context.Context, cwd string, name string, args ...string) (subprocess.Result, error) {
 			require.Empty(t, cwd)
 			require.Equal(t, "codex", name)
 			require.Equal(
@@ -125,8 +137,7 @@ func TestRepositorySuggestTaskName_DelegatesToCodexProposal(t *testing.T) {
 				args,
 			)
 			return subprocess.Result{Stdout: "billing retry flow\n"}, nil
-		},
-	}
+		})
 	repo := New(runner, Config{Binary: "codex"}, HookForwardingConfig{})
 
 	suggestion, err := repo.SuggestTaskName(t.Context(), "add billing retry flow")
@@ -136,38 +147,29 @@ func TestRepositorySuggestTaskName_DelegatesToCodexProposal(t *testing.T) {
 }
 
 func TestRepositorySuggestTaskName_PrefersOutputFileOverStdout(t *testing.T) {
-	runner := stubRunner{
-		runFn: func(_ context.Context, _ string, _ string, args ...string) (subprocess.Result, error) {
+	runner := subprocess.NewMockRunner(t)
+	runner.EXPECT().
+		Run(
+			mock.Anything,
+			"",
+			"codex",
+			"exec",
+			"--skip-git-repo-check",
+			"--output-last-message",
+			mock.Anything,
+			mock.Anything,
+		).
+		RunAndReturn(func(_ context.Context, _ string, _ string, args ...string) (subprocess.Result, error) {
 			require.NoError(
 				t,
 				os.WriteFile(args[3], []byte("{\"name\":\"File Result\",\"branch_type\":\"feat\"}\n"), 0o600),
 			)
 			return subprocess.Result{Stdout: "stdout result\n"}, nil
-		},
-	}
+		})
 	repo := New(runner, Config{Binary: "codex"}, HookForwardingConfig{})
 
 	suggestion, err := repo.SuggestTaskName(t.Context(), "add billing retry flow")
 	require.NoError(t, err)
 	require.Equal(t, "File Result", suggestion.Name)
 	require.Equal(t, "feat", suggestion.BranchType)
-}
-
-type stubRunner struct {
-	runFn          func(context.Context, string, string, ...string) (subprocess.Result, error)
-	runWithStdinFn func(context.Context, subprocess.RunWithStdinOptions) (subprocess.Result, error)
-}
-
-func (s stubRunner) Run(ctx context.Context, cwd string, name string, args ...string) (subprocess.Result, error) {
-	if s.runFn == nil {
-		return subprocess.Result{}, nil
-	}
-	return s.runFn(ctx, cwd, name, args...)
-}
-
-func (s stubRunner) RunWithStdin(ctx context.Context, opts subprocess.RunWithStdinOptions) (subprocess.Result, error) {
-	if s.runWithStdinFn == nil {
-		return subprocess.Result{}, nil
-	}
-	return s.runWithStdinFn(ctx, opts)
 }

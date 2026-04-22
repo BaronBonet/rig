@@ -4,17 +4,19 @@ import (
 	"context"
 	"errors"
 	"regexp"
+	"strings"
 	"testing"
 	"time"
 
 	"rig/internal/core"
 
 	tea "charm.land/bubbletea/v2"
+	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
 )
 
 func TestModel_InitLoadsAllTasksAcrossRepos(t *testing.T) {
-	frontend := newStubFrontend()
+	frontend := newFrontendHarness()
 	frontend.listTasks = []*core.Task{
 		{
 			ID:          "task-1",
@@ -30,7 +32,7 @@ func TestModel_InitLoadsAllTasksAcrossRepos(t *testing.T) {
 		},
 	}
 
-	m := newModel(frontend)
+	m := newModel(frontend.mock)
 	cmd := m.Init()
 	require.NotNil(t, cmd)
 
@@ -45,7 +47,7 @@ func TestModel_InitLoadsAllTasksAcrossRepos(t *testing.T) {
 }
 
 func TestModel_ViewRendersTaskMetadata(t *testing.T) {
-	frontend := newStubFrontend()
+	frontend := newFrontendHarness()
 	frontend.listTasks = []*core.Task{
 		{
 			ID:          "task-1",
@@ -57,7 +59,7 @@ func TestModel_ViewRendersTaskMetadata(t *testing.T) {
 		},
 	}
 
-	m := newModel(frontend)
+	m := newModel(frontend.mock)
 	msg := runCmd(t, m.Init())
 	next, _ := m.Update(msg)
 
@@ -77,7 +79,7 @@ func TestModel_ViewRendersTaskMetadata(t *testing.T) {
 }
 
 func TestModel_AfterLoadRequestsLatestStatusAndSubscriptionsForEachTask(t *testing.T) {
-	frontend := newStubFrontend()
+	frontend := newFrontendHarness()
 	frontend.listTasks = []*core.Task{
 		{ID: "task-1", RepoName: "repo-a", DisplayName: "first task", Provider: core.ProviderCodex},
 		{ID: "task-2", RepoName: "repo-b", DisplayName: "second task", Provider: core.ProviderCodex},
@@ -87,7 +89,7 @@ func TestModel_AfterLoadRequestsLatestStatusAndSubscriptionsForEachTask(t *testi
 		"task-2": make(chan core.TaskStatusUpdate, 1),
 	}
 
-	m := newModel(frontend)
+	m := newModel(frontend.mock)
 	loadMsg := runCmd(t, m.Init())
 	next, cmd := m.Update(loadMsg)
 	require.NotNil(t, cmd)
@@ -102,7 +104,7 @@ func TestModel_AfterLoadRequestsLatestStatusAndSubscriptionsForEachTask(t *testi
 }
 
 func TestModel_LatestStatusSeedUpdatesRenderedPhase(t *testing.T) {
-	frontend := newStubFrontend()
+	frontend := newFrontendHarness()
 	frontend.listTasks = []*core.Task{
 		{ID: "task-1", RepoName: "repo-a", DisplayName: "first task", Provider: core.ProviderCodex},
 	}
@@ -116,7 +118,7 @@ func TestModel_LatestStatusSeedUpdatesRenderedPhase(t *testing.T) {
 		"task-1": make(chan core.TaskStatusUpdate, 1),
 	}
 
-	m := newModel(frontend)
+	m := newModel(frontend.mock)
 	loadMsg := runCmd(t, m.Init())
 	next, cmd := m.Update(loadMsg)
 	require.NotNil(t, cmd)
@@ -136,7 +138,7 @@ func TestModel_LatestStatusSeedUpdatesRenderedPhase(t *testing.T) {
 }
 
 func TestModel_TaskRowUpdatesWhenSubscriptionUpdateArrives(t *testing.T) {
-	frontend := newStubFrontend()
+	frontend := newFrontendHarness()
 	frontend.listTasks = []*core.Task{
 		{ID: "task-1", RepoName: "repo-a", DisplayName: "first task", Provider: core.ProviderCodex},
 	}
@@ -145,7 +147,7 @@ func TestModel_TaskRowUpdatesWhenSubscriptionUpdateArrives(t *testing.T) {
 		"task-1": updates,
 	}
 
-	m := newModel(frontend)
+	m := newModel(frontend.mock)
 	loadMsg := runCmd(t, m.Init())
 	next, cmd := m.Update(loadMsg)
 	require.NotNil(t, cmd)
@@ -177,7 +179,7 @@ func TestModel_TaskRowUpdatesWhenSubscriptionUpdateArrives(t *testing.T) {
 }
 
 func TestModel_StatusEnrichmentFailuresDoNotCollapseListView(t *testing.T) {
-	frontend := newStubFrontend()
+	frontend := newFrontendHarness()
 	frontend.listTasks = []*core.Task{
 		{ID: "task-1", RepoName: "repo-a", DisplayName: "first task", Provider: core.ProviderCodex},
 		{ID: "task-2", RepoName: "repo-b", DisplayName: "second task", Provider: core.ProviderCodex},
@@ -198,7 +200,7 @@ func TestModel_StatusEnrichmentFailuresDoNotCollapseListView(t *testing.T) {
 		"task-2": errors.New("subscription unavailable"),
 	}
 
-	m := newModel(frontend)
+	m := newModel(frontend.mock)
 	loadMsg := runCmd(t, m.Init())
 	next, cmd := m.Update(loadMsg)
 	require.NotNil(t, cmd)
@@ -227,8 +229,8 @@ func TestModel_StatusEnrichmentFailuresDoNotCollapseListView(t *testing.T) {
 }
 
 func TestModel_InitUsesLifecycleContextForInitialLoad(t *testing.T) {
-	frontend := newStubFrontend()
-	m := newModel(frontend)
+	frontend := newFrontendHarness()
+	m := newModel(frontend.mock)
 
 	cmd := m.Init()
 	require.NotNil(t, cmd)
@@ -241,7 +243,7 @@ func TestModel_InitUsesLifecycleContextForInitialLoad(t *testing.T) {
 }
 
 func TestModel_KeyAEntersPromptMode(t *testing.T) {
-	frontend := newStubFrontend()
+	frontend := newFrontendHarness()
 	m := newLoadedModel(frontend)
 
 	next, cmd := m.Update(tea.KeyPressMsg{Text: "a"})
@@ -255,7 +257,7 @@ func TestModel_KeyAEntersPromptMode(t *testing.T) {
 }
 
 func TestModel_KeyNEntersPromptMode(t *testing.T) {
-	frontend := newStubFrontend()
+	frontend := newFrontendHarness()
 	m := newLoadedModel(frontend)
 
 	next, cmd := m.Update(tea.KeyPressMsg{Text: "n"})
@@ -269,7 +271,7 @@ func TestModel_KeyNEntersPromptMode(t *testing.T) {
 }
 
 func TestModel_EnterOpensSelectedTaskAndKeepsRigRunningOnSuccess(t *testing.T) {
-	frontend := newStubFrontend()
+	frontend := newFrontendHarness()
 	frontend.listTasks = []*core.Task{
 		{ID: "task-1", DisplayName: "first task", TmuxSession: "repo_task_1", Provider: core.ProviderCodex},
 		{ID: "task-2", DisplayName: "second task", TmuxSession: "repo_task_2", Provider: core.ProviderCodex},
@@ -298,7 +300,7 @@ func TestModel_EnterOpensSelectedTaskAndKeepsRigRunningOnSuccess(t *testing.T) {
 }
 
 func TestModel_OpenTaskFailureShowsErrorAndStaysInList(t *testing.T) {
-	frontend := newStubFrontend()
+	frontend := newFrontendHarness()
 	frontend.listTasks = []*core.Task{
 		{ID: "task-1", DisplayName: "first task", TmuxSession: "repo_task_1", Provider: core.ProviderCodex},
 	}
@@ -324,7 +326,7 @@ func TestModel_OpenTaskFailureShowsErrorAndStaysInList(t *testing.T) {
 }
 
 func TestModel_EnterReconnectsWhenSessionIsMissing(t *testing.T) {
-	frontend := newStubFrontend()
+	frontend := newFrontendHarness()
 	frontend.listTasks = []*core.Task{
 		{ID: "task-1", DisplayName: "first task", TmuxSession: "repo_task_1", Provider: core.ProviderCodex},
 	}
@@ -361,7 +363,7 @@ func TestModel_EnterReconnectsWhenSessionIsMissing(t *testing.T) {
 }
 
 func TestModel_CreateTaskFromPromptAppendsTaskAndStartsStatusTracking(t *testing.T) {
-	frontend := newStubFrontend()
+	frontend := newFrontendHarness()
 	frontend.listTasks = []*core.Task{
 		{ID: "task-1", DisplayName: "first task", RepoName: "repo-a", Provider: core.ProviderCodex},
 		{ID: "task-2", DisplayName: "second task", RepoName: "repo-b", Provider: core.ProviderCodex},
@@ -429,6 +431,7 @@ func TestModel_CreateTaskFromPromptAppendsTaskAndStartsStatusTracking(t *testing
 	require.Equal(t, "task-3", got.rows[len(got.rows)-1].task.ID)
 	require.Equal(t, "fix the retry loop", frontend.createInput.Prompt)
 	require.Equal(t, core.ProviderCodex, frontend.createInput.Provider)
+	require.Empty(t, frontend.createInput.Source.PullRequest)
 	require.Equal(t, 1, frontend.createTaskStreamCalls)
 
 	frontend.listTasks = append(frontend.listTasks, createdTask)
@@ -452,7 +455,7 @@ func TestModel_CreateTaskFromPromptAppendsTaskAndStartsStatusTracking(t *testing
 }
 
 func TestModel_CreateTaskReloadsAuthoritativeTaskSnapshotWhenCreateResponseIsPartial(t *testing.T) {
-	frontend := newStubFrontend()
+	frontend := newFrontendHarness()
 	frontend.listTasks = []*core.Task{
 		{ID: "task-1", DisplayName: "first task", RepoName: "repo-a", Provider: core.ProviderCodex},
 	}
@@ -531,7 +534,7 @@ func TestModel_CreateTaskReloadsAuthoritativeTaskSnapshotWhenCreateResponseIsPar
 }
 
 func TestModel_EnterWithBlankPromptDoesNothing(t *testing.T) {
-	frontend := newStubFrontend()
+	frontend := newFrontendHarness()
 	m := newLoadedModel(frontend)
 	m.mode = modePromptInput
 	m.prompt = "   "
@@ -549,7 +552,7 @@ func TestModel_EnterWithBlankPromptDoesNothing(t *testing.T) {
 }
 
 func TestModel_CreateTaskFailureKeepsPromptRecoverableAndPreservesListView(t *testing.T) {
-	frontend := newStubFrontend()
+	frontend := newFrontendHarness()
 	frontend.listTasks = []*core.Task{
 		{ID: "task-1", DisplayName: "first task", RepoName: "repo-a", Provider: core.ProviderCodex},
 		{ID: "task-2", DisplayName: "second task", RepoName: "repo-b", Provider: core.ProviderCodex},
@@ -611,7 +614,7 @@ func TestModel_CreateTaskFailureKeepsPromptRecoverableAndPreservesListView(t *te
 }
 
 func TestModel_PendingCreateStillAllowsQuitKeys(t *testing.T) {
-	frontend := newStubFrontend()
+	frontend := newFrontendHarness()
 	m := newLoadedModel(frontend)
 	m.mode = modePromptInput
 	m.prompt = "fix the retry loop"
@@ -635,7 +638,7 @@ func TestModel_PendingCreateStillAllowsQuitKeys(t *testing.T) {
 }
 
 func TestModel_ShimmerTickAdvancesAndReschedulesWhilePending(t *testing.T) {
-	frontend := newStubFrontend()
+	frontend := newFrontendHarness()
 	m := newLoadedModel(frontend)
 	m.createPending = true
 
@@ -652,7 +655,7 @@ func TestModel_ShimmerTickAdvancesAndReschedulesWhilePending(t *testing.T) {
 }
 
 func TestModel_EscCancelsPromptMode(t *testing.T) {
-	frontend := newStubFrontend()
+	frontend := newFrontendHarness()
 	m := newLoadedModel(frontend)
 	m.mode = modePromptInput
 	m.prompt = "fix the retry loop"
@@ -670,8 +673,196 @@ func TestModel_EscCancelsPromptMode(t *testing.T) {
 	require.Zero(t, frontend.createTaskStreamCalls)
 }
 
+func TestModel_CtrlPFromPromptModeLoadsRepoPullRequests(t *testing.T) {
+	frontend := newFrontendHarness()
+	frontend.listTasks = []*core.Task{
+		{
+			ID:          "task-1",
+			DisplayName: "first task",
+			RepoRoot:    "/tmp/repo",
+			RepoName:    "repo",
+			Provider:    core.ProviderCodex,
+		},
+	}
+	frontend.listRepoPullRequests = []core.RepoPullRequest{
+		{Number: 42, Title: "Auth rewrite", BranchName: "feat/auth", State: core.PRStateDraft},
+	}
+
+	m := newLoadedModel(frontend)
+	m.mode = modePromptInput
+	m.prompt = "typed already"
+
+	next, cmd := m.Update(tea.KeyPressMsg{Code: 'p', Mod: tea.ModCtrl})
+	require.NotNil(t, cmd)
+
+	pending, ok := next.(model)
+	require.True(t, ok)
+	require.Equal(t, modePRPicker, pending.mode)
+	require.Equal(t, "typed already", pending.prompt)
+
+	msg := runCmd(t, cmd)
+	loaded, ok := msg.(repoPullRequestsLoadedMsg)
+	require.True(t, ok)
+	require.Equal(t, "/tmp/repo", loaded.repoRoot)
+	require.Equal(t, "repo", loaded.repoName)
+
+	next, _ = pending.Update(loaded)
+	got, ok := next.(model)
+	require.True(t, ok)
+	require.Equal(t, "/tmp/repo", frontend.listRepoPullRequestsCwd)
+	require.Equal(t, modePRPicker, got.mode)
+	require.Len(t, got.prRows, 1)
+}
+
+func TestPRPickerView_ShowsDuplicateRowsAsDisabled(t *testing.T) {
+	frontend := newFrontendHarness()
+	m := newLoadedModel(frontend)
+	m.mode = modePRPicker
+	m.prRepoName = "repo"
+	m.prRows = []core.RepoPullRequest{
+		{Number: 42, Title: "Auth rewrite", BranchName: "feat/auth", State: core.PRStateDraft, HasExistingTask: true},
+	}
+
+	view := stripANSI(m.View().Content)
+	require.Contains(t, view, "PRs: repo")
+	require.Contains(t, view, "Auth rewrite")
+	require.Contains(t, view, "branch checked out")
+	require.NotContains(t, view, "already has workspace")
+}
+
+func TestModel_PRPickerEnterCreatesTaskFromSelectedPR(t *testing.T) {
+	frontend := newFrontendHarness()
+	frontend.createTaskEvents = []core.TaskCreateEvent{
+		{
+			Task: &core.Task{
+				ID:          "task-2",
+				DisplayName: "PR #42 Auth rewrite",
+				RepoName:    "repo",
+				Provider:    core.ProviderCodex,
+			},
+		},
+	}
+	frontend.listTasks = []*core.Task{
+		{ID: "task-1", DisplayName: "existing task", RepoName: "repo", Provider: core.ProviderCodex},
+	}
+	frontend.subscribeTaskStatus = map[string]chan core.TaskStatusUpdate{
+		"task-2": make(chan core.TaskStatusUpdate),
+	}
+	frontend.latestTaskStatus = map[string]*core.TaskStatusUpdate{}
+
+	m := newLoadedModel(frontend)
+	m.mode = modePRPicker
+	m.prompt = "typed already"
+	m.prRepoRoot = "/tmp/repo"
+	m.prRepoName = "repo"
+	m.prRows = []core.RepoPullRequest{
+		{Number: 42, Title: "Auth rewrite", BranchName: "feat/auth", State: core.PRStateDraft},
+	}
+
+	next, cmd := m.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
+	require.NotNil(t, cmd)
+
+	pending, ok := next.(model)
+	require.True(t, ok)
+	require.Equal(t, modeBrowse, pending.mode)
+	require.True(t, pending.createPending)
+	view := stripANSI(pending.View().Content)
+	require.Contains(t, view, "n new   r refresh   x clean   q quit")
+	require.Contains(t, view, "Creating task from pull request")
+	require.NotContains(t, view, "Suggesting name")
+	require.Less(t, strings.Index(view, "existing task"), strings.Index(view, "Creating task from pull request"))
+
+	msgs := runBatchCmd(t, cmd)
+	createMsg := requireMsgType[taskCreateEventMsg](t, msgs)
+	requireMsgType[shimmerTickMsg](t, msgs)
+	require.NotNil(t, createMsg.event.Task)
+	require.Equal(t, "/tmp/repo", frontend.createInput.Cwd)
+	require.Equal(t, core.ProviderCodex, frontend.createInput.Provider)
+	require.NotNil(t, frontend.createInput.Source.PullRequest)
+	require.Equal(t, 42, frontend.createInput.Source.PullRequest.Number)
+	require.Equal(t, "feat/auth", frontend.createInput.Source.PullRequest.BranchName)
+}
+
+func TestModel_PRPickerCreateFailureReturnsToBrowseWithProgressAndError(t *testing.T) {
+	frontend := newFrontendHarness()
+	frontend.listTasks = []*core.Task{
+		{ID: "task-1", DisplayName: "existing task", RepoName: "repo", Provider: core.ProviderCodex},
+	}
+	frontend.createTaskEvents = []core.TaskCreateEvent{
+		{Progress: &core.TaskCreateProgressEvent{Step: core.TaskCreateProgressCreatingWorktree}},
+		{Err: errors.New("create failed")},
+	}
+
+	m := newLoadedModel(frontend)
+	m.mode = modePRPicker
+	m.prRepoRoot = "/tmp/repo"
+	m.prRepoName = "repo"
+	m.prRows = []core.RepoPullRequest{
+		{Number: 42, Title: "Auth rewrite", BranchName: "feat/auth", State: core.PRStateDraft},
+	}
+
+	next, cmd := m.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
+	require.NotNil(t, cmd)
+
+	pending, ok := next.(model)
+	require.True(t, ok)
+	require.Equal(t, modeBrowse, pending.mode)
+	require.True(t, pending.createPending)
+	view := stripANSI(pending.View().Content)
+	require.Contains(t, view, "Creating task from pull request")
+	require.NotContains(t, view, "Suggesting name")
+
+	initialMsgs := runBatchCmd(t, cmd)
+	progressMsg := requireMsgType[taskCreateEventMsg](t, initialMsgs)
+	requireMsgType[shimmerTickMsg](t, initialMsgs)
+	require.NotNil(t, progressMsg.event.Progress)
+
+	next, follow := pending.Update(progressMsg)
+	require.NotNil(t, follow)
+
+	withProgress, ok := next.(model)
+	require.True(t, ok)
+	require.Equal(t, modeBrowse, withProgress.mode)
+	require.Equal(t, core.TaskCreateProgressCreatingWorktree, withProgress.createActive)
+	view = stripANSI(withProgress.View().Content)
+	require.Contains(t, view, "Creating task from pull request")
+	require.NotContains(t, view, "Creating worktree")
+
+	createFailed := runCmd(t, follow)
+	next, follow = withProgress.Update(createFailed)
+	require.Nil(t, follow)
+
+	got, ok := next.(model)
+	require.True(t, ok)
+	require.Equal(t, modeBrowse, got.mode)
+	require.False(t, got.createPending)
+	require.ErrorContains(t, got.createErr, "create failed")
+
+	view = stripANSI(got.View().Content)
+	require.Contains(t, view, "n new   r refresh   x clean   q quit")
+	require.Contains(t, view, "Creating task from pull request")
+	require.NotContains(t, view, "Creating worktree")
+	require.Contains(t, view, "create failed")
+}
+
+func TestModel_EscFromPRPickerReturnsToPromptMode(t *testing.T) {
+	frontend := newFrontendHarness()
+	m := newLoadedModel(frontend)
+	m.mode = modePRPicker
+	m.prompt = "typed already"
+
+	next, cmd := m.Update(tea.KeyPressMsg{Code: tea.KeyEscape})
+
+	require.Nil(t, cmd)
+
+	got, ok := next.(model)
+	require.True(t, ok)
+	require.Equal(t, modePromptInput, got.mode)
+	require.Equal(t, "typed already", got.prompt)
+}
+
 func TestModel_KeyXEntersCleanupConfirmMode(t *testing.T) {
-	frontend := newStubFrontend()
+	frontend := newFrontendHarness()
 	frontend.listTasks = []*core.Task{{ID: "task-1", DisplayName: "first task"}}
 
 	m := newLoadedModel(frontend)
@@ -685,7 +876,7 @@ func TestModel_KeyXEntersCleanupConfirmMode(t *testing.T) {
 }
 
 func TestModel_ConfirmCleanupDeletesTaskAndRemovesRow(t *testing.T) {
-	frontend := newStubFrontend()
+	frontend := newFrontendHarness()
 	frontend.listTasks = []*core.Task{
 		{ID: "task-1", DisplayName: "first task", Provider: core.ProviderCodex},
 		{ID: "task-2", DisplayName: "second task", Provider: core.ProviderCodex},
@@ -721,7 +912,7 @@ func TestModel_ConfirmCleanupDeletesTaskAndRemovesRow(t *testing.T) {
 }
 
 func TestModel_CleanupFailurePreservesRowsAndShowsError(t *testing.T) {
-	frontend := newStubFrontend()
+	frontend := newFrontendHarness()
 	frontend.listTasks = []*core.Task{
 		{ID: "task-1", DisplayName: "first task", Provider: core.ProviderCodex},
 	}
@@ -751,9 +942,10 @@ func TestModel_CleanupFailurePreservesRowsAndShowsError(t *testing.T) {
 	require.ErrorContains(t, got.err, "cleanup failed")
 }
 
-func newLoadedModel(frontend *stubFrontend) model {
+func newLoadedModel(frontend *frontendHarness) model {
 	return model{
-		frontend:      frontend,
+		frontend:      frontend.mock,
+		launchCwd:     "/tmp/repo",
 		statusContext: context.Background(),
 		rows:          rowsFromTasks(frontend.listTasks),
 		mode:          modeBrowse,
@@ -800,11 +992,16 @@ func stripANSI(s string) string {
 	return ansiPattern.ReplaceAllString(s, "")
 }
 
-type stubFrontend struct {
+type frontendHarness struct {
+	mock *core.MockTaskFrontend
+
 	listTasks                 []*core.Task
 	listTasksContext          context.Context
 	listTasksErr              error
 	listTasksCalls            int
+	listRepoPullRequests      []core.RepoPullRequest
+	listRepoPullRequestsErr   error
+	listRepoPullRequestsCwd   string
 	attachedTask              *core.Task
 	attachTaskSessionErr      error
 	attachTaskSessionCalls    int
@@ -826,76 +1023,89 @@ type stubFrontend struct {
 	subscribeTaskStatusCalls  []string
 }
 
-func newStubFrontend() *stubFrontend {
-	return &stubFrontend{}
-}
-
-func (s *stubFrontend) AttachTaskSession(ctx context.Context, task *core.Task) error {
-	s.attachTaskSessionCalls++
-	s.attachedTask = task
-	if s.attachTaskSessionFn != nil {
-		return s.attachTaskSessionFn(ctx, task)
-	}
-	return s.attachTaskSessionErr
-}
-
-func (s *stubFrontend) ReconnectTaskSession(ctx context.Context, taskID string) error {
-	s.reconnectTaskSessionCalls++
-	if s.reconnectTaskSessionFn != nil {
-		return s.reconnectTaskSessionFn(ctx, taskID)
-	}
-	return s.reconnectTaskSessionErr
-}
-
-func (s *stubFrontend) CreateTaskStream(
-	_ context.Context,
-	input core.CreateTaskInput,
-) (<-chan core.TaskCreateEvent, error) {
-	s.createTaskStreamCalls++
-	s.createInput = input
-	if s.createTaskStreamErr != nil {
-		return nil, s.createTaskStreamErr
-	}
-
-	events := make(chan core.TaskCreateEvent, len(s.createTaskEvents))
-	for _, event := range s.createTaskEvents {
-		events <- event
-	}
-	close(events)
-	return events, nil
-}
-
-func (s *stubFrontend) DeleteTask(_ context.Context, taskID string) error {
-	s.deleteTaskIDs = append(s.deleteTaskIDs, taskID)
-	return s.deleteTaskErr
-}
-
-func (s *stubFrontend) ListTasks(ctx context.Context) ([]*core.Task, error) {
-	s.listTasksCalls++
-	s.listTasksContext = ctx
-	return s.listTasks, s.listTasksErr
-}
-
-func (s *stubFrontend) LatestTaskStatus(_ context.Context, taskID string) (*core.TaskStatusUpdate, error) {
-	s.latestTaskStatusCalls = append(s.latestTaskStatusCalls, taskID)
-	if s.latestTaskStatusErr != nil && s.latestTaskStatusErr[taskID] != nil {
-		return nil, s.latestTaskStatusErr[taskID]
-	}
-	if s.latestTaskStatus == nil {
-		return nil, nil
-	}
-	return s.latestTaskStatus[taskID], nil
-}
-
-func (s *stubFrontend) SubscribeTaskStatus(_ context.Context, taskID string) (<-chan core.TaskStatusUpdate, error) {
-	s.subscribeTaskStatusCalls = append(s.subscribeTaskStatusCalls, taskID)
-	if s.subscribeTaskStatusErr != nil && s.subscribeTaskStatusErr[taskID] != nil {
-		return nil, s.subscribeTaskStatusErr[taskID]
-	}
-	if s.subscribeTaskStatus == nil {
-		ch := make(chan core.TaskStatusUpdate)
-		close(ch)
-		return ch, nil
-	}
-	return s.subscribeTaskStatus[taskID], nil
+func newFrontendHarness() *frontendHarness {
+	frontend := &frontendHarness{mock: &core.MockTaskFrontend{}}
+	frontend.mock.EXPECT().AttachTaskSession(mock.Anything, mock.Anything).RunAndReturn(
+		func(ctx context.Context, task *core.Task) error {
+			frontend.attachTaskSessionCalls++
+			frontend.attachedTask = task
+			if frontend.attachTaskSessionFn != nil {
+				return frontend.attachTaskSessionFn(ctx, task)
+			}
+			return frontend.attachTaskSessionErr
+		},
+	).Maybe()
+	frontend.mock.EXPECT().ReconnectTaskSession(mock.Anything, mock.Anything).RunAndReturn(
+		func(ctx context.Context, taskID string) error {
+			frontend.reconnectTaskSessionCalls++
+			if frontend.reconnectTaskSessionFn != nil {
+				return frontend.reconnectTaskSessionFn(ctx, taskID)
+			}
+			return frontend.reconnectTaskSessionErr
+		},
+	).Maybe()
+	frontend.mock.EXPECT().CreateTaskStream(mock.Anything, mock.Anything).RunAndReturn(
+		func(_ context.Context, input core.CreateTaskInput) (<-chan core.TaskCreateEvent, error) {
+			frontend.createTaskStreamCalls++
+			frontend.createInput = input
+			if frontend.createTaskStreamErr != nil {
+				return nil, frontend.createTaskStreamErr
+			}
+			events := make(chan core.TaskCreateEvent, len(frontend.createTaskEvents))
+			for _, event := range frontend.createTaskEvents {
+				events <- event
+			}
+			close(events)
+			return events, nil
+		},
+	).Maybe()
+	frontend.mock.EXPECT().DeleteTask(mock.Anything, mock.Anything).RunAndReturn(
+		func(_ context.Context, taskID string) error {
+			frontend.deleteTaskIDs = append(frontend.deleteTaskIDs, taskID)
+			return frontend.deleteTaskErr
+		},
+	).Maybe()
+	frontend.mock.EXPECT().ListTasks(mock.Anything).RunAndReturn(
+		func(ctx context.Context) ([]*core.Task, error) {
+			frontend.listTasksCalls++
+			frontend.listTasksContext = ctx
+			return frontend.listTasks, frontend.listTasksErr
+		},
+	).Maybe()
+	frontend.mock.EXPECT().ListRepoPullRequests(mock.Anything, mock.Anything).RunAndReturn(
+		func(_ context.Context, cwd string) ([]core.RepoPullRequest, error) {
+			frontend.listRepoPullRequestsCwd = cwd
+			if frontend.listRepoPullRequestsErr != nil {
+				return nil, frontend.listRepoPullRequestsErr
+			}
+			return append([]core.RepoPullRequest(nil), frontend.listRepoPullRequests...), nil
+		},
+	).Maybe()
+	frontend.mock.EXPECT().LatestTaskStatus(mock.Anything, mock.Anything).RunAndReturn(
+		func(_ context.Context, taskID string) (*core.TaskStatusUpdate, error) {
+			frontend.latestTaskStatusCalls = append(frontend.latestTaskStatusCalls, taskID)
+			if frontend.latestTaskStatusErr != nil && frontend.latestTaskStatusErr[taskID] != nil {
+				return nil, frontend.latestTaskStatusErr[taskID]
+			}
+			if frontend.latestTaskStatus == nil {
+				return nil, nil
+			}
+			return frontend.latestTaskStatus[taskID], nil
+		},
+	).Maybe()
+	frontend.mock.EXPECT().SubscribeTaskStatus(mock.Anything, mock.Anything).RunAndReturn(
+		func(_ context.Context, taskID string) (<-chan core.TaskStatusUpdate, error) {
+			frontend.subscribeTaskStatusCalls = append(frontend.subscribeTaskStatusCalls, taskID)
+			if frontend.subscribeTaskStatusErr != nil && frontend.subscribeTaskStatusErr[taskID] != nil {
+				return nil, frontend.subscribeTaskStatusErr[taskID]
+			}
+			if frontend.subscribeTaskStatus == nil {
+				ch := make(chan core.TaskStatusUpdate)
+				close(ch)
+				return ch, nil
+			}
+			return frontend.subscribeTaskStatus[taskID], nil
+		},
+	).Maybe()
+	return frontend
 }

@@ -96,6 +96,8 @@ func (s *unixSocketServer) handleConn(ctx context.Context, conn net.Conn) {
 		s.handleDeleteTask(connCtx, encoder, req)
 	case "reconnect_task_session":
 		s.handleReconnectTaskSession(connCtx, encoder, req)
+	case "list_repo_pull_requests":
+		s.handleListRepoPullRequests(ctx, encoder, req)
 	case "list_tasks":
 		s.handleListTasks(ctx, encoder)
 	case "latest_task_status":
@@ -194,6 +196,20 @@ func (s *unixSocketServer) handleListTasks(ctx context.Context, encoder *json.En
 	}
 
 	_ = writeSocketEnvelope(encoder, socketEnvelope{Type: "tasks_list", OK: true, Tasks: tasks})
+}
+
+func (s *unixSocketServer) handleListRepoPullRequests(ctx context.Context, encoder *json.Encoder, req socketRequest) {
+	prs, err := s.frontend.ListRepoPullRequests(ctx, strings.TrimSpace(req.Cwd))
+	if err != nil {
+		_ = writeSocketEnvelope(encoder, socketEnvelope{Type: "error", Error: err.Error()})
+		return
+	}
+
+	_ = writeSocketEnvelope(encoder, socketEnvelope{
+		Type:         "repo_pull_requests_list",
+		OK:           true,
+		PullRequests: prs,
+	})
 }
 
 func (s *unixSocketServer) handleLatestTaskStatus(ctx context.Context, encoder *json.Encoder, req socketRequest) {

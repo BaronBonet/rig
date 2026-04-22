@@ -14,6 +14,7 @@ type TaskServiceDependencies struct {
 	Tasks                TaskRepository
 	GitWorktree          GitWorktreeClient
 	TmuxSession          TmuxSessionClient
+	PullRequests         PullRequestClient
 	Providers            map[Provider]ProviderClient
 	Workspace            TaskWorkspaceManager
 	DefaultProvider      Provider
@@ -24,6 +25,7 @@ type taskService struct {
 	tasks                TaskRepository
 	gitWorktree          GitWorktreeClient
 	tmuxSession          TmuxSessionClient
+	pullRequests         PullRequestClient
 	providers            map[Provider]ProviderClient
 	workspace            TaskWorkspaceManager
 	defaultProvider      Provider
@@ -35,6 +37,7 @@ func NewTaskService(deps TaskServiceDependencies) TaskService {
 		tasks:                deps.Tasks,
 		gitWorktree:          deps.GitWorktree,
 		tmuxSession:          deps.TmuxSession,
+		pullRequests:         deps.PullRequests,
 		providers:            deps.Providers,
 		workspace:            deps.Workspace,
 		enableWorkspaceSetup: deps.EnableWorkspaceSetup,
@@ -69,6 +72,42 @@ func (s *taskService) CreateTaskWithProgress(
 
 func (s *taskService) ListTasks(ctx context.Context) ([]*Task, error) {
 	return s.tasks.ListTasks(ctx)
+}
+
+func (s *taskService) ListRepoPullRequests(ctx context.Context, cwd string) ([]RepoPullRequest, error) {
+	if s.pullRequests == nil {
+		return nil, fmt.Errorf("pull request client not configured")
+	}
+
+	repoCtx, err := s.gitWorktree.DetectRepo(ctx, cwd)
+	if err != nil {
+		return nil, err
+	}
+
+	prs, err := s.pullRequests.ListRepoPullRequests(ctx, repoCtx.Root)
+	if err != nil {
+		return nil, err
+	}
+
+	existingTasks, err := s.tasks.ListTasks(ctx)
+	if err != nil {
+		return nil, err
+	}
+
+	annotated := make([]RepoPullRequest, 0, len(prs))
+	for _, pr := range prs {
+		pr.HasExistingTask = existingTaskForBranch(existingTasks, repoCtx.Root, pr.BranchName) != nil
+		if !pr.HasExistingTask {
+			inUse, err := s.gitWorktree.IsBranchUsedByWorktree(ctx, repoCtx.Root, pr.BranchName)
+			if err != nil {
+				return nil, err
+			}
+			pr.HasExistingTask = inUse
+		}
+		annotated = append(annotated, pr)
+	}
+
+	return annotated, nil
 }
 
 func (s *taskService) DeleteTask(ctx context.Context, taskID string) error {
