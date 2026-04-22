@@ -1,4 +1,4 @@
-package codexprovider
+package codex
 
 import (
 	"bytes"

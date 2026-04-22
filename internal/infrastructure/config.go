@@ -10,7 +10,7 @@ import (
 
 	sqlite "rig/internal/adapters/repository/sqlite"
 
-	codexprovider "rig/internal/adapters/client/codexprovider"
+	"rig/internal/adapters/client/codex"
 
 	"github.com/caarlos0/env/v11"
 )
@@ -18,7 +18,7 @@ import (
 type ApplicationConfig struct {
 	Provider core.Provider `env:"RIG_PROVIDER" envDefault:"codex"`
 	SQLite   sqlite.Config
-	Codex    codexprovider.Config
+	Codex    codex.Config
 	Daemon   taskdaemon.Config
 }
 

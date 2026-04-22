@@ -3,20 +3,20 @@ package main
 import (
 	"context"
 	"fmt"
+	"io"
 	"os"
 	"os/signal"
 	"syscall"
 
+	"rig/internal/adapters/client/codex"
+	"rig/internal/adapters/client/git"
+	"rig/internal/adapters/client/tmux"
 	"rig/internal/adapters/handler/tui"
 	"rig/internal/adapters/repository/sqlite"
 	"rig/internal/adapters/taskdaemon"
 	"rig/internal/core"
 	"rig/internal/infrastructure"
 	"rig/internal/pkg/subprocess"
-
-	codexprovider "rig/internal/adapters/client/codexprovider"
-	gitworktree "rig/internal/adapters/client/gitworktree"
-	tmuxsession "rig/internal/adapters/client/tmuxsession"
 
 	repositoryworkspace "rig/internal/adapters/repository/workspace"
 
@@ -31,14 +31,24 @@ const (
 	daemonModeEnvValue = "task-daemon"
 )
 
+var version = "dev"
+
 func main() {
-	if err := execute(); err != nil {
+	if err := executeWithArgs(os.Args[1:], os.Stdout, os.Stderr); err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		os.Exit(1)
 	}
 }
 
-func execute() error {
+func executeWithArgs(args []string, stdout io.Writer, _ io.Writer) error {
+	if len(args) == 1 && args[0] == "--version" {
+		if stdout == nil {
+			stdout = os.Stdout
+		}
+		_, err := fmt.Fprintln(stdout, version)
+		return err
+	}
+
 	cfg, err := infrastructure.LoadConfig()
 	if err != nil {
 		return err
@@ -102,8 +112,6 @@ func serveTaskDaemon(
 		return fmt.Errorf("application config not configured")
 	}
 
-	// TODO: why not just
-	// taskRepo, err := sqlite.New(sqlite.Config{Path: cfg.SQLite.Path})
 	taskRepo, err := sqlite.New(cfg.SQLite)
 	if err != nil {
 		return err
@@ -112,10 +120,10 @@ func serveTaskDaemon(
 	runner := subprocess.ExecRunner{}
 
 	providers := map[core.Provider]core.ProviderClient{
-		core.ProviderCodex: codexprovider.New(
+		core.ProviderCodex: codex.New(
 			runner,
 			cfg.Codex,
-			codexprovider.HookForwardingConfig{
+			codex.HookForwardingConfig{
 				CollectorURL:  "http://" + cfg.Daemon.HookListenAddr + "/codex-hook",
 				RigBinaryPath: execPath,
 				SourceRoot:    sourceRoot,
@@ -125,15 +133,15 @@ func serveTaskDaemon(
 
 	service := core.NewTaskService(core.TaskServiceDependencies{
 		Tasks:                taskRepo,
-		GitWorktree:          gitworktree.New(runner),
-		TmuxSession:          tmuxsession.New(runner),
+		GitWorktree:          git.New(runner),
+		TmuxSession:          tmux.New(runner),
 		Providers:            providers,
 		Workspace:            repositoryworkspace.New(),
 		EnableWorkspaceSetup: true,
 		DefaultProvider:      cfg.Provider,
 	})
 
-	codexHooks := codexprovider.NewHookHTTPHandler(service, nil)
+	codexHooks := codex.NewHookHTTPHandler(service, nil)
 	adapter := taskdaemon.New(cfg.Daemon)
 
 	return adapter.Serve(ctx, service, []core.TaskDaemonHookRoute{
