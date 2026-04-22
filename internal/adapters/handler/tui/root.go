@@ -7,6 +7,6 @@ import (
 )
 
 // NewProgram creates the daemon-backed task TUI program backed by the task frontend.
-func NewProgram(frontend core.TaskFrontend, opts ...tea.ProgramOption) *tea.Program {
-	return tea.NewProgram(newModel(frontend), opts...)
+func NewProgram(frontend core.TaskFrontend, launchCwd string, opts ...tea.ProgramOption) *tea.Program {
+	return tea.NewProgram(newModelWithLaunchCwd(frontend, launchCwd), opts...)
 }

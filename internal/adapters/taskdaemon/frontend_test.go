@@ -13,6 +13,7 @@ import (
 
 	"rig/internal/core"
 
+	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
 )
 
@@ -46,6 +47,33 @@ func TestFrontend_ListTasksSendsListTasksAndReturnsTasks(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, socketRequest{Command: "list_tasks"}, <-requestCh)
 	require.True(t, reflect.DeepEqual(expectedTasks, tasks))
+	require.NoError(t, <-serverErrCh)
+}
+
+func TestFrontend_ListRepoPullRequestsSendsRequestAndReturnsPullRequests(t *testing.T) {
+	t.Parallel()
+
+	socketPath := frontendTestSocketPath(t)
+	expectedPRs := []core.RepoPullRequest{
+		{Number: 41, Title: "Billing", BranchName: "feat/billing", State: core.PRStateOpen},
+		{Number: 42, Title: "Auth", BranchName: "feat/auth", State: core.PRStateDraft, HasExistingTask: true},
+	}
+	requestCh := make(chan socketRequest, 1)
+	serverErrCh := serveOneShotFrontendSocket(t, socketPath, func(req socketRequest, encoder *json.Encoder) error {
+		requestCh <- req
+		return encoder.Encode(socketEnvelope{
+			Type:         "repo_pull_requests_list",
+			OK:           true,
+			PullRequests: expectedPRs,
+		})
+	})
+
+	frontend := New(Config{SocketPath: socketPath}).Frontend()
+
+	prs, err := frontend.ListRepoPullRequests(t.Context(), "/tmp/repo")
+	require.NoError(t, err)
+	require.Equal(t, socketRequest{Command: "list_repo_pull_requests", Cwd: "/tmp/repo"}, <-requestCh)
+	require.Equal(t, expectedPRs, prs)
 	require.NoError(t, <-serverErrCh)
 }
 
@@ -168,12 +196,13 @@ func TestFrontend_CreateTaskStreamLatestTaskStatusAndSubscribeTaskStatus(t *test
 		t.Parallel()
 
 		task := &core.Task{ID: "task-123", TmuxSession: "repo_task"}
-		sessions := &stubTaskSessionClient{
-			attachTaskSessionFn: func(_ context.Context, got *core.Task) error {
+		sessions := core.NewMockTmuxSessionClient(t)
+		sessions.EXPECT().AttachTaskSession(mock.Anything, task).RunAndReturn(
+			func(_ context.Context, got *core.Task) error {
 				require.Same(t, task, got)
 				return nil
 			},
-		}
+		)
 
 		frontend := &frontend{sessions: sessions}
 
@@ -398,25 +427,6 @@ func TestFrontend_CreateTaskStreamLatestTaskStatusAndSubscribeTaskStatus(t *test
 
 		require.NoError(t, <-serverErrCh)
 	})
-}
-
-type stubTaskSessionClient struct {
-	attachTaskSessionFn func(context.Context, *core.Task) error
-}
-
-func (s *stubTaskSessionClient) StartTaskSession(context.Context, *core.Task, core.TaskSessionLaunchSpec) error {
-	panic("unexpected StartTaskSession call")
-}
-
-func (s *stubTaskSessionClient) AttachTaskSession(ctx context.Context, task *core.Task) error {
-	if s.attachTaskSessionFn != nil {
-		return s.attachTaskSessionFn(ctx, task)
-	}
-	return nil
-}
-
-func (s *stubTaskSessionClient) DeleteTaskSession(context.Context, *core.Task) error {
-	panic("unexpected DeleteTaskSession call")
 }
 
 func TestFrontend_ReturnsExplicitErrorsOnErrorEnvelopesAndUnexpectedTypes(t *testing.T) {

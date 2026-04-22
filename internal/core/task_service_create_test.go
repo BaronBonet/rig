@@ -5,6 +5,7 @@ import (
 	"errors"
 	"testing"
 
+	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
 )
 
@@ -211,9 +212,9 @@ func TestTaskServiceCreateTask_BootstrapsWorkspaceWhenRepoSetupIsDisabled(t *tes
 		GitWorktree: svc.repoClientMock,
 		TmuxSession: svc.sessionClientMock,
 		Providers: map[Provider]ProviderClient{
-			ProviderCodex: &recordingProviderClient{state: &svc.providerRepo},
+			ProviderCodex: svc.providerClientMock,
 		},
-		Workspace:            &recordingWorkspaceManager{state: &svc.workspace, session: &svc.sessionClient},
+		Workspace:            svc.workspaceMock,
 		EnableWorkspaceSetup: false,
 		DefaultProvider:      ProviderCodex,
 	})
@@ -328,14 +329,6 @@ func TestTaskServiceCreateTask_AppendsNumericSuffixWhenSlugAlreadyExists(t *test
 	require.Equal(t, "repo_billing_retry_flow_2", task.TmuxSession)
 }
 
-type recordingTaskCreateProgressReporter struct {
-	steps []TaskCreateProgressStep
-}
-
-func (r *recordingTaskCreateProgressReporter) ReportTaskCreateProgress(step TaskCreateProgressStep) {
-	r.steps = append(r.steps, step)
-}
-
 func TestTaskServiceCreateTaskWithProgress_EmitsProgressStepsInOrder(t *testing.T) {
 	svc := newTestTaskService(t)
 	svc.providerRepo.suggestedName = "task creation workflow tests"
@@ -345,7 +338,11 @@ func TestTaskServiceCreateTaskWithProgress_EmitsProgressStepsInOrder(t *testing.
 		FileMode: 0o644,
 	}}}
 
-	reporter := &recordingTaskCreateProgressReporter{}
+	var steps []TaskCreateProgressStep
+	reporter := NewMockTaskCreateProgressReporter(t)
+	reporter.EXPECT().ReportTaskCreateProgress(mock.Anything).Run(func(step TaskCreateProgressStep) {
+		steps = append(steps, step)
+	}).Return()
 
 	task, err := svc.service.CreateTaskWithProgress(t.Context(), CreateTaskInput{
 		Cwd:      "/tmp/repo",
@@ -360,7 +357,7 @@ func TestTaskServiceCreateTaskWithProgress_EmitsProgressStepsInOrder(t *testing.
 		TaskCreateProgressCreatingWorktree,
 		TaskCreateProgressPreparingWorkspace,
 		TaskCreateProgressStartingSession,
-	}, reporter.steps)
+	}, steps)
 }
 
 func TestTaskServiceCreateTaskWithProgress_AllowsNilReporter(t *testing.T) {

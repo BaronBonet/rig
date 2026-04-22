@@ -10,6 +10,7 @@ import (
 
 	"rig/internal/adapters/client/codex"
 	"rig/internal/adapters/client/git"
+	"rig/internal/adapters/client/github"
 	"rig/internal/adapters/client/tmux"
 	"rig/internal/adapters/handler/tui"
 	"rig/internal/adapters/repository/sqlite"
@@ -94,6 +95,7 @@ func executeWithArgs(args []string, stdout io.Writer, _ io.Writer) error {
 
 	program := tui.NewProgram(
 		frontend,
+		sourceRoot,
 		tea.WithInput(os.Stdin),
 		tea.WithOutput(os.Stdout),
 	)
@@ -135,6 +137,7 @@ func serveTaskDaemon(
 		Tasks:                taskRepo,
 		GitWorktree:          git.New(runner),
 		TmuxSession:          tmux.New(runner),
+		PullRequests:         github.New(runner),
 		Providers:            providers,
 		Workspace:            repositoryworkspace.New(),
 		EnableWorkspaceSetup: true,

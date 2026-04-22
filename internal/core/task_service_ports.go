@@ -66,6 +66,10 @@ type TaskFrontend interface {
 	// AttachTaskSession attaches to an existing task session in tmux for
 	// interactive use.
 	AttachTaskSession(ctx context.Context, task *Task) error
+	// ListRepoPullRequests lists pull requests for the repository that contains
+	// cwd and annotates whether each PR branch already has a local Rig
+	// workspace.
+	ListRepoPullRequests(ctx context.Context, cwd string) ([]RepoPullRequest, error)
 	// ReconnectTaskSession recreates a missing task runtime session from
 	// persisted provider resume metadata.
 	ReconnectTaskSession(ctx context.Context, taskID string) error
@@ -139,6 +143,10 @@ type TaskService interface {
 		input CreateTaskInput,
 		reporter TaskCreateProgressReporter,
 	) (*Task, error)
+	// ListRepoPullRequests lists pull requests for the repository that contains
+	// cwd and annotates whether each PR branch already has a local Rig
+	// workspace.
+	ListRepoPullRequests(ctx context.Context, cwd string) ([]RepoPullRequest, error)
 	// ListTasks returns all known tasks.
 	ListTasks(ctx context.Context) ([]*Task, error)
 	// LatestTaskStatus returns the latest published live status for a task, or
@@ -226,6 +234,14 @@ type GitWorktreeClient interface {
 	CreateTaskWorkspaceFromBranch(ctx context.Context, task *Task) error
 	// RemoveTaskWorkspace deletes a task worktree while keeping its branch.
 	RemoveTaskWorkspace(ctx context.Context, task *Task) error
+}
+
+// PullRequestClient lists repository pull requests through an external
+// provider such as GitHub.
+type PullRequestClient interface {
+	// ListRepoPullRequests lists open and draft pull requests for the canonical
+	// repository root.
+	ListRepoPullRequests(ctx context.Context, repoRoot string) ([]RepoPullRequest, error)
 }
 
 // TmuxSessionClient manages tmux session lifecycle for a task.

@@ -13,6 +13,12 @@ packages:
   rig/internal/core:
     interfaces:
       TaskRepository:
+      TaskFrontend:
+      TaskCreateProgressReporter:
+      TaskService:
+      GitWorktreeClient:
+      PullRequestClient:
+      TaskWorkspaceManager:
       TmuxSessionClient:
       ProviderClient:
   rig/internal/pkg/subprocess:

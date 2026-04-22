@@ -48,9 +48,11 @@ func (r *repository) IsBranchUsedByWorktree(ctx context.Context, repoRoot string
 	}
 
 	target := "refs/heads/" + strings.TrimSpace(branchName)
-	for _, line := range strings.Split(result.Stdout, "\n") {
-		line = strings.TrimSpace(line)
-		if strings.HasPrefix(line, "branch ") && strings.TrimSpace(strings.TrimPrefix(line, "branch ")) == target {
+	for _, entry := range parseWorktreeEntries(result.Stdout) {
+		if entry.prunable {
+			continue
+		}
+		if entry.branch == target {
 			return true, nil
 		}
 	}
@@ -97,7 +99,8 @@ func (r *repository) RemoveTaskWorkspace(ctx context.Context, task *core.Task) e
 	}
 	if _, err := os.Stat(task.WorktreePath); err != nil {
 		if os.IsNotExist(err) {
-			return nil
+			_, pruneErr := r.runner.Run(ctx, task.RepoRoot, "git", "worktree", "prune")
+			return pruneErr
 		}
 		return err
 	}
@@ -112,6 +115,37 @@ func (r *repository) RemoveTaskWorkspace(ctx context.Context, task *core.Task) e
 		task.WorktreePath,
 	)
 	return err
+}
+
+type worktreeEntry struct {
+	branch   string
+	prunable bool
+}
+
+func parseWorktreeEntries(worktreeList string) []worktreeEntry {
+	entries := []worktreeEntry{{}}
+	for _, line := range strings.Split(worktreeList, "\n") {
+		line = strings.TrimSpace(line)
+		if line == "" {
+			if entries[len(entries)-1] != (worktreeEntry{}) {
+				entries = append(entries, worktreeEntry{})
+			}
+			continue
+		}
+
+		current := &entries[len(entries)-1]
+		switch {
+		case strings.HasPrefix(line, "branch "):
+			current.branch = strings.TrimSpace(strings.TrimPrefix(line, "branch "))
+		case strings.HasPrefix(line, "prunable "):
+			current.prunable = true
+		}
+	}
+
+	if len(entries) > 0 && entries[len(entries)-1] == (worktreeEntry{}) {
+		entries = entries[:len(entries)-1]
+	}
+	return entries
 }
 
 func (r *repository) loadWorktreeList(ctx context.Context, cwd string) string {

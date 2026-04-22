@@ -22,6 +22,23 @@ func loadTasksCmd(ctx context.Context, frontend core.TaskFrontend) tea.Cmd {
 	}
 }
 
+func listRepoPullRequestsCmd(
+	ctx context.Context,
+	frontend core.TaskFrontend,
+	repoRoot string,
+	repoName string,
+) tea.Cmd {
+	return func() tea.Msg {
+		prs, err := frontend.ListRepoPullRequests(ctx, repoRoot)
+		return repoPullRequestsLoadedMsg{
+			repoRoot: repoRoot,
+			repoName: repoName,
+			prs:      prs,
+			err:      err,
+		}
+	}
+}
+
 func openTaskSessionCmd(ctx context.Context, frontend core.TaskFrontend, task *core.Task) tea.Cmd {
 	return func() tea.Msg {
 		err := frontend.AttachTaskSession(ctx, task)

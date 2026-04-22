@@ -3,6 +3,7 @@ package tui
 import (
 	"context"
 	"errors"
+	"path/filepath"
 	"strings"
 
 	"rig/internal/core"
@@ -20,6 +21,7 @@ type modelMode int
 const (
 	modeBrowse modelMode = iota
 	modePromptInput
+	modePRPicker
 	modeCleanupConfirm
 )
 
@@ -33,15 +35,21 @@ type model struct {
 	createErr     error
 	cancelStatus  context.CancelFunc
 	rows          []taskRow
+	prRows        []core.RepoPullRequest
 	prompt        string
 	createActive  core.TaskCreateProgressStep
 	createDone    []core.TaskCreateProgressStep
 	selected      int
+	prSelected    int
 	width         int
 	shimmerTick   int
 	mode          modelMode
+	launchCwd     string
+	prRepoRoot    string
+	prRepoName    string
 	loading       bool
 	createPending bool
+	createFromPR  bool
 	deletePending bool
 }
 
@@ -97,15 +105,27 @@ type taskDeletedMsg struct {
 	taskID string
 }
 
+type repoPullRequestsLoadedMsg struct {
+	err      error
+	prs      []core.RepoPullRequest
+	repoRoot string
+	repoName string
+}
+
 type shimmerTickMsg struct{}
 
 func newModel(frontend core.TaskFrontend) model {
+	return newModelWithLaunchCwd(frontend, "")
+}
+
+func newModelWithLaunchCwd(frontend core.TaskFrontend, launchCwd string) model {
 	statusContext, cancelStatus := context.WithCancel(context.Background())
 
 	return model{
 		frontend:      frontend,
 		statusContext: statusContext,
 		cancelStatus:  cancelStatus,
+		launchCwd:     strings.TrimSpace(launchCwd),
 		loading:       true,
 		mode:          modeBrowse,
 	}
@@ -131,6 +151,9 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if m.mode == modePromptInput {
 			return m.updatePromptInput(msg)
 		}
+		if m.mode == modePRPicker {
+			return m.updatePRPicker(msg)
+		}
 		if m.mode == modeCleanupConfirm {
 			return m.updateCleanupConfirm(msg)
 		}
@@ -146,6 +169,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.prompt = ""
 			m.createErr = nil
 			m.createPending = false
+			m.createFromPR = false
 			return m, nil
 		case "r":
 			m.loading = true
@@ -210,6 +234,17 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, waitForTaskStatusCmd(msg.taskID, msg.updates)
 	case taskStatusSubscriptionClosedMsg:
 		return m, nil
+	case repoPullRequestsLoadedMsg:
+		m.createErr = msg.err
+		if msg.err != nil {
+			m.prRows = nil
+			return m, nil
+		}
+		m.prRepoRoot = msg.repoRoot
+		m.prRepoName = msg.repoName
+		m.prRows = append([]core.RepoPullRequest(nil), msg.prs...)
+		m.clampPRSelection()
+		return m, nil
 	case taskCreatedMsg:
 		m.createPending = false
 		m.shimmerTick = 0
@@ -221,6 +256,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.mode = modeBrowse
 		m.prompt = ""
 		m.createErr = nil
+		m.createFromPR = false
 		index := m.upsertTaskRow(msg.task)
 		if index >= 0 {
 			m.selected = index
@@ -296,6 +332,8 @@ func (m model) View() tea.View {
 	switch m.mode {
 	case modePromptInput:
 		body = m.promptInputView()
+	case modePRPicker:
+		body = m.prPickerView()
 	case modeCleanupConfirm:
 		body = m.confirmationView()
 	}
@@ -331,12 +369,14 @@ func (m model) submitPrompt() (model, tea.Cmd) {
 	}
 
 	m.createPending = true
+	m.createFromPR = false
 	m.createErr = nil
 	m.shimmerTick = 0
 	m.resetCreateProgress()
 
 	return m, tea.Batch(
 		createTaskStreamCmd(m.statusContext, m.frontend, core.CreateTaskInput{
+			Cwd:      m.currentCreateCwd(),
 			Prompt:   prompt,
 			Provider: defaultCreateProvider,
 		}),
@@ -347,6 +387,22 @@ func (m model) submitPrompt() (model, tea.Cmd) {
 func (m model) updatePromptInput(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	if m.createPending {
 		return m, nil
+	}
+
+	if msg.String() == "ctrl+p" {
+		repoRoot, repoName, ok := m.currentRepoScope()
+		if !ok {
+			m.createErr = errors.New("repo scope unavailable")
+			return m, nil
+		}
+
+		m.mode = modePRPicker
+		m.prRepoRoot = repoRoot
+		m.prRepoName = repoName
+		m.prRows = nil
+		m.prSelected = 0
+		m.createErr = nil
+		return m, listRepoPullRequestsCmd(m.statusContext, m.frontend, repoRoot, repoName)
 	}
 
 	switch msg.Key().Code {
@@ -370,6 +426,61 @@ func (m model) updatePromptInput(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	}
 
 	return m, nil
+}
+
+func (m model) updatePRPicker(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
+	if m.createPending {
+		return m, nil
+	}
+
+	switch msg.String() {
+	case "esc":
+		m.mode = modePromptInput
+		m.createErr = nil
+		return m, nil
+	case "g", "home":
+		m.prSelected = 0
+		return m, nil
+	case "G", "end":
+		m.prSelected = len(m.prRows) - 1
+		return m, nil
+	case "j", "down":
+		m.movePRSelection(1)
+		return m, nil
+	case "k", "up":
+		m.movePRSelection(-1)
+		return m, nil
+	case "enter":
+		pr := m.selectedPR()
+		if pr == nil {
+			return m, nil
+		}
+		if pr.HasExistingTask {
+			m.createErr = errors.New("PR already has workspace")
+			return m, nil
+		}
+
+		m.mode = modeBrowse
+		m.createPending = true
+		m.createFromPR = true
+		m.createErr = nil
+		m.shimmerTick = 0
+		m.resetCreateProgress()
+
+		selected := *pr
+		return m, tea.Batch(
+			createTaskStreamCmd(m.statusContext, m.frontend, core.CreateTaskInput{
+				Cwd:      m.prRepoRoot,
+				Provider: defaultCreateProvider,
+				Source: core.CreateTaskSource{
+					PullRequest: &selected,
+				},
+			}),
+			shimmerTickCmd(),
+		)
+	default:
+		return m, nil
+	}
 }
 
 func (m model) updateCleanupConfirm(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
@@ -431,6 +542,30 @@ func (m *model) clampSelection() {
 	}
 	if m.selected >= len(m.rows) {
 		m.selected = len(m.rows) - 1
+	}
+}
+
+func (m *model) movePRSelection(delta int) {
+	if len(m.prRows) == 0 {
+		m.prSelected = 0
+		return
+	}
+
+	m.prSelected += delta
+	m.clampPRSelection()
+}
+
+func (m *model) clampPRSelection() {
+	if len(m.prRows) == 0 {
+		m.prSelected = 0
+		return
+	}
+	if m.prSelected < 0 {
+		m.prSelected = 0
+		return
+	}
+	if m.prSelected >= len(m.prRows) {
+		m.prSelected = len(m.prRows) - 1
 	}
 }
 
@@ -510,6 +645,44 @@ func taskID(task *core.Task) string {
 		return ""
 	}
 	return strings.TrimSpace(task.ID)
+}
+
+func (m model) currentCreateCwd() string {
+	if row := m.selectedRow(); row != nil && row.task != nil {
+		if repoRoot := strings.TrimSpace(row.task.RepoRoot); repoRoot != "" {
+			return repoRoot
+		}
+	}
+
+	return strings.TrimSpace(m.launchCwd)
+}
+
+func (m model) currentRepoScope() (string, string, bool) {
+	if row := m.selectedRow(); row != nil && row.task != nil {
+		repoRoot := strings.TrimSpace(row.task.RepoRoot)
+		if repoRoot != "" {
+			repoName := strings.TrimSpace(row.task.RepoName)
+			if repoName == "" {
+				repoName = filepath.Base(repoRoot)
+			}
+			return repoRoot, repoName, true
+		}
+	}
+
+	launchCwd := strings.TrimSpace(m.launchCwd)
+	if launchCwd == "" {
+		return "", "", false
+	}
+
+	return launchCwd, filepath.Base(launchCwd), true
+}
+
+func (m model) selectedPR() *core.RepoPullRequest {
+	if len(m.prRows) == 0 || m.prSelected < 0 || m.prSelected >= len(m.prRows) {
+		return nil
+	}
+
+	return &m.prRows[m.prSelected]
 }
 
 func (m model) totalWidth() int {

@@ -77,6 +77,22 @@ func TestRepositoryIsBranchUsedByWorktree_ReturnsTrueWhenBranchIsCheckedOutElsew
 	require.True(t, used)
 }
 
+func TestRepositoryIsBranchUsedByWorktree_IgnoresPrunableWorktrees(t *testing.T) {
+	runner := subprocess.NewMockRunner(t)
+	runner.EXPECT().
+		Run(mock.Anything, "/tmp/repo", "git", "worktree", "list", "--porcelain").
+		Return(subprocess.Result{
+			Stdout: "worktree /tmp/repo\nHEAD abcdef\nbranch refs/heads/main\n\n" +
+				"worktree /tmp/repo-auth\nHEAD 123456\nbranch refs/heads/feat/auth\n" +
+				"prunable gitdir file points to non-existent location\n",
+		}, nil).
+		Once()
+
+	used, err := New(runner).IsBranchUsedByWorktree(context.Background(), "/tmp/repo", "feat/auth")
+	require.NoError(t, err)
+	require.False(t, used)
+}
+
 func TestRepositoryCreateTaskWorkspace_UsesDetectedBaseBranch(t *testing.T) {
 	runner := subprocess.NewMockRunner(t)
 	runner.EXPECT().
@@ -127,6 +143,21 @@ func TestRepositoryRemoveTaskWorkspace_RemovesWorktreePath(t *testing.T) {
 	require.NoError(t, os.Mkdir(worktreePath, 0o755))
 	runner.EXPECT().
 		Run(mock.Anything, "/tmp/repo", "git", "worktree", "remove", "--force", worktreePath).
+		Return(subprocess.Result{}, nil).
+		Once()
+
+	err := New(runner).RemoveTaskWorkspace(context.Background(), &core.Task{
+		RepoRoot:     "/tmp/repo",
+		WorktreePath: worktreePath,
+	})
+	require.NoError(t, err)
+}
+
+func TestRepositoryRemoveTaskWorkspace_PrunesStaleWorktreeMetadataWhenPathIsMissing(t *testing.T) {
+	runner := subprocess.NewMockRunner(t)
+	worktreePath := filepath.Join(t.TempDir(), "repo-auth-rewrite")
+	runner.EXPECT().
+		Run(mock.Anything, "/tmp/repo", "git", "worktree", "prune").
 		Return(subprocess.Result{}, nil).
 		Once()
 

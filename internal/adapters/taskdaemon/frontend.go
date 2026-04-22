@@ -24,6 +24,21 @@ func (f *frontend) AttachTaskSession(ctx context.Context, task *core.Task) error
 	return f.sessions.AttachTaskSession(ctx, task)
 }
 
+func (f *frontend) ListRepoPullRequests(ctx context.Context, cwd string) ([]core.RepoPullRequest, error) {
+	resp, err := f.send(ctx, socketRequest{
+		Command: "list_repo_pull_requests",
+		Cwd:     cwd,
+	})
+	if err != nil {
+		return nil, err
+	}
+	if resp.Type != "repo_pull_requests_list" || !resp.OK {
+		return nil, unexpectedResponseError("list_repo_pull_requests", *resp)
+	}
+
+	return resp.PullRequests, nil
+}
+
 func (f *frontend) ReconnectTaskSession(ctx context.Context, taskID string) error {
 	resp, err := f.send(ctx, socketRequest{
 		Command: "reconnect_task_session",

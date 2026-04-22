@@ -12,6 +12,7 @@ func TestTaskFrontendContract_ExposesCreateListAndStatusMethods(t *testing.T) {
 		AttachTaskSession(context.Context, *Task) error
 		CreateTaskStream(context.Context, CreateTaskInput) (<-chan TaskCreateEvent, error)
 		DeleteTask(context.Context, string) error
+		ListRepoPullRequests(context.Context, string) ([]RepoPullRequest, error)
 		ListTasks(context.Context) ([]*Task, error)
 		LatestTaskStatus(context.Context, string) (*TaskStatusUpdate, error)
 		SubscribeTaskStatus(context.Context, string) (<-chan TaskStatusUpdate, error)
@@ -22,6 +23,7 @@ func TestTaskServiceContract_ExposesListTasks(t *testing.T) {
 	var _ interface {
 		CreateTaskWithProgress(context.Context, CreateTaskInput, TaskCreateProgressReporter) (*Task, error)
 		DeleteTask(context.Context, string) error
+		ListRepoPullRequests(context.Context, string) ([]RepoPullRequest, error)
 		ListTasks(context.Context) ([]*Task, error)
 	} = (TaskService)(nil)
 }
@@ -41,6 +43,33 @@ func TestTaskService_ListTasksReturnsRepositoryTasks(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, tasks, 2)
 	require.Equal(t, []string{"task-1", "task-2"}, []string{tasks[0].ID, tasks[1].ID})
+}
+
+func TestTaskService_ListRepoPullRequests_MarksExistingWorkspaceBranches(t *testing.T) {
+	svc := newTestTaskService(t)
+	svc.taskRepo.listTasks = []*Task{
+		{
+			ID:         "task-1",
+			RepoRoot:   "/tmp/repo",
+			BranchName: "feat/auth",
+		},
+	}
+	svc.repoClient.branchInUse["feat/billing"] = true
+	svc.pullRequests.listRepoPullRequests = []RepoPullRequest{
+		{Number: 41, Title: "Billing", BranchName: "feat/billing", State: PRStateOpen},
+		{Number: 42, Title: "Auth", BranchName: "feat/auth", State: PRStateDraft},
+		{Number: 43, Title: "Search", BranchName: "feat/search", State: PRStateOpen},
+	}
+
+	prs, err := svc.service.ListRepoPullRequests(t.Context(), "/tmp/repo/worktree")
+
+	require.NoError(t, err)
+	require.Equal(t, "/tmp/repo", svc.pullRequests.lastListRepoRoot)
+	require.Equal(t, []RepoPullRequest{
+		{Number: 41, Title: "Billing", BranchName: "feat/billing", State: PRStateOpen, HasExistingTask: true},
+		{Number: 42, Title: "Auth", BranchName: "feat/auth", State: PRStateDraft, HasExistingTask: true},
+		{Number: 43, Title: "Search", BranchName: "feat/search", State: PRStateOpen, HasExistingTask: false},
+	}, prs)
 }
 
 func TestTaskService_DeleteTaskRemovesSessionWorkspaceAndRecord(t *testing.T) {
