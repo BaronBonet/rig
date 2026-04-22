@@ -58,7 +58,6 @@ This is intentionally not a compatibility-first migration. If legacy code breaks
 Right now, the active implementation path is the daemon-backed task/TUI slice:
 
 - [cmd/rig/main.go](/Users/ebon/personal_software/rig/cmd/rig/main.go)
-- [cmd/debug/main.go](/Users/ebon/personal_software/rig/cmd/debug/main.go)
 
 This is the path we are using to wire the new architecture together and verify
 that the task lifecycle works end to end.
@@ -69,16 +68,27 @@ That means:
 - `cmd/debug/main.go` is still useful as a narrow development harness
 - old paths that are outside this slice are not the current priority
 
-Verified on 2026-04-21:
+Verified on 2026-04-22:
 
 - `rig` now runs through the daemon-backed TUI path
 - the daemon is auto-started by the root entrypoint when needed
-- task creation, task listing, latest-status reads, and per-task status subscriptions
-  run through `TaskFrontend`
+- task creation, task listing, latest-status reads, per-task status subscriptions,
+  local tmux attach, and explicit reconnect all run through `TaskFrontend`
 - Codex hooks are ingested through the unified `taskdaemon` adapter
+- Codex hook installation is now a provider session-environment concern:
+  - hooks are installed into `CODEX_HOME/hooks.json` or `~/.codex/hooks.json`
+  - the previous per-worktree `.codex/hooks.json` path is not the active runtime path
+- hook ingestion persists both:
+  - live task status in `task_status`
+  - reconnect metadata in `task_resume_metadata`
 - `SessionStart` streams as `starting`
 - `UserPromptSubmit`, `PreToolUse`, and `PostToolUse` stream as `working`
 - `Stop` streams as `waiting_for_input`
+- reconnect is explicit and strict:
+  - local attach is `AttachTaskSession`
+  - missing tmux sessions surface as `ErrTaskSessionNotFound`
+  - recovery goes through `ReconnectTaskSession`
+  - reconnect fails explicitly when no resume metadata exists
 - approval-selector / permission-request state remains deferred
 
 ## Status Of `cmd/rig/main.go`
@@ -102,14 +112,20 @@ The active runtime shape is now:
   - daemon process management
 - `internal/adapters/handler/tui` renders the browse/create MVP against `TaskFrontend`
 - `TaskService` owns:
-  - `CreateTask`
+  - `CreateTaskWithProgress`
   - `ListTasks`
   - `LatestTaskStatus`
   - `SubscribeTaskStatus`
   - `HandleHookEvent`
+  - `DeleteTask`
+  - `ReconnectTaskSession`
 - `sqlite` is the active durable task repository
 - `git`, `tmux`, and `codex` are the active operational adapters
-- `workspace` owns repo-local setup plus provider bootstrap file writing
+- `workspace` owns repo-local setup plus optional provider bootstrap file writing
+- Codex provider runtime setup now owns:
+  - installing rig hook rules into the Codex config layer
+  - ensuring the forwarder script exists before launch or resume
+  - generating `codex resume <session_id>` launch specs for reconnect
 
 This slice is intentionally Codex-only for now. Claude support and other legacy
 provider/runtime paths were removed rather than carried forward as dead weight.
@@ -125,6 +141,14 @@ The important runtime split is:
 So the TUI does not talk to `TaskService` directly. It talks to a
 daemon-backed `TaskFrontend`, and the daemon server forwards those requests
 into `TaskService`.
+
+The current interactive recovery flow is:
+
+- TUI tries `AttachTaskSession`
+- if tmux reports the session is missing, it calls `ReconnectTaskSession`
+- if reconnect succeeds, it retries `AttachTaskSession` once
+- if no resume metadata exists, reconnect fails explicitly instead of silently
+  starting a fresh session
 
 ## What “Done” Looks Like
 
@@ -150,6 +174,12 @@ Until further notice:
   - `SessionStart` -> `starting`
   - `UserPromptSubmit`, `PreToolUse`, `PostToolUse` -> `working`
   - `Stop` -> `waiting_for_input`
+- treat tmux attach and session recovery as separate concerns:
+  - `AttachTaskSession` is local tmux mechanics only
+  - `ReconnectTaskSession` is the business operation that recreates a missing runtime
+- persist reconnect state explicitly:
+  - `task_resume_metadata` is the source of truth for provider resume IDs
+  - reconnect must fail when that metadata is missing
 - approval-selector / permission-request detection is deferred until Codex exposes a reliable hook for it
 - do not preserve legacy complexity just to keep removed providers or dead paths alive
 - prefer smaller, more direct boundaries over “helpful” extra abstractions
@@ -158,6 +188,9 @@ Until further notice:
 - keep the client-side `TaskFrontend` view of the daemon separate from the
   daemon-serving `TaskDaemon.Serve(...)` path so the TUI stays unaware of
   transport and lifecycle details
+- keep provider runtime setup with the provider adapter:
+  - Codex hook installation belongs in `EnsureTaskSessionEnvironment`
+  - do not rely on per-worktree `.codex/hooks.json` as the active runtime mechanism
 
 OLD CODE: this commit removed most of the old code which may be useful to look at for how things use to work
  187410c - BREAKING: remove legacy obesrver and client packages
