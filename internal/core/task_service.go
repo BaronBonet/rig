@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"path/filepath"
 	"strings"
+	"sync"
 	"time"
 
 	slugpkg "rig/internal/pkg/slug"
@@ -30,6 +31,14 @@ type taskService struct {
 	workspace            TaskWorkspaceManager
 	defaultProvider      Provider
 	enableWorkspaceSetup bool
+	prStatusCache        map[string]prStatusCacheEntry
+	prStatusCacheMu      sync.Mutex
+	prStatusCacheTTL     time.Duration
+}
+
+type prStatusCacheEntry struct {
+	status    *PRStatus
+	fetchedAt time.Time
 }
 
 func NewTaskService(deps TaskServiceDependencies) TaskService {
@@ -108,6 +117,49 @@ func (s *taskService) ListRepoPullRequests(ctx context.Context, cwd string) ([]R
 	}
 
 	return annotated, nil
+}
+
+func (s *taskService) PullRequestStatus(
+	ctx context.Context,
+	repoRoot string,
+	branchName string,
+) (*PRStatus, error) {
+	repoRoot = strings.TrimSpace(repoRoot)
+	branchName = strings.TrimSpace(branchName)
+	if repoRoot == "" || branchName == "" || s.pullRequests == nil {
+		return &PRStatus{State: PRStateNone}, nil
+	}
+
+	key := repoRoot + ":" + branchName
+	ttl := s.prStatusCacheTTL
+	if ttl == 0 {
+		ttl = time.Minute
+	}
+
+	s.prStatusCacheMu.Lock()
+	if s.prStatusCache == nil {
+		s.prStatusCache = make(map[string]prStatusCacheEntry)
+	}
+	if entry, ok := s.prStatusCache[key]; ok && time.Since(entry.fetchedAt) < ttl {
+		s.prStatusCacheMu.Unlock()
+		return clonePRStatus(entry.status), nil
+	}
+	s.prStatusCacheMu.Unlock()
+
+	status := &PRStatus{State: PRStateNone}
+	checkedStatus, checkErr := s.pullRequests.CheckPullRequestStatus(ctx, repoRoot, branchName)
+	if checkErr == nil && checkedStatus != nil {
+		status = checkedStatus
+	}
+
+	s.prStatusCacheMu.Lock()
+	if s.prStatusCache == nil {
+		s.prStatusCache = make(map[string]prStatusCacheEntry)
+	}
+	s.prStatusCache[key] = prStatusCacheEntry{status: clonePRStatus(status), fetchedAt: time.Now()}
+	s.prStatusCacheMu.Unlock()
+
+	return clonePRStatus(status), nil
 }
 
 func (s *taskService) DeleteTask(ctx context.Context, taskID string) error {
@@ -559,4 +611,13 @@ func prDisplayName(pr RepoPullRequest) string {
 		return title
 	}
 	return strings.TrimSpace(pr.BranchName)
+}
+
+func clonePRStatus(status *PRStatus) *PRStatus {
+	if status == nil {
+		return nil
+	}
+
+	cloned := *status
+	return &cloned
 }

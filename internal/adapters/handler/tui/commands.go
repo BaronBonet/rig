@@ -90,6 +90,23 @@ func latestTaskStatusCmd(ctx context.Context, frontend core.TaskFrontend, taskID
 	}
 }
 
+func pullRequestStatusCmd(
+	ctx context.Context,
+	frontend core.TaskFrontend,
+	taskID string,
+	repoRoot string,
+	branchName string,
+) tea.Cmd {
+	return func() tea.Msg {
+		status, err := frontend.PullRequestStatus(ctx, repoRoot, branchName)
+		return pullRequestStatusLoadedMsg{
+			taskID: taskID,
+			status: status,
+			err:    err,
+		}
+	}
+}
+
 func subscribeTaskStatusCmd(ctx context.Context, frontend core.TaskFrontend, taskID string) tea.Cmd {
 	return func() tea.Msg {
 		updates, err := frontend.SubscribeTaskStatus(ctx, taskID)

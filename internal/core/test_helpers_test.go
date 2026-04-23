@@ -85,8 +85,12 @@ type providerClientState struct {
 
 type pullRequestClientState struct {
 	listErr              error
+	checkStatusErr       error
 	listRepoPullRequests []RepoPullRequest
+	statusByBranch       map[string]*PRStatus
 	lastListRepoRoot     string
+	lastStatusRepoRoot   string
+	checkStatusCalls     int
 }
 
 type workspaceManagerState struct {
@@ -193,6 +197,19 @@ func configurePullRequestClientMock(client *MockPullRequestClient, state *pullRe
 				return nil, state.listErr
 			}
 			return append([]RepoPullRequest(nil), state.listRepoPullRequests...), nil
+		},
+	).Maybe()
+	client.EXPECT().CheckPullRequestStatus(mock.Anything, mock.Anything, mock.Anything).RunAndReturn(
+		func(_ context.Context, repoRoot string, branchName string) (*PRStatus, error) {
+			state.lastStatusRepoRoot = repoRoot
+			state.checkStatusCalls++
+			if state.checkStatusErr != nil {
+				return nil, state.checkStatusErr
+			}
+			if state.statusByBranch == nil {
+				return &PRStatus{State: PRStateNone}, nil
+			}
+			return clonePRStatus(state.statusByBranch[branchName]), nil
 		},
 	).Maybe()
 }

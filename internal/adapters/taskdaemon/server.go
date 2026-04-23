@@ -29,6 +29,14 @@ func (s *server) ListRepoPullRequests(ctx context.Context, cwd string) ([]core.R
 	return s.service.ListRepoPullRequests(ctx, cwd)
 }
 
+func (s *server) PullRequestStatus(ctx context.Context, repoRoot string, branchName string) (*core.PRStatus, error) {
+	if s.service == nil {
+		return nil, fmt.Errorf("task service not configured")
+	}
+
+	return s.service.PullRequestStatus(ctx, repoRoot, branchName)
+}
+
 func (s *server) ReconnectTaskSession(ctx context.Context, taskID string) error {
 	if s.service == nil {
 		return fmt.Errorf("task service not configured")

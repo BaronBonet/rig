@@ -9,11 +9,17 @@ import (
 type PRState string
 
 const (
+	PRStateNone   PRState = ""
 	PRStateOpen   PRState = "open"
 	PRStateDraft  PRState = "draft"
 	PRStateMerged PRState = "merged"
 	PRStateClosed PRState = "closed"
 )
+
+type PRStatus struct {
+	State  PRState `json:"state"`
+	Number int     `json:"number"`
+}
 
 type RepoPullRequest struct {
 	Title           string  `json:"title"`
@@ -70,6 +76,9 @@ type TaskFrontend interface {
 	// cwd and annotates whether each PR branch already has a local Rig
 	// workspace.
 	ListRepoPullRequests(ctx context.Context, cwd string) ([]RepoPullRequest, error)
+	// PullRequestStatus returns the pull request state for a repository branch,
+	// or PRStateNone when no pull request is open or known for that branch.
+	PullRequestStatus(ctx context.Context, repoRoot string, branchName string) (*PRStatus, error)
 	// ReconnectTaskSession recreates a missing task runtime session from
 	// persisted provider resume metadata.
 	ReconnectTaskSession(ctx context.Context, taskID string) error
@@ -147,6 +156,9 @@ type TaskService interface {
 	// cwd and annotates whether each PR branch already has a local Rig
 	// workspace.
 	ListRepoPullRequests(ctx context.Context, cwd string) ([]RepoPullRequest, error)
+	// PullRequestStatus returns the pull request state for a repository branch,
+	// or PRStateNone when no pull request is open or known for that branch.
+	PullRequestStatus(ctx context.Context, repoRoot string, branchName string) (*PRStatus, error)
 	// ListTasks returns all known tasks.
 	ListTasks(ctx context.Context) ([]*Task, error)
 	// LatestTaskStatus returns the latest published live status for a task, or
@@ -242,6 +254,9 @@ type PullRequestClient interface {
 	// ListRepoPullRequests lists open and draft pull requests for the canonical
 	// repository root.
 	ListRepoPullRequests(ctx context.Context, repoRoot string) ([]RepoPullRequest, error)
+	// CheckPullRequestStatus returns pull request state for a branch in the
+	// canonical repository root.
+	CheckPullRequestStatus(ctx context.Context, repoRoot string, branchName string) (*PRStatus, error)
 }
 
 // TmuxSessionClient manages tmux session lifecycle for a task.

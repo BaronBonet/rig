@@ -77,6 +77,34 @@ func TestFrontend_ListRepoPullRequestsSendsRequestAndReturnsPullRequests(t *test
 	require.NoError(t, <-serverErrCh)
 }
 
+func TestFrontend_PullRequestStatusSendsRequestAndReturnsStatus(t *testing.T) {
+	t.Parallel()
+
+	socketPath := frontendTestSocketPath(t)
+	expectedStatus := &core.PRStatus{State: core.PRStateOpen, Number: 42}
+	requestCh := make(chan socketRequest, 1)
+	serverErrCh := serveOneShotFrontendSocket(t, socketPath, func(req socketRequest, encoder *json.Encoder) error {
+		requestCh <- req
+		return encoder.Encode(socketEnvelope{
+			Type: "pull_request_status",
+			OK:   true,
+			PR:   expectedStatus,
+		})
+	})
+
+	frontend := New(Config{SocketPath: socketPath}).Frontend()
+
+	status, err := frontend.PullRequestStatus(t.Context(), "/tmp/repo", "feat/auth")
+	require.NoError(t, err)
+	require.Equal(
+		t,
+		socketRequest{Command: "pull_request_status", Cwd: "/tmp/repo", BranchName: "feat/auth"},
+		<-requestCh,
+	)
+	require.Equal(t, expectedStatus, status)
+	require.NoError(t, <-serverErrCh)
+}
+
 func TestFrontend_CreateTaskStreamLatestTaskStatusAndSubscribeTaskStatus(t *testing.T) {
 	t.Parallel()
 
