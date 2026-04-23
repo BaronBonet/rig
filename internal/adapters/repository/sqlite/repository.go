@@ -90,6 +90,42 @@ func (r *repository) ListTasks(ctx context.Context) ([]*core.Task, error) {
 	return tasksFromRows(rows), nil
 }
 
+func (r *repository) RecordTaskActivity(ctx context.Context, event core.TaskActivityEvent) error {
+	event.TaskID = strings.TrimSpace(event.TaskID)
+	if event.TaskID == "" {
+		return fmt.Errorf("task activity event task ID is required")
+	}
+
+	return r.queries.InsertTaskActivity(ctx, insertTaskActivityParams(event))
+}
+
+func (r *repository) GetTaskActivity(ctx context.Context, taskID string, limit int) ([]core.TaskActivityEvent, error) {
+	taskID = strings.TrimSpace(taskID)
+	if taskID == "" {
+		return nil, nil
+	}
+
+	if limit <= 0 {
+		rows, err := r.queries.ListTaskActivityByTaskID(ctx, taskID)
+		if err != nil {
+			return nil, err
+		}
+		return taskActivityEventsFromRows(rows), nil
+	}
+
+	rows, err := r.queries.ListTaskActivityByTaskIDLimitedDesc(ctx, generated.ListTaskActivityByTaskIDLimitedDescParams{
+		TaskID: taskID,
+		Limit:  int64(limit),
+	})
+	if err != nil {
+		return nil, err
+	}
+
+	events := taskActivityEventsFromRows(rows)
+	slices.Reverse(events)
+	return events, nil
+}
+
 func (r *repository) UpsertTaskStatus(ctx context.Context, update core.TaskStatusUpdate) error {
 	update.TaskID = strings.TrimSpace(update.TaskID)
 	if update.TaskID == "" {

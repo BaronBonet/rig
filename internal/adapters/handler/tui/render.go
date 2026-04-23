@@ -209,6 +209,36 @@ func (m model) selectedTaskDetailView() string {
 		builder.WriteString("   " + padRightVisible(leftLine, detailColWidth) + "   " + rightLine + "\n")
 	}
 
+	if activity := taskActivityPreview(row.activity); len(activity) > 0 {
+		builder.WriteString("\n")
+		builder.WriteString("   " + headerLabelStyle.Render("ACTIVITY") + "\n")
+		for idx, event := range activity {
+			label := "assistant"
+			labelStyle := providerStyle(string(task.Provider))
+			textStyle := dimStyle
+			if event.Role == core.TaskActivityRoleUser {
+				label = "you"
+				labelStyle = mutedStyle
+				if idx == len(activity)-1 {
+					textStyle = primaryStyle
+				}
+			} else if idx == len(activity)-1 {
+				textStyle = primaryStyle
+			}
+
+			lines := wrapAndTruncate(event.Text, totalWidth-16, 3)
+			for lineIndex, line := range lines {
+				if lineIndex == 0 {
+					builder.WriteString(
+						"   " + padRightVisible(labelStyle.Render(label), 10) + " " + textStyle.Render(line) + "\n",
+					)
+					continue
+				}
+				builder.WriteString("   " + strings.Repeat(" ", 11) + textStyle.Render(line) + "\n")
+			}
+		}
+	}
+
 	if strings.TrimSpace(task.Prompt) != "" {
 		builder.WriteString("\n")
 		builder.WriteString("   " + headerLabelStyle.Render("PROMPT") + "\n")
@@ -218,6 +248,62 @@ func (m model) selectedTaskDetailView() string {
 	}
 
 	return strings.TrimRight(builder.String(), "\n")
+}
+
+func taskActivityPreview(events []core.TaskActivityEvent) []core.TaskActivityEvent {
+	if len(events) == 0 {
+		return nil
+	}
+
+	start := -1
+	for i := len(events) - 1; i >= 0; i-- {
+		if events[i].Role == core.TaskActivityRoleUser && strings.TrimSpace(events[i].Text) != "" {
+			start = i
+			break
+		}
+	}
+	if start == -1 {
+		start = 0
+	}
+
+	preview := make([]core.TaskActivityEvent, 0, len(events)-start)
+	for _, event := range events[start:] {
+		if strings.TrimSpace(event.Text) == "" {
+			continue
+		}
+		preview = append(preview, event)
+	}
+
+	if len(preview) == 0 {
+		return nil
+	}
+
+	if preview[0].Role == core.TaskActivityRoleUser {
+		assistantCount := 0
+		for _, event := range preview[1:] {
+			if event.Role == core.TaskActivityRoleAssistant {
+				assistantCount++
+			}
+		}
+		if assistantCount > taskActivityPreviewLimit-1 {
+			trimmed := []core.TaskActivityEvent{preview[0]}
+			toSkip := assistantCount - (taskActivityPreviewLimit - 1)
+			for _, event := range preview[1:] {
+				if event.Role == core.TaskActivityRoleAssistant && toSkip > 0 {
+					toSkip--
+					continue
+				}
+				trimmed = append(trimmed, event)
+			}
+			return trimmed
+		}
+	}
+
+	if len(preview) > taskActivityPreviewLimit {
+		return preview[len(preview)-taskActivityPreviewLimit:]
+	}
+
+	return preview
 }
 
 func (m model) promptInputView() string {

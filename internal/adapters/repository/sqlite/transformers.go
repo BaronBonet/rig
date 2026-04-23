@@ -51,6 +51,17 @@ func upsertTaskStatusParams(update core.TaskStatusUpdate) generated.UpsertTaskSt
 	}
 }
 
+func insertTaskActivityParams(event core.TaskActivityEvent) generated.InsertTaskActivityParams {
+	return generated.InsertTaskActivityParams{
+		TaskID:     event.TaskID,
+		TurnID:     event.TurnID,
+		EventName:  event.EventName,
+		Role:       string(event.Role),
+		Text:       event.Text,
+		ObservedAt: formatTime(event.ObservedAt),
+	}
+}
+
 func upsertTaskResumeMetadataParams(metadata core.TaskResumeMetadata) generated.UpsertTaskResumeMetadataParams {
 	return generated.UpsertTaskResumeMetadataParams{
 		TaskID:     metadata.TaskID,
@@ -114,6 +125,25 @@ func taskStatusUpdateFromRow(row generated.TaskStatus) *core.TaskStatusUpdate {
 		RawEventName: row.RawEventName,
 		ObservedAt:   parseTime(row.ObservedAt),
 	}
+}
+
+func taskActivityEventFromRow(row generated.TaskActivity) core.TaskActivityEvent {
+	return core.TaskActivityEvent{
+		TaskID:     row.TaskID,
+		TurnID:     row.TurnID,
+		EventName:  row.EventName,
+		Role:       core.TaskActivityRole(row.Role),
+		Text:       row.Text,
+		ObservedAt: parseTime(row.ObservedAt),
+	}
+}
+
+func taskActivityEventsFromRows(rows []generated.TaskActivity) []core.TaskActivityEvent {
+	events := make([]core.TaskActivityEvent, 0, len(rows))
+	for _, row := range rows {
+		events = append(events, taskActivityEventFromRow(row))
+	}
+	return events
 }
 
 func taskResumeMetadataFromRow(row generated.TaskResumeMetadatum) *core.TaskResumeMetadata {

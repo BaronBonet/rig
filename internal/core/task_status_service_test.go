@@ -10,6 +10,7 @@ import (
 
 func TestTaskServiceContract_ExposesStatusMethods(t *testing.T) {
 	var _ interface {
+		GetTaskActivity(context.Context, string, int) ([]TaskActivityEvent, error)
 		LatestTaskStatus(context.Context, string) (*TaskStatusUpdate, error)
 		SubscribeTaskStatus(context.Context, string) (<-chan TaskStatusUpdate, error)
 		HandleHookEvent(context.Context, HookEventInput) error
@@ -20,9 +21,51 @@ func TestTaskFrontendContract_ExposesCreateAndStatusReadMethods(t *testing.T) {
 	var _ interface {
 		AttachTaskSession(context.Context, *Task) error
 		CreateTaskStream(context.Context, CreateTaskInput) (<-chan TaskCreateEvent, error)
+		GetTaskActivity(context.Context, string, int) ([]TaskActivityEvent, error)
 		LatestTaskStatus(context.Context, string) (*TaskStatusUpdate, error)
 		SubscribeTaskStatus(context.Context, string) (<-chan TaskStatusUpdate, error)
 	} = (TaskFrontend)(nil)
+}
+
+func TestTaskStatusService_GetTaskActivityReturnsRepositoryEvents(t *testing.T) {
+	svc := newTestTaskService(t)
+	svc.taskRepo.activityByTask = map[string][]TaskActivityEvent{
+		"task-123": {
+			{
+				TaskID:     "task-123",
+				EventName:  "UserPromptSubmit",
+				Role:       TaskActivityRoleUser,
+				Text:       "restore the task detail previews",
+				ObservedAt: time.Date(2026, time.April, 23, 10, 0, 0, 0, time.UTC),
+			},
+			{
+				TaskID:     "task-123",
+				EventName:  "Stop",
+				Role:       TaskActivityRoleAssistant,
+				Text:       "Rewired the detail panel to show recent task activity.",
+				ObservedAt: time.Date(2026, time.April, 23, 10, 1, 0, 0, time.UTC),
+			},
+		},
+	}
+
+	events, err := svc.service.GetTaskActivity(t.Context(), "task-123", 5)
+	require.NoError(t, err)
+	require.Equal(t, []TaskActivityEvent{
+		{
+			TaskID:     "task-123",
+			EventName:  "UserPromptSubmit",
+			Role:       TaskActivityRoleUser,
+			Text:       "restore the task detail previews",
+			ObservedAt: time.Date(2026, time.April, 23, 10, 0, 0, 0, time.UTC),
+		},
+		{
+			TaskID:     "task-123",
+			EventName:  "Stop",
+			Role:       TaskActivityRoleAssistant,
+			Text:       "Rewired the detail panel to show recent task activity.",
+			ObservedAt: time.Date(2026, time.April, 23, 10, 1, 0, 0, time.UTC),
+		},
+	}, events)
 }
 
 func TestTaskStatusService_LatestReturnsNilWhenTaskHasNoStatus(t *testing.T) {
@@ -164,4 +207,70 @@ func TestTaskStatusService_HandleHookEventPersistsResumeMetadataWhenSessionIDPre
 		SessionID:  "sess-1",
 		ObservedAt: time.Date(2026, time.April, 20, 9, 5, 0, 0, time.UTC),
 	}, *svc.taskRepo.savedResumeMetadata)
+}
+
+func TestTaskStatusService_HandleHookEventRecordsActivity(t *testing.T) {
+	svc := newTestTaskService(t)
+	svc.taskRepo.listTasks = []*Task{{
+		ID:           "task-123",
+		WorktreePath: "/tmp/repo-task",
+	}}
+
+	require.NoError(t, svc.service.HandleHookEvent(t.Context(), HookEventInput{
+		OccurredAt: time.Date(2026, time.April, 23, 10, 0, 0, 0, time.UTC),
+		Provider:   ProviderCodex,
+		Cwd:        "/tmp/repo-task",
+		EventName:  "UserPromptSubmit",
+		TurnID:     "turn-1",
+		PromptText: "bring the task preview back",
+	}))
+	require.NoError(t, svc.service.HandleHookEvent(t.Context(), HookEventInput{
+		OccurredAt:        time.Date(2026, time.April, 23, 10, 0, 30, 0, time.UTC),
+		Provider:          ProviderCodex,
+		Cwd:               "/tmp/repo-task",
+		EventName:         "PostToolUse",
+		TurnID:            "turn-1",
+		CommandText:       "rg -n task detail",
+		SessionID:         "sess-1",
+		PromptText:        "bring the task preview back",
+		CommandResultText: "internal/adapters/handler/tui/render.go",
+	}))
+	require.NoError(t, svc.service.HandleHookEvent(t.Context(), HookEventInput{
+		OccurredAt:           time.Date(2026, time.April, 23, 10, 1, 0, 0, time.UTC),
+		Provider:             ProviderCodex,
+		Cwd:                  "/tmp/repo-task",
+		EventName:            "Stop",
+		TurnID:               "turn-1",
+		SessionID:            "sess-1",
+		LastAssistantMessage: "Restored the detail panel message preview.",
+	}))
+
+	events, err := svc.service.GetTaskActivity(t.Context(), "task-123", 10)
+	require.NoError(t, err)
+	require.Equal(t, []TaskActivityEvent{
+		{
+			TaskID:     "task-123",
+			TurnID:     "turn-1",
+			EventName:  "UserPromptSubmit",
+			Role:       TaskActivityRoleUser,
+			Text:       "bring the task preview back",
+			ObservedAt: time.Date(2026, time.April, 23, 10, 0, 0, 0, time.UTC),
+		},
+		{
+			TaskID:     "task-123",
+			TurnID:     "turn-1",
+			EventName:  "PostToolUse",
+			Role:       TaskActivityRoleAssistant,
+			Text:       "rg -n task detail",
+			ObservedAt: time.Date(2026, time.April, 23, 10, 0, 30, 0, time.UTC),
+		},
+		{
+			TaskID:     "task-123",
+			TurnID:     "turn-1",
+			EventName:  "Stop",
+			Role:       TaskActivityRoleAssistant,
+			Text:       "Restored the detail panel message preview.",
+			ObservedAt: time.Date(2026, time.April, 23, 10, 1, 0, 0, time.UTC),
+		},
+	}, events)
 }

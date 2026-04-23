@@ -90,6 +90,17 @@ func latestTaskStatusCmd(ctx context.Context, frontend core.TaskFrontend, taskID
 	}
 }
 
+func taskActivityCmd(ctx context.Context, frontend core.TaskFrontend, taskID string, limit int) tea.Cmd {
+	return func() tea.Msg {
+		activity, err := frontend.GetTaskActivity(ctx, taskID, limit)
+		return taskActivityLoadedMsg{
+			taskID:   taskID,
+			activity: activity,
+			err:      err,
+		}
+	}
+}
+
 func pullRequestStatusCmd(
 	ctx context.Context,
 	frontend core.TaskFrontend,

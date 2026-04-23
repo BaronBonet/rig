@@ -41,6 +41,7 @@ type taskRepositoryState struct {
 	deletedTaskID       string
 	savedResumeMetadata *TaskResumeMetadata
 	latestResumeByTask  map[string]TaskResumeMetadata
+	activityByTask      map[string][]TaskActivityEvent
 	mu                  sync.Mutex
 	latestByTask        map[string]TaskStatusUpdate
 	subscribers         map[string][]chan TaskStatusUpdate
@@ -123,6 +124,7 @@ func newTestTaskService(t *testing.T) *testTaskServiceHarness {
 	}
 	h.taskRepo.latestByTask = make(map[string]TaskStatusUpdate)
 	h.taskRepo.latestResumeByTask = make(map[string]TaskResumeMetadata)
+	h.taskRepo.activityByTask = make(map[string][]TaskActivityEvent)
 	h.taskRepo.subscribers = make(map[string][]chan TaskStatusUpdate)
 	h.taskRepoMock = NewMockTaskRepository(t)
 	h.repoClientMock = NewMockGitWorktreeClient(t)
@@ -392,6 +394,25 @@ func configureTaskRepositoryMock(repo *MockTaskRepository, state *taskRepository
 				tasks = append(tasks, cloneTask(task))
 			}
 			return tasks, nil
+		},
+	).Maybe()
+	repo.EXPECT().RecordTaskActivity(mock.Anything, mock.Anything).RunAndReturn(
+		func(_ context.Context, event TaskActivityEvent) error {
+			state.mu.Lock()
+			defer state.mu.Unlock()
+			state.activityByTask[event.TaskID] = append(state.activityByTask[event.TaskID], event)
+			return nil
+		},
+	).Maybe()
+	repo.EXPECT().GetTaskActivity(mock.Anything, mock.Anything, mock.Anything).RunAndReturn(
+		func(_ context.Context, taskID string, limit int) ([]TaskActivityEvent, error) {
+			state.mu.Lock()
+			defer state.mu.Unlock()
+			events := append([]TaskActivityEvent(nil), state.activityByTask[taskID]...)
+			if limit > 0 && len(events) > limit {
+				events = events[len(events)-limit:]
+			}
+			return events, nil
 		},
 	).Maybe()
 	repo.EXPECT().UpsertTaskStatus(mock.Anything, mock.Anything).RunAndReturn(

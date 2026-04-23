@@ -353,6 +353,52 @@ func TestUnixSocketServer_ReconnectTaskSessionCallsTaskService(t *testing.T) {
 	require.NoError(t, <-errCh)
 }
 
+func TestUnixSocketServer_GetTaskActivityCallsTaskService(t *testing.T) {
+	t.Parallel()
+
+	socketPath := serverTestSocketPath(t)
+	expectedEvents := []core.TaskActivityEvent{
+		{
+			TaskID:     "task-1",
+			TurnID:     "turn-1",
+			EventName:  "UserPromptSubmit",
+			Role:       core.TaskActivityRoleUser,
+			Text:       "restore preview",
+			ObservedAt: time.Date(2026, time.April, 23, 10, 0, 0, 0, time.UTC),
+		},
+		{
+			TaskID:     "task-1",
+			TurnID:     "turn-1",
+			EventName:  "Stop",
+			Role:       core.TaskActivityRoleAssistant,
+			Text:       "Restored preview",
+			ObservedAt: time.Date(2026, time.April, 23, 10, 1, 0, 0, time.UTC),
+		},
+	}
+	svc := core.NewMockTaskService(t)
+	svc.EXPECT().GetTaskActivity(mock.Anything, "task-1", 5).Return(expectedEvents, nil)
+	adapter := New(Config{
+		SocketPath:     socketPath,
+		HookListenAddr: "127.0.0.1:0",
+	})
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	errCh := make(chan error, 1)
+	go func() {
+		errCh <- adapter.Serve(ctx, svc, nil, nil)
+	}()
+	waitForUnixSocketServer(t, socketPath)
+
+	events, err := getTaskActivityViaSocket(context.Background(), socketPath, "task-1", 5)
+	require.NoError(t, err)
+	require.Equal(t, expectedEvents, events)
+
+	cancel()
+	require.NoError(t, <-errCh)
+}
+
 func TestUnixSocketServer_SubscribeTaskStatusStreamsMatchingUpdates(t *testing.T) {
 	t.Parallel()
 
@@ -644,6 +690,40 @@ func reconnectTaskSessionViaSocket(ctx context.Context, socketPath string, taskI
 	}
 
 	return nil
+}
+
+func getTaskActivityViaSocket(
+	ctx context.Context,
+	socketPath string,
+	taskID string,
+	limit int,
+) ([]core.TaskActivityEvent, error) {
+	conn, err := dialDaemonSocket(ctx, socketPath)
+	if err != nil {
+		return nil, err
+	}
+	defer conn.Close()
+
+	if err := json.NewEncoder(conn).Encode(socketRequest{
+		Command: "get_task_activity",
+		TaskID:  taskID,
+		Limit:   limit,
+	}); err != nil {
+		return nil, err
+	}
+
+	var resp socketEnvelope
+	if err := json.NewDecoder(conn).Decode(&resp); err != nil {
+		return nil, err
+	}
+	if resp.Type == "error" && resp.Error != "" {
+		return nil, assertiveError(resp.Error)
+	}
+	if resp.Type != "task_activity" || !resp.OK {
+		return nil, assertiveError("unexpected task activity response")
+	}
+
+	return resp.Activity, nil
 }
 
 func listTasksViaSocket(ctx context.Context, socketPath string) ([]*core.Task, error) {

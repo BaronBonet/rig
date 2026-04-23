@@ -268,6 +268,47 @@ func TestFrontend_CreateTaskStreamLatestTaskStatusAndSubscribeTaskStatus(t *test
 		require.NoError(t, <-serverErrCh)
 	})
 
+	t.Run("get task activity", func(t *testing.T) {
+		t.Parallel()
+
+		socketPath := frontendTestSocketPath(t)
+		expectedEvents := []core.TaskActivityEvent{
+			{
+				TaskID:     "task-123",
+				TurnID:     "turn-1",
+				EventName:  "UserPromptSubmit",
+				Role:       core.TaskActivityRoleUser,
+				Text:       "restore the preview",
+				ObservedAt: time.Unix(1710000000, 0).UTC(),
+			},
+			{
+				TaskID:     "task-123",
+				TurnID:     "turn-1",
+				EventName:  "Stop",
+				Role:       core.TaskActivityRoleAssistant,
+				Text:       "Re-added the task detail preview.",
+				ObservedAt: time.Unix(1710000060, 0).UTC(),
+			},
+		}
+		requestCh := make(chan socketRequest, 1)
+		serverErrCh := serveOneShotFrontendSocket(t, socketPath, func(req socketRequest, encoder *json.Encoder) error {
+			requestCh <- req
+			return encoder.Encode(socketEnvelope{
+				Type:     "task_activity",
+				OK:       true,
+				Activity: expectedEvents,
+			})
+		})
+
+		frontend := New(Config{SocketPath: socketPath}).Frontend()
+
+		events, err := frontend.GetTaskActivity(t.Context(), "task-123", 5)
+		require.NoError(t, err)
+		require.Equal(t, socketRequest{Command: "get_task_activity", TaskID: "task-123", Limit: 5}, <-requestCh)
+		require.Equal(t, expectedEvents, events)
+		require.NoError(t, <-serverErrCh)
+	})
+
 	t.Run("subscribe task status", func(t *testing.T) {
 		t.Parallel()
 

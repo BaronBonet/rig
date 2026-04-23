@@ -13,6 +13,7 @@ import (
 
 type taskRow struct {
 	task        *core.Task
+	activity    []core.TaskActivityEvent
 	status      *core.TaskStatusUpdate
 	pullRequest *core.PRStatus
 }
@@ -27,6 +28,8 @@ const (
 )
 
 const defaultCreateProvider = core.ProviderCodex
+
+const taskActivityPreviewLimit = 6
 
 // nolint:recvcheck // bubbletea requires value receivers for tea.Model.
 type model struct {
@@ -70,6 +73,12 @@ type pullRequestStatusLoadedMsg struct {
 	status *core.PRStatus
 	err    error
 	taskID string
+}
+
+type taskActivityLoadedMsg struct {
+	activity []core.TaskActivityEvent
+	err      error
+	taskID   string
 }
 
 type taskStatusSubscriptionReadyMsg struct {
@@ -238,6 +247,12 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		m.setTaskPullRequestStatus(msg.taskID, msg.status)
 		return m, nil
+	case taskActivityLoadedMsg:
+		if msg.err != nil {
+			return m, nil
+		}
+		m.setTaskActivity(msg.taskID, msg.activity)
+		return m, nil
 	case taskStatusSubscriptionReadyMsg:
 		if msg.err != nil {
 			return m, nil
@@ -246,7 +261,10 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case taskStatusUpdatedMsg:
 		update := msg.update
 		m.setTaskStatus(msg.taskID, &update)
-		return m, waitForTaskStatusCmd(msg.taskID, msg.updates)
+		return m, tea.Batch(
+			taskActivityCmd(m.statusContext, m.frontend, msg.taskID, taskActivityPreviewLimit),
+			waitForTaskStatusCmd(msg.taskID, msg.updates),
+		)
 	case taskStatusSubscriptionClosedMsg:
 		return m, nil
 	case repoPullRequestsLoadedMsg:
@@ -374,9 +392,13 @@ func rowsFromTasks(tasks []*core.Task) []taskRow {
 }
 
 func (m model) afterTasksLoadedCmds() []tea.Cmd {
-	cmds := make([]tea.Cmd, 0, len(m.rows)*3)
+	cmds := make([]tea.Cmd, 0, len(m.rows)*4)
 	for _, row := range m.rows {
-		cmds = append(cmds, m.taskStatusTrackingCmds(taskID(row.task))...)
+		taskID := taskID(row.task)
+		cmds = append(cmds, m.taskStatusTrackingCmds(taskID)...)
+		if taskID != "" {
+			cmds = append(cmds, taskActivityCmd(m.statusContext, m.frontend, taskID, taskActivityPreviewLimit))
+		}
 		if cmd := m.taskPullRequestStatusCmd(row.task); cmd != nil {
 			cmds = append(cmds, cmd)
 		}
@@ -688,6 +710,16 @@ func (m *model) setTaskPullRequestStatus(taskID string, status *core.PRStatus) {
 			continue
 		}
 		m.rows[i].pullRequest = status
+		return
+	}
+}
+
+func (m *model) setTaskActivity(taskID string, activity []core.TaskActivityEvent) {
+	for i := range m.rows {
+		if m.rows[i].task == nil || m.rows[i].task.ID != taskID {
+			continue
+		}
+		m.rows[i].activity = append([]core.TaskActivityEvent(nil), activity...)
 		return
 	}
 }
