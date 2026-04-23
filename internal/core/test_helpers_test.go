@@ -88,6 +88,7 @@ type pullRequestClientState struct {
 	checkStatusErr       error
 	listRepoPullRequests []RepoPullRequest
 	statusByBranch       map[string]*PRStatus
+	statusSequence       []*PRStatus
 	lastListRepoRoot     string
 	lastStatusRepoRoot   string
 	checkStatusCalls     int
@@ -205,6 +206,11 @@ func configurePullRequestClientMock(client *MockPullRequestClient, state *pullRe
 			state.checkStatusCalls++
 			if state.checkStatusErr != nil {
 				return nil, state.checkStatusErr
+			}
+			if len(state.statusSequence) > 0 {
+				status := state.statusSequence[0]
+				state.statusSequence = state.statusSequence[1:]
+				return clonePRStatus(status), nil
 			}
 			if state.statusByBranch == nil {
 				return &PRStatus{State: PRStateNone}, nil

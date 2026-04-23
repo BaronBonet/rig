@@ -65,6 +65,30 @@ func TestRepository_CheckPullRequestStatus_ReturnsOpenPR(t *testing.T) {
 	require.Equal(t, &core.PRStatus{State: core.PRStateOpen, Number: 42}, status)
 }
 
+func TestRepository_CheckPullRequestStatus_ReturnsMergedPR(t *testing.T) {
+	runner := subprocess.NewMockRunner(t)
+	runner.EXPECT().
+		Run(
+			mock.Anything,
+			"/tmp/repo",
+			"gh",
+			"pr",
+			"view",
+			"feat/auth",
+			"--json",
+			"number,state,isDraft",
+			"--jq",
+			".number,.state,.isDraft",
+		).
+		Return(subprocess.Result{Stdout: "42\nMERGED\nfalse\n"}, nil).
+		Once()
+
+	status, err := New(runner).CheckPullRequestStatus(t.Context(), "/tmp/repo", "feat/auth")
+
+	require.NoError(t, err)
+	require.Equal(t, &core.PRStatus{State: core.PRStateMerged, Number: 42}, status)
+}
+
 func TestRepository_CheckPullRequestStatus_ReturnsNoneWhenNoPRMatchesBranch(t *testing.T) {
 	runner := subprocess.NewMockRunner(t)
 	runner.EXPECT().
