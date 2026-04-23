@@ -4,10 +4,10 @@ import (
 	"context"
 	"errors"
 	"path/filepath"
+	"rig/internal/core"
 	"strings"
 
-	"rig/internal/core"
-
+	"charm.land/bubbles/v2/textarea"
 	tea "charm.land/bubbletea/v2"
 )
 
@@ -38,6 +38,7 @@ type model struct {
 	rows          []taskRow
 	prRows        []core.RepoPullRequest
 	prompt        string
+	promptInput   textarea.Model
 	createActive  core.TaskCreateProgressStep
 	createDone    []core.TaskCreateProgressStep
 	selected      int
@@ -133,6 +134,7 @@ func newModelWithLaunchCwd(frontend core.TaskFrontend, launchCwd string) model {
 		statusContext: statusContext,
 		cancelStatus:  cancelStatus,
 		launchCwd:     strings.TrimSpace(launchCwd),
+		promptInput:   newPromptInput(),
 		loading:       true,
 		mode:          modeBrowse,
 	}
@@ -148,9 +150,6 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.width = msg.Width
 		return m, nil
 	case tea.PasteMsg:
-		if m.mode != modePromptInput {
-			return m, nil
-		}
 		return m.updatePromptPaste(msg)
 	case tea.KeyPressMsg:
 		if isQuitKey(msg) {
@@ -177,12 +176,10 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 			return m, tea.Quit
 		case "a", "n":
-			m.mode = modePromptInput
-			m.prompt = ""
-			m.createErr = nil
-			m.createPending = false
-			m.createFromPR = false
-			return m, nil
+			if m.createPending {
+				return m, nil
+			}
+			return m.enterPromptInputMode("")
 		case "r":
 			m.loading = true
 			m.err = nil
@@ -273,6 +270,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 		m.mode = modeBrowse
 		m.prompt = ""
+		m.promptInput = newPromptInput()
 		m.createErr = nil
 		m.createFromPR = false
 		index := m.upsertTaskRow(msg.task)
@@ -341,6 +339,9 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.shimmerTick++
 		return m, shimmerTickCmd()
 	default:
+		if m.mode == modePromptInput {
+			return m.updatePromptInput(msg)
+		}
 		return m, nil
 	}
 }
@@ -384,16 +385,19 @@ func (m model) afterTasksLoadedCmds() []tea.Cmd {
 }
 
 func (m model) submitPrompt() (model, tea.Cmd) {
-	prompt := strings.TrimSpace(m.prompt)
+	m.ensurePromptInputInitialized()
+	prompt := strings.TrimSpace(m.promptValue())
 	if prompt == "" {
 		return m, nil
 	}
 
+	m.mode = modeBrowse
 	m.createPending = true
 	m.createFromPR = false
 	m.createErr = nil
 	m.shimmerTick = 0
 	m.resetCreateProgress()
+	m.promptInput.Blur()
 
 	return m, tea.Batch(
 		createTaskStreamCmd(m.statusContext, m.frontend, core.CreateTaskInput{
@@ -405,61 +409,70 @@ func (m model) submitPrompt() (model, tea.Cmd) {
 	)
 }
 
-func (m model) updatePromptInput(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
+func (m model) updatePromptInput(msg tea.Msg) (tea.Model, tea.Cmd) {
 	if m.createPending {
 		return m, nil
 	}
+	m.ensurePromptInputInitialized()
+	if m.promptInput.Value() != m.prompt {
+		m.promptInput.SetValue(m.prompt)
+	}
+	var focusCmd tea.Cmd
+	if !m.promptInput.Focused() {
+		focusCmd = m.promptInput.Focus()
+	}
 
-	if msg.String() == "ctrl+p" {
-		repoRoot, repoName, ok := m.currentRepoScope()
-		if !ok {
-			m.createErr = errors.New("repo scope unavailable")
-			return m, nil
+	switch typed := msg.(type) {
+	case tea.KeyPressMsg:
+		if typed.String() == "ctrl+p" {
+			repoRoot, repoName, ok := m.currentRepoScope()
+			if !ok {
+				m.createErr = errors.New("repo scope unavailable")
+				return m, nil
+			}
+
+			m.mode = modePRPicker
+			m.prRepoRoot = repoRoot
+			m.prRepoName = repoName
+			m.prRows = nil
+			m.prSelected = 0
+			m.createErr = nil
+			m.promptInput.Blur()
+			return m, listRepoPullRequestsCmd(m.statusContext, m.frontend, repoRoot, repoName)
 		}
 
-		m.mode = modePRPicker
-		m.prRepoRoot = repoRoot
-		m.prRepoName = repoName
-		m.prRows = nil
-		m.prSelected = 0
-		m.createErr = nil
-		return m, listRepoPullRequestsCmd(m.statusContext, m.frontend, repoRoot, repoName)
+		switch typed.Key().Code {
+		case tea.KeyEscape:
+			m.mode = modeBrowse
+			m.prompt = ""
+			m.promptInput = newPromptInput()
+			m.createErr = nil
+			m.resetCreateProgress()
+			return m, nil
+		case tea.KeyEnter:
+			return m.submitPrompt()
+		}
 	}
 
-	switch msg.Key().Code {
-	case tea.KeyEscape:
-		m.mode = modeBrowse
-		m.prompt = ""
+	previousValue := m.promptInput.Value()
+	updatedInput, cmd := m.promptInput.Update(msg)
+	m.promptInput = updatedInput
+	m.prompt = m.promptInput.Value()
+	if m.prompt != previousValue {
 		m.createErr = nil
-		m.resetCreateProgress()
-		return m, nil
-	case tea.KeyEnter:
-		return m.submitPrompt()
-	case tea.KeyBackspace:
-		m.createErr = nil
-		m.prompt = trimLastRune(m.prompt)
-		return m, nil
 	}
 
-	if msg.Text != "" {
-		m.createErr = nil
-		m.prompt += msg.Text
+	if focusCmd != nil {
+		return m, tea.Batch(focusCmd, cmd)
 	}
-
-	return m, nil
+	return m, cmd
 }
 
 func (m model) updatePromptPaste(msg tea.PasteMsg) (tea.Model, tea.Cmd) {
-	if m.createPending {
+	if m.mode != modePromptInput || m.createPending {
 		return m, nil
 	}
-	if msg.Content == "" {
-		return m, nil
-	}
-
-	m.createErr = nil
-	m.prompt += msg.Content
-	return m, nil
+	return m.updatePromptInput(msg)
 }
 
 func (m model) updatePRPicker(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
@@ -471,7 +484,7 @@ func (m model) updatePRPicker(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	case "esc":
 		m.mode = modePromptInput
 		m.createErr = nil
-		return m, nil
+		return m, m.promptInput.Focus()
 	case "g", "home":
 		m.prSelected = 0
 		return m, nil
@@ -515,6 +528,32 @@ func (m model) updatePRPicker(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	default:
 		return m, nil
 	}
+}
+
+func (m model) enterPromptInputMode(initialValue string) (tea.Model, tea.Cmd) {
+	m.mode = modePromptInput
+	m.prompt = initialValue
+	m.promptInput = newPromptInput()
+	m.promptInput.SetValue(initialValue)
+	m.createErr = nil
+	m.createPending = false
+	m.createFromPR = false
+	return m, m.promptInput.Focus()
+}
+
+func (m model) promptValue() string {
+	m.ensurePromptInputInitialized()
+	if value := m.promptInput.Value(); value != "" || m.prompt == "" {
+		return value
+	}
+	return m.prompt
+}
+
+func (m *model) ensurePromptInputInitialized() {
+	if m.promptInput.MaxHeight != 0 {
+		return
+	}
+	m.promptInput = newPromptInput()
 }
 
 func (m model) updateCleanupConfirm(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
@@ -768,14 +807,6 @@ func (m model) selectedRow() *taskRow {
 		return &m.rows[len(m.rows)-1]
 	}
 	return &m.rows[m.selected]
-}
-
-func trimLastRune(value string) string {
-	runes := []rune(value)
-	if len(runes) == 0 {
-		return ""
-	}
-	return string(runes[:len(runes)-1])
 }
 
 func containsCreateStep(steps []core.TaskCreateProgressStep, target core.TaskCreateProgressStep) bool {

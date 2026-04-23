@@ -242,17 +242,21 @@ func (m model) promptInputView() string {
 			"\n\n",
 	)
 
-	prompt := strings.TrimRight(m.prompt, "\n")
-	if prompt == "" {
-		prompt = dimStyle.Render("Describe the task to create...")
-	} else {
-		prompt = primaryStyle.Render(prompt)
-	}
 	promptBoxWidth := totalWidth - 4
 	if promptBoxWidth < 20 {
 		promptBoxWidth = 20
 	}
-	builder.WriteString(promptBoxStyle.Width(promptBoxWidth).Render(prompt))
+	m.ensurePromptInputInitialized()
+	input := m.promptInput
+	if input.Value() != m.prompt {
+		input.SetValue(m.prompt)
+	}
+	contentWidth := promptBoxWidth - promptBoxStyle.GetHorizontalFrameSize()
+	if contentWidth < 1 {
+		contentWidth = 1
+	}
+	input.SetWidth(contentWidth)
+	builder.WriteString(promptBoxStyle.Width(promptBoxWidth).Render(input.View()))
 
 	if progress := m.renderCreateProgress(); progress != "" {
 		builder.WriteString("\n\n" + progress)
