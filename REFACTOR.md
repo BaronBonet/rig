@@ -168,7 +168,6 @@ Until further notice:
 
 - optimize for the new architecture
 - treat `cmd/rig/main.go` as the primary execution path
-- use `cmd/debug/main.go` as a focused harness when that is useful
 - keep the active slice Codex-only
 - treat Codex status streaming as normal-turn streaming only:
   - `SessionStart` -> `starting`

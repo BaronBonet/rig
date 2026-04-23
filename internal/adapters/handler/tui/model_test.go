@@ -327,12 +327,13 @@ func TestModel_KeyAEntersPromptMode(t *testing.T) {
 
 	next, cmd := m.Update(tea.KeyPressMsg{Text: "a"})
 
-	require.Nil(t, cmd)
+	require.NotNil(t, cmd)
 
 	got, ok := next.(model)
 	require.True(t, ok)
 	require.Equal(t, modePromptInput, got.mode)
 	require.Empty(t, got.prompt)
+	require.True(t, got.promptInput.Focused())
 }
 
 func TestModel_KeyNEntersPromptMode(t *testing.T) {
@@ -341,12 +342,13 @@ func TestModel_KeyNEntersPromptMode(t *testing.T) {
 
 	next, cmd := m.Update(tea.KeyPressMsg{Text: "n"})
 
-	require.Nil(t, cmd)
+	require.NotNil(t, cmd)
 
 	got, ok := next.(model)
 	require.True(t, ok)
 	require.Equal(t, modePromptInput, got.mode)
 	require.Empty(t, got.prompt)
+	require.True(t, got.promptInput.Focused())
 }
 
 func TestModel_EnterOpensSelectedTaskAndKeepsRigRunningOnSuccess(t *testing.T) {
@@ -478,7 +480,7 @@ func TestModel_CreateTaskFromPromptAppendsTaskAndStartsStatusTracking(t *testing
 
 	submitted, ok := next.(model)
 	require.True(t, ok)
-	require.Equal(t, modePromptInput, submitted.mode)
+	require.Equal(t, modeBrowse, submitted.mode)
 	require.Equal(t, "fix the retry loop", submitted.prompt)
 	require.True(t, submitted.createPending)
 
@@ -494,8 +496,10 @@ func TestModel_CreateTaskFromPromptAppendsTaskAndStartsStatusTracking(t *testing
 	got, ok := next.(model)
 	require.True(t, ok)
 	require.True(t, got.createPending)
+	require.Equal(t, modeBrowse, got.mode)
 	require.Equal(t, core.TaskCreateProgressSuggestingName, got.createActive)
 	require.Contains(t, stripANSI(got.View().Content), "Suggesting name")
+	require.NotContains(t, stripANSI(got.View().Content), "Enter task prompt.")
 
 	taskCreated := runCmd(t, follow)
 	next, follow = got.Update(taskCreated)
@@ -663,10 +667,11 @@ func TestModel_PasteIntoPromptInputAppendsPastedText(t *testing.T) {
 	m := newLoadedModel(frontend)
 	m.mode = modePromptInput
 	m.prompt = "existing "
+	_ = m.promptInput.Focus()
 
 	next, cmd := m.Update(tea.PasteMsg{Content: "copied text\nnext line"})
 
-	require.Nil(t, cmd)
+	require.NotNil(t, cmd)
 
 	got, ok := next.(model)
 	require.True(t, ok)
@@ -695,6 +700,7 @@ func TestModel_CreateTaskFailureKeepsPromptRecoverableAndPreservesListView(t *te
 
 	pending, ok := next.(model)
 	require.True(t, ok)
+	require.Equal(t, modeBrowse, pending.mode)
 	require.True(t, pending.createPending)
 
 	initialMsgs := runBatchCmd(t, cmd)
@@ -716,7 +722,7 @@ func TestModel_CreateTaskFailureKeepsPromptRecoverableAndPreservesListView(t *te
 
 	got, ok := next.(model)
 	require.True(t, ok)
-	require.Equal(t, modePromptInput, got.mode)
+	require.Equal(t, modeBrowse, got.mode)
 	require.Equal(t, "fix the retry loop", got.prompt)
 	require.False(t, got.createPending)
 	require.ErrorContains(t, got.createErr, "create failed")
@@ -728,13 +734,51 @@ func TestModel_CreateTaskFailureKeepsPromptRecoverableAndPreservesListView(t *te
 
 	view := stripANSI(got.View().Content)
 	require.Contains(t, view, "RIG")
-	require.Contains(t, view, "new task")
-	require.Contains(t, view, "Enter task prompt.")
-	require.Contains(t, view, "provider  codex")
-	require.Contains(t, view, "fix the retry loop")
+	require.Contains(t, view, "first task")
 	require.Contains(t, view, "Creating worktree")
 	require.Contains(t, view, "create failed")
 	require.NotContains(t, view, "Loading tasks...")
+	require.NotContains(t, view, "Enter task prompt.")
+}
+
+func TestModel_CreateTaskFromPromptReturnsToBrowseImmediatelyAndKeepsOverviewUsable(t *testing.T) {
+	frontend := newFrontendHarness()
+	frontend.listTasks = []*core.Task{
+		{ID: "task-1", DisplayName: "first task", RepoName: "repo-a", Provider: core.ProviderCodex},
+		{ID: "task-2", DisplayName: "second task", RepoName: "repo-b", Provider: core.ProviderCodex},
+	}
+	frontend.createTaskEvents = []core.TaskCreateEvent{
+		{Progress: &core.TaskCreateProgressEvent{Step: core.TaskCreateProgressSuggestingName}},
+	}
+
+	m := newLoadedModel(frontend)
+	m.mode = modePromptInput
+	m.prompt = "fix the retry loop"
+
+	next, cmd := m.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
+	require.NotNil(t, cmd)
+
+	submitted, ok := next.(model)
+	require.True(t, ok)
+	require.Equal(t, modeBrowse, submitted.mode)
+	require.True(t, submitted.createPending)
+	require.Equal(t, 0, submitted.selected)
+
+	next, navCmd := submitted.Update(tea.KeyPressMsg{Text: "j"})
+	require.Nil(t, navCmd)
+
+	navigated, ok := next.(model)
+	require.True(t, ok)
+	require.Equal(t, 1, navigated.selected)
+	require.True(t, navigated.createPending)
+
+	next, promptCmd := navigated.Update(tea.KeyPressMsg{Text: "n"})
+	require.Nil(t, promptCmd)
+
+	stillPending, ok := next.(model)
+	require.True(t, ok)
+	require.Equal(t, modeBrowse, stillPending.mode)
+	require.True(t, stillPending.createPending)
 }
 
 func TestPromptInputView_RendersPromptTextBox(t *testing.T) {
@@ -745,8 +789,9 @@ func TestPromptInputView_RendersPromptTextBox(t *testing.T) {
 
 	view := stripANSI(m.View().Content)
 	require.Contains(t, view, "╭")
-	require.Contains(t, view, "│ fix the retry loop")
+	require.Contains(t, view, "fix the retry loop")
 	require.Contains(t, view, "╰")
+	require.Contains(t, view, "┃")
 }
 
 func TestModel_PendingCreateStillAllowsQuitKeys(t *testing.T) {
@@ -1022,12 +1067,13 @@ func TestModel_EscFromPRPickerReturnsToPromptMode(t *testing.T) {
 
 	next, cmd := m.Update(tea.KeyPressMsg{Code: tea.KeyEscape})
 
-	require.Nil(t, cmd)
+	require.NotNil(t, cmd)
 
 	got, ok := next.(model)
 	require.True(t, ok)
 	require.Equal(t, modePromptInput, got.mode)
 	require.Equal(t, "typed already", got.prompt)
+	require.True(t, got.promptInput.Focused())
 }
 
 func TestModel_KeyXEntersCleanupConfirmMode(t *testing.T) {
@@ -1115,6 +1161,7 @@ func newLoadedModel(frontend *frontendHarness) model {
 	return model{
 		frontend:      frontend.mock,
 		launchCwd:     "/tmp/repo",
+		promptInput:   newPromptInput(),
 		statusContext: context.Background(),
 		rows:          rowsFromTasks(frontend.listTasks),
 		mode:          modeBrowse,
