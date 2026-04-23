@@ -351,7 +351,7 @@ func rowsFromTasks(tasks []*core.Task) []taskRow {
 		}
 		rows = append(rows, taskRow{task: task})
 	}
-	return rows
+	return groupRowsByRepo(rows)
 }
 
 func (m model) afterTasksLoadedCmds() []tea.Cmd {
@@ -611,7 +611,13 @@ func (m *model) upsertTaskRow(task *core.Task) int {
 	}
 
 	m.rows = append(m.rows, taskRow{task: task})
-	return len(m.rows) - 1
+	m.rows = groupRowsByRepo(m.rows)
+	for i := range m.rows {
+		if taskID(m.rows[i].task) == id {
+			return i
+		}
+	}
+	return -1
 }
 
 func (m *model) resetCreateProgress() {
@@ -648,16 +654,23 @@ func taskID(task *core.Task) string {
 }
 
 func (m model) currentCreateCwd() string {
-	if row := m.selectedRow(); row != nil && row.task != nil {
-		if repoRoot := strings.TrimSpace(row.task.RepoRoot); repoRoot != "" {
-			return repoRoot
-		}
+	if launchCwd := strings.TrimSpace(m.launchCwd); launchCwd != "" {
+		return launchCwd
 	}
 
-	return strings.TrimSpace(m.launchCwd)
+	if row := m.selectedRow(); row != nil && row.task != nil {
+		return strings.TrimSpace(row.task.RepoRoot)
+	}
+
+	return ""
 }
 
 func (m model) currentRepoScope() (string, string, bool) {
+	launchCwd := strings.TrimSpace(m.launchCwd)
+	if launchCwd != "" {
+		return launchCwd, filepath.Base(launchCwd), true
+	}
+
 	if row := m.selectedRow(); row != nil && row.task != nil {
 		repoRoot := strings.TrimSpace(row.task.RepoRoot)
 		if repoRoot != "" {
@@ -669,12 +682,7 @@ func (m model) currentRepoScope() (string, string, bool) {
 		}
 	}
 
-	launchCwd := strings.TrimSpace(m.launchCwd)
-	if launchCwd == "" {
-		return "", "", false
-	}
-
-	return launchCwd, filepath.Base(launchCwd), true
+	return "", "", false
 }
 
 func (m model) selectedPR() *core.RepoPullRequest {
@@ -720,6 +728,41 @@ func containsCreateStep(steps []core.TaskCreateProgressStep, target core.TaskCre
 		}
 	}
 	return false
+}
+
+func groupRowsByRepo(rows []taskRow) []taskRow {
+	if len(rows) < 2 {
+		return rows
+	}
+
+	order := make([]string, 0, len(rows))
+	groups := make(map[string][]taskRow, len(rows))
+	for _, row := range rows {
+		key := repoGroupKey(row.task)
+		if _, ok := groups[key]; !ok {
+			order = append(order, key)
+		}
+		groups[key] = append(groups[key], row)
+	}
+
+	grouped := make([]taskRow, 0, len(rows))
+	for _, key := range order {
+		grouped = append(grouped, groups[key]...)
+	}
+	return grouped
+}
+
+func repoGroupKey(task *core.Task) string {
+	if task == nil {
+		return ""
+	}
+	if repoRoot := strings.TrimSpace(task.RepoRoot); repoRoot != "" {
+		return repoRoot
+	}
+	if repoName := strings.TrimSpace(task.RepoName); repoName != "" {
+		return repoName
+	}
+	return ""
 }
 
 func isQuitKey(msg tea.KeyPressMsg) bool {

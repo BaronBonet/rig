@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io"
 	"net"
+	"strings"
 	"sync"
 
 	"rig/internal/core"
@@ -16,6 +17,14 @@ import (
 var currentFrontendBuildVersion = "dev"
 
 const currentFrontendProtocolVersion = 3
+
+func SetFrontendBuildVersion(version string) {
+	version = strings.TrimSpace(version)
+	if version == "" {
+		version = "dev"
+	}
+	currentFrontendBuildVersion = version
+}
 
 type socketRequest struct {
 	Input   *core.CreateTaskInput `json:"input,omitempty"`

@@ -59,6 +59,12 @@ func executeWithArgs(args []string, stdout io.Writer, _ io.Writer) error {
 	if err != nil {
 		return err
 	}
+	daemonBuildIdentity, err := taskDaemonBuildIdentity(execPath, version)
+	if err != nil {
+		return err
+	}
+	taskdaemon.SetFrontendBuildVersion(daemonBuildIdentity)
+
 	sourceRoot, err := os.Getwd()
 	if err != nil {
 		return err
@@ -101,6 +107,19 @@ func executeWithArgs(args []string, stdout io.Writer, _ io.Writer) error {
 	)
 	_, err = program.Run()
 	return err
+}
+
+func taskDaemonBuildIdentity(execPath string, version string) (string, error) {
+	if version != "" && version != "dev" {
+		return version, nil
+	}
+
+	info, err := os.Stat(execPath)
+	if err != nil {
+		return "", fmt.Errorf("stat task daemon executable: %w", err)
+	}
+
+	return fmt.Sprintf("dev:%s:%d:%d", execPath, info.Size(), info.ModTime().UnixNano()), nil
 }
 
 func serveTaskDaemon(

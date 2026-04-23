@@ -85,11 +85,12 @@ func (f *frontend) CreateTaskStream(
 		for {
 			event, recvErr := receiveTaskCreateEvent(decoder)
 			if recvErr != nil {
-				if !errors.Is(recvErr, io.EOF) {
-					select {
-					case <-ctx.Done():
-					case events <- core.TaskCreateEvent{Err: recvErr}:
-					}
+				if errors.Is(recvErr, io.EOF) {
+					recvErr = errors.New("create task stream closed before terminal result")
+				}
+				select {
+				case <-ctx.Done():
+				case events <- core.TaskCreateEvent{Err: recvErr}:
 				}
 				return
 			}

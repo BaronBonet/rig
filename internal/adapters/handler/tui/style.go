@@ -71,6 +71,11 @@ var (
 	headerLabelStyle = lipgloss.NewStyle().
 				Foreground(lipgloss.Color("#8b8fa3")).
 				Bold(true)
+
+	promptBoxStyle = lipgloss.NewStyle().
+			Border(lipgloss.RoundedBorder()).
+			BorderForeground(colorAccent).
+			Padding(0, 1)
 )
 
 func providerStyle(provider string) lipgloss.Style {
