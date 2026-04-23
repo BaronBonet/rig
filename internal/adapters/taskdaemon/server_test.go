@@ -251,6 +251,40 @@ func TestUnixSocketServer_ListRepoPullRequestsReturnsRepoScopedSnapshot(t *testi
 	require.NoError(t, <-errCh)
 }
 
+func TestUnixSocketServer_PullRequestStatusReturnsRepoBranchStatus(t *testing.T) {
+	t.Parallel()
+
+	socketPath := serverTestSocketPath(t)
+	svc := core.NewMockTaskService(t)
+	svc.EXPECT().PullRequestStatus(mock.Anything, "/tmp/repo", "feat/auth").RunAndReturn(
+		func(_ context.Context, repoRoot string, branchName string) (*core.PRStatus, error) {
+			require.Equal(t, "/tmp/repo", repoRoot)
+			require.Equal(t, "feat/auth", branchName)
+			return &core.PRStatus{State: core.PRStateOpen, Number: 42}, nil
+		},
+	)
+	adapter := New(Config{
+		SocketPath:     socketPath,
+		HookListenAddr: "127.0.0.1:0",
+	})
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	errCh := make(chan error, 1)
+	go func() {
+		errCh <- adapter.Serve(ctx, svc, nil, nil)
+	}()
+	waitForUnixSocketServer(t, socketPath)
+
+	status, err := pullRequestStatusViaSocket(context.Background(), socketPath, "/tmp/repo", "feat/auth")
+	require.NoError(t, err)
+	require.Equal(t, &core.PRStatus{State: core.PRStateOpen, Number: 42}, status)
+
+	cancel()
+	require.NoError(t, <-errCh)
+}
+
 func TestUnixSocketServer_DeleteTaskCallsTaskService(t *testing.T) {
 	t.Parallel()
 
@@ -659,6 +693,37 @@ func listRepoPullRequestsViaSocket(ctx context.Context, socketPath string, cwd s
 	}
 
 	return resp.PullRequests, nil
+}
+
+func pullRequestStatusViaSocket(
+	ctx context.Context,
+	socketPath string,
+	repoRoot string,
+	branchName string,
+) (*core.PRStatus, error) {
+	conn, err := dialDaemonSocket(ctx, socketPath)
+	if err != nil {
+		return nil, err
+	}
+	defer conn.Close()
+
+	if err := json.NewEncoder(conn).Encode(socketRequest{
+		Command:    "pull_request_status",
+		Cwd:        repoRoot,
+		BranchName: branchName,
+	}); err != nil {
+		return nil, err
+	}
+
+	var resp socketEnvelope
+	if err := json.NewDecoder(conn).Decode(&resp); err != nil {
+		return nil, err
+	}
+	if resp.Type != "pull_request_status" {
+		return nil, nil
+	}
+
+	return resp.PR, nil
 }
 
 func subscribeTaskStatusViaSocket(

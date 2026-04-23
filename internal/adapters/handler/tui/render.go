@@ -113,7 +113,7 @@ func (m model) renderRow(index int, row taskRow, totalWidth int) (string, string
 
 	provider := emptyFallback(string(row.task.Provider), "-")
 	agentCell := padRight(provider, colWidthAgent)
-	prText := mutedStyle.Render(iconPRNone)
+	prText := prStatusText(row.pullRequest)
 
 	if index == m.selected {
 		line1 := lipgloss.NewStyle().Foreground(colorAccent).Bold(true).Render(nameCell) +
@@ -161,6 +161,9 @@ func (m model) selectedTaskDetailView() string {
 			workspaceLines,
 			mutedStyle.Render("path")+"   "+dimStyle.Render(task.WorktreePath),
 		)
+	}
+	if prLine := prStatusDetailText(row.pullRequest); prLine != "" {
+		workspaceLines = append(workspaceLines, prLine)
 	}
 
 	sessionLines := []string{
@@ -451,6 +454,43 @@ func taskStatusText(update *core.TaskStatusUpdate) (string, lipgloss.Style) {
 		return iconStatusProgress + " needs input", warningStyle
 	default:
 		return iconStatusIdle + " idle", dimStyle
+	}
+}
+
+func prStatusText(status *core.PRStatus) string {
+	if status == nil || status.State == core.PRStateNone {
+		return mutedStyle.Render(iconPRNone)
+	}
+
+	icon, style := prStateIconStyle(status.State)
+	label := icon
+	if status.Number > 0 {
+		label += " #" + strconv.Itoa(status.Number)
+	}
+	label += " " + string(status.State)
+	return style.Render(label)
+}
+
+func prStatusDetailText(status *core.PRStatus) string {
+	if status == nil || status.State == core.PRStateNone {
+		return ""
+	}
+
+	return mutedStyle.Render("pr") + "     " + prStatusText(status)
+}
+
+func prStateIconStyle(state core.PRState) (string, lipgloss.Style) {
+	switch state {
+	case core.PRStateOpen:
+		return "●", healthyStyle
+	case core.PRStateDraft:
+		return "◐", warningStyle
+	case core.PRStateMerged:
+		return "✓", healthyStyle
+	case core.PRStateClosed:
+		return "×", errorStyle
+	default:
+		return iconPRNone, mutedStyle
 	}
 }
 

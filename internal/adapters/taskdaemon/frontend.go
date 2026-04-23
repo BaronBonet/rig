@@ -39,6 +39,29 @@ func (f *frontend) ListRepoPullRequests(ctx context.Context, cwd string) ([]core
 	return resp.PullRequests, nil
 }
 
+func (f *frontend) PullRequestStatus(
+	ctx context.Context,
+	repoRoot string,
+	branchName string,
+) (*core.PRStatus, error) {
+	resp, err := f.send(ctx, socketRequest{
+		Command:    "pull_request_status",
+		Cwd:        repoRoot,
+		BranchName: branchName,
+	})
+	if err != nil {
+		return nil, err
+	}
+	if resp.Type != "pull_request_status" || !resp.OK {
+		return nil, unexpectedResponseError("pull_request_status", *resp)
+	}
+	if resp.PR == nil {
+		return &core.PRStatus{State: core.PRStateNone}, nil
+	}
+
+	return resp.PR, nil
+}
+
 func (f *frontend) ReconnectTaskSession(ctx context.Context, taskID string) error {
 	resp, err := f.send(ctx, socketRequest{
 		Command: "reconnect_task_session",

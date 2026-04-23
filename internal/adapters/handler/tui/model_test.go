@@ -119,6 +119,44 @@ func TestModel_ViewSplitsTaskOverviewByRepo(t *testing.T) {
 	require.NotContains(t, view, "/tmp/repo-b")
 }
 
+func TestModel_PRStatusShownInOverviewRowsAndDetailPanel(t *testing.T) {
+	frontend := newFrontendHarness()
+	frontend.listTasks = []*core.Task{
+		{
+			ID:          "task-1",
+			RepoRoot:    "/tmp/repo",
+			RepoName:    "repo",
+			DisplayName: "auth rewrite",
+			BranchName:  "feat/auth",
+			Provider:    core.ProviderCodex,
+		},
+	}
+	frontend.pullRequestStatus = map[string]*core.PRStatus{
+		"/tmp/repo:feat/auth": {State: core.PRStateOpen, Number: 42},
+	}
+
+	m := newModel(frontend.mock)
+	loadMsg := runCmd(t, m.Init())
+	next, cmd := m.Update(loadMsg)
+	require.NotNil(t, cmd)
+
+	got, ok := next.(model)
+	require.True(t, ok)
+
+	msgs := runBatchCmd(t, cmd)
+	prStatusMsg := requireMsgType[pullRequestStatusLoadedMsg](t, msgs)
+	next, _ = got.Update(prStatusMsg)
+	got, ok = next.(model)
+	require.True(t, ok)
+
+	require.NotNil(t, got.rows[0].pullRequest)
+	require.Equal(t, core.PRStateOpen, got.rows[0].pullRequest.State)
+
+	view := stripANSI(got.View().Content)
+	require.Contains(t, view, "auth rewrite")
+	require.Contains(t, view, "#42 open")
+}
+
 func TestModel_AfterLoadRequestsLatestStatusAndSubscriptionsForEachTask(t *testing.T) {
 	frontend := newFrontendHarness()
 	frontend.listTasks = []*core.Task{
@@ -1116,6 +1154,9 @@ type frontendHarness struct {
 	listRepoPullRequests      []core.RepoPullRequest
 	listRepoPullRequestsErr   error
 	listRepoPullRequestsCwd   string
+	pullRequestStatus         map[string]*core.PRStatus
+	pullRequestStatusErr      map[string]error
+	pullRequestStatusCalls    []string
 	attachedTask              *core.Task
 	attachTaskSessionErr      error
 	attachTaskSessionCalls    int
@@ -1193,6 +1234,19 @@ func newFrontendHarness() *frontendHarness {
 				return nil, frontend.listRepoPullRequestsErr
 			}
 			return append([]core.RepoPullRequest(nil), frontend.listRepoPullRequests...), nil
+		},
+	).Maybe()
+	frontend.mock.EXPECT().PullRequestStatus(mock.Anything, mock.Anything, mock.Anything).RunAndReturn(
+		func(_ context.Context, repoRoot string, branchName string) (*core.PRStatus, error) {
+			key := repoRoot + ":" + branchName
+			frontend.pullRequestStatusCalls = append(frontend.pullRequestStatusCalls, key)
+			if frontend.pullRequestStatusErr != nil && frontend.pullRequestStatusErr[key] != nil {
+				return nil, frontend.pullRequestStatusErr[key]
+			}
+			if frontend.pullRequestStatus == nil {
+				return &core.PRStatus{State: core.PRStateNone}, nil
+			}
+			return frontend.pullRequestStatus[key], nil
 		},
 	).Maybe()
 	frontend.mock.EXPECT().LatestTaskStatus(mock.Anything, mock.Anything).RunAndReturn(

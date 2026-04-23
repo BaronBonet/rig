@@ -38,6 +38,55 @@ func (r *repository) ListRepoPullRequests(ctx context.Context, repoRoot string) 
 	return parsePRListOutput(result.Stdout), nil
 }
 
+func (r *repository) CheckPullRequestStatus(
+	ctx context.Context,
+	repoRoot string,
+	branchName string,
+) (*core.PRStatus, error) {
+	result, runErr := r.runner.Run(
+		ctx,
+		repoRoot,
+		"gh",
+		"pr",
+		"view",
+		branchName,
+		"--json",
+		"number,state,isDraft",
+		"--jq",
+		".number,.state,.isDraft",
+	)
+	if runErr == nil {
+		return parsePRStatusOutput(result.Stdout), nil
+	}
+
+	return &core.PRStatus{State: core.PRStateNone}, nil
+}
+
+func parsePRStatusOutput(output string) *core.PRStatus {
+	lines := strings.Split(strings.TrimSpace(output), "\n")
+	if len(lines) < 2 {
+		return &core.PRStatus{State: core.PRStateNone}
+	}
+
+	number, _ := strconv.Atoi(strings.TrimSpace(lines[0]))
+	state := strings.ToLower(strings.TrimSpace(lines[1]))
+	isDraft := len(lines) >= 3 && strings.EqualFold(strings.TrimSpace(lines[2]), "true")
+
+	switch state {
+	case "open":
+		if isDraft {
+			return &core.PRStatus{State: core.PRStateDraft, Number: number}
+		}
+		return &core.PRStatus{State: core.PRStateOpen, Number: number}
+	case "merged":
+		return &core.PRStatus{State: core.PRStateMerged, Number: number}
+	case "closed":
+		return &core.PRStatus{State: core.PRStateClosed, Number: number}
+	default:
+		return &core.PRStatus{State: core.PRStateNone}
+	}
+}
+
 func parsePRListOutput(output string) []core.RepoPullRequest {
 	lines := strings.Split(strings.TrimSpace(output), "\n")
 	prs := make([]core.RepoPullRequest, 0, len(lines))

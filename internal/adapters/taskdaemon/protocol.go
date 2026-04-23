@@ -16,7 +16,7 @@ import (
 
 var currentFrontendBuildVersion = "dev"
 
-const currentFrontendProtocolVersion = 3
+const currentFrontendProtocolVersion = 4
 
 func SetFrontendBuildVersion(version string) {
 	version = strings.TrimSpace(version)
@@ -27,10 +27,11 @@ func SetFrontendBuildVersion(version string) {
 }
 
 type socketRequest struct {
-	Input   *core.CreateTaskInput `json:"input,omitempty"`
-	Command string                `json:"command"`
-	Cwd     string                `json:"cwd,omitempty"`
-	TaskID  string                `json:"task_id,omitempty"`
+	Input      *core.CreateTaskInput `json:"input,omitempty"`
+	Command    string                `json:"command"`
+	Cwd        string                `json:"cwd,omitempty"`
+	BranchName string                `json:"branch_name,omitempty"`
+	TaskID     string                `json:"task_id,omitempty"`
 }
 
 type socketEnvelope struct {
@@ -40,6 +41,7 @@ type socketEnvelope struct {
 	Task            *core.Task                    `json:"task,omitempty"`
 	CreateProgress  *core.TaskCreateProgressEvent `json:"create_progress,omitempty"`
 	Update          *core.TaskStatusUpdate        `json:"update,omitempty"`
+	PR              *core.PRStatus                `json:"pr,omitempty"`
 	Tasks           []*core.Task                  `json:"tasks,omitempty"`
 	PullRequests    []core.RepoPullRequest        `json:"pull_requests,omitempty"`
 	ProtocolVersion int                           `json:"protocol_version,omitempty"`

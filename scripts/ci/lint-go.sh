@@ -20,7 +20,7 @@ function check_no_changes() {
 }
 
 echo "Running golangci-lint..."
-go tool golangci-lint run --timeout=5m --config=.golangci.yaml || exit 1
+go tool golangci-lint run --timeout=5m --config=.golangci.yaml ./... || exit 1
 
 echo "Checking if goimports would make changes..."
 

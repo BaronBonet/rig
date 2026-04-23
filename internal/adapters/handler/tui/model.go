@@ -12,8 +12,9 @@ import (
 )
 
 type taskRow struct {
-	task   *core.Task
-	status *core.TaskStatusUpdate
+	task        *core.Task
+	status      *core.TaskStatusUpdate
+	pullRequest *core.PRStatus
 }
 
 type modelMode int
@@ -60,6 +61,12 @@ type tasksLoadedMsg struct {
 
 type latestTaskStatusLoadedMsg struct {
 	status *core.TaskStatusUpdate
+	err    error
+	taskID string
+}
+
+type pullRequestStatusLoadedMsg struct {
+	status *core.PRStatus
 	err    error
 	taskID string
 }
@@ -223,6 +230,12 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		m.setTaskStatus(msg.taskID, msg.status)
 		return m, nil
+	case pullRequestStatusLoadedMsg:
+		if msg.err != nil {
+			return m, nil
+		}
+		m.setTaskPullRequestStatus(msg.taskID, msg.status)
+		return m, nil
 	case taskStatusSubscriptionReadyMsg:
 		if msg.err != nil {
 			return m, nil
@@ -355,9 +368,12 @@ func rowsFromTasks(tasks []*core.Task) []taskRow {
 }
 
 func (m model) afterTasksLoadedCmds() []tea.Cmd {
-	cmds := make([]tea.Cmd, 0, len(m.rows)*2)
+	cmds := make([]tea.Cmd, 0, len(m.rows)*3)
 	for _, row := range m.rows {
 		cmds = append(cmds, m.taskStatusTrackingCmds(taskID(row.task))...)
+		if cmd := m.taskPullRequestStatusCmd(row.task); cmd != nil {
+			cmds = append(cmds, cmd)
+		}
 	}
 	return cmds
 }
@@ -521,6 +537,19 @@ func (m model) taskStatusTrackingCmds(taskID string) []tea.Cmd {
 	}
 }
 
+func (m model) taskPullRequestStatusCmd(task *core.Task) tea.Cmd {
+	if task == nil {
+		return nil
+	}
+	taskID := strings.TrimSpace(task.ID)
+	repoRoot := strings.TrimSpace(task.RepoRoot)
+	branchName := strings.TrimSpace(task.BranchName)
+	if taskID == "" || repoRoot == "" || branchName == "" {
+		return nil
+	}
+	return pullRequestStatusCmd(m.statusContext, m.frontend, taskID, repoRoot, branchName)
+}
+
 func (m *model) moveSelection(delta int) {
 	if len(m.rows) == 0 {
 		m.selected = 0
@@ -592,6 +621,16 @@ func (m *model) setTaskStatus(taskID string, status *core.TaskStatusUpdate) {
 			continue
 		}
 		m.rows[i].status = status
+		return
+	}
+}
+
+func (m *model) setTaskPullRequestStatus(taskID string, status *core.PRStatus) {
+	for i := range m.rows {
+		if m.rows[i].task == nil || m.rows[i].task.ID != taskID {
+			continue
+		}
+		m.rows[i].pullRequest = status
 		return
 	}
 }
