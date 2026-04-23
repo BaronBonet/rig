@@ -486,7 +486,7 @@ func prStateIconStyle(state core.PRState) (string, lipgloss.Style) {
 	case core.PRStateDraft:
 		return "◐", warningStyle
 	case core.PRStateMerged:
-		return "✓", healthyStyle
+		return "✓", prMergedStyle
 	case core.PRStateClosed:
 		return "×", errorStyle
 	default:
