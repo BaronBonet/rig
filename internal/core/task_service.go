@@ -74,6 +74,10 @@ func (s *taskService) ListTasks(ctx context.Context) ([]*Task, error) {
 	return s.tasks.ListTasks(ctx)
 }
 
+func (s *taskService) GetTaskActivity(ctx context.Context, taskID string, limit int) ([]TaskActivityEvent, error) {
+	return s.tasks.GetTaskActivity(ctx, strings.TrimSpace(taskID), limit)
+}
+
 func (s *taskService) ListRepoPullRequests(ctx context.Context, cwd string) ([]RepoPullRequest, error) {
 	if s.pullRequests == nil {
 		return nil, fmt.Errorf("pull request client not configured")
@@ -227,6 +231,12 @@ func (s *taskService) HandleHookEvent(ctx context.Context, input HookEventInput)
 		}
 	}
 
+	if activity := taskActivityEventFromHookInput(input); activity != nil {
+		if err := s.tasks.RecordTaskActivity(ctx, *activity); err != nil {
+			return fmt.Errorf("record task activity: %w", err)
+		}
+	}
+
 	update, err := providerClient.HookEventToTaskStatus(input)
 	if err != nil {
 		return err
@@ -250,6 +260,39 @@ func (s *taskService) HandleHookEvent(ctx context.Context, input HookEventInput)
 	}
 
 	return s.tasks.UpsertTaskStatus(ctx, *update)
+}
+
+func taskActivityEventFromHookInput(input HookEventInput) *TaskActivityEvent {
+	event := TaskActivityEvent{
+		TaskID:     strings.TrimSpace(input.TaskID),
+		TurnID:     strings.TrimSpace(input.TurnID),
+		EventName:  strings.TrimSpace(input.EventName),
+		ObservedAt: input.OccurredAt,
+	}
+
+	switch event.EventName {
+	case "UserPromptSubmit":
+		event.Role = TaskActivityRoleUser
+		event.Text = compactActivityText(input.PromptText)
+	case "PostToolUse":
+		event.Role = TaskActivityRoleAssistant
+		event.Text = compactActivityText(input.CommandText)
+	case "Stop":
+		event.Role = TaskActivityRoleAssistant
+		event.Text = compactActivityText(input.LastAssistantMessage)
+	default:
+		return nil
+	}
+
+	if event.TaskID == "" || event.Text == "" {
+		return nil
+	}
+
+	return &event
+}
+
+func compactActivityText(value string) string {
+	return strings.Join(strings.Fields(strings.TrimSpace(value)), " ")
 }
 
 func (s *taskService) createTaskFromPrompt(

@@ -102,6 +102,8 @@ func (s *unixSocketServer) handleConn(ctx context.Context, conn net.Conn) {
 		s.handlePullRequestStatus(ctx, encoder, req)
 	case "list_tasks":
 		s.handleListTasks(ctx, encoder)
+	case "get_task_activity":
+		s.handleGetTaskActivity(connCtx, encoder, req)
 	case "latest_task_status":
 		s.handleLatestTaskStatus(connCtx, encoder, req)
 	case "subscribe_task_status":
@@ -198,6 +200,22 @@ func (s *unixSocketServer) handleListTasks(ctx context.Context, encoder *json.En
 	}
 
 	_ = writeSocketEnvelope(encoder, socketEnvelope{Type: "tasks_list", OK: true, Tasks: tasks})
+}
+
+func (s *unixSocketServer) handleGetTaskActivity(ctx context.Context, encoder *json.Encoder, req socketRequest) {
+	taskID := strings.TrimSpace(req.TaskID)
+	if taskID == "" {
+		_ = writeSocketEnvelope(encoder, socketEnvelope{Type: "error", Error: "get_task_activity task_id required"})
+		return
+	}
+
+	activity, err := s.frontend.GetTaskActivity(ctx, taskID, req.Limit)
+	if err != nil {
+		_ = writeSocketEnvelope(encoder, socketEnvelope{Type: "error", Error: err.Error()})
+		return
+	}
+
+	_ = writeSocketEnvelope(encoder, socketEnvelope{Type: "task_activity", OK: true, Activity: activity})
 }
 
 func (s *unixSocketServer) handleListRepoPullRequests(ctx context.Context, encoder *json.Encoder, req socketRequest) {

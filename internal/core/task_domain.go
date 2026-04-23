@@ -90,6 +90,24 @@ type TaskStatusUpdate struct {
 	Phase        TaskStatusPhase `json:"phase"`
 }
 
+type TaskActivityRole string
+
+const (
+	TaskActivityRoleUser      TaskActivityRole = "user"
+	TaskActivityRoleAssistant TaskActivityRole = "assistant"
+)
+
+// TaskActivityEvent is the compact persisted read model used by the detail
+// panel to show the last human prompt and recent LLM actions for a task.
+type TaskActivityEvent struct {
+	ObservedAt time.Time        `json:"observed_at"`
+	TaskID     string           `json:"task_id"`
+	TurnID     string           `json:"turn_id"`
+	EventName  string           `json:"event_name"`
+	Role       TaskActivityRole `json:"role"`
+	Text       string           `json:"text"`
+}
+
 // TaskResumeMetadata is the minimal provider runtime state needed to reconnect
 // a task session after its tmux session has been lost.
 type TaskResumeMetadata struct {

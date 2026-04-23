@@ -10,6 +10,7 @@ import (
 
 	"rig/internal/core"
 
+	"github.com/stretchr/testify/require"
 	_ "modernc.org/sqlite"
 )
 
@@ -241,6 +242,120 @@ func TestRepositoryUpsertTaskStatus_PersistsLatestAndPublishesToSubscribers(t *t
 	}
 }
 
+func TestRepositoryRecordTaskActivityAndGetTaskActivity_ReturnsNewestWindowOldestFirst(t *testing.T) {
+	repo := newTestRepository(t)
+	task := &core.Task{
+		ID:           "task-1",
+		Slug:         "task-one",
+		Prompt:       "prompt",
+		DisplayName:  "task one",
+		RepoRoot:     "/tmp/repo",
+		RepoName:     "repo",
+		BranchName:   "feat/task-one",
+		WorktreePath: "/tmp/repo-task-one",
+		TmuxSession:  "repo_task_one",
+		Provider:     core.ProviderCodex,
+		CreatedAt:    time.Now().UTC(),
+		UpdatedAt:    time.Now().UTC(),
+	}
+	require.NoError(t, repo.CreateTask(context.Background(), task))
+
+	first := core.TaskActivityEvent{
+		TaskID:     task.ID,
+		TurnID:     "turn-1",
+		EventName:  "UserPromptSubmit",
+		Role:       core.TaskActivityRoleUser,
+		Text:       "bring back the preview",
+		ObservedAt: time.Date(2026, time.April, 23, 10, 0, 0, 0, time.UTC),
+	}
+	second := core.TaskActivityEvent{
+		TaskID:     task.ID,
+		TurnID:     "turn-1",
+		EventName:  "PostToolUse",
+		Role:       core.TaskActivityRoleAssistant,
+		Text:       "rg -n message preview",
+		ObservedAt: time.Date(2026, time.April, 23, 10, 0, 30, 0, time.UTC),
+	}
+	third := core.TaskActivityEvent{
+		TaskID:     task.ID,
+		TurnID:     "turn-1",
+		EventName:  "Stop",
+		Role:       core.TaskActivityRoleAssistant,
+		Text:       "Restored the task detail activity block.",
+		ObservedAt: time.Date(2026, time.April, 23, 10, 1, 0, 0, time.UTC),
+	}
+
+	require.NoError(t, repo.RecordTaskActivity(context.Background(), first))
+	require.NoError(t, repo.RecordTaskActivity(context.Background(), second))
+	require.NoError(t, repo.RecordTaskActivity(context.Background(), third))
+
+	got, err := repo.GetTaskActivity(context.Background(), task.ID, 2)
+	require.NoError(t, err)
+	require.Equal(t, []core.TaskActivityEvent{second, third}, got)
+}
+
+func TestRepositoryGetTaskActivity_FiltersRequestedTaskID(t *testing.T) {
+	repo := newTestRepository(t)
+	firstTask := &core.Task{
+		ID:           "task-1",
+		Slug:         "task-one",
+		Prompt:       "prompt",
+		DisplayName:  "task one",
+		RepoRoot:     "/tmp/repo",
+		RepoName:     "repo",
+		BranchName:   "feat/task-one",
+		WorktreePath: "/tmp/repo-task-one",
+		TmuxSession:  "repo_task_one",
+		Provider:     core.ProviderCodex,
+		CreatedAt:    time.Now().UTC(),
+		UpdatedAt:    time.Now().UTC(),
+	}
+	secondTask := &core.Task{
+		ID:           "task-2",
+		Slug:         "task-two",
+		Prompt:       "prompt",
+		DisplayName:  "task two",
+		RepoRoot:     "/tmp/repo",
+		RepoName:     "repo",
+		BranchName:   "feat/task-two",
+		WorktreePath: "/tmp/repo-task-two",
+		TmuxSession:  "repo_task_two",
+		Provider:     core.ProviderCodex,
+		CreatedAt:    time.Now().UTC(),
+		UpdatedAt:    time.Now().UTC(),
+	}
+	require.NoError(t, repo.CreateTask(context.Background(), firstTask))
+	require.NoError(t, repo.CreateTask(context.Background(), secondTask))
+
+	require.NoError(t, repo.RecordTaskActivity(context.Background(), core.TaskActivityEvent{
+		TaskID:     firstTask.ID,
+		TurnID:     "turn-1",
+		EventName:  "UserPromptSubmit",
+		Role:       core.TaskActivityRoleUser,
+		Text:       "first task prompt",
+		ObservedAt: time.Date(2026, time.April, 23, 10, 0, 0, 0, time.UTC),
+	}))
+	require.NoError(t, repo.RecordTaskActivity(context.Background(), core.TaskActivityEvent{
+		TaskID:     secondTask.ID,
+		TurnID:     "turn-2",
+		EventName:  "UserPromptSubmit",
+		Role:       core.TaskActivityRoleUser,
+		Text:       "second task prompt",
+		ObservedAt: time.Date(2026, time.April, 23, 10, 1, 0, 0, time.UTC),
+	}))
+
+	got, err := repo.GetTaskActivity(context.Background(), firstTask.ID, 10)
+	require.NoError(t, err)
+	require.Equal(t, []core.TaskActivityEvent{{
+		TaskID:     firstTask.ID,
+		TurnID:     "turn-1",
+		EventName:  "UserPromptSubmit",
+		Role:       core.TaskActivityRoleUser,
+		Text:       "first task prompt",
+		ObservedAt: time.Date(2026, time.April, 23, 10, 0, 0, 0, time.UTC),
+	}}, got)
+}
+
 func TestRepositorySubscribeTaskStatus_ClosesChannelWhenContextCancelled(t *testing.T) {
 	repo := newTestRepository(t)
 	ctx, cancel := context.WithCancel(context.Background())
@@ -428,6 +543,20 @@ func TestRepositoryNew_CreatesSchemaForTasksAndLatestStatuses(t *testing.T) {
 	}
 	if !reflect.DeepEqual(resumeNames, wantResume) {
 		t.Fatalf("unexpected task_resume_metadata columns:\n got: %#v\nwant: %#v", resumeNames, wantResume)
+	}
+
+	activityNames := tableColumnNames(t, repo.db, "task_activity")
+	wantActivity := []string{
+		"id",
+		"task_id",
+		"turn_id",
+		"event_name",
+		"role",
+		"text",
+		"observed_at",
+	}
+	if !reflect.DeepEqual(activityNames, wantActivity) {
+		t.Fatalf("unexpected task_activity columns:\n got: %#v\nwant: %#v", activityNames, wantActivity)
 	}
 }
 

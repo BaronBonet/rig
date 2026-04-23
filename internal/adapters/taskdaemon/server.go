@@ -21,6 +21,14 @@ func (s *server) AttachTaskSession(context.Context, *core.Task) error {
 	return fmt.Errorf("attach task session unsupported on daemon server")
 }
 
+func (s *server) GetTaskActivity(ctx context.Context, taskID string, limit int) ([]core.TaskActivityEvent, error) {
+	if s.service == nil {
+		return nil, fmt.Errorf("task service not configured")
+	}
+
+	return s.service.GetTaskActivity(ctx, taskID, limit)
+}
+
 func (s *server) ListRepoPullRequests(ctx context.Context, cwd string) ([]core.RepoPullRequest, error) {
 	if s.service == nil {
 		return nil, fmt.Errorf("task service not configured")

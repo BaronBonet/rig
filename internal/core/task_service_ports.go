@@ -72,6 +72,9 @@ type TaskFrontend interface {
 	// AttachTaskSession attaches to an existing task session in tmux for
 	// interactive use.
 	AttachTaskSession(ctx context.Context, task *Task) error
+	// GetTaskActivity returns recent persisted activity events for the selected
+	// task detail view, ordered oldest-to-newest within the requested window.
+	GetTaskActivity(ctx context.Context, taskID string, limit int) ([]TaskActivityEvent, error)
 	// ListRepoPullRequests lists pull requests for the repository that contains
 	// cwd and annotates whether each PR branch already has a local Rig
 	// workspace.
@@ -159,6 +162,9 @@ type TaskService interface {
 	// PullRequestStatus returns the pull request state for a repository branch,
 	// or PRStateNone when no pull request is open or known for that branch.
 	PullRequestStatus(ctx context.Context, repoRoot string, branchName string) (*PRStatus, error)
+	// GetTaskActivity returns recent persisted activity events for the selected
+	// task detail view, ordered oldest-to-newest within the requested window.
+	GetTaskActivity(ctx context.Context, taskID string, limit int) ([]TaskActivityEvent, error)
 	// ListTasks returns all known tasks.
 	ListTasks(ctx context.Context) ([]*Task, error)
 	// LatestTaskStatus returns the latest published live status for a task, or
@@ -189,6 +195,12 @@ type TaskRepository interface {
 	UpdateTask(ctx context.Context, task *Task) error
 	// ListTasks returns all known tasks.
 	ListTasks(ctx context.Context) ([]*Task, error)
+	// RecordTaskActivity persists a compact activity event for the task detail
+	// view.
+	RecordTaskActivity(ctx context.Context, event TaskActivityEvent) error
+	// GetTaskActivity returns recent persisted activity events for the selected
+	// task detail view, ordered oldest-to-newest within the requested window.
+	GetTaskActivity(ctx context.Context, taskID string, limit int) ([]TaskActivityEvent, error)
 	// UpsertTaskStatus stores the latest known live status for a task.
 	UpsertTaskStatus(ctx context.Context, update TaskStatusUpdate) error
 	// UpsertTaskResumeMetadata stores the latest reconnect metadata for a task.

@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"regexp"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -177,9 +178,33 @@ func TestModel_AfterLoadRequestsLatestStatusAndSubscriptionsForEachTask(t *testi
 	require.True(t, ok)
 
 	msgs := runBatchCmd(t, cmd)
-	require.Len(t, msgs, 4)
+	require.Len(t, msgs, 6)
 	require.Equal(t, []string{"task-1", "task-2"}, frontend.latestTaskStatusCalls)
+	require.Equal(t, []string{"task-1:6", "task-2:6"}, frontend.getTaskActivityCalls)
 	require.Equal(t, []string{"task-1", "task-2"}, frontend.subscribeTaskStatusCalls)
+}
+
+func TestModel_AfterLoadRequestsTaskActivityForEachTask(t *testing.T) {
+	frontend := newFrontendHarness()
+	frontend.listTasks = []*core.Task{
+		{ID: "task-1", RepoName: "repo-a", DisplayName: "first task", Provider: core.ProviderCodex},
+		{ID: "task-2", RepoName: "repo-b", DisplayName: "second task", Provider: core.ProviderCodex},
+	}
+	frontend.subscribeTaskStatus = map[string]chan core.TaskStatusUpdate{
+		"task-1": make(chan core.TaskStatusUpdate),
+		"task-2": make(chan core.TaskStatusUpdate),
+	}
+
+	m := newModel(frontend.mock)
+	loadMsg := runCmd(t, m.Init())
+	next, cmd := m.Update(loadMsg)
+	require.NotNil(t, cmd)
+
+	_, ok := next.(model)
+	require.True(t, ok)
+
+	_ = runBatchCmd(t, cmd)
+	require.Equal(t, []string{"task-1:6", "task-2:6"}, frontend.getTaskActivityCalls)
 }
 
 func TestModel_LatestStatusSeedUpdatesRenderedPhase(t *testing.T) {
@@ -214,6 +239,68 @@ func TestModel_LatestStatusSeedUpdatesRenderedPhase(t *testing.T) {
 	require.NotNil(t, got.rows[0].status)
 	require.Equal(t, core.TaskStatusPhaseWorking, got.rows[0].status.Phase)
 	require.Contains(t, stripANSI(got.View().Content), "working")
+}
+
+func TestModel_ViewRendersTaskActivity(t *testing.T) {
+	frontend := newFrontendHarness()
+	frontend.listTasks = []*core.Task{
+		{
+			ID:          "task-1",
+			RepoName:    "repo-a",
+			DisplayName: "first task",
+			Provider:    core.ProviderCodex,
+		},
+	}
+	frontend.getTaskActivity = map[string][]core.TaskActivityEvent{
+		"task-1": {
+			{
+				TaskID:     "task-1",
+				TurnID:     "turn-1",
+				EventName:  "UserPromptSubmit",
+				Role:       core.TaskActivityRoleUser,
+				Text:       "restore the task preview",
+				ObservedAt: time.Date(2026, time.April, 23, 10, 0, 0, 0, time.UTC),
+			},
+			{
+				TaskID:     "task-1",
+				TurnID:     "turn-1",
+				EventName:  "PostToolUse",
+				Role:       core.TaskActivityRoleAssistant,
+				Text:       "rg -n task detail",
+				ObservedAt: time.Date(2026, time.April, 23, 10, 0, 30, 0, time.UTC),
+			},
+			{
+				TaskID:     "task-1",
+				TurnID:     "turn-1",
+				EventName:  "Stop",
+				Role:       core.TaskActivityRoleAssistant,
+				Text:       "Restored the task detail preview.",
+				ObservedAt: time.Date(2026, time.April, 23, 10, 1, 0, 0, time.UTC),
+			},
+		},
+	}
+	frontend.subscribeTaskStatus = map[string]chan core.TaskStatusUpdate{
+		"task-1": make(chan core.TaskStatusUpdate),
+	}
+
+	m := newModel(frontend.mock)
+	loadMsg := runCmd(t, m.Init())
+	next, cmd := m.Update(loadMsg)
+	require.NotNil(t, cmd)
+
+	got, ok := next.(model)
+	require.True(t, ok)
+
+	for _, msg := range runBatchCmd(t, cmd) {
+		next, _ = got.Update(msg)
+		got = next.(model)
+	}
+
+	view := stripANSI(got.View().Content)
+	require.Contains(t, view, "ACTIVITY")
+	require.Contains(t, view, "restore the task preview")
+	require.Contains(t, view, "rg -n task detail")
+	require.Contains(t, view, "Restored the task detail preview.")
 }
 
 func TestModel_TaskRowUpdatesWhenSubscriptionUpdateArrives(t *testing.T) {
@@ -255,6 +342,69 @@ func TestModel_TaskRowUpdatesWhenSubscriptionUpdateArrives(t *testing.T) {
 	require.NotNil(t, got.rows[0].status)
 	require.Equal(t, core.TaskStatusPhaseWaitingForInput, got.rows[0].status.Phase)
 	require.Contains(t, stripANSI(got.View().Content), "needs input")
+}
+
+func TestModel_TaskStatusUpdateReloadsTaskActivity(t *testing.T) {
+	frontend := newFrontendHarness()
+	frontend.listTasks = []*core.Task{
+		{ID: "task-1", RepoName: "repo-a", DisplayName: "first task", Provider: core.ProviderCodex},
+	}
+	updates := make(chan core.TaskStatusUpdate, 1)
+	frontend.subscribeTaskStatus = map[string]chan core.TaskStatusUpdate{
+		"task-1": updates,
+	}
+	frontend.getTaskActivity = map[string][]core.TaskActivityEvent{
+		"task-1": {
+			{
+				TaskID:     "task-1",
+				TurnID:     "turn-1",
+				EventName:  "Stop",
+				Role:       core.TaskActivityRoleAssistant,
+				Text:       "fresh activity",
+				ObservedAt: time.Date(2026, time.April, 23, 10, 1, 0, 0, time.UTC),
+			},
+		},
+	}
+
+	m := newModel(frontend.mock)
+	loadMsg := runCmd(t, m.Init())
+	next, cmd := m.Update(loadMsg)
+	require.NotNil(t, cmd)
+
+	got, ok := next.(model)
+	require.True(t, ok)
+
+	msgs := runBatchCmd(t, cmd)
+	subscribeMsg := requireMsgType[taskStatusSubscriptionReadyMsg](t, msgs)
+
+	next, waitCmd := got.Update(subscribeMsg)
+	got, ok = next.(model)
+	require.True(t, ok)
+	require.NotNil(t, waitCmd)
+
+	updates <- core.TaskStatusUpdate{
+		TaskID: "task-1",
+		Phase:  core.TaskStatusPhaseWorking,
+	}
+
+	updateMsg := runCmd(t, waitCmd)
+	next, followCmd := got.Update(updateMsg)
+	got, ok = next.(model)
+	require.True(t, ok)
+	require.NotNil(t, followCmd)
+
+	batchMsg, ok := runCmd(t, followCmd).(tea.BatchMsg)
+	require.True(t, ok)
+	require.Len(t, batchMsg, 2)
+
+	activityMsg, ok := batchMsg[0]().(taskActivityLoadedMsg)
+	require.True(t, ok)
+	require.Equal(t, []string{"task-1:6", "task-1:6"}, frontend.getTaskActivityCalls)
+	next, _ = got.Update(activityMsg)
+	got, ok = next.(model)
+	require.True(t, ok)
+	require.Len(t, got.rows[0].activity, 1)
+	require.Equal(t, "fresh activity", got.rows[0].activity[0].Text)
 }
 
 func TestModel_StatusEnrichmentFailuresDoNotCollapseListView(t *testing.T) {
@@ -1237,6 +1387,9 @@ type frontendHarness struct {
 	latestTaskStatus          map[string]*core.TaskStatusUpdate
 	latestTaskStatusErr       map[string]error
 	latestTaskStatusCalls     []string
+	getTaskActivity           map[string][]core.TaskActivityEvent
+	getTaskActivityErr        map[string]error
+	getTaskActivityCalls      []string
 	subscribeTaskStatus       map[string]chan core.TaskStatusUpdate
 	subscribeTaskStatusErr    map[string]error
 	subscribeTaskStatusCalls  []string
@@ -1323,6 +1476,18 @@ func newFrontendHarness() *frontendHarness {
 				return nil, nil
 			}
 			return frontend.latestTaskStatus[taskID], nil
+		},
+	).Maybe()
+	frontend.mock.EXPECT().GetTaskActivity(mock.Anything, mock.Anything, mock.Anything).RunAndReturn(
+		func(_ context.Context, taskID string, limit int) ([]core.TaskActivityEvent, error) {
+			frontend.getTaskActivityCalls = append(frontend.getTaskActivityCalls, taskID+":"+strconv.Itoa(limit))
+			if frontend.getTaskActivityErr != nil && frontend.getTaskActivityErr[taskID] != nil {
+				return nil, frontend.getTaskActivityErr[taskID]
+			}
+			if frontend.getTaskActivity == nil {
+				return nil, nil
+			}
+			return append([]core.TaskActivityEvent(nil), frontend.getTaskActivity[taskID]...), nil
 		},
 	).Maybe()
 	frontend.mock.EXPECT().SubscribeTaskStatus(mock.Anything, mock.Anything).RunAndReturn(
