@@ -147,6 +147,11 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case tea.WindowSizeMsg:
 		m.width = msg.Width
 		return m, nil
+	case tea.PasteMsg:
+		if m.mode != modePromptInput {
+			return m, nil
+		}
+		return m.updatePromptPaste(msg)
 	case tea.KeyPressMsg:
 		if isQuitKey(msg) {
 			if m.cancelStatus != nil {
@@ -441,6 +446,19 @@ func (m model) updatePromptInput(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		m.prompt += msg.Text
 	}
 
+	return m, nil
+}
+
+func (m model) updatePromptPaste(msg tea.PasteMsg) (tea.Model, tea.Cmd) {
+	if m.createPending {
+		return m, nil
+	}
+	if msg.Content == "" {
+		return m, nil
+	}
+
+	m.createErr = nil
+	m.prompt += msg.Content
 	return m, nil
 }
 

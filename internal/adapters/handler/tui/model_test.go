@@ -658,6 +658,23 @@ func TestModel_EnterWithBlankPromptDoesNothing(t *testing.T) {
 	require.Zero(t, frontend.createTaskStreamCalls)
 }
 
+func TestModel_PasteIntoPromptInputAppendsPastedText(t *testing.T) {
+	frontend := newFrontendHarness()
+	m := newLoadedModel(frontend)
+	m.mode = modePromptInput
+	m.prompt = "existing "
+
+	next, cmd := m.Update(tea.PasteMsg{Content: "copied text\nnext line"})
+
+	require.Nil(t, cmd)
+
+	got, ok := next.(model)
+	require.True(t, ok)
+	require.Equal(t, modePromptInput, got.mode)
+	require.Equal(t, "existing copied text\nnext line", got.prompt)
+	require.NoError(t, got.createErr)
+}
+
 func TestModel_CreateTaskFailureKeepsPromptRecoverableAndPreservesListView(t *testing.T) {
 	frontend := newFrontendHarness()
 	frontend.listTasks = []*core.Task{
