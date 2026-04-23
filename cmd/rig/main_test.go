@@ -73,3 +73,29 @@ func TestExecuteWithArgs_VersionFlagPrintsConfiguredVersion(t *testing.T) {
 	require.Equal(t, "v9.9.9\n", stdout.String())
 	require.Empty(t, stderr.String())
 }
+
+func TestTaskDaemonBuildIdentityIncludesExecutableMetadataForDevBuilds(t *testing.T) {
+	t.Parallel()
+
+	path := filepath.Join(t.TempDir(), "rig")
+	require.NoError(t, os.WriteFile(path, []byte("first"), 0o755))
+
+	first, err := taskDaemonBuildIdentity(path, "dev")
+	require.NoError(t, err)
+	require.Contains(t, first, path)
+
+	require.NoError(t, os.WriteFile(path, []byte("second-build"), 0o755))
+	second, err := taskDaemonBuildIdentity(path, "dev")
+	require.NoError(t, err)
+
+	require.NotEqual(t, first, second)
+	require.Equal(t, "v9.9.9", mustTaskDaemonBuildIdentity(t, path, "v9.9.9"))
+}
+
+func mustTaskDaemonBuildIdentity(t *testing.T, path string, version string) string {
+	t.Helper()
+
+	identity, err := taskDaemonBuildIdentity(path, version)
+	require.NoError(t, err)
+	return identity
+}

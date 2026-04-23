@@ -427,6 +427,65 @@ func TestFrontend_CreateTaskStreamLatestTaskStatusAndSubscribeTaskStatus(t *test
 
 		require.NoError(t, <-serverErrCh)
 	})
+
+	t.Run("create task stream yields error when socket closes before terminal result", func(t *testing.T) {
+		t.Parallel()
+
+		socketPath := frontendTestSocketPath(t)
+		requestCh := make(chan socketRequest, 1)
+		serverErrCh := serveStreamingFrontendSocket(
+			t,
+			socketPath,
+			func(req socketRequest, encoder *json.Encoder) error {
+				requestCh <- req
+				return encoder.Encode(socketEnvelope{
+					Type: "task_create_progress",
+					OK:   true,
+					CreateProgress: &core.TaskCreateProgressEvent{
+						Step: core.TaskCreateProgressSuggestingName,
+					},
+				})
+			},
+		)
+
+		frontend := New(Config{SocketPath: socketPath}).Frontend()
+
+		events, err := frontend.CreateTaskStream(t.Context(), core.CreateTaskInput{Prompt: "ship it"})
+		require.NoError(t, err)
+		require.Equal(
+			t,
+			socketRequest{Command: "create_task", Input: &core.CreateTaskInput{Prompt: "ship it"}},
+			<-requestCh,
+		)
+
+		select {
+		case event, ok := <-events:
+			require.True(t, ok)
+			require.NotNil(t, event.Progress)
+			require.Equal(t, core.TaskCreateProgressSuggestingName, event.Progress.Step)
+		case <-time.After(2 * time.Second):
+			t.Fatal("timed out waiting for streamed create progress")
+		}
+
+		select {
+		case event, ok := <-events:
+			require.True(t, ok)
+			require.Nil(t, event.Progress)
+			require.Nil(t, event.Task)
+			require.EqualError(t, event.Err, "create task stream closed before terminal result")
+		case <-time.After(2 * time.Second):
+			t.Fatal("timed out waiting for premature close error")
+		}
+
+		select {
+		case _, ok := <-events:
+			require.False(t, ok)
+		case <-time.After(2 * time.Second):
+			t.Fatal("timed out waiting for premature close stream close")
+		}
+
+		require.NoError(t, <-serverErrCh)
+	})
 }
 
 func TestFrontend_ReturnsExplicitErrorsOnErrorEnvelopesAndUnexpectedTypes(t *testing.T) {

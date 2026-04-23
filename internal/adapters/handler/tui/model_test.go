@@ -78,6 +78,47 @@ func TestModel_ViewRendersTaskMetadata(t *testing.T) {
 	require.Contains(t, view, "15m")
 }
 
+func TestModel_ViewSplitsTaskOverviewByRepo(t *testing.T) {
+	frontend := newFrontendHarness()
+	frontend.listTasks = []*core.Task{
+		{
+			ID:          "task-1",
+			RepoRoot:    "/tmp/repo-a",
+			RepoName:    "repo-a",
+			DisplayName: "first task",
+			Provider:    core.ProviderCodex,
+		},
+		{
+			ID:          "task-2",
+			RepoRoot:    "/tmp/repo-a",
+			RepoName:    "repo-a",
+			DisplayName: "second task",
+			Provider:    core.ProviderCodex,
+		},
+		{
+			ID:          "task-3",
+			RepoRoot:    "/tmp/repo-b",
+			RepoName:    "repo-b",
+			DisplayName: "third task",
+			Provider:    core.ProviderCodex,
+		},
+	}
+
+	m := newModel(frontend.mock)
+	msg := runCmd(t, m.Init())
+	next, _ := m.Update(msg)
+
+	got, ok := next.(model)
+	require.True(t, ok)
+
+	view := stripANSI(got.View().Content)
+	require.Less(t, strings.Index(view, "repo-a"), strings.Index(view, "first task"))
+	require.Less(t, strings.Index(view, "second task"), strings.Index(view, "repo-b"))
+	require.Less(t, strings.Index(view, "repo-b"), strings.Index(view, "third task"))
+	require.NotContains(t, view, "/tmp/repo-a")
+	require.NotContains(t, view, "/tmp/repo-b")
+}
+
 func TestModel_AfterLoadRequestsLatestStatusAndSubscriptionsForEachTask(t *testing.T) {
 	frontend := newFrontendHarness()
 	frontend.listTasks = []*core.Task{
@@ -454,6 +495,34 @@ func TestModel_CreateTaskFromPromptAppendsTaskAndStartsStatusTracking(t *testing
 	require.Equal(t, core.TaskStatusPhaseWorking, got.rows[2].status.Phase)
 }
 
+func TestModel_CreateTaskFromPromptUsesLaunchCwdWhenAnotherRepoTaskIsSelected(t *testing.T) {
+	frontend := newFrontendHarness()
+	frontend.listTasks = []*core.Task{
+		{
+			ID:          "task-1",
+			DisplayName: "repo a task",
+			RepoRoot:    "/tmp/repo-a",
+			RepoName:    "repo-a",
+			Provider:    core.ProviderCodex,
+		},
+	}
+	frontend.createTaskEvents = []core.TaskCreateEvent{
+		{Task: &core.Task{ID: "task-2", DisplayName: "new task", Provider: core.ProviderCodex}},
+	}
+
+	m := newLoadedModel(frontend)
+	m.launchCwd = "/tmp/repo-b/subdir"
+	m.selected = 0
+	m.mode = modePromptInput
+	m.prompt = "fix the retry loop"
+
+	_, cmd := m.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
+	require.NotNil(t, cmd)
+
+	runBatchCmd(t, cmd)
+	require.Equal(t, "/tmp/repo-b/subdir", frontend.createInput.Cwd)
+}
+
 func TestModel_CreateTaskReloadsAuthoritativeTaskSnapshotWhenCreateResponseIsPartial(t *testing.T) {
 	frontend := newFrontendHarness()
 	frontend.listTasks = []*core.Task{
@@ -613,6 +682,18 @@ func TestModel_CreateTaskFailureKeepsPromptRecoverableAndPreservesListView(t *te
 	require.NotContains(t, view, "Loading tasks...")
 }
 
+func TestPromptInputView_RendersPromptTextBox(t *testing.T) {
+	frontend := newFrontendHarness()
+	m := newLoadedModel(frontend)
+	m.mode = modePromptInput
+	m.prompt = "fix the retry loop"
+
+	view := stripANSI(m.View().Content)
+	require.Contains(t, view, "╭")
+	require.Contains(t, view, "│ fix the retry loop")
+	require.Contains(t, view, "╰")
+}
+
 func TestModel_PendingCreateStillAllowsQuitKeys(t *testing.T) {
 	frontend := newFrontendHarness()
 	m := newLoadedModel(frontend)
@@ -712,6 +793,39 @@ func TestModel_CtrlPFromPromptModeLoadsRepoPullRequests(t *testing.T) {
 	require.Equal(t, "/tmp/repo", frontend.listRepoPullRequestsCwd)
 	require.Equal(t, modePRPicker, got.mode)
 	require.Len(t, got.prRows, 1)
+}
+
+func TestModel_CtrlPFromPromptModeUsesLaunchCwdWhenAnotherRepoTaskIsSelected(t *testing.T) {
+	frontend := newFrontendHarness()
+	frontend.listTasks = []*core.Task{
+		{
+			ID:          "task-1",
+			DisplayName: "repo a task",
+			RepoRoot:    "/tmp/repo-a",
+			RepoName:    "repo-a",
+			Provider:    core.ProviderCodex,
+		},
+	}
+
+	m := newLoadedModel(frontend)
+	m.launchCwd = "/tmp/repo-b/subdir"
+	m.selected = 0
+	m.mode = modePromptInput
+
+	next, cmd := m.Update(tea.KeyPressMsg{Code: 'p', Mod: tea.ModCtrl})
+	require.NotNil(t, cmd)
+
+	pending, ok := next.(model)
+	require.True(t, ok)
+
+	msg := runCmd(t, cmd)
+	loaded, ok := msg.(repoPullRequestsLoadedMsg)
+	require.True(t, ok)
+	require.Equal(t, "/tmp/repo-b/subdir", loaded.repoRoot)
+	require.Equal(t, "subdir", loaded.repoName)
+
+	_, _ = pending.Update(loaded)
+	require.Equal(t, "/tmp/repo-b/subdir", frontend.listRepoPullRequestsCwd)
 }
 
 func TestPRPickerView_ShowsDuplicateRowsAsDisabled(t *testing.T) {

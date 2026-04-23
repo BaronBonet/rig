@@ -48,14 +48,24 @@ func (m model) listView() string {
 		return builder.String()
 	}
 
+	previousRepoKey := ""
 	for index, row := range m.rows {
+		repoKey := repoGroupKey(row.task)
+		if index == 0 || repoKey != previousRepoKey {
+			if index > 0 {
+				builder.WriteString("\n")
+			}
+			builder.WriteString(m.renderRepoHeader(row.task, totalWidth) + "\n")
+			previousRepoKey = repoKey
+		}
+
 		line1, line2 := m.renderRow(index, row, totalWidth)
 		if line1 == "" {
 			continue
 		}
 		builder.WriteString(line1 + "\n")
 		builder.WriteString(line2 + "\n")
-		if index < len(m.rows)-1 {
+		if index < len(m.rows)-1 && repoGroupKey(m.rows[index+1].task) == repoKey {
 			builder.WriteString("\n")
 		}
 	}
@@ -70,6 +80,14 @@ func (m model) listView() string {
 	}
 
 	return strings.TrimRight(builder.String(), "\n")
+}
+
+func (m model) renderRepoHeader(task *core.Task, totalWidth int) string {
+	name := "unknown repo"
+	if task != nil {
+		name = emptyFallback(task.RepoName, name)
+	}
+	return headerLabelStyle.Render(truncateStr(name, totalWidth))
 }
 
 func (m model) renderRow(index int, row taskRow, totalWidth int) (string, string) {
@@ -227,7 +245,11 @@ func (m model) promptInputView() string {
 	} else {
 		prompt = primaryStyle.Render(prompt)
 	}
-	builder.WriteString(prompt)
+	promptBoxWidth := totalWidth - 4
+	if promptBoxWidth < 20 {
+		promptBoxWidth = 20
+	}
+	builder.WriteString(promptBoxStyle.Width(promptBoxWidth).Render(prompt))
 
 	if progress := m.renderCreateProgress(); progress != "" {
 		builder.WriteString("\n\n" + progress)
