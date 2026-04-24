@@ -125,7 +125,7 @@ func (r *repository) HookEventToTaskStatus(input core.HookEventInput) (*core.Tas
 		phase = core.TaskStatusPhaseStarting
 	case "UserPromptSubmit", "PreToolUse", "PostToolUse":
 		phase = core.TaskStatusPhaseWorking
-	case "Stop":
+	case "Stop", "PermissionRequest":
 		phase = core.TaskStatusPhaseWaitingForInput
 	default:
 		return nil, nil

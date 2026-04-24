@@ -75,6 +75,7 @@ func TestRepositoryEnsureTaskSessionEnvironment_InstallsRigHooksIntoCodexHome(t 
 	require.Contains(t, cfg.Hooks, "UserPromptSubmit")
 	require.Contains(t, cfg.Hooks, "Stop")
 	require.Contains(t, cfg.Hooks, "PreToolUse")
+	require.Contains(t, cfg.Hooks, "PermissionRequest")
 	require.Contains(t, cfg.Hooks, "PostToolUse")
 
 	scriptPath := filepath.Join(tempDir, "hooks", "forward-to-rig.sh")

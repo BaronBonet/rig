@@ -223,6 +223,14 @@ func (r *repository) renderHooksJSON(scriptPath string) ([]byte, error) {
 					Hooks:   []hookCommand{{Type: "command", Command: r.commandForEvent(scriptPath, "PreToolUse")}},
 				},
 			},
+			"PermissionRequest": {
+				{
+					Matcher: "Bash",
+					Hooks: []hookCommand{
+						{Type: "command", Command: r.commandForEvent(scriptPath, "PermissionRequest")},
+					},
+				},
+			},
 			"PostToolUse": {
 				{
 					Matcher: "Bash",
