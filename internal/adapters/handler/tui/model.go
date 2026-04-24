@@ -162,7 +162,13 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case tea.PasteMsg:
 		return m.updatePromptPaste(msg)
 	case tea.KeyPressMsg:
-		if isQuitKey(msg) {
+		if isForceQuitKey(msg) {
+			if m.cancelStatus != nil {
+				m.cancelStatus()
+			}
+			return m, tea.Quit
+		}
+		if m.createPending && isQuitKey(msg) {
 			if m.cancelStatus != nil {
 				m.cancelStatus()
 			}
@@ -177,6 +183,13 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		if m.mode == modeCleanupConfirm {
 			return m.updateCleanupConfirm(msg)
+		}
+
+		if isQuitKey(msg) {
+			if m.cancelStatus != nil {
+				m.cancelStatus()
+			}
+			return m, tea.Quit
 		}
 
 		switch msg.String() {
@@ -893,4 +906,8 @@ func isQuitKey(msg tea.KeyPressMsg) bool {
 	default:
 		return false
 	}
+}
+
+func isForceQuitKey(msg tea.KeyPressMsg) bool {
+	return msg.String() == "ctrl+c"
 }

@@ -577,6 +577,20 @@ func TestModel_KeyNEntersPromptMode(t *testing.T) {
 	require.True(t, got.promptInput.Focused())
 }
 
+func TestModel_PromptInputTreatsQAsText(t *testing.T) {
+	frontend := newFrontendHarness()
+	m := newLoadedModel(frontend)
+	m.mode = modePromptInput
+	_ = m.promptInput.Focus()
+
+	next, _ := m.Update(tea.KeyPressMsg{Text: "q"})
+
+	got, ok := next.(model)
+	require.True(t, ok)
+	require.Equal(t, modePromptInput, got.mode)
+	require.Equal(t, "q", got.prompt)
+}
+
 func TestModel_EnterOpensSelectedTaskAndKeepsRigRunningOnSuccess(t *testing.T) {
 	frontend := newFrontendHarness()
 	frontend.listTasks = []*core.Task{
