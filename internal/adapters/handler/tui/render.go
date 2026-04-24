@@ -175,10 +175,10 @@ func (m model) selectedTaskDetailView() string {
 			mutedStyle.Render("time")+"   "+primaryStyle.Bold(true).Render(elapsed)+mutedStyle.Render(" total"),
 		)
 	}
-	if statusText, _ := taskStatusText(row.status); statusText != "" {
+	if statusText, statusStyle := taskStatusText(row.status); statusText != "" {
 		sessionLines = append(
 			sessionLines,
-			mutedStyle.Render("state")+"  "+primaryStyle.Render(statusText),
+			mutedStyle.Render("state")+"  "+statusStyle.Render(statusText),
 		)
 	}
 	if provider := strings.TrimSpace(string(task.Provider)); provider != "" {
