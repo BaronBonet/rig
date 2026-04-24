@@ -248,6 +248,7 @@ func TestModel_ViewRendersTaskActivity(t *testing.T) {
 			ID:          "task-1",
 			RepoName:    "repo-a",
 			DisplayName: "first task",
+			Prompt:      "top-level task prompt",
 			Provider:    core.ProviderCodex,
 		},
 	}
@@ -268,6 +269,14 @@ func TestModel_ViewRendersTaskActivity(t *testing.T) {
 				Role:       core.TaskActivityRoleAssistant,
 				Text:       "rg -n task detail",
 				ObservedAt: time.Date(2026, time.April, 23, 10, 0, 30, 0, time.UTC),
+			},
+			{
+				TaskID:     "task-1",
+				TurnID:     "turn-1",
+				EventName:  "PostToolUse",
+				Role:       core.TaskActivityRoleAssistant,
+				Text:       "go test ./internal/adapters/handler/tui",
+				ObservedAt: time.Date(2026, time.April, 23, 10, 0, 45, 0, time.UTC),
 			},
 			{
 				TaskID:     "task-1",
@@ -297,10 +306,25 @@ func TestModel_ViewRendersTaskActivity(t *testing.T) {
 	}
 
 	view := stripANSI(got.View().Content)
+	require.Contains(t, view, "PROMPT")
 	require.Contains(t, view, "ACTIVITY")
+	require.Contains(t, view, "top-level task prompt")
 	require.Contains(t, view, "restore the task preview")
 	require.Contains(t, view, "rg -n task detail")
+	require.Contains(t, view, "go test")
+	require.Contains(t, view, "./internal/adapters/handler/tui")
 	require.Contains(t, view, "Restored the task detail preview.")
+	require.Less(t, strings.Index(view, "PROMPT"), strings.Index(view, "ACTIVITY"))
+	require.Less(
+		t,
+		strings.Index(view, "Restored the task detail preview."),
+		strings.Index(view, "go test"),
+	)
+	require.Less(
+		t,
+		strings.Index(view, "go test"),
+		strings.Index(view, "rg -n task detail"),
+	)
 }
 
 func TestModel_TaskRowUpdatesWhenSubscriptionUpdateArrives(t *testing.T) {

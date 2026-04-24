@@ -4,8 +4,9 @@ import (
 	"context"
 	"errors"
 	"path/filepath"
-	"rig/internal/core"
 	"strings"
+
+	"rig/internal/core"
 
 	"charm.land/bubbles/v2/textarea"
 	tea "charm.land/bubbletea/v2"
