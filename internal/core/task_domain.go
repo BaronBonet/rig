@@ -78,6 +78,7 @@ const (
 	TaskStatusPhaseStarting        TaskStatusPhase = "starting"
 	TaskStatusPhaseWorking         TaskStatusPhase = "working"
 	TaskStatusPhaseWaitingForInput TaskStatusPhase = "waiting_for_input"
+	TaskStatusPhaseStopped         TaskStatusPhase = "stopped"
 )
 
 // TaskStatusUpdate is the live status message published by the observer
@@ -88,6 +89,12 @@ type TaskStatusUpdate struct {
 	RawEventName string          `json:"raw_event_name"`
 	Provider     Provider        `json:"provider"`
 	Phase        TaskStatusPhase `json:"phase"`
+}
+
+// TaskSessionRuntimeState is the current tmux-side state of a task session.
+type TaskSessionRuntimeState struct {
+	ActiveCommands []string
+	Exists         bool
 }
 
 type TaskActivityRole string

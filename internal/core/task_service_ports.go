@@ -234,6 +234,9 @@ type ProviderClient interface {
 	// BuildReconnectTaskSessionLaunchSpec describes how the provider's CLI
 	// should resume an existing logical session inside a recreated tmux session.
 	BuildReconnectTaskSessionLaunchSpec(task *Task, sessionID string) (TaskSessionLaunchSpec, error)
+	// TaskSessionCommandName returns the foreground process name expected while
+	// the provider is running in the task tmux pane.
+	TaskSessionCommandName() string
 	// HookEventToTaskStatus normalizes a provider hook event into a task status
 	// update when the event contributes to the live task status stream.
 	HookEventToTaskStatus(input HookEventInput) (*TaskStatusUpdate, error)
@@ -282,6 +285,9 @@ type TmuxSessionClient interface {
 	StartTaskSession(ctx context.Context, task *Task, launch TaskSessionLaunchSpec) error
 	// AttachTaskSession attaches to an existing task session.
 	AttachTaskSession(ctx context.Context, task *Task) error
+	// InspectTaskSession returns the current tmux-side runtime state for the
+	// task session. Missing sessions are reported as Exists=false.
+	InspectTaskSession(ctx context.Context, task *Task) (TaskSessionRuntimeState, error)
 	// DeleteTaskSession tears down the task session during task deletion.
 	DeleteTaskSession(ctx context.Context, task *Task) error
 }

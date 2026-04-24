@@ -61,9 +61,11 @@ type repoClientState struct {
 type sessionClientState struct {
 	startErr      error
 	deleteErr     error
+	inspectErr    error
 	startedTask   *Task
 	deletedTask   *Task
 	startedLaunch TaskSessionLaunchSpec
+	inspectState  TaskSessionRuntimeState
 }
 
 type providerClientState struct {
@@ -121,6 +123,10 @@ func newTestTaskService(t *testing.T) *testTaskServiceHarness {
 			},
 			branchInUse: map[string]bool{},
 		},
+	}
+	h.sessionClient.inspectState = TaskSessionRuntimeState{
+		Exists:         true,
+		ActiveCommands: []string{"codex"},
 	}
 	h.taskRepo.latestByTask = make(map[string]TaskStatusUpdate)
 	h.taskRepo.latestResumeByTask = make(map[string]TaskResumeMetadata)
@@ -231,6 +237,11 @@ func configureTmuxSessionMock(client *MockTmuxSessionClient, state *sessionClien
 		},
 	).Maybe()
 	client.EXPECT().AttachTaskSession(mock.Anything, mock.Anything).Return(nil).Maybe()
+	client.EXPECT().InspectTaskSession(mock.Anything, mock.Anything).RunAndReturn(
+		func(_ context.Context, _ *Task) (TaskSessionRuntimeState, error) {
+			return state.inspectState, state.inspectErr
+		},
+	).Maybe()
 	client.EXPECT().DeleteTaskSession(mock.Anything, mock.Anything).RunAndReturn(
 		func(_ context.Context, task *Task) error {
 			if state.deleteErr != nil {
@@ -298,6 +309,7 @@ func configureProviderClientMock(client *MockProviderClient, state *providerClie
 			}, nil
 		},
 	).Maybe()
+	client.EXPECT().TaskSessionCommandName().Return("codex").Maybe()
 	client.EXPECT().HookEventToTaskStatus(mock.Anything).RunAndReturn(
 		func(input HookEventInput) (*TaskStatusUpdate, error) {
 			state.hookInput = input

@@ -191,7 +191,12 @@ func (s *taskService) ReconnectTaskSession(ctx context.Context, taskID string) e
 }
 
 func (s *taskService) LatestTaskStatus(ctx context.Context, taskID string) (*TaskStatusUpdate, error) {
-	return s.tasks.LatestTaskStatus(ctx, strings.TrimSpace(taskID))
+	update, err := s.tasks.LatestTaskStatus(ctx, strings.TrimSpace(taskID))
+	if err != nil || update == nil {
+		return update, err
+	}
+
+	return s.currentTaskStatus(ctx, update), nil
 }
 
 func (s *taskService) SubscribeTaskStatus(
@@ -199,6 +204,63 @@ func (s *taskService) SubscribeTaskStatus(
 	taskID string,
 ) (<-chan TaskStatusUpdate, error) {
 	return s.tasks.SubscribeTaskStatus(ctx, strings.TrimSpace(taskID))
+}
+
+func (s *taskService) currentTaskStatus(ctx context.Context, update *TaskStatusUpdate) *TaskStatusUpdate {
+	if update == nil || update.Phase == TaskStatusPhaseStopped {
+		return update
+	}
+
+	task, err := s.taskByID(ctx, update.TaskID)
+	if err != nil {
+		return update
+	}
+
+	runtime, err := s.tmuxSession.InspectTaskSession(ctx, task)
+	if err != nil {
+		return update
+	}
+
+	providerClient, err := s.providerClientFor(task.Provider)
+	if err != nil {
+		return update
+	}
+
+	if taskSessionRunningProvider(runtime, providerClient.TaskSessionCommandName()) {
+		return update
+	}
+
+	stopped := *update
+	stopped.Phase = TaskStatusPhaseStopped
+	stopped.RawEventName = "TaskSessionStopped"
+	return &stopped
+}
+
+func taskSessionRunningProvider(runtime TaskSessionRuntimeState, commandName string) bool {
+	if !runtime.Exists {
+		return false
+	}
+
+	expectedCommand := filepath.Base(strings.TrimSpace(commandName))
+	if expectedCommand == "" {
+		return false
+	}
+
+	for _, command := range runtime.ActiveCommands {
+		activeCommand := filepath.Base(strings.TrimSpace(command))
+		if taskSessionCommandsMatch(activeCommand, expectedCommand) {
+			return true
+		}
+	}
+
+	return false
+}
+
+func taskSessionCommandsMatch(activeCommand, expectedCommand string) bool {
+	if activeCommand == expectedCommand {
+		return true
+	}
+	return strings.HasPrefix(activeCommand, expectedCommand+"-")
 }
 
 func (s *taskService) HandleHookEvent(ctx context.Context, input HookEventInput) error {

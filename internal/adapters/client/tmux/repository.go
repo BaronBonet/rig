@@ -77,6 +77,34 @@ func (r *repository) AttachTaskSession(ctx context.Context, task *core.Task) err
 	return err
 }
 
+func (r *repository) InspectTaskSession(ctx context.Context, task *core.Task) (core.TaskSessionRuntimeState, error) {
+	if task == nil || strings.TrimSpace(task.TmuxSession) == "" {
+		return core.TaskSessionRuntimeState{}, nil
+	}
+
+	result, err := r.runner.Run(
+		ctx,
+		"",
+		"tmux",
+		"list-panes",
+		"-t",
+		exactWindowTarget(task.TmuxSession, taskWindowName),
+		"-F",
+		"#{pane_current_command}",
+	)
+	if isMissingSessionError(err, result) {
+		return core.TaskSessionRuntimeState{}, nil
+	}
+	if err != nil {
+		return core.TaskSessionRuntimeState{}, err
+	}
+
+	return core.TaskSessionRuntimeState{
+		Exists:         true,
+		ActiveCommands: paneCommandsFromTmuxOutput(result.Stdout),
+	}, nil
+}
+
 func (r *repository) DeleteTaskSession(ctx context.Context, task *core.Task) error {
 	if task == nil || strings.TrimSpace(task.TmuxSession) == "" {
 		return nil
@@ -234,6 +262,19 @@ func normalizedSessionName(session string) string {
 	return strings.ReplaceAll(session, ":", "-")
 }
 
+func paneCommandsFromTmuxOutput(output string) []string {
+	lines := strings.Split(output, "\n")
+	commands := make([]string, 0, len(lines))
+	for _, line := range lines {
+		command := strings.TrimSpace(line)
+		if command == "" {
+			continue
+		}
+		commands = append(commands, command)
+	}
+	return commands
+}
+
 func isMissingSessionError(err error, result subprocess.Result) bool {
 	if err == nil {
 		return false
@@ -247,5 +288,8 @@ func isMissingSessionError(err error, result subprocess.Result) bool {
 		}
 	}
 
-	return strings.Contains(strings.ToLower(stderr), "can't find session")
+	lower := strings.ToLower(stderr)
+	return strings.Contains(lower, "can't find session") ||
+		strings.Contains(lower, "can't find window") ||
+		strings.Contains(lower, "can't find pane")
 }
