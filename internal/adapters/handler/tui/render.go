@@ -209,36 +209,6 @@ func (m model) selectedTaskDetailView() string {
 		builder.WriteString("   " + padRightVisible(leftLine, detailColWidth) + "   " + rightLine + "\n")
 	}
 
-	if activity := taskActivityPreview(row.activity); len(activity) > 0 {
-		builder.WriteString("\n")
-		builder.WriteString("   " + headerLabelStyle.Render("ACTIVITY") + "\n")
-		for idx, event := range activity {
-			label := "assistant"
-			labelStyle := providerStyle(string(task.Provider))
-			textStyle := dimStyle
-			if event.Role == core.TaskActivityRoleUser {
-				label = "you"
-				labelStyle = mutedStyle
-				if idx == len(activity)-1 {
-					textStyle = primaryStyle
-				}
-			} else if idx == len(activity)-1 {
-				textStyle = primaryStyle
-			}
-
-			lines := wrapAndTruncate(event.Text, totalWidth-16, 3)
-			for lineIndex, line := range lines {
-				if lineIndex == 0 {
-					builder.WriteString(
-						"   " + padRightVisible(labelStyle.Render(label), 10) + " " + textStyle.Render(line) + "\n",
-					)
-					continue
-				}
-				builder.WriteString("   " + strings.Repeat(" ", 11) + textStyle.Render(line) + "\n")
-			}
-		}
-	}
-
 	if strings.TrimSpace(task.Prompt) != "" {
 		builder.WriteString("\n")
 		builder.WriteString("   " + headerLabelStyle.Render("PROMPT") + "\n")
@@ -247,12 +217,76 @@ func (m model) selectedTaskDetailView() string {
 		}
 	}
 
+	lastUserPrompt, assistantItems := taskActivityPreview(row.activity)
+	if lastUserPrompt != "" || len(assistantItems) > 0 {
+		builder.WriteString("\n")
+		builder.WriteString("   " + headerLabelStyle.Render("ACTIVITY") + "\n")
+
+		leftWidth := totalWidth * 35 / 100
+		if leftWidth < 24 {
+			leftWidth = 24
+		}
+		rightWidth := totalWidth - leftWidth - 9
+		if rightWidth < 24 {
+			rightWidth = 24
+			leftWidth = totalWidth - rightWidth - 9
+		}
+
+		leftLines := []string{mutedStyle.Render("last user prompt")}
+		if lastUserPrompt != "" {
+			for _, line := range wrapAndTruncate(lastUserPrompt, leftWidth, 5) {
+				leftLines = append(leftLines, primaryStyle.Render(line))
+			}
+		} else {
+			leftLines = append(leftLines, dimStyle.Render("No prompt yet."))
+		}
+
+		rightLines := []string{providerStyle(string(task.Provider)).Render("assistant")}
+		if len(assistantItems) == 0 {
+			rightLines = append(rightLines, dimStyle.Render("No assistant activity yet."))
+		} else {
+			for idx, item := range assistantItems {
+				textStyle := dimStyle
+				if idx == 0 {
+					textStyle = primaryStyle
+				}
+				for lineIndex, line := range wrapAndTruncate(item, rightWidth, 3) {
+					if lineIndex == 0 {
+						rightLines = append(rightLines, textStyle.Render(line))
+						continue
+					}
+					rightLines = append(rightLines, textStyle.Render(line))
+				}
+				if idx < len(assistantItems)-1 {
+					rightLines = append(rightLines, "")
+				}
+			}
+		}
+
+		maxActivityLines := len(leftLines)
+		if len(rightLines) > maxActivityLines {
+			maxActivityLines = len(rightLines)
+		}
+
+		for i := range maxActivityLines {
+			leftLine := ""
+			rightLine := ""
+			if i < len(leftLines) {
+				leftLine = leftLines[i]
+			}
+			if i < len(rightLines) {
+				rightLine = rightLines[i]
+			}
+			builder.WriteString("   " + padRightVisible(leftLine, leftWidth) + "   " + rightLine + "\n")
+		}
+	}
+
 	return strings.TrimRight(builder.String(), "\n")
 }
 
-func taskActivityPreview(events []core.TaskActivityEvent) []core.TaskActivityEvent {
+func taskActivityPreview(events []core.TaskActivityEvent) (string, []string) {
 	if len(events) == 0 {
-		return nil
+		return "", nil
 	}
 
 	start := -1
@@ -262,48 +296,31 @@ func taskActivityPreview(events []core.TaskActivityEvent) []core.TaskActivityEve
 			break
 		}
 	}
-	if start == -1 {
-		start = 0
+
+	lastUserPrompt := ""
+	if start >= 0 {
+		lastUserPrompt = strings.TrimSpace(events[start].Text)
 	}
 
-	preview := make([]core.TaskActivityEvent, 0, len(events)-start)
-	for _, event := range events[start:] {
-		if strings.TrimSpace(event.Text) == "" {
+	assistantItems := make([]string, 0, taskActivityPreviewLimit)
+	for i := len(events) - 1; i >= 0; i-- {
+		if start >= 0 && i <= start {
+			break
+		}
+		if events[i].Role != core.TaskActivityRoleAssistant {
 			continue
 		}
-		preview = append(preview, event)
-	}
-
-	if len(preview) == 0 {
-		return nil
-	}
-
-	if preview[0].Role == core.TaskActivityRoleUser {
-		assistantCount := 0
-		for _, event := range preview[1:] {
-			if event.Role == core.TaskActivityRoleAssistant {
-				assistantCount++
-			}
+		text := strings.TrimSpace(events[i].Text)
+		if text == "" {
+			continue
 		}
-		if assistantCount > taskActivityPreviewLimit-1 {
-			trimmed := []core.TaskActivityEvent{preview[0]}
-			toSkip := assistantCount - (taskActivityPreviewLimit - 1)
-			for _, event := range preview[1:] {
-				if event.Role == core.TaskActivityRoleAssistant && toSkip > 0 {
-					toSkip--
-					continue
-				}
-				trimmed = append(trimmed, event)
-			}
-			return trimmed
+		assistantItems = append(assistantItems, text)
+		if len(assistantItems) == taskActivityPreviewLimit {
+			break
 		}
 	}
 
-	if len(preview) > taskActivityPreviewLimit {
-		return preview[len(preview)-taskActivityPreviewLimit:]
-	}
-
-	return preview
+	return lastUserPrompt, assistantItems
 }
 
 func (m model) promptInputView() string {
