@@ -63,3 +63,23 @@ func TestRepositoryHookEventToTaskStatus_MapsCodexEvent(t *testing.T) {
 		ObservedAt:   time.Date(2026, time.April, 20, 11, 1, 0, 0, time.UTC),
 	}, update)
 }
+
+func TestRepositoryHookEventToTaskStatus_MapsPermissionRequestToWaitingForInput(t *testing.T) {
+	repo := New(nil, Config{Binary: "codex"}, HookForwardingConfig{})
+
+	update, err := repo.HookEventToTaskStatus(core.HookEventInput{
+		TaskID:     "task-123",
+		OccurredAt: time.Date(2026, time.April, 20, 11, 2, 0, 0, time.UTC),
+		EventName:  "PermissionRequest",
+		Provider:   core.ProviderCodex,
+	})
+	require.NoError(t, err)
+	require.NotNil(t, update)
+	require.Equal(t, &core.TaskStatusUpdate{
+		TaskID:       "task-123",
+		Provider:     core.ProviderCodex,
+		Phase:        core.TaskStatusPhaseWaitingForInput,
+		RawEventName: "PermissionRequest",
+		ObservedAt:   time.Date(2026, time.April, 20, 11, 2, 0, 0, time.UTC),
+	}, update)
+}
