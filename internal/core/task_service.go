@@ -681,11 +681,15 @@ func branchNameForTask(taskSlug string, branchType string) string {
 }
 
 func taskWorktreePath(repoCtx RepoContext, taskSlug string) string {
-	return filepath.Join(filepath.Dir(repoCtx.Root), repoCtx.Name+"-"+taskSlug)
+	return filepath.Join(filepath.Dir(repoCtx.Root), taskRuntimeStem(repoCtx, taskSlug))
 }
 
 func taskSessionName(repoCtx RepoContext, taskSlug string) string {
-	return repoCtx.Name + "_" + strings.ReplaceAll(taskSlug, "-", "_")
+	return taskRuntimeStem(repoCtx, taskSlug)
+}
+
+func taskRuntimeStem(repoCtx RepoContext, taskSlug string) string {
+	return repoCtx.Name + "_" + taskSlug
 }
 
 func uniqueTaskSlug(repoRoot string, raw string, tasks []*Task) string {

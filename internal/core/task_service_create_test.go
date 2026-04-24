@@ -59,8 +59,8 @@ func TestTaskServiceCreateTask_CreatesWorkspaceSessionAndPersistsTask(t *testing
 	require.Equal(t, "billing retry flow", task.DisplayName)
 	require.Equal(t, "billing-retry-flow", task.Slug)
 	require.Equal(t, "feat/billing-retry-flow", task.BranchName)
-	require.Equal(t, "/tmp/repo-billing-retry-flow", svc.repoClient.createdTask.WorktreePath)
-	require.Equal(t, "repo_billing_retry_flow", svc.sessionClient.startedTask.TmuxSession)
+	require.Equal(t, "/tmp/repo_billing-retry-flow", svc.repoClient.createdTask.WorktreePath)
+	require.Equal(t, "repo_billing-retry-flow", svc.sessionClient.startedTask.TmuxSession)
 	require.Zero(t, svc.taskRepo.updateCount)
 	require.Nil(t, svc.taskRepo.updatedTask)
 	require.True(t, svc.workspace.setupCalled)
@@ -68,7 +68,7 @@ func TestTaskServiceCreateTask_CreatesWorkspaceSessionAndPersistsTask(t *testing
 	require.True(t, svc.workspace.setupCalledBeforeSession)
 	require.True(t, svc.workspace.bootstrapCalledBeforeSession)
 	require.Equal(t, "/tmp/repo", svc.workspace.repoRoot)
-	require.Equal(t, "/tmp/repo-billing-retry-flow", svc.workspace.worktreePath)
+	require.Equal(t, "/tmp/repo_billing-retry-flow", svc.workspace.worktreePath)
 	require.Equal(t, svc.providerRepo.bootstrapSpec, svc.workspace.bootstrapSpec)
 	require.NotNil(t, svc.providerRepo.bootstrapRequest)
 	require.Equal(t, task.ID, svc.providerRepo.bootstrapRequest.ID)
@@ -313,8 +313,8 @@ func TestTaskServiceCreateTask_AppendsNumericSuffixWhenSlugAlreadyExists(t *test
 		RepoRoot:     "/tmp/repo",
 		DisplayName:  "billing retry flow",
 		BranchName:   "feat/billing-retry-flow",
-		WorktreePath: "/tmp/repo-billing-retry-flow",
-		TmuxSession:  "repo_billing_retry_flow",
+		WorktreePath: "/tmp/repo_billing-retry-flow",
+		TmuxSession:  "repo_billing-retry-flow",
 	}}
 
 	task, err := svc.service.CreateTaskWithProgress(t.Context(), CreateTaskInput{
@@ -325,8 +325,8 @@ func TestTaskServiceCreateTask_AppendsNumericSuffixWhenSlugAlreadyExists(t *test
 	require.NoError(t, err)
 	require.Equal(t, "billing-retry-flow-2", task.Slug)
 	require.Equal(t, "feat/billing-retry-flow-2", task.BranchName)
-	require.Equal(t, "/tmp/repo-billing-retry-flow-2", task.WorktreePath)
-	require.Equal(t, "repo_billing_retry_flow_2", task.TmuxSession)
+	require.Equal(t, "/tmp/repo_billing-retry-flow-2", task.WorktreePath)
+	require.Equal(t, "repo_billing-retry-flow-2", task.TmuxSession)
 }
 
 func TestTaskServiceCreateTaskWithProgress_EmitsProgressStepsInOrder(t *testing.T) {
