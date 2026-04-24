@@ -307,7 +307,7 @@ func TestModel_ViewRendersTaskActivity(t *testing.T) {
 	}
 
 	view := stripANSI(got.View().Content)
-	require.Contains(t, view, "PROMPT")
+	require.Contains(t, view, "INITIAL PROMPT")
 	require.Contains(t, view, "ACTIVITY")
 	require.Contains(t, view, "top-level task prompt")
 	require.Contains(t, view, "restore the task preview")
@@ -315,7 +315,7 @@ func TestModel_ViewRendersTaskActivity(t *testing.T) {
 	require.Contains(t, view, "go test")
 	require.Contains(t, view, "./internal/adapters/handler/tui")
 	require.Contains(t, view, "Restored the task detail preview.")
-	require.Less(t, strings.Index(view, "PROMPT"), strings.Index(view, "ACTIVITY"))
+	require.Less(t, strings.Index(view, "INITIAL PROMPT"), strings.Index(view, "ACTIVITY"))
 	require.Less(
 		t,
 		strings.Index(view, "Restored the task detail preview."),
@@ -357,6 +357,7 @@ func TestRenderRow_CommandStatusKeepsElapsedColumnAligned(t *testing.T) {
 		lipgloss.Width(strings.SplitN(commandView, "15m", 2)[0]),
 	)
 }
+
 func TestModel_TaskRowUpdatesWhenSubscriptionUpdateArrives(t *testing.T) {
 	frontend := newFrontendHarness()
 	frontend.listTasks = []*core.Task{

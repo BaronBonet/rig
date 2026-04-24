@@ -2,6 +2,7 @@ package core
 
 import (
 	"context"
+	"strconv"
 	"testing"
 	"time"
 
@@ -356,4 +357,41 @@ func TestTaskStatusService_HandleHookEventRecordsActivity(t *testing.T) {
 			ObservedAt: time.Date(2026, time.April, 23, 10, 1, 0, 0, time.UTC),
 		},
 	}, events)
+}
+
+func TestTaskStatusService_GetTaskActivityKeepsLastUserPromptOutsideRecentAssistantWindow(t *testing.T) {
+	svc := newTestTaskService(t)
+	svc.taskRepo.activityByTask["task-123"] = []TaskActivityEvent{
+		{
+			TaskID:     "task-123",
+			EventName:  "UserPromptSubmit",
+			Role:       TaskActivityRoleUser,
+			Text:       "older prompt",
+			ObservedAt: time.Date(2026, time.April, 23, 9, 0, 0, 0, time.UTC),
+		},
+		{
+			TaskID:     "task-123",
+			EventName:  "UserPromptSubmit",
+			Role:       TaskActivityRoleUser,
+			Text:       "fix the stale status",
+			ObservedAt: time.Date(2026, time.April, 23, 10, 0, 0, 0, time.UTC),
+		},
+	}
+	for i := range 7 {
+		svc.taskRepo.activityByTask["task-123"] = append(svc.taskRepo.activityByTask["task-123"], TaskActivityEvent{
+			TaskID:     "task-123",
+			EventName:  "PostToolUse",
+			Role:       TaskActivityRoleAssistant,
+			Text:       "assistant event " + strconv.Itoa(i+1),
+			ObservedAt: time.Date(2026, time.April, 23, 10, i+1, 0, 0, time.UTC),
+		})
+	}
+
+	events, err := svc.service.GetTaskActivity(t.Context(), "task-123", 6)
+	require.NoError(t, err)
+	require.Len(t, events, 7)
+	require.Equal(t, TaskActivityRoleUser, events[0].Role)
+	require.Equal(t, "fix the stale status", events[0].Text)
+	require.Equal(t, "assistant event 2", events[1].Text)
+	require.Equal(t, "assistant event 7", events[6].Text)
 }
