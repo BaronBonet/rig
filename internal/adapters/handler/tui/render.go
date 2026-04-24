@@ -13,7 +13,7 @@ import (
 
 const (
 	colWidthAgent   = 7
-	colWidthStatus  = 14
+	colWidthStatus  = 21
 	colWidthElapsed = 7
 )
 

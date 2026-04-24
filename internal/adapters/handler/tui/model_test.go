@@ -12,6 +12,7 @@ import (
 	"rig/internal/core"
 
 	tea "charm.land/bubbletea/v2"
+	"charm.land/lipgloss/v2"
 	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
 )
@@ -327,6 +328,35 @@ func TestModel_ViewRendersTaskActivity(t *testing.T) {
 	)
 }
 
+func TestRenderRow_CommandStatusKeepsElapsedColumnAligned(t *testing.T) {
+	task := &core.Task{
+		ID:          "task-1",
+		DisplayName: "first task",
+		Provider:    core.ProviderCodex,
+		CreatedAt:   time.Now().Add(-15 * time.Minute),
+	}
+
+	m := model{selected: 1}
+	idleLine, _ := m.renderRow(0, taskRow{task: task}, 72)
+	commandLine, _ := m.renderRow(0, taskRow{
+		task: task,
+		status: &core.TaskStatusUpdate{
+			TaskID:       task.ID,
+			Phase:        core.TaskStatusPhaseWorking,
+			RawEventName: "PreToolUse",
+		},
+	}, 72)
+
+	idleView := stripANSI(idleLine)
+	commandView := stripANSI(commandLine)
+
+	require.Contains(t, commandView, "working · command")
+	require.Equal(
+		t,
+		lipgloss.Width(strings.SplitN(idleView, "15m", 2)[0]),
+		lipgloss.Width(strings.SplitN(commandView, "15m", 2)[0]),
+	)
+}
 func TestModel_TaskRowUpdatesWhenSubscriptionUpdateArrives(t *testing.T) {
 	frontend := newFrontendHarness()
 	frontend.listTasks = []*core.Task{
