@@ -431,6 +431,27 @@ func TestModel_TaskStatusUpdateReloadsTaskActivity(t *testing.T) {
 	require.Equal(t, "fresh activity", got.rows[0].activity[0].Text)
 }
 
+func TestModel_DetailStatusUsesTaskStatusStyle(t *testing.T) {
+	status := &core.TaskStatusUpdate{
+		TaskID: "task-1",
+		Phase:  core.TaskStatusPhaseWaitingForInput,
+	}
+	m := model{
+		rows: []taskRow{{
+			task:   &core.Task{ID: "task-1", DisplayName: "first task", Provider: core.ProviderCodex},
+			status: status,
+		}},
+		width: 80,
+	}
+
+	statusText, statusStyle := taskStatusText(status)
+
+	view := m.selectedTaskDetailView()
+
+	require.Contains(t, view, mutedStyle.Render("state")+"  "+statusStyle.Render(statusText))
+	require.NotContains(t, view, mutedStyle.Render("state")+"  "+primaryStyle.Render(statusText))
+}
+
 func TestModel_StatusEnrichmentFailuresDoNotCollapseListView(t *testing.T) {
 	frontend := newFrontendHarness()
 	frontend.listTasks = []*core.Task{
