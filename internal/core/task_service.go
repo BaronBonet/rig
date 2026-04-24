@@ -75,7 +75,17 @@ func (s *taskService) ListTasks(ctx context.Context) ([]*Task, error) {
 }
 
 func (s *taskService) GetTaskActivity(ctx context.Context, taskID string, limit int) ([]TaskActivityEvent, error) {
-	return s.tasks.GetTaskActivity(ctx, strings.TrimSpace(taskID), limit)
+	taskID = strings.TrimSpace(taskID)
+	if limit <= 0 {
+		return s.tasks.GetTaskActivity(ctx, taskID, limit)
+	}
+
+	events, err := s.tasks.GetTaskActivity(ctx, taskID, 0)
+	if err != nil {
+		return nil, err
+	}
+
+	return activityWindowWithLastUserPrompt(events, limit), nil
 }
 
 func (s *taskService) ListRepoPullRequests(ctx context.Context, cwd string) ([]RepoPullRequest, error) {
@@ -351,6 +361,34 @@ func taskActivityEventFromHookInput(input HookEventInput) *TaskActivityEvent {
 	}
 
 	return &event
+}
+
+func activityWindowWithLastUserPrompt(events []TaskActivityEvent, limit int) []TaskActivityEvent {
+	if limit <= 0 || len(events) <= limit {
+		return events
+	}
+
+	window := append([]TaskActivityEvent(nil), events[len(events)-limit:]...)
+
+	lastUserIndex := -1
+	for i := len(events) - 1; i >= 0; i-- {
+		if events[i].Role == TaskActivityRoleUser && strings.TrimSpace(events[i].Text) != "" {
+			lastUserIndex = i
+			break
+		}
+	}
+	if lastUserIndex < 0 {
+		return window
+	}
+
+	lastUser := events[lastUserIndex]
+	for _, event := range window {
+		if event == lastUser {
+			return window
+		}
+	}
+
+	return append([]TaskActivityEvent{lastUser}, window...)
 }
 
 func compactActivityText(value string) string {

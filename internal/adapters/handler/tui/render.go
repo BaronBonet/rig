@@ -211,7 +211,7 @@ func (m model) selectedTaskDetailView() string {
 
 	if strings.TrimSpace(task.Prompt) != "" {
 		builder.WriteString("\n")
-		builder.WriteString("   " + headerLabelStyle.Render("PROMPT") + "\n")
+		builder.WriteString("   " + headerLabelStyle.Render("INITIAL PROMPT") + "\n")
 		for _, line := range wrapAndTruncate(task.Prompt, totalWidth-6, 3) {
 			builder.WriteString("   " + primaryStyle.Render(line) + "\n")
 		}
