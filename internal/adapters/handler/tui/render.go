@@ -559,6 +559,8 @@ func taskStatusText(update *core.TaskStatusUpdate) (string, lipgloss.Style) {
 		return iconStatusActive + " working", healthyStyle
 	case core.TaskStatusPhaseWaitingForInput:
 		return iconStatusProgress + " needs input", warningStyle
+	case core.TaskStatusPhaseStopped:
+		return iconStatusIdle + " stopped", dimStyle
 	default:
 		return iconStatusIdle + " idle", dimStyle
 	}

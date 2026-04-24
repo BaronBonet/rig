@@ -37,6 +37,12 @@ func TestRepositoryBuildReconnectTaskSessionLaunchSpec_UsesCodexResume(t *testin
 	}, launch)
 }
 
+func TestRepositoryTaskSessionCommandNameUsesConfiguredBinaryBase(t *testing.T) {
+	repo := New(subprocess.NewMockRunner(t), Config{Binary: "/opt/homebrew/bin/codex-custom"}, HookForwardingConfig{})
+
+	require.Equal(t, "codex-custom", repo.TaskSessionCommandName())
+}
+
 func TestRepositoryBuildWorkspaceBootstrapSpec_ReturnsNoWorkspaceFiles(t *testing.T) {
 	repo := New(subprocess.NewMockRunner(t), Config{
 		Binary: "codex",

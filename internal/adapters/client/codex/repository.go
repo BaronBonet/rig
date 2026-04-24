@@ -154,6 +154,14 @@ func (r *repository) BuildReconnectTaskSessionLaunchSpec(
 	}, nil
 }
 
+func (r *repository) TaskSessionCommandName() string {
+	commandName := filepath.Base(strings.TrimSpace(r.binary))
+	if commandName == "." {
+		return "codex"
+	}
+	return commandName
+}
+
 func readOutputFile(path string) string {
 	fileBytes, err := os.ReadFile(path)
 	if err != nil {

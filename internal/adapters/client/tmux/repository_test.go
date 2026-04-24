@@ -136,6 +136,59 @@ func TestRepositoryAttachTaskSession_ReturnsErrTaskSessionNotFoundWhenSessionIsM
 	require.ErrorIs(t, err, core.ErrTaskSessionNotFound)
 }
 
+func TestRepositoryInspectTaskSession_ReturnsActiveTaskWindowCommands(t *testing.T) {
+	runner := subprocess.NewMockRunner(t)
+	repo := New(runner).(*repository)
+
+	expectTmuxRun(
+		runner,
+		subprocess.Result{Stdout: "zsh\ncodex\n"},
+		nil,
+		"list-panes",
+		"-t",
+		"=repo_task:task",
+		"-F",
+		"#{pane_current_command}",
+	)
+
+	state, err := repo.InspectTaskSession(context.Background(), &core.Task{
+		TmuxSession: "repo_task",
+	})
+
+	require.NoError(t, err)
+	require.True(t, state.Exists)
+	require.Equal(t, []string{"zsh", "codex"}, state.ActiveCommands)
+}
+
+func TestRepositoryInspectTaskSession_ReturnsMissingWhenTaskWindowIsGone(t *testing.T) {
+	runner := subprocess.NewMockRunner(t)
+	repo := New(runner).(*repository)
+
+	expectTmuxRun(
+		runner,
+		subprocess.Result{Stderr: "can't find window: task"},
+		subprocess.CommandError{
+			Name:   "tmux",
+			Args:   []string{"list-panes", "-t", "=repo_task:task", "-F", "#{pane_current_command}"},
+			Stderr: "can't find window: task",
+			Err:    errors.New("exit status 1"),
+		},
+		"list-panes",
+		"-t",
+		"=repo_task:task",
+		"-F",
+		"#{pane_current_command}",
+	)
+
+	state, err := repo.InspectTaskSession(context.Background(), &core.Task{
+		TmuxSession: "repo_task",
+	})
+
+	require.NoError(t, err)
+	require.False(t, state.Exists)
+	require.Empty(t, state.ActiveCommands)
+}
+
 func TestRepositoryDeleteTaskSession_KillsSession(t *testing.T) {
 	runner := subprocess.NewMockRunner(t)
 	repo := New(runner).(*repository)
