@@ -18,6 +18,11 @@ func New(runner subprocess.Runner) core.GitWorktreeClient {
 	return &repository{runner: runner}
 }
 
+func (r *repository) HealthCheck(ctx context.Context) error {
+	_, err := r.runner.Run(ctx, "", "git", "--version")
+	return err
+}
+
 func (r *repository) DetectRepo(ctx context.Context, cwd string) (core.RepoContext, error) {
 	rootResult, err := r.runner.Run(ctx, cwd, "git", "rev-parse", "--show-toplevel")
 	if err != nil {

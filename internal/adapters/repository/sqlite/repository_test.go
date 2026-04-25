@@ -26,6 +26,12 @@ func TestNew_ReturnsTaskRepository(t *testing.T) {
 	}
 }
 
+func TestRepositoryHealthCheck_VerifiesInitializedDatabase(t *testing.T) {
+	repo := newTestRepository(t)
+
+	require.NoError(t, repo.HealthCheck(context.Background()))
+}
+
 func TestRepositoryCreateTaskAndListTasks_PersistsCoreTaskFields(t *testing.T) {
 	repo := newTestRepository(t)
 	now := time.Now().UTC()

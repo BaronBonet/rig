@@ -17,11 +17,17 @@ import (
 	_ "modernc.org/sqlite"
 )
 
+var errHealthCheckRepositoryOnly = errors.New("sqlite health-check repository only supports HealthCheck")
+
 type repository struct {
 	queries *generated.Queries
 	db      *sql.DB
 	subs    map[string][]chan core.TaskStatusUpdate
 	mu      sync.Mutex
+}
+
+type healthCheckRepository struct {
+	cfg Config
 }
 
 func New(cfg Config) (core.TaskRepository, error) {
@@ -67,6 +73,81 @@ func New(cfg Config) (core.TaskRepository, error) {
 		queries: generated.New(db),
 		subs:    make(map[string][]chan core.TaskStatusUpdate),
 	}, nil
+}
+
+func NewHealthCheckRepository(cfg Config) core.TaskRepository {
+	return &healthCheckRepository{cfg: cfg}
+}
+
+func (r *healthCheckRepository) HealthCheck(ctx context.Context) error {
+	repo, err := New(r.cfg)
+	if err != nil {
+		return err
+	}
+	return repo.HealthCheck(ctx)
+}
+
+func (r *healthCheckRepository) CreateTask(context.Context, *core.Task) error {
+	return errHealthCheckRepositoryOnly
+}
+
+func (r *healthCheckRepository) DeleteTask(context.Context, string) error {
+	return errHealthCheckRepositoryOnly
+}
+
+func (r *healthCheckRepository) UpdateTask(context.Context, *core.Task) error {
+	return errHealthCheckRepositoryOnly
+}
+
+func (r *healthCheckRepository) ListTasks(context.Context) ([]*core.Task, error) {
+	return nil, errHealthCheckRepositoryOnly
+}
+
+func (r *healthCheckRepository) RecordTaskActivity(context.Context, core.TaskActivityEvent) error {
+	return errHealthCheckRepositoryOnly
+}
+
+func (r *healthCheckRepository) GetTaskActivity(context.Context, string, int) ([]core.TaskActivityEvent, error) {
+	return nil, errHealthCheckRepositoryOnly
+}
+
+func (r *healthCheckRepository) UpsertTaskStatus(context.Context, core.TaskStatusUpdate) error {
+	return errHealthCheckRepositoryOnly
+}
+
+func (r *healthCheckRepository) UpsertTaskResumeMetadata(context.Context, core.TaskResumeMetadata) error {
+	return errHealthCheckRepositoryOnly
+}
+
+func (r *healthCheckRepository) LatestTaskStatus(context.Context, string) (*core.TaskStatusUpdate, error) {
+	return nil, errHealthCheckRepositoryOnly
+}
+
+func (r *healthCheckRepository) LatestTaskResumeMetadata(context.Context, string) (*core.TaskResumeMetadata, error) {
+	return nil, errHealthCheckRepositoryOnly
+}
+
+func (r *healthCheckRepository) SubscribeTaskStatus(context.Context, string) (<-chan core.TaskStatusUpdate, error) {
+	return nil, errHealthCheckRepositoryOnly
+}
+
+func (r *repository) HealthCheck(ctx context.Context) error {
+	if r == nil || r.db == nil {
+		return fmt.Errorf("sqlite repository not configured")
+	}
+	if err := r.db.PingContext(ctx); err != nil {
+		return fmt.Errorf("ping sqlite database: %w", err)
+	}
+
+	var result string
+	if err := r.db.QueryRowContext(ctx, "pragma quick_check").Scan(&result); err != nil {
+		return fmt.Errorf("run sqlite quick_check: %w", err)
+	}
+	if strings.TrimSpace(result) != "ok" {
+		return fmt.Errorf("sqlite quick_check failed: %s", result)
+	}
+
+	return nil
 }
 
 func (r *repository) CreateTask(ctx context.Context, task *core.Task) error {

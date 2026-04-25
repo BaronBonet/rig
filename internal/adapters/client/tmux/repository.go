@@ -33,6 +33,11 @@ func New(runner subprocess.Runner) core.TmuxSessionClient {
 	}
 }
 
+func (r *repository) HealthCheck(ctx context.Context) error {
+	_, err := r.runner.Run(ctx, "", "tmux", "-V")
+	return err
+}
+
 func (r *repository) StartTaskSession(ctx context.Context, task *core.Task, launch core.TaskSessionLaunchSpec) error {
 	if err := r.createSession(ctx, task.TmuxSession, task.WorktreePath); err != nil {
 		return err
