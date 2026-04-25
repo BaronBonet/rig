@@ -29,6 +29,7 @@ type testTaskServiceHarness struct {
 }
 
 type taskRepositoryState struct {
+	healthErr           error
 	createErr           error
 	updateErr           error
 	deleteErr           error
@@ -48,6 +49,7 @@ type taskRepositoryState struct {
 }
 
 type repoClientState struct {
+	healthErr      error
 	detectRepoErr  error
 	branchInUseErr error
 	createErr      error
@@ -59,6 +61,7 @@ type repoClientState struct {
 }
 
 type sessionClientState struct {
+	healthErr     error
 	startErr      error
 	deleteErr     error
 	inspectErr    error
@@ -69,6 +72,7 @@ type sessionClientState struct {
 }
 
 type providerClientState struct {
+	healthErr           error
 	suggestErr          error
 	suggestedName       string
 	suggestedSuggestion TaskSuggestion
@@ -87,6 +91,7 @@ type providerClientState struct {
 }
 
 type pullRequestClientState struct {
+	healthErr            error
 	listErr              error
 	checkStatusErr       error
 	listRepoPullRequests []RepoPullRequest
@@ -162,6 +167,11 @@ func newTestTaskService(t *testing.T) *testTaskServiceHarness {
 }
 
 func configureGitWorktreeMock(client *MockGitWorktreeClient, state *repoClientState) {
+	client.EXPECT().HealthCheck(mock.Anything).RunAndReturn(
+		func(context.Context) error {
+			return state.healthErr
+		},
+	).Maybe()
 	client.EXPECT().DetectRepo(mock.Anything, mock.Anything).RunAndReturn(
 		func(context.Context, string) (RepoContext, error) {
 			if state.detectRepoErr != nil {
@@ -199,6 +209,11 @@ func configureGitWorktreeMock(client *MockGitWorktreeClient, state *repoClientSt
 }
 
 func configurePullRequestClientMock(client *MockPullRequestClient, state *pullRequestClientState) {
+	client.EXPECT().HealthCheck(mock.Anything).RunAndReturn(
+		func(context.Context) error {
+			return state.healthErr
+		},
+	).Maybe()
 	client.EXPECT().ListRepoPullRequests(mock.Anything, mock.Anything).RunAndReturn(
 		func(_ context.Context, repoRoot string) ([]RepoPullRequest, error) {
 			state.lastListRepoRoot = repoRoot
@@ -229,6 +244,11 @@ func configurePullRequestClientMock(client *MockPullRequestClient, state *pullRe
 }
 
 func configureTmuxSessionMock(client *MockTmuxSessionClient, state *sessionClientState) {
+	client.EXPECT().HealthCheck(mock.Anything).RunAndReturn(
+		func(context.Context) error {
+			return state.healthErr
+		},
+	).Maybe()
 	client.EXPECT().StartTaskSession(mock.Anything, mock.Anything, mock.Anything).RunAndReturn(
 		func(_ context.Context, task *Task, launch TaskSessionLaunchSpec) error {
 			state.startedTask = cloneTask(task)
@@ -254,6 +274,11 @@ func configureTmuxSessionMock(client *MockTmuxSessionClient, state *sessionClien
 }
 
 func configureProviderClientMock(client *MockProviderClient, state *providerClientState) {
+	client.EXPECT().HealthCheck(mock.Anything).RunAndReturn(
+		func(context.Context) error {
+			return state.healthErr
+		},
+	).Maybe()
 	client.EXPECT().SuggestTaskName(mock.Anything, mock.Anything).RunAndReturn(
 		func(context.Context, string) (TaskSuggestion, error) {
 			if state.suggestErr != nil {
@@ -359,6 +384,11 @@ func configureWorkspaceManagerMock(
 }
 
 func configureTaskRepositoryMock(repo *MockTaskRepository, state *taskRepositoryState) {
+	repo.EXPECT().HealthCheck(mock.Anything).RunAndReturn(
+		func(context.Context) error {
+			return state.healthErr
+		},
+	).Maybe()
 	repo.EXPECT().CreateTask(mock.Anything, mock.Anything).RunAndReturn(
 		func(_ context.Context, task *Task) error {
 			if state.createErr != nil {

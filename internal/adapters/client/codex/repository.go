@@ -48,6 +48,11 @@ func New(runner subprocess.Runner, cfg Config, hooks HookForwardingConfig) core.
 	}
 }
 
+func (r *repository) HealthCheck(ctx context.Context) error {
+	_, err := r.runner.Run(ctx, "", r.binary, "--version")
+	return err
+}
+
 func (r *repository) SuggestTaskName(ctx context.Context, prompt string) (core.TaskSuggestion, error) {
 	tmpFile, err := os.CreateTemp("", "rig-codex-name-*.txt")
 	if err != nil {

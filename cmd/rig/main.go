@@ -55,6 +55,10 @@ func executeWithArgs(args []string, stdout io.Writer, _ io.Writer) error {
 		return err
 	}
 
+	if len(args) == 1 && args[0] == "doctor" {
+		return runDoctor(stdout, cfg)
+	}
+
 	execPath, err := os.Executable()
 	if err != nil {
 		return err
@@ -107,6 +111,55 @@ func executeWithArgs(args []string, stdout io.Writer, _ io.Writer) error {
 	)
 	_, err = program.Run()
 	return err
+}
+
+func runDoctor(stdout io.Writer, cfg *infrastructure.ApplicationConfig) error {
+	if stdout == nil {
+		stdout = os.Stdout
+	}
+	if cfg == nil {
+		return fmt.Errorf("application config not configured")
+	}
+	service := newDoctorService(cfg)
+
+	fmt.Fprintln(stdout, "Rig doctor")
+	fmt.Fprintf(stdout, "Provider: %s\n", cfg.Provider)
+	fmt.Fprintf(stdout, "SQLite: %s\n", cfg.SQLite.Path)
+	fmt.Fprintf(stdout, "Daemon socket: %s\n\n", cfg.Daemon.SocketPath)
+
+	checks, err := service.HealthCheck(context.Background())
+	renderHealthChecks(stdout, checks)
+
+	return err
+}
+
+func newDoctorService(cfg *infrastructure.ApplicationConfig) core.TaskService {
+	runner := subprocess.ExecRunner{}
+	providers := map[core.Provider]core.ProviderClient{
+		core.ProviderCodex: codex.New(runner, cfg.Codex, codex.HookForwardingConfig{}),
+	}
+
+	return core.NewTaskService(core.TaskServiceDependencies{
+		Tasks:           sqlite.NewHealthCheckRepository(cfg.SQLite),
+		GitWorktree:     git.New(runner),
+		TmuxSession:     tmux.New(runner),
+		PullRequests:    github.New(runner),
+		Providers:       providers,
+		DefaultProvider: cfg.Provider,
+	})
+}
+
+func renderHealthChecks(stdout io.Writer, checks []core.HealthCheck) {
+	for _, check := range checks {
+		switch {
+		case check.Err == nil:
+			fmt.Fprintf(stdout, "OK   %-6s\n", check.Name)
+		case check.Required:
+			fmt.Fprintf(stdout, "FAIL %-6s %s\n", check.Name, check.Err)
+		default:
+			fmt.Fprintf(stdout, "WARN %-6s %s\n", check.Name, check.Err)
+		}
+	}
 }
 
 func taskDaemonBuildIdentity(execPath string, version string) (string, error) {

@@ -17,6 +17,11 @@ func New(runner subprocess.Runner) core.PullRequestClient {
 	return &repository{runner: runner}
 }
 
+func (r *repository) HealthCheck(ctx context.Context) error {
+	_, err := r.runner.Run(ctx, "", "gh", "auth", "status")
+	return err
+}
+
 func (r *repository) ListRepoPullRequests(ctx context.Context, repoRoot string) ([]core.RepoPullRequest, error) {
 	result, err := r.runner.Run(
 		ctx,

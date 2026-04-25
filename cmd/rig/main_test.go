@@ -74,6 +74,68 @@ func TestExecuteWithArgs_VersionFlagPrintsConfiguredVersion(t *testing.T) {
 	require.Empty(t, stderr.String())
 }
 
+func TestExecuteWithArgsDoctorReportsHealthyEnvironment(t *testing.T) {
+	binDir := t.TempDir()
+	writeExecutable(t, binDir, "git")
+	writeExecutable(t, binDir, "tmux")
+	writeExecutable(t, binDir, "codex")
+
+	t.Setenv("HOME", t.TempDir())
+	t.Setenv("PATH", binDir)
+	t.Setenv("RIG_PROVIDER", "codex")
+
+	var stdout bytes.Buffer
+	err := executeWithArgs([]string{"doctor"}, &stdout, nil)
+
+	require.NoError(t, err)
+	require.Contains(t, stdout.String(), "Rig doctor")
+	require.Contains(t, stdout.String(), "OK   git")
+	require.Contains(t, stdout.String(), "OK   tmux")
+	require.Contains(t, stdout.String(), "OK   codex")
+	require.Contains(t, stdout.String(), "OK   sqlite")
+	require.Contains(t, stdout.String(), "WARN gh")
+	require.Contains(t, stdout.String(), "Provider: codex")
+}
+
+func TestExecuteWithArgsDoctorFailsWhenRequiredCommandMissing(t *testing.T) {
+	binDir := t.TempDir()
+	writeExecutable(t, binDir, "git")
+	writeExecutable(t, binDir, "codex")
+
+	t.Setenv("HOME", t.TempDir())
+	t.Setenv("PATH", binDir)
+	t.Setenv("RIG_PROVIDER", "codex")
+
+	var stdout bytes.Buffer
+	err := executeWithArgs([]string{"doctor"}, &stdout, nil)
+
+	require.Error(t, err)
+	require.ErrorContains(t, err, "tmux")
+	require.Contains(t, stdout.String(), "FAIL tmux")
+}
+
+func TestExecuteWithArgsDoctorFailsWhenSQLiteIsUnhealthy(t *testing.T) {
+	binDir := t.TempDir()
+	writeExecutable(t, binDir, "git")
+	writeExecutable(t, binDir, "tmux")
+	writeExecutable(t, binDir, "codex")
+
+	dbPath := filepath.Join(t.TempDir(), "tasks.db")
+	require.NoError(t, os.WriteFile(dbPath, []byte("not a sqlite database"), 0o644))
+
+	t.Setenv("HOME", t.TempDir())
+	t.Setenv("PATH", binDir)
+	t.Setenv("RIG_PROVIDER", "codex")
+	t.Setenv("RIG_SQLITE_PATH", dbPath)
+
+	var stdout bytes.Buffer
+	err := executeWithArgs([]string{"doctor"}, &stdout, nil)
+
+	require.Error(t, err)
+	require.ErrorContains(t, err, "sqlite")
+	require.Contains(t, stdout.String(), "FAIL sqlite")
+}
+
 func TestTaskDaemonBuildIdentityIncludesExecutableMetadataForDevBuilds(t *testing.T) {
 	t.Parallel()
 
@@ -98,4 +160,11 @@ func mustTaskDaemonBuildIdentity(t *testing.T, path string, version string) stri
 	identity, err := taskDaemonBuildIdentity(path, version)
 	require.NoError(t, err)
 	return identity
+}
+
+func writeExecutable(t *testing.T, dir string, name string) {
+	t.Helper()
+
+	path := filepath.Join(dir, name)
+	require.NoError(t, os.WriteFile(path, []byte("#!/bin/sh\nexit 0\n"), 0o755))
 }

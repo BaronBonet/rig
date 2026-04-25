@@ -2,8 +2,10 @@ package core
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"path/filepath"
+	"sort"
 	"strings"
 	"time"
 
@@ -32,6 +34,29 @@ type taskService struct {
 	enableWorkspaceSetup bool
 }
 
+type HealthCheck struct {
+	Err      error
+	Name     string
+	Required bool
+}
+
+func healthCheckError(checks []HealthCheck) error {
+	var failed []string
+	var errs []error
+	for _, check := range checks {
+		if !check.Required || check.Err == nil {
+			continue
+		}
+		failed = append(failed, check.Name)
+		errs = append(errs, fmt.Errorf("%s: %w", check.Name, check.Err))
+	}
+	if len(errs) == 0 {
+		return nil
+	}
+
+	return fmt.Errorf("required health check(s) failed: %s: %w", strings.Join(failed, ", "), errors.Join(errs...))
+}
+
 func NewTaskService(deps TaskServiceDependencies) TaskService {
 	return &taskService{
 		tasks:                deps.Tasks,
@@ -43,6 +68,66 @@ func NewTaskService(deps TaskServiceDependencies) TaskService {
 		enableWorkspaceSetup: deps.EnableWorkspaceSetup,
 		defaultProvider:      deps.DefaultProvider,
 	}
+}
+
+func (s *taskService) HealthCheck(ctx context.Context) ([]HealthCheck, error) {
+	var checks []HealthCheck
+	checks = append(checks, runRequiredHealthCheck(ctx, "git", s.gitWorktree))
+	checks = append(checks, runRequiredHealthCheck(ctx, "tmux", s.tmuxSession))
+
+	if s.defaultProvider != "" {
+		checks = append(checks, runRequiredHealthCheck(ctx, string(s.defaultProvider), s.providers[s.defaultProvider]))
+	}
+	for _, provider := range additionalProviderNames(s.providers, s.defaultProvider) {
+		checks = append(checks, runRequiredHealthCheck(ctx, string(provider), s.providers[provider]))
+	}
+
+	checks = append(checks, runOptionalHealthCheck(ctx, "gh", s.pullRequests))
+	checks = append(checks, runRequiredHealthCheck(ctx, "sqlite", s.tasks))
+
+	return checks, healthCheckError(checks)
+}
+
+type healthChecker interface {
+	HealthCheck(ctx context.Context) error
+}
+
+func runRequiredHealthCheck(ctx context.Context, name string, checker healthChecker) HealthCheck {
+	return runHealthCheck(ctx, name, true, checker)
+}
+
+func runOptionalHealthCheck(ctx context.Context, name string, checker healthChecker) HealthCheck {
+	return runHealthCheck(ctx, name, false, checker)
+}
+
+func runHealthCheck(ctx context.Context, name string, required bool, checker healthChecker) HealthCheck {
+	if checker == nil {
+		return HealthCheck{
+			Name:     name,
+			Required: required,
+			Err:      fmt.Errorf("not configured"),
+		}
+	}
+
+	return HealthCheck{
+		Name:     name,
+		Required: required,
+		Err:      checker.HealthCheck(ctx),
+	}
+}
+
+func additionalProviderNames(providers map[Provider]ProviderClient, defaultProvider Provider) []Provider {
+	names := make([]Provider, 0, len(providers))
+	for provider := range providers {
+		if provider == defaultProvider {
+			continue
+		}
+		names = append(names, provider)
+	}
+	sort.Slice(names, func(i, j int) bool {
+		return names[i] < names[j]
+	})
+	return names
 }
 
 func reportTaskCreateProgress(reporter TaskCreateProgressReporter, step TaskCreateProgressStep) {

@@ -148,6 +148,8 @@ type TaskDaemon interface {
 }
 
 type TaskService interface {
+	// HealthCheck runs environment diagnostics across task-service dependencies.
+	HealthCheck(ctx context.Context) ([]HealthCheck, error)
 	// CreateTaskWithProgress creates a new task while reporting coarse-grained
 	// creation milestones to the provided reporter when non-nil.
 	CreateTaskWithProgress(
@@ -187,6 +189,9 @@ type TaskService interface {
 
 // TaskRepository persists task records and returns their durable state.
 type TaskRepository interface {
+	// HealthCheck verifies that the repository backend is reachable and its
+	// storage-level consistency checks pass.
+	HealthCheck(ctx context.Context) error
 	// CreateTask stores a newly created task record.
 	CreateTask(ctx context.Context, task *Task) error
 	// DeleteTask removes a persisted task record.
@@ -220,6 +225,8 @@ type TaskRepository interface {
 // ProviderClient wraps provider-specific behavior behind one application
 // contract.
 type ProviderClient interface {
+	// HealthCheck verifies that the provider dependency is available.
+	HealthCheck(ctx context.Context) error
 	// SuggestTaskName derives a task display name and branch type from a prompt.
 	SuggestTaskName(ctx context.Context, prompt string) (TaskSuggestion, error)
 	// EnsureTaskSessionEnvironment applies any provider-specific runtime
@@ -245,6 +252,8 @@ type ProviderClient interface {
 // GitWorktreeClient manages the Git worktree operations needed by the new task
 // service during task creation.
 type GitWorktreeClient interface {
+	// HealthCheck verifies that Git is available for worktree operations.
+	HealthCheck(ctx context.Context) error
 	// DetectRepo resolves the canonical repository root, display name, and base
 	// branch for the working directory where task creation was requested.
 	DetectRepo(ctx context.Context, cwd string) (RepoContext, error)
@@ -266,6 +275,8 @@ type GitWorktreeClient interface {
 // PullRequestClient lists repository pull requests through an external
 // provider such as GitHub.
 type PullRequestClient interface {
+	// HealthCheck verifies that the pull-request provider is available.
+	HealthCheck(ctx context.Context) error
 	// ListRepoPullRequests lists open and draft pull requests for the canonical
 	// repository root.
 	ListRepoPullRequests(ctx context.Context, repoRoot string) ([]RepoPullRequest, error)
@@ -275,11 +286,9 @@ type PullRequestClient interface {
 }
 
 // TmuxSessionClient manages tmux session lifecycle for a task.
-//
-// This is the session-facing port used by the task service for task-scoped tmux
-// operations. Environment-level diagnostics such as "is tmux installed" do not
-// belong on this port.
 type TmuxSessionClient interface {
+	// HealthCheck verifies that tmux is available for task sessions.
+	HealthCheck(ctx context.Context) error
 	// StartTaskSession starts the runtime session for a task using the provider's
 	// task session launch spec.
 	StartTaskSession(ctx context.Context, task *Task, launch TaskSessionLaunchSpec) error
