@@ -378,6 +378,24 @@ func (s *taskService) HandleHookEvent(ctx context.Context, input HookEventInput)
 	}
 
 	if input.SessionID = strings.TrimSpace(input.SessionID); input.SessionID != "" {
+		observedAt := input.OccurredAt
+		if observedAt.IsZero() {
+			observedAt = time.Now().UTC()
+		}
+		if err := s.tasks.UpsertTaskProviderSession(ctx, TaskProviderSession{
+			TaskID:            input.TaskID,
+			Provider:          input.Provider,
+			ProviderSessionID: input.SessionID,
+			TranscriptPath:    strings.TrimSpace(input.TranscriptPath),
+			StartSource:       strings.TrimSpace(input.StartSource),
+			Model:             strings.TrimSpace(input.Model),
+			Cwd:               strings.TrimSpace(input.Cwd),
+			FirstObservedAt:   observedAt,
+			LastObservedAt:    observedAt,
+			LastEventName:     strings.TrimSpace(input.EventName),
+		}); err != nil {
+			return fmt.Errorf("upsert task provider session: %w", err)
+		}
 		if err := s.tasks.UpsertTaskResumeMetadata(ctx, TaskResumeMetadata{
 			TaskID:     input.TaskID,
 			Provider:   input.Provider,

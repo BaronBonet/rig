@@ -71,6 +71,21 @@ func upsertTaskResumeMetadataParams(metadata core.TaskResumeMetadata) generated.
 	}
 }
 
+func upsertTaskProviderSessionParams(session core.TaskProviderSession) generated.UpsertTaskProviderSessionParams {
+	return generated.UpsertTaskProviderSessionParams{
+		TaskID:            session.TaskID,
+		Provider:          string(session.Provider),
+		ProviderSessionID: session.ProviderSessionID,
+		TranscriptPath:    session.TranscriptPath,
+		StartSource:       session.StartSource,
+		Model:             session.Model,
+		Cwd:               session.Cwd,
+		FirstObservedAt:   formatTime(session.FirstObservedAt),
+		LastObservedAt:    formatTime(session.LastObservedAt),
+		LastEventName:     session.LastEventName,
+	}
+}
+
 func formatTime(ts time.Time) string {
 	if ts.IsZero() {
 		return ""
@@ -153,4 +168,27 @@ func taskResumeMetadataFromRow(row generated.TaskResumeMetadatum) *core.TaskResu
 		SessionID:  row.SessionID,
 		ObservedAt: parseTime(row.ObservedAt),
 	}
+}
+
+func taskProviderSessionFromRow(row generated.ListTaskProviderSessionsRow) core.TaskProviderSession {
+	return core.TaskProviderSession{
+		TaskID:            row.TaskID,
+		Provider:          core.Provider(row.Provider),
+		ProviderSessionID: row.ProviderSessionID,
+		TranscriptPath:    row.TranscriptPath,
+		StartSource:       row.StartSource,
+		LastEventName:     row.LastEventName,
+		Model:             row.Model,
+		Cwd:               row.Cwd,
+		FirstObservedAt:   parseTime(row.FirstObservedAt),
+		LastObservedAt:    parseTime(row.LastObservedAt),
+	}
+}
+
+func taskProviderSessionsFromRows(rows []generated.ListTaskProviderSessionsRow) []core.TaskProviderSession {
+	sessions := make([]core.TaskProviderSession, 0, len(rows))
+	for _, row := range rows {
+		sessions = append(sessions, taskProviderSessionFromRow(row))
+	}
+	return sessions
 }
