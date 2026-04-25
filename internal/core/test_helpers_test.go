@@ -29,23 +29,25 @@ type testTaskServiceHarness struct {
 }
 
 type taskRepositoryState struct {
-	healthErr           error
-	createErr           error
-	updateErr           error
-	deleteErr           error
-	resumeMetadataErr   error
-	updateErrAt         int
-	updateCount         int
-	listTasks           []*Task
-	createdTask         *Task
-	updatedTask         *Task
-	deletedTaskID       string
-	savedResumeMetadata *TaskResumeMetadata
-	latestResumeByTask  map[string]TaskResumeMetadata
-	activityByTask      map[string][]TaskActivityEvent
-	mu                  sync.Mutex
-	latestByTask        map[string]TaskStatusUpdate
-	subscribers         map[string][]chan TaskStatusUpdate
+	healthErr              error
+	createErr              error
+	updateErr              error
+	deleteErr              error
+	resumeMetadataErr      error
+	updateErrAt            int
+	updateCount            int
+	listTasks              []*Task
+	createdTask            *Task
+	updatedTask            *Task
+	deletedTaskID          string
+	savedResumeMetadata    *TaskResumeMetadata
+	savedProviderSessions  []TaskProviderSession
+	latestResumeByTask     map[string]TaskResumeMetadata
+	providerSessionsByTask map[string][]TaskProviderSession
+	activityByTask         map[string][]TaskActivityEvent
+	mu                     sync.Mutex
+	latestByTask           map[string]TaskStatusUpdate
+	subscribers            map[string][]chan TaskStatusUpdate
 }
 
 type repoClientState struct {
@@ -135,6 +137,7 @@ func newTestTaskService(t *testing.T) *testTaskServiceHarness {
 	}
 	h.taskRepo.latestByTask = make(map[string]TaskStatusUpdate)
 	h.taskRepo.latestResumeByTask = make(map[string]TaskResumeMetadata)
+	h.taskRepo.providerSessionsByTask = make(map[string][]TaskProviderSession)
 	h.taskRepo.activityByTask = make(map[string][]TaskActivityEvent)
 	h.taskRepo.subscribers = make(map[string][]chan TaskStatusUpdate)
 	h.taskRepoMock = NewMockTaskRepository(t)
@@ -482,6 +485,16 @@ func configureTaskRepositoryMock(repo *MockTaskRepository, state *taskRepository
 			return nil
 		},
 	).Maybe()
+	repo.EXPECT().UpsertTaskProviderSession(mock.Anything, mock.Anything).RunAndReturn(
+		func(_ context.Context, session TaskProviderSession) error {
+			state.savedProviderSessions = append(state.savedProviderSessions, session)
+			state.providerSessionsByTask[session.TaskID] = append(
+				state.providerSessionsByTask[session.TaskID],
+				session,
+			)
+			return nil
+		},
+	).Maybe()
 	repo.EXPECT().LatestTaskStatus(mock.Anything, mock.Anything).RunAndReturn(
 		func(_ context.Context, taskID string) (*TaskStatusUpdate, error) {
 			state.mu.Lock()
@@ -504,6 +517,11 @@ func configureTaskRepositoryMock(repo *MockTaskRepository, state *taskRepository
 			}
 			copy := metadata
 			return &copy, nil
+		},
+	).Maybe()
+	repo.EXPECT().ListTaskProviderSessions(mock.Anything, mock.Anything).RunAndReturn(
+		func(_ context.Context, taskID string) ([]TaskProviderSession, error) {
+			return append([]TaskProviderSession(nil), state.providerSessionsByTask[taskID]...), nil
 		},
 	).Maybe()
 	repo.EXPECT().SubscribeTaskStatus(mock.Anything, mock.Anything).RunAndReturn(

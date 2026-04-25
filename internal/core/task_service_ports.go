@@ -210,12 +210,16 @@ type TaskRepository interface {
 	UpsertTaskStatus(ctx context.Context, update TaskStatusUpdate) error
 	// UpsertTaskResumeMetadata stores the latest reconnect metadata for a task.
 	UpsertTaskResumeMetadata(ctx context.Context, metadata TaskResumeMetadata) error
+	// UpsertTaskProviderSession stores a provider session observed for a task.
+	UpsertTaskProviderSession(ctx context.Context, session TaskProviderSession) error
 	// LatestTaskStatus returns the latest known live status for a task, or nil
 	// when no status has been recorded yet.
 	LatestTaskStatus(ctx context.Context, taskID string) (*TaskStatusUpdate, error)
 	// LatestTaskResumeMetadata returns the latest known reconnect metadata for a
 	// task, or nil when none has been recorded yet.
 	LatestTaskResumeMetadata(ctx context.Context, taskID string) (*TaskResumeMetadata, error)
+	// ListTaskProviderSessions returns provider sessions observed for a task.
+	ListTaskProviderSessions(ctx context.Context, taskID string) ([]TaskProviderSession, error)
 	// SubscribeTaskStatus subscribes to live status updates for a task. The
 	// subscription lifetime is owned by ctx; cancelling it removes the
 	// subscription and closes the update channel.

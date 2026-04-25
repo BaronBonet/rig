@@ -16,13 +16,17 @@ import (
 
 func TestNewHookHTTPHandler_DecodesCodexHookAndDelegatesToTaskService(t *testing.T) {
 	now := time.Date(2026, time.April, 20, 11, 0, 0, 0, time.UTC)
+	payload := `{"cwd":"/tmp/repo-task","hook_event_name":"SessionStart","model":"gpt-5.4-codex","prompt":"fix the retry flow","session_id":"sess-1","source":"startup","transcript_path":"/tmp/codex-session.jsonl"}`
 	service := core.NewMockTaskService(t)
 	service.EXPECT().HandleHookEvent(mock.Anything, core.HookEventInput{
 		OccurredAt:     now,
 		EventName:      "SessionStart",
 		Provider:       core.ProviderCodex,
-		RawPayloadJSON: `{"cwd":"/tmp/repo-task","hook_event_name":"SessionStart","prompt":"fix the retry flow","session_id":"session-1"}`,
-		SessionID:      "session-1",
+		RawPayloadJSON: payload,
+		SessionID:      "sess-1",
+		TranscriptPath: "/tmp/codex-session.jsonl",
+		StartSource:    "startup",
+		Model:          "gpt-5.4-codex",
 		Cwd:            "/tmp/repo-task",
 		PromptText:     "fix the retry flow",
 	}).Return(nil).Once()
@@ -32,9 +36,7 @@ func TestNewHookHTTPHandler_DecodesCodexHookAndDelegatesToTaskService(t *testing
 		context.Background(),
 		http.MethodPost,
 		"/hook",
-		bytes.NewBufferString(
-			`{"cwd":"/tmp/repo-task","hook_event_name":"SessionStart","prompt":"fix the retry flow","session_id":"session-1"}`,
-		),
+		bytes.NewBufferString(payload),
 	)
 	req.Header.Set("X-Codex-Hook-Event", "SessionStart")
 

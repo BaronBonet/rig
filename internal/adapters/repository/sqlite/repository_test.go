@@ -172,6 +172,99 @@ func TestRepositoryDeleteTask_RemovesTaskAndCascadesLatestStatus(t *testing.T) {
 	}
 }
 
+func TestRepositoryDeleteTask_CascadesTaskProviderSessions(t *testing.T) {
+	repo := newTestRepository(t)
+	now := time.Now().UTC()
+
+	task := &core.Task{
+		ID:           "task-1",
+		Slug:         "task-one",
+		Prompt:       "prompt",
+		DisplayName:  "task one",
+		RepoRoot:     "/tmp/repo",
+		RepoName:     "repo",
+		BranchName:   "feat/task-one",
+		WorktreePath: "/tmp/repo-task-one",
+		TmuxSession:  "repo_task_one",
+		Provider:     core.ProviderCodex,
+		CreatedAt:    now,
+		UpdatedAt:    now,
+	}
+	require.NoError(t, repo.CreateTask(context.Background(), task))
+	require.NoError(t, repo.UpsertTaskProviderSession(context.Background(), core.TaskProviderSession{
+		TaskID:            "task-1",
+		Provider:          core.ProviderCodex,
+		ProviderSessionID: "sess-a",
+		TranscriptPath:    "/tmp/codex-a.jsonl",
+		FirstObservedAt:   now,
+		LastObservedAt:    now,
+		LastEventName:     "SessionStart",
+	}))
+
+	require.NoError(t, repo.DeleteTask(context.Background(), "task-1"))
+
+	got, err := repo.ListTaskProviderSessions(context.Background(), "task-1")
+	require.NoError(t, err)
+	require.Empty(t, got)
+}
+
+func TestRepositoryUpsertAndListTaskProviderSessions(t *testing.T) {
+	repo := newTestRepository(t)
+	now := time.Date(2026, time.April, 25, 10, 0, 0, 0, time.UTC)
+
+	task := &core.Task{
+		ID:           "task-1",
+		Slug:         "task-one",
+		Prompt:       "prompt",
+		DisplayName:  "task one",
+		RepoRoot:     "/tmp/repo",
+		RepoName:     "repo",
+		BranchName:   "feat/task-one",
+		WorktreePath: "/tmp/repo-task-one",
+		TmuxSession:  "repo_task_one",
+		Provider:     core.ProviderCodex,
+		CreatedAt:    now,
+		UpdatedAt:    now,
+	}
+	require.NoError(t, repo.CreateTask(context.Background(), task))
+
+	first := core.TaskProviderSession{
+		TaskID:            "task-1",
+		Provider:          core.ProviderCodex,
+		ProviderSessionID: "sess-a",
+		TranscriptPath:    "/tmp/codex-a.jsonl",
+		StartSource:       "startup",
+		Model:             "gpt-5-codex",
+		Cwd:               "/tmp/repo-task-one",
+		FirstObservedAt:   now,
+		LastObservedAt:    now,
+		LastEventName:     "SessionStart",
+	}
+	updatedFirst := first
+	updatedFirst.LastObservedAt = now.Add(2 * time.Minute)
+	updatedFirst.LastEventName = "Stop"
+	second := core.TaskProviderSession{
+		TaskID:            "task-1",
+		Provider:          core.ProviderCodex,
+		ProviderSessionID: "sess-b",
+		TranscriptPath:    "/tmp/codex-b.jsonl",
+		StartSource:       "resume",
+		Model:             "gpt-5-codex",
+		Cwd:               "/tmp/repo-task-one",
+		FirstObservedAt:   now.Add(time.Minute),
+		LastObservedAt:    now.Add(time.Minute),
+		LastEventName:     "SessionStart",
+	}
+
+	require.NoError(t, repo.UpsertTaskProviderSession(context.Background(), first))
+	require.NoError(t, repo.UpsertTaskProviderSession(context.Background(), updatedFirst))
+	require.NoError(t, repo.UpsertTaskProviderSession(context.Background(), second))
+
+	got, err := repo.ListTaskProviderSessions(context.Background(), "task-1")
+	require.NoError(t, err)
+	require.Equal(t, []core.TaskProviderSession{updatedFirst, second}, got)
+}
+
 func TestRepositoryUpsertTaskStatus_PersistsLatestAndPublishesToSubscribers(t *testing.T) {
 	repo := newTestRepository(t)
 	ctx, cancel := context.WithCancel(context.Background())

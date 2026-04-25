@@ -124,6 +124,19 @@ type TaskResumeMetadata struct {
 	Provider   Provider  `json:"provider"`
 }
 
+type TaskProviderSession struct {
+	FirstObservedAt   time.Time `json:"first_observed_at"`
+	LastObservedAt    time.Time `json:"last_observed_at"`
+	TaskID            string    `json:"task_id"`
+	Provider          Provider  `json:"provider"`
+	ProviderSessionID string    `json:"provider_session_id"`
+	TranscriptPath    string    `json:"transcript_path"`
+	StartSource       string    `json:"start_source"`
+	LastEventName     string    `json:"last_event_name"`
+	Model             string    `json:"model"`
+	Cwd               string    `json:"cwd"`
+}
+
 // Provider identifies the supported interactive runtime backing a task.
 type Provider string
 

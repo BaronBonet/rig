@@ -9,6 +9,7 @@ import (
 	"slices"
 	"strings"
 	"sync"
+	"time"
 
 	"rig/internal/adapters/repository/sqlite/generated"
 	"rig/internal/core"
@@ -169,6 +170,54 @@ func (r *repository) ListTasks(ctx context.Context) ([]*core.Task, error) {
 	}
 
 	return tasksFromRows(rows), nil
+}
+
+func (r *repository) UpsertTaskProviderSession(ctx context.Context, session core.TaskProviderSession) error {
+	session.TaskID = strings.TrimSpace(session.TaskID)
+	if session.TaskID == "" {
+		return fmt.Errorf("task provider session task ID is required")
+	}
+
+	if strings.TrimSpace(string(session.Provider)) == "" {
+		return fmt.Errorf("task provider session provider is required")
+	}
+
+	session.ProviderSessionID = strings.TrimSpace(session.ProviderSessionID)
+	if session.ProviderSessionID == "" {
+		return fmt.Errorf("task provider session provider session ID is required")
+	}
+
+	session.TranscriptPath = strings.TrimSpace(session.TranscriptPath)
+	session.StartSource = strings.TrimSpace(session.StartSource)
+	session.LastEventName = strings.TrimSpace(session.LastEventName)
+	session.Model = strings.TrimSpace(session.Model)
+	session.Cwd = strings.TrimSpace(session.Cwd)
+
+	if session.FirstObservedAt.IsZero() {
+		session.FirstObservedAt = session.LastObservedAt
+	}
+	if session.FirstObservedAt.IsZero() {
+		session.FirstObservedAt = time.Now().UTC()
+	}
+	if session.LastObservedAt.IsZero() {
+		session.LastObservedAt = session.FirstObservedAt
+	}
+
+	return r.queries.UpsertTaskProviderSession(ctx, upsertTaskProviderSessionParams(session))
+}
+
+func (r *repository) ListTaskProviderSessions(ctx context.Context, taskID string) ([]core.TaskProviderSession, error) {
+	taskID = strings.TrimSpace(taskID)
+	if taskID == "" {
+		return nil, nil
+	}
+
+	rows, err := r.queries.ListTaskProviderSessions(ctx, taskID)
+	if err != nil {
+		return nil, err
+	}
+
+	return taskProviderSessionsFromRows(rows), nil
 }
 
 func (r *repository) RecordTaskActivity(ctx context.Context, event core.TaskActivityEvent) error {

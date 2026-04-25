@@ -293,6 +293,94 @@ func TestTaskStatusService_HandleHookEventPersistsResumeMetadataWhenSessionIDPre
 	}, *svc.taskRepo.savedResumeMetadata)
 }
 
+func TestTaskServiceHandleHookEvent_RecordsMultipleProviderSessionsForTask(t *testing.T) {
+	svc := newTestTaskService(t)
+	svc.taskRepo.listTasks = []*Task{{
+		ID:           "task-1",
+		WorktreePath: "/tmp/repo-task",
+		Provider:     ProviderCodex,
+	}}
+
+	firstObservedAt := time.Date(2026, time.April, 25, 9, 0, 0, 0, time.UTC)
+	secondObservedAt := time.Date(2026, time.April, 25, 9, 5, 0, 0, time.UTC)
+
+	require.NoError(t, svc.service.HandleHookEvent(t.Context(), HookEventInput{
+		OccurredAt:     firstObservedAt,
+		Provider:       ProviderCodex,
+		Cwd:            "/tmp/repo-task",
+		EventName:      "SessionStart",
+		SessionID:      "sess-a",
+		TranscriptPath: "/tmp/codex-a.jsonl",
+		StartSource:    "startup",
+		Model:          "gpt-5.4-codex",
+	}))
+	require.NoError(t, svc.service.HandleHookEvent(t.Context(), HookEventInput{
+		OccurredAt:     secondObservedAt,
+		Provider:       ProviderCodex,
+		Cwd:            "/tmp/repo-task",
+		EventName:      "SessionStart",
+		SessionID:      "sess-b",
+		TranscriptPath: "/tmp/codex-b.jsonl",
+		StartSource:    "startup",
+		Model:          "gpt-5.4-codex",
+	}))
+
+	require.Equal(t, []TaskProviderSession{
+		{
+			TaskID:            "task-1",
+			Provider:          ProviderCodex,
+			ProviderSessionID: "sess-a",
+			TranscriptPath:    "/tmp/codex-a.jsonl",
+			StartSource:       "startup",
+			Model:             "gpt-5.4-codex",
+			Cwd:               "/tmp/repo-task",
+			FirstObservedAt:   firstObservedAt,
+			LastObservedAt:    firstObservedAt,
+			LastEventName:     "SessionStart",
+		},
+		{
+			TaskID:            "task-1",
+			Provider:          ProviderCodex,
+			ProviderSessionID: "sess-b",
+			TranscriptPath:    "/tmp/codex-b.jsonl",
+			StartSource:       "startup",
+			Model:             "gpt-5.4-codex",
+			Cwd:               "/tmp/repo-task",
+			FirstObservedAt:   secondObservedAt,
+			LastObservedAt:    secondObservedAt,
+			LastEventName:     "SessionStart",
+		},
+	}, svc.taskRepo.savedProviderSessions)
+}
+
+func TestTaskServiceHandleHookEvent_SkipsProviderSessionWithoutSessionID(t *testing.T) {
+	svc := newTestTaskService(t)
+	svc.taskRepo.listTasks = []*Task{{
+		ID:           "task-1",
+		WorktreePath: "/tmp/repo-task",
+		Provider:     ProviderCodex,
+	}}
+	svc.providerRepo.hookUpdate = &TaskStatusUpdate{
+		Phase:        TaskStatusPhaseStarting,
+		RawEventName: "SessionStart",
+	}
+
+	err := svc.service.HandleHookEvent(t.Context(), HookEventInput{
+		OccurredAt:     time.Date(2026, time.April, 25, 9, 0, 0, 0, time.UTC),
+		Provider:       ProviderCodex,
+		Cwd:            "/tmp/repo-task",
+		EventName:      "SessionStart",
+		TranscriptPath: "/tmp/codex-a.jsonl",
+		StartSource:    "startup",
+		Model:          "gpt-5.4-codex",
+	})
+
+	require.NoError(t, err)
+	require.Empty(t, svc.taskRepo.savedProviderSessions)
+	require.Equal(t, "task-1", svc.providerRepo.hookInput.TaskID)
+	require.Equal(t, "SessionStart", svc.providerRepo.hookInput.EventName)
+}
+
 func TestTaskStatusService_HandleHookEventRecordsActivity(t *testing.T) {
 	svc := newTestTaskService(t)
 	svc.taskRepo.listTasks = []*Task{{
