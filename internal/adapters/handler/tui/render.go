@@ -114,6 +114,10 @@ func (m model) renderRow(index int, row taskRow, totalWidth int) (string, string
 	provider := emptyFallback(string(row.task.Provider), "-")
 	agentCell := padRight(provider, colWidthAgent)
 	prText := prStatusText(row.pullRequest)
+	tokenText := taskTokenUsageRowText(row.tokenUsage)
+	if tokenText != "" {
+		prText += "  " + tokenText
+	}
 
 	if index == m.selected {
 		line1 := lipgloss.NewStyle().Foreground(colorAccent).Bold(true).Render(nameCell) +
@@ -207,6 +211,13 @@ func (m model) selectedTaskDetailView() string {
 			rightLine = right[i]
 		}
 		builder.WriteString("   " + padRightVisible(leftLine, detailColWidth) + "   " + rightLine + "\n")
+	}
+
+	if tokenLines := taskTokenUsageDetailLines(row.tokenUsage); len(tokenLines) > 0 {
+		builder.WriteString("\n")
+		for _, line := range tokenLines {
+			builder.WriteString("   " + line + "\n")
+		}
 	}
 
 	if strings.TrimSpace(task.Prompt) != "" {
@@ -586,6 +597,61 @@ func prStatusDetailText(status *core.PRStatus) string {
 	}
 
 	return mutedStyle.Render("pr") + "     " + prStatusText(status)
+}
+
+func taskTokenUsageRowText(usage *core.TaskTokenUsage) string {
+	if usage == nil || usage.TotalTokens <= 0 {
+		return ""
+	}
+
+	return mutedStyle.Render(formatTokenCount(usage.TotalTokens) + " tok")
+}
+
+func taskTokenUsageDetailLines(usage *core.TaskTokenUsage) []string {
+	if usage == nil || usage.TotalTokens <= 0 {
+		return nil
+	}
+
+	sessionLabel := "session"
+	if usage.SessionCount != 1 {
+		sessionLabel = "sessions"
+	}
+
+	fields := []string{
+		tokenUsageField("total", usage.TotalTokens),
+	}
+	fields = appendPositiveTokenUsageField(fields, "input", usage.InputTokens)
+	fields = appendPositiveTokenUsageField(fields, "output", usage.OutputTokens)
+	fields = appendPositiveTokenUsageField(fields, "cached", usage.CachedInputTokens)
+	fields = appendPositiveTokenUsageField(fields, "cache created", usage.CacheCreationInputTokens)
+	fields = appendPositiveTokenUsageField(fields, "reasoning", usage.ReasoningOutputTokens)
+	fields = append(fields, mutedStyle.Render(strconv.Itoa(usage.SessionCount)+" "+sessionLabel))
+
+	return []string{
+		headerLabelStyle.Render("TOKENS"),
+		strings.Join(fields, "   "),
+	}
+}
+
+func appendPositiveTokenUsageField(fields []string, label string, tokens int) []string {
+	if tokens <= 0 {
+		return fields
+	}
+	return append(fields, tokenUsageField(label, tokens))
+}
+
+func tokenUsageField(label string, tokens int) string {
+	return mutedStyle.Render(label+" ") + primaryStyle.Render(formatTokenCount(tokens))
+}
+
+func formatTokenCount(tokens int) string {
+	if tokens < 1000 {
+		return strconv.Itoa(tokens)
+	}
+	if tokens < 1000000 {
+		return fmt.Sprintf("%.1fk", float64(tokens)/1000)
+	}
+	return fmt.Sprintf("%.1fm", float64(tokens)/1000000)
 }
 
 func prStateIconStyle(state core.PRState) (string, lipgloss.Style) {

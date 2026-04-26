@@ -399,6 +399,40 @@ func TestUnixSocketServer_GetTaskActivityCallsTaskService(t *testing.T) {
 	require.NoError(t, <-errCh)
 }
 
+func TestUnixSocketServer_GetTaskTokenUsageCallsTaskService(t *testing.T) {
+	t.Parallel()
+
+	socketPath := serverTestSocketPath(t)
+	expectedUsage := &core.TaskTokenUsage{
+		SessionCount: 2,
+		InputTokens:  130,
+		OutputTokens: 60,
+		TotalTokens:  190,
+	}
+	svc := core.NewMockTaskService(t)
+	svc.EXPECT().GetTaskTokenUsage(mock.Anything, "task-1").Return(expectedUsage, nil)
+	adapter := New(Config{
+		SocketPath:     socketPath,
+		HookListenAddr: "127.0.0.1:0",
+	})
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	errCh := make(chan error, 1)
+	go func() {
+		errCh <- adapter.Serve(ctx, svc, nil, nil)
+	}()
+	waitForUnixSocketServer(t, socketPath)
+
+	usage, err := getTaskTokenUsageViaSocket(context.Background(), socketPath, "task-1")
+	require.NoError(t, err)
+	require.Equal(t, expectedUsage, usage)
+
+	cancel()
+	require.NoError(t, <-errCh)
+}
+
 func TestUnixSocketServer_SubscribeTaskStatusStreamsMatchingUpdates(t *testing.T) {
 	t.Parallel()
 
@@ -724,6 +758,38 @@ func getTaskActivityViaSocket(
 	}
 
 	return resp.Activity, nil
+}
+
+func getTaskTokenUsageViaSocket(
+	ctx context.Context,
+	socketPath string,
+	taskID string,
+) (*core.TaskTokenUsage, error) {
+	conn, err := dialDaemonSocket(ctx, socketPath)
+	if err != nil {
+		return nil, err
+	}
+	defer conn.Close()
+
+	if err := json.NewEncoder(conn).Encode(socketRequest{
+		Command: "get_task_token_usage",
+		TaskID:  taskID,
+	}); err != nil {
+		return nil, err
+	}
+
+	var resp socketEnvelope
+	if err := json.NewDecoder(conn).Decode(&resp); err != nil {
+		return nil, err
+	}
+	if resp.Type == "error" && resp.Error != "" {
+		return nil, assertiveError(resp.Error)
+	}
+	if resp.Type != "task_token_usage" || !resp.OK {
+		return nil, assertiveError("unexpected task token usage response")
+	}
+
+	return resp.Usage, nil
 }
 
 func listTasksViaSocket(ctx context.Context, socketPath string) ([]*core.Task, error) {

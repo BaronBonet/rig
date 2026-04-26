@@ -29,6 +29,14 @@ func (s *server) GetTaskActivity(ctx context.Context, taskID string, limit int) 
 	return s.service.GetTaskActivity(ctx, taskID, limit)
 }
 
+func (s *server) GetTaskTokenUsage(ctx context.Context, taskID string) (*core.TaskTokenUsage, error) {
+	if s.service == nil {
+		return nil, fmt.Errorf("task service not configured")
+	}
+
+	return s.service.GetTaskTokenUsage(ctx, taskID)
+}
+
 func (s *server) ListRepoPullRequests(ctx context.Context, cwd string) ([]core.RepoPullRequest, error) {
 	if s.service == nil {
 		return nil, fmt.Errorf("task service not configured")

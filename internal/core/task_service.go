@@ -173,6 +173,51 @@ func (s *taskService) GetTaskActivity(ctx context.Context, taskID string, limit 
 	return activityWindowWithLastUserPrompt(events, limit), nil
 }
 
+func (s *taskService) GetTaskTokenUsage(ctx context.Context, taskID string) (*TaskTokenUsage, error) {
+	sessions, err := s.tasks.ListTaskProviderSessions(ctx, strings.TrimSpace(taskID))
+	if err != nil {
+		return nil, err
+	}
+
+	latestBySession := latestProviderSessionsByID(sessions)
+	if len(latestBySession) == 0 {
+		return nil, nil
+	}
+
+	var total TaskTokenUsage
+	for _, session := range latestBySession {
+		transcriptPath := strings.TrimSpace(session.TranscriptPath)
+		if transcriptPath == "" {
+			continue
+		}
+		providerClient, err := s.providerClientFor(session.Provider)
+		if err != nil {
+			return nil, err
+		}
+		usage, err := providerClient.ReadSessionTokenUsage(ctx, transcriptPath)
+		if err != nil {
+			return nil, fmt.Errorf("read session token usage %q: %w", transcriptPath, err)
+		}
+		if usage == nil || usage.IsZero() {
+			continue
+		}
+
+		total.SessionCount++
+		total.InputTokens += usage.InputTokens
+		total.OutputTokens += usage.OutputTokens
+		total.CachedInputTokens += usage.CachedInputTokens
+		total.CacheCreationInputTokens += usage.CacheCreationInputTokens
+		total.ReasoningOutputTokens += usage.ReasoningOutputTokens
+		total.TotalTokens += usage.TotalTokens
+	}
+
+	if total.IsZero() {
+		return nil, nil
+	}
+
+	return &total, nil
+}
+
 func (s *taskService) ListRepoPullRequests(ctx context.Context, cwd string) ([]RepoPullRequest, error) {
 	if s.pullRequests == nil {
 		return nil, fmt.Errorf("pull request client not configured")
@@ -492,6 +537,44 @@ func activityWindowWithLastUserPrompt(events []TaskActivityEvent, limit int) []T
 	}
 
 	return append([]TaskActivityEvent{lastUser}, window...)
+}
+
+func latestProviderSessionsByID(sessions []TaskProviderSession) []TaskProviderSession {
+	latestByKey := make(map[string]TaskProviderSession)
+	for _, session := range sessions {
+		provider := strings.TrimSpace(string(session.Provider))
+		sessionID := strings.TrimSpace(session.ProviderSessionID)
+		transcriptPath := strings.TrimSpace(session.TranscriptPath)
+		if provider == "" || sessionID == "" || transcriptPath == "" {
+			continue
+		}
+
+		session.Provider = Provider(provider)
+		session.ProviderSessionID = sessionID
+		session.TranscriptPath = transcriptPath
+		key := provider + "\x00" + sessionID
+		current, ok := latestByKey[key]
+		if !ok || session.LastObservedAt.After(current.LastObservedAt) {
+			latestByKey[key] = session
+		}
+	}
+
+	latest := make([]TaskProviderSession, 0, len(latestByKey))
+	for _, session := range latestByKey {
+		latest = append(latest, session)
+	}
+	sort.SliceStable(latest, func(i, j int) bool {
+		left := latest[i]
+		right := latest[j]
+		if !left.LastObservedAt.Equal(right.LastObservedAt) {
+			return left.LastObservedAt.Before(right.LastObservedAt)
+		}
+		if left.Provider != right.Provider {
+			return left.Provider < right.Provider
+		}
+		return left.ProviderSessionID < right.ProviderSessionID
+	})
+	return latest
 }
 
 func compactActivityText(value string) string {

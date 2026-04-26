@@ -265,6 +265,71 @@ func TestRepositoryUpsertAndListTaskProviderSessions(t *testing.T) {
 	require.Equal(t, []core.TaskProviderSession{updatedFirst, second}, got)
 }
 
+func TestRepositoryUpsertTaskProviderSession_PreservesRichMetadataFromSparseEvents(t *testing.T) {
+	repo := newTestRepository(t)
+	now := time.Date(2026, time.April, 25, 10, 0, 0, 0, time.UTC)
+
+	task := &core.Task{
+		ID:           "task-1",
+		Slug:         "task-one",
+		Prompt:       "prompt",
+		DisplayName:  "task one",
+		RepoRoot:     "/tmp/repo",
+		RepoName:     "repo",
+		BranchName:   "feat/task-one",
+		WorktreePath: "/tmp/repo-task-one",
+		TmuxSession:  "repo_task_one",
+		Provider:     core.ProviderCodex,
+		CreatedAt:    now,
+		UpdatedAt:    now,
+	}
+	require.NoError(t, repo.CreateTask(context.Background(), task))
+
+	rich := core.TaskProviderSession{
+		TaskID:            "task-1",
+		Provider:          core.ProviderCodex,
+		ProviderSessionID: "sess-a",
+		TranscriptPath:    "/tmp/codex-a.jsonl",
+		StartSource:       "startup",
+		Model:             "gpt-5-codex",
+		Cwd:               "/tmp/repo-task-one",
+		FirstObservedAt:   now,
+		LastObservedAt:    now.Add(time.Minute),
+		LastEventName:     "SessionStart",
+	}
+	sparseOlder := rich
+	sparseOlder.StartSource = ""
+	sparseOlder.Model = ""
+	sparseOlder.Cwd = ""
+	sparseOlder.LastObservedAt = now.Add(-time.Minute)
+	sparseOlder.LastEventName = "PreToolUse"
+
+	emptyThenFilled := core.TaskProviderSession{
+		TaskID:            "task-1",
+		Provider:          core.ProviderCodex,
+		ProviderSessionID: "sess-b",
+		TranscriptPath:    "/tmp/codex-b.jsonl",
+		FirstObservedAt:   now,
+		LastObservedAt:    now,
+		LastEventName:     "PreToolUse",
+	}
+	filledLater := emptyThenFilled
+	filledLater.StartSource = "resume"
+	filledLater.Model = "gpt-5-codex"
+	filledLater.Cwd = "/tmp/repo-task-one"
+	filledLater.LastObservedAt = now.Add(2 * time.Minute)
+	filledLater.LastEventName = "Stop"
+
+	require.NoError(t, repo.UpsertTaskProviderSession(context.Background(), rich))
+	require.NoError(t, repo.UpsertTaskProviderSession(context.Background(), sparseOlder))
+	require.NoError(t, repo.UpsertTaskProviderSession(context.Background(), emptyThenFilled))
+	require.NoError(t, repo.UpsertTaskProviderSession(context.Background(), filledLater))
+
+	got, err := repo.ListTaskProviderSessions(context.Background(), "task-1")
+	require.NoError(t, err)
+	require.Equal(t, []core.TaskProviderSession{rich, filledLater}, got)
+}
+
 func TestRepositoryUpsertTaskStatus_PersistsLatestAndPublishesToSubscribers(t *testing.T) {
 	repo := newTestRepository(t)
 	ctx, cancel := context.WithCancel(context.Background())
