@@ -25,46 +25,37 @@ func (f *frontend) AttachTaskSession(ctx context.Context, task *core.Task) error
 }
 
 func (f *frontend) GetTaskActivity(ctx context.Context, taskID string, limit int) ([]core.TaskActivityEvent, error) {
-	resp, err := f.send(ctx, socketRequest{
-		Command: "get_task_activity",
+	resp, err := f.sendUnary(ctx, socketRequest{
+		Command: socketCommandGetTaskActivity,
 		TaskID:  taskID,
 		Limit:   limit,
-	})
+	}, socketEnvelopeTaskActivity)
 	if err != nil {
 		return nil, err
-	}
-	if resp.Type != "task_activity" || !resp.OK {
-		return nil, unexpectedResponseError("get_task_activity", *resp)
 	}
 
 	return resp.Activity, nil
 }
 
 func (f *frontend) GetTaskTokenUsage(ctx context.Context, taskID string) (*core.TaskTokenUsage, error) {
-	resp, err := f.send(ctx, socketRequest{
-		Command: "get_task_token_usage",
+	resp, err := f.sendUnary(ctx, socketRequest{
+		Command: socketCommandGetTaskTokenUsage,
 		TaskID:  taskID,
-	})
+	}, socketEnvelopeTaskTokenUsage)
 	if err != nil {
 		return nil, err
-	}
-	if resp.Type != "task_token_usage" || !resp.OK {
-		return nil, unexpectedResponseError("get_task_token_usage", *resp)
 	}
 
 	return resp.Usage, nil
 }
 
 func (f *frontend) ListRepoPullRequests(ctx context.Context, cwd string) ([]core.RepoPullRequest, error) {
-	resp, err := f.send(ctx, socketRequest{
-		Command: "list_repo_pull_requests",
+	resp, err := f.sendUnary(ctx, socketRequest{
+		Command: socketCommandListRepoPullRequests,
 		Cwd:     cwd,
-	})
+	}, socketEnvelopeRepoPullRequestsList)
 	if err != nil {
 		return nil, err
-	}
-	if resp.Type != "repo_pull_requests_list" || !resp.OK {
-		return nil, unexpectedResponseError("list_repo_pull_requests", *resp)
 	}
 
 	return resp.PullRequests, nil
@@ -75,16 +66,13 @@ func (f *frontend) PullRequestStatus(
 	repoRoot string,
 	branchName string,
 ) (*core.PRStatus, error) {
-	resp, err := f.send(ctx, socketRequest{
-		Command:    "pull_request_status",
+	resp, err := f.sendUnary(ctx, socketRequest{
+		Command:    socketCommandPullRequestStatus,
 		Cwd:        repoRoot,
 		BranchName: branchName,
-	})
+	}, socketEnvelopePullRequestStatus)
 	if err != nil {
 		return nil, err
-	}
-	if resp.Type != "pull_request_status" || !resp.OK {
-		return nil, unexpectedResponseError("pull_request_status", *resp)
 	}
 	if resp.PR == nil {
 		return &core.PRStatus{State: core.PRStateNone}, nil
@@ -94,18 +82,11 @@ func (f *frontend) PullRequestStatus(
 }
 
 func (f *frontend) ReconnectTaskSession(ctx context.Context, taskID string) error {
-	resp, err := f.send(ctx, socketRequest{
-		Command: "reconnect_task_session",
+	_, err := f.sendUnary(ctx, socketRequest{
+		Command: socketCommandReconnectTaskSession,
 		TaskID:  taskID,
-	})
-	if err != nil {
-		return err
-	}
-	if resp.Type != "task_session_reconnected" || !resp.OK {
-		return unexpectedResponseError("reconnect_task_session", *resp)
-	}
-
-	return nil
+	}, socketEnvelopeTaskSessionReconnect)
+	return err
 }
 
 func (f *frontend) CreateTaskStream(
@@ -118,7 +99,7 @@ func (f *frontend) CreateTaskStream(
 	}
 
 	if err := json.NewEncoder(conn).Encode(socketRequest{
-		Command: "create_task",
+		Command: socketCommandCreateTask,
 		Input:   &input,
 	}); err != nil {
 		_ = conn.Close()
@@ -165,42 +146,29 @@ func (f *frontend) CreateTaskStream(
 }
 
 func (f *frontend) DeleteTask(ctx context.Context, taskID string) error {
-	resp, err := f.send(ctx, socketRequest{
-		Command: "delete_task",
+	_, err := f.sendUnary(ctx, socketRequest{
+		Command: socketCommandDeleteTask,
 		TaskID:  taskID,
-	})
-	if err != nil {
-		return err
-	}
-	if resp.Type != "task_deleted" || !resp.OK {
-		return unexpectedResponseError("delete_task", *resp)
-	}
-
-	return nil
+	}, socketEnvelopeTaskDeleted)
+	return err
 }
 
 func (f *frontend) ListTasks(ctx context.Context) ([]*core.Task, error) {
-	resp, err := f.send(ctx, socketRequest{Command: "list_tasks"})
+	resp, err := f.sendUnary(ctx, socketRequest{Command: socketCommandListTasks}, socketEnvelopeTasksList)
 	if err != nil {
 		return nil, err
-	}
-	if resp.Type != "tasks_list" || !resp.OK {
-		return nil, unexpectedResponseError("list_tasks", *resp)
 	}
 
 	return resp.Tasks, nil
 }
 
 func (f *frontend) LatestTaskStatus(ctx context.Context, taskID string) (*core.TaskStatusUpdate, error) {
-	resp, err := f.send(ctx, socketRequest{
-		Command: "latest_task_status",
+	resp, err := f.sendUnary(ctx, socketRequest{
+		Command: socketCommandLatestTaskStatus,
 		TaskID:  taskID,
-	})
+	}, socketEnvelopeTaskStatusSnapshot)
 	if err != nil {
 		return nil, err
-	}
-	if resp.Type != "task_status_snapshot" || !resp.OK {
-		return nil, unexpectedResponseError("latest_task_status", *resp)
 	}
 
 	return resp.Update, nil
@@ -213,7 +181,7 @@ func (f *frontend) SubscribeTaskStatus(ctx context.Context, taskID string) (<-ch
 	}
 
 	if err := json.NewEncoder(conn).Encode(socketRequest{
-		Command: "subscribe_task_status",
+		Command: socketCommandSubscribeTaskStatus,
 		TaskID:  taskID,
 	}); err != nil {
 		_ = conn.Close()
@@ -236,13 +204,13 @@ func (f *frontend) SubscribeTaskStatus(ctx context.Context, taskID string) (<-ch
 		_ = conn.Close()
 		return nil, err
 	}
-	if ack.Type == "error" && ack.Error != "" {
+	if ack.Type == socketEnvelopeError && ack.Error != "" {
 		_ = conn.Close()
 		return nil, errors.New(ack.Error)
 	}
-	if ack.Type != "subscribed" || !ack.OK {
+	if ack.Type != socketEnvelopeSubscribed || !ack.OK {
 		_ = conn.Close()
-		return nil, unexpectedResponseError("subscribe_task_status", ack)
+		return nil, unexpectedResponseError(socketCommandSubscribeTaskStatus, ack)
 	}
 
 	updates := make(chan core.TaskStatusUpdate, 16)
@@ -284,11 +252,23 @@ func (f *frontend) send(ctx context.Context, req socketRequest) (*socketEnvelope
 	if err := json.NewDecoder(bufio.NewReader(conn)).Decode(&resp); err != nil {
 		return nil, err
 	}
-	if resp.Type == "error" && resp.Error != "" {
+	if resp.Type == socketEnvelopeError && resp.Error != "" {
 		return nil, errors.New(resp.Error)
 	}
 
 	return &resp, nil
+}
+
+func (f *frontend) sendUnary(ctx context.Context, req socketRequest, expectedType string) (*socketEnvelope, error) {
+	resp, err := f.send(ctx, req)
+	if err != nil {
+		return nil, err
+	}
+	if resp.Type != expectedType || !resp.OK {
+		return nil, unexpectedResponseError(req.Command, *resp)
+	}
+
+	return resp, nil
 }
 
 func unexpectedResponseError(command string, resp socketEnvelope) error {

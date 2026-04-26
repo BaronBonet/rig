@@ -17,10 +17,6 @@ type server struct {
 	hookRoutes     []core.TaskDaemonHookRoute
 }
 
-func (s *server) AttachTaskSession(context.Context, *core.Task) error {
-	return fmt.Errorf("attach task session unsupported on daemon server")
-}
-
 func (s *server) GetTaskActivity(ctx context.Context, taskID string, limit int) ([]core.TaskActivityEvent, error) {
 	if s.service == nil {
 		return nil, fmt.Errorf("task service not configured")
@@ -129,7 +125,7 @@ func (s *server) Serve(ctx context.Context) error {
 
 	unixSocketServer := &unixSocketServer{
 		socketPath: s.socketPath,
-		frontend:   s,
+		backend:    s,
 		stop:       s.stop,
 	}
 

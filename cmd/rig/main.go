@@ -275,7 +275,7 @@ func runTUI(stdout io.Writer) error {
 	// The daemon is not a separate executable. EnsureRunning re-execs this same
 	// binary with RIG_MODE=task-daemon, and that child process takes this path.
 	if os.Getenv(daemonModeEnvKey) == daemonModeEnvValue {
-		return serveTaskDaemon(ctx, cfg, execPath, sourceRoot, cancel)
+		return serveTaskDaemon(ctx, cfg, cancel)
 	}
 
 	adapter, err := newClientTaskDaemon(cfg)
@@ -423,8 +423,6 @@ func taskDaemonBuildIdentity(execPath string, version string) (string, error) {
 func serveTaskDaemon(
 	ctx context.Context,
 	cfg *infrastructure.ApplicationConfig,
-	execPath string,
-	sourceRoot string,
 	stop func(),
 ) error {
 	if cfg == nil {
@@ -437,15 +435,18 @@ func serveTaskDaemon(
 	}
 
 	runner := subprocess.ExecRunner{}
+	hookSecret, err := codex.NewHookSecret()
+	if err != nil {
+		return err
+	}
 
 	providers := map[core.Provider]core.ProviderClient{
 		core.ProviderCodex: codex.New(
 			runner,
 			cfg.Codex,
 			codex.HookForwardingConfig{
-				CollectorURL:  "http://" + cfg.Daemon.HookListenAddr + "/codex-hook",
-				RigBinaryPath: execPath,
-				SourceRoot:    sourceRoot,
+				CollectorURL: "http://" + cfg.Daemon.HookListenAddr + "/codex-hook",
+				HookSecret:   hookSecret,
 			},
 		),
 	}
@@ -461,7 +462,7 @@ func serveTaskDaemon(
 		DefaultProvider:      cfg.Provider,
 	})
 
-	codexHooks := codex.NewHookHTTPHandler(service, nil)
+	codexHooks := codex.NewHookHTTPHandler(service, nil, hookSecret)
 	adapter := taskdaemon.New(cfg.Daemon)
 
 	return adapter.Serve(ctx, service, []core.TaskDaemonHookRoute{

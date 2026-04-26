@@ -157,7 +157,7 @@ func stopTaskDaemon(ctx context.Context, socketPath string) error {
 	}
 	defer conn.Close()
 
-	if err := json.NewEncoder(conn).Encode(socketRequest{Command: "stop"}); err != nil {
+	if err := json.NewEncoder(conn).Encode(socketRequest{Command: socketCommandStop}); err != nil {
 		return err
 	}
 
@@ -165,7 +165,7 @@ func stopTaskDaemon(ctx context.Context, socketPath string) error {
 	if err := json.NewDecoder(bufio.NewReader(conn)).Decode(&resp); err != nil {
 		return err
 	}
-	if resp.Type != "stopping" || !resp.OK {
+	if resp.Type != socketEnvelopeStopping || !resp.OK {
 		if resp.Error != "" {
 			return errors.New(resp.Error)
 		}

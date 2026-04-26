@@ -1,0 +1,78 @@
+vars: {
+  d2-config: {
+    layout-engine: elk
+    sketch: true
+  }
+}
+
+shape: sequence_diagram
+
+user: "User terminal" {
+  style: {
+    fill: "#3b4261"
+    font-color: white
+  }
+}
+rig: "rig foreground\ncmd/rig" {
+  style: {
+    fill: "#3b4261"
+    font-color: white
+  }
+}
+daemon_client: "taskdaemon adapter\nclient side" {
+  style: {
+    fill: "#485e30"
+    font-color: white
+  }
+}
+daemon_proc: "daemon child process\nRIG_MODE=task-daemon" {
+  style: {
+    fill: "#485e30"
+    font-color: white
+  }
+}
+socket: "Unix socket server" {
+  style: {
+    fill: "#2a2e42"
+    font-color: white
+  }
+}
+http_hooks: "HTTP hook server" {
+  style: {
+    fill: "#2a2e42"
+    font-color: white
+  }
+}
+tui: "Bubble Tea TUI" {
+  style: {
+    fill: "#3b4261"
+    font-color: white
+  }
+}
+
+Startup: {
+  user -> rig: "1. Run rig"
+  rig -> rig: "2. Load config and build daemon identity"
+  rig -> daemon_client: "3. EnsureRunning"
+  daemon_client -> socket: "4. Probe health, protocol,\nbuild version"
+  socket -> daemon_client: "5. Probe fails or mismatches"
+  daemon_client -> daemon_proc: "6. Spawn same binary\nwith RIG_MODE=task-daemon"
+  daemon_proc -> socket: "7. Listen on Unix socket\n0600 file mode"
+  daemon_proc -> http_hooks: "8. Listen on loopback hook port"
+  daemon_client -> socket: "9. Probe health until ready"
+  rig -> tui: "10. Start TUI with daemon-backed frontend"
+}
+
+Interactive commands: {
+  tui -> socket: "11. list_tasks, create_task,\nlatest_task_status, subscribe_task_status"
+  socket -> tui: "12. JSON envelopes\nincluding streaming updates"
+  tui -> rig: "13. Enter selected task"
+  rig -> rig: "14. Attach tmux locally\nusing current terminal"
+}
+
+Shutdown and restart: {
+  user -> rig: "15. rig daemon stop/restart/status"
+  rig -> socket: "16. stop or probe command"
+  socket -> daemon_proc: "17. stop callback cancels daemon context"
+  daemon_proc -> daemon_proc: "18. Close listeners and remove socket"
+}

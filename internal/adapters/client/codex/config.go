@@ -5,7 +5,6 @@ type Config struct {
 }
 
 type HookForwardingConfig struct {
-	CollectorURL  string
-	RigBinaryPath string
-	SourceRoot    string
+	CollectorURL string
+	HookSecret   string
 }

@@ -7,15 +7,11 @@ node_modules/
 *.db-shm
 *.db-wal
 internal/core/mock_*.go
-internal/adapters/handler/cli/mock_*.go
-internal/pkg/execx/mock_*.go
-internal/adapters/client/tmux/mock_*.go
+internal/pkg/subprocess/mock_*.go
 internal/adapters/repository/sqlite/generated/
 mock_*
 docs/superpowers/*
 .superpowers/*
 .codex/
-.claude/
-.agent/observability/
 .claude/
 rig

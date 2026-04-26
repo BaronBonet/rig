@@ -17,7 +17,6 @@ var (
 	colorHealthy  = lipgloss.Color("#4aba7a")
 	colorWarning  = lipgloss.Color("#c4a24e")
 	colorError    = lipgloss.Color("#c05050")
-	colorClaude   = lipgloss.Color("#d4956a")
 	colorCodex    = lipgloss.Color("#5ac4a0")
 	colorPRMerged = lipgloss.Color("#9b7ce8")
 )
@@ -44,9 +43,6 @@ var (
 
 	healthyStyle = lipgloss.NewStyle().
 			Foreground(colorHealthy)
-
-	claudeStyle = lipgloss.NewStyle().
-			Foreground(colorClaude)
 
 	codexStyle = lipgloss.NewStyle().
 			Foreground(colorCodex)
@@ -82,13 +78,8 @@ var (
 			Padding(0, 1)
 )
 
-func providerStyle(provider string) lipgloss.Style {
-	switch provider {
-	case "claude":
-		return claudeStyle
-	default:
-		return codexStyle
-	}
+func providerStyle(string) lipgloss.Style {
+	return codexStyle
 }
 
 const shimmerWidth = 4

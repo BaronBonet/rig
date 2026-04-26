@@ -3,6 +3,7 @@ package sqlite
 import (
 	"context"
 	"database/sql"
+	"os"
 	"path/filepath"
 	"reflect"
 	"testing"
@@ -612,7 +613,22 @@ func TestRepositoryNew_ReturnsErrorForInvalidConfig(t *testing.T) {
 	}
 }
 
-func TestRepositoryNew_ResetsDisposableDBWhenSchemaIsStale(t *testing.T) {
+func TestRepositoryNew_CreatesPrivateDataDirectoryAndDatabaseFile(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "rig-state", "state.db")
+
+	repo := newTestRepositoryAtPath(t, path)
+	require.NoError(t, repo.db.Close())
+
+	dirInfo, err := os.Stat(filepath.Dir(path))
+	require.NoError(t, err)
+	require.Equal(t, os.FileMode(0o700), dirInfo.Mode().Perm())
+
+	dbInfo, err := os.Stat(path)
+	require.NoError(t, err)
+	require.Equal(t, os.FileMode(0o600), dbInfo.Mode().Perm())
+}
+
+func TestRepositoryNew_ReturnsErrorAndPreservesDBWhenSchemaIsStale(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "state.db")
 
 	db, err := sql.Open("sqlite", path)
@@ -639,29 +655,59 @@ func TestRepositoryNew_ResetsDisposableDBWhenSchemaIsStale(t *testing.T) {
 	if err != nil {
 		t.Fatalf("create stale tasks table: %v", err)
 	}
+	_, err = db.ExecContext(context.Background(), `
+		insert into tasks (
+			id,
+			slug,
+			prompt,
+			display_name,
+			repo_root,
+			repo_name,
+			branch_name,
+			worktree_path,
+			tmux_session,
+			provider,
+			status,
+			created_at,
+			updated_at
+		) values (
+			'task-1',
+			'task-name',
+			'preserve this prompt',
+			'task name',
+			'/tmp/repo',
+			'repo',
+			'feat/task-name',
+			'/tmp/repo-task-name',
+			'repo_task_name',
+			'codex',
+			'ready',
+			'2026-04-20T10:00:00Z',
+			'2026-04-20T10:00:00Z'
+		);
+	`)
+	if err != nil {
+		t.Fatalf("insert stale task: %v", err)
+	}
 	if err := db.Close(); err != nil {
 		t.Fatalf("close stale db: %v", err)
 	}
 
-	repo := newTestRepositoryAtPath(t, path)
-	task := &core.Task{
-		ID:           "task-1",
-		Slug:         "task-name",
-		Prompt:       "first prompt",
-		DisplayName:  "task name",
-		RepoRoot:     "/tmp/repo",
-		RepoName:     "repo",
-		BranchName:   "feat/task-name",
-		WorktreePath: "/tmp/repo-task-name",
-		TmuxSession:  "repo_task_name",
-		Provider:     core.ProviderCodex,
-		CreatedAt:    time.Now().UTC(),
-		UpdatedAt:    time.Now().UTC(),
-	}
+	repo, err := New(Config{Path: path})
+	require.Nil(t, repo)
+	require.ErrorContains(t, err, "stale sqlite schema")
+	require.ErrorContains(t, err, path)
 
-	if err := repo.CreateTask(context.Background(), task); err != nil {
-		t.Fatalf("create task after reset: %v", err)
-	}
+	db, err = sql.Open("sqlite", path)
+	require.NoError(t, err)
+	defer db.Close()
+
+	var prompt string
+	require.NoError(
+		t,
+		db.QueryRowContext(context.Background(), "select prompt from tasks where id = 'task-1'").Scan(&prompt),
+	)
+	require.Equal(t, "preserve this prompt", prompt)
 }
 
 func TestRepositoryNew_CreatesSchemaForTasksAndLatestStatuses(t *testing.T) {

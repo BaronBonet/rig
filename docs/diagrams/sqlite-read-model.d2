@@ -1,0 +1,145 @@
+vars: {
+  d2-config: {
+    layout-engine: elk
+    sketch: true
+  }
+}
+direction: right
+
+***: {
+  style: {
+    border-radius: 5
+    stroke-width: 3
+  }
+}
+
+tasks: {
+  label: "tasks"
+  shape: sql_table
+  id: "text primary key"
+  slug: text
+  prompt: text
+  display_name: text
+  repo_root: text
+  repo_name: text
+  branch_name: text
+  worktree_path: text
+  tmux_session: text
+  provider: text
+  created_at: text
+  updated_at: text
+  style: {
+    fill: "#1a1b2e"
+    stroke: "#babbf1"
+    font-color: white
+  }
+}
+
+status: {
+  label: "task_status"
+  shape: sql_table
+  task_id: "text primary key"
+  provider: text
+  phase: text
+  raw_event_name: text
+  observed_at: text
+  style: {
+    fill: "#2a2e42"
+    stroke: "#babbf1"
+    font-color: white
+  }
+}
+
+activity: {
+  label: "task_activity"
+  shape: sql_table
+  id: "integer primary key"
+  task_id: text
+  turn_id: text
+  event_name: text
+  role: text
+  text: text
+  observed_at: text
+  style: {
+    fill: "#2a2e42"
+    stroke: "#babbf1"
+    font-color: white
+  }
+}
+
+resume: {
+  label: "task_resume_metadata"
+  shape: sql_table
+  task_id: "text primary key"
+  provider: text
+  session_id: text
+  observed_at: text
+  style: {
+    fill: "#2a2e42"
+    stroke: "#babbf1"
+    font-color: white
+  }
+}
+
+provider_sessions: {
+  label: "task_provider_sessions"
+  shape: sql_table
+  id: "integer primary key"
+  task_id: text
+  provider: text
+  provider_session_id: text
+  transcript_path: text
+  start_source: text
+  model: text
+  cwd: text
+  first_observed_at: text
+  last_observed_at: text
+  last_event_name: text
+  style: {
+    fill: "#2a2e42"
+    stroke: "#babbf1"
+    font-color: white
+  }
+}
+
+subscriber: {
+  label: "in-memory subscribers"
+  sublabel: "map[task_id][]chan TaskStatusUpdate"
+  style: {
+    fill: "#485e30"
+    stroke: "#a6d189"
+    font-color: white
+  }
+}
+
+tasks -> status: "1:1\non delete cascade" {
+  style: {
+    stroke: "#e5c890"
+    stroke-width: 4
+  }
+}
+tasks -> resume: "1:1\non delete cascade" {
+  style: {
+    stroke: "#e5c890"
+    stroke-width: 4
+  }
+}
+tasks -> activity: "1:many\non delete cascade" {
+  style: {
+    stroke: "#e5c890"
+    stroke-width: 4
+  }
+}
+tasks -> provider_sessions: "1:many\non delete cascade" {
+  style: {
+    stroke: "#e5c890"
+    stroke-width: 4
+  }
+}
+status -> subscriber: "UpsertTaskStatus\nfanout after commit" {
+  style: {
+    stroke: "#a6d189"
+    stroke-width: 3
+    animated: true
+  }
+}

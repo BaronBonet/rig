@@ -59,6 +59,7 @@ func TestRepositoryEnsureTaskSessionEnvironment_InstallsRigHooksIntoCodexHome(t 
 	tempDir := t.TempDir()
 	repo := New(subprocess.NewMockRunner(t), Config{Binary: "codex"}, HookForwardingConfig{
 		CollectorURL: "http://127.0.0.1:4124/codex-hook",
+		HookSecret:   "secret-token",
 	}).(*repository)
 	repo.codexHomeDir = func() (string, error) { return tempDir, nil }
 
@@ -82,6 +83,8 @@ func TestRepositoryEnsureTaskSessionEnvironment_InstallsRigHooksIntoCodexHome(t 
 	scriptBytes, err := os.ReadFile(scriptPath)
 	require.NoError(t, err)
 	require.Contains(t, string(scriptBytes), "http://127.0.0.1:4124/codex-hook")
+	require.Contains(t, string(scriptBytes), `X-Rig-Hook-Secret: $hook_secret`)
+	require.Contains(t, string(scriptBytes), "secret-token")
 	require.Contains(t, string(hooksJSON), scriptPath)
 }
 

@@ -52,19 +52,17 @@ func New(cfg Config) (core.TaskRepository, error) {
 		return nil, err
 	} else if stale {
 		_ = db.Close()
-		if err := removeSQLiteFiles(cfg.Path); err != nil {
-			return nil, err
-		}
-		db, err = openSQLiteDB(cfg.Path)
-		if err != nil {
-			return nil, err
-		}
-		if err := applyBootstrapSQL(context.Background(), db, sqlFiles, "bootstrap/connection.sql"); err != nil {
-			_ = db.Close()
-			return nil, err
-		}
+		return nil, fmt.Errorf(
+			"stale sqlite schema at %s; automatic reset is disabled to preserve existing data; "+
+				"move the database aside or migrate it before starting rig",
+			cfg.Path,
+		)
 	}
 	if err := applyGooseMigrations(context.Background(), db, sqlFiles, "migrations"); err != nil {
+		_ = db.Close()
+		return nil, err
+	}
+	if err := chmodSQLiteFiles(cfg.Path); err != nil {
 		_ = db.Close()
 		return nil, err
 	}
@@ -353,6 +351,10 @@ func (r *repository) SubscribeTaskStatus(ctx context.Context, taskID string) (<-
 }
 
 func openSQLiteDB(path string) (*sql.DB, error) {
+	if err := ensureSQLiteDBFileMode(path); err != nil {
+		return nil, err
+	}
+
 	db, err := sql.Open("sqlite", path)
 	if err != nil {
 		return nil, err
@@ -360,6 +362,36 @@ func openSQLiteDB(path string) (*sql.DB, error) {
 	db.SetMaxOpenConns(1)
 	db.SetMaxIdleConns(1)
 	return db, nil
+}
+
+func ensureSQLiteDBFileMode(path string) error {
+	file, err := os.OpenFile(path, os.O_RDWR|os.O_CREATE, 0o600)
+	if err != nil {
+		return fmt.Errorf("open sqlite database file %s: %w", path, err)
+	}
+	if err := file.Close(); err != nil {
+		return fmt.Errorf("close sqlite database file %s: %w", path, err)
+	}
+	return chmodSQLiteFiles(path)
+}
+
+func chmodSQLiteFiles(path string) error {
+	for _, candidate := range []string{path, path + "-wal", path + "-shm"} {
+		info, err := os.Lstat(candidate)
+		if errors.Is(err, os.ErrNotExist) {
+			continue
+		}
+		if err != nil {
+			return fmt.Errorf("stat sqlite file %s: %w", candidate, err)
+		}
+		if !info.Mode().IsRegular() {
+			return fmt.Errorf("sqlite file %s must be a regular file", candidate)
+		}
+		if err := os.Chmod(candidate, 0o600); err != nil {
+			return fmt.Errorf("chmod sqlite file %s: %w", candidate, err)
+		}
+	}
+	return nil
 }
 
 func hasStaleTasksSchema(ctx context.Context, db *sql.DB) (bool, error) {
@@ -443,13 +475,4 @@ func hasStaleTasksSchema(ctx context.Context, db *sql.DB) (bool, error) {
 		"raw_event_name",
 		"observed_at",
 	}), nil
-}
-
-func removeSQLiteFiles(path string) error {
-	for _, candidate := range []string{path, path + "-wal", path + "-shm"} {
-		if err := os.Remove(candidate); err != nil && !errors.Is(err, os.ErrNotExist) {
-			return fmt.Errorf("remove disposable sqlite file %s: %w", candidate, err)
-		}
-	}
-	return nil
 }

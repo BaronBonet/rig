@@ -11,8 +11,12 @@ import (
 )
 
 func listenForHTTPHooks(ctx context.Context, addr string) (net.Listener, error) {
-	if strings.TrimSpace(addr) == "" {
+	addr = strings.TrimSpace(addr)
+	if addr == "" {
 		return nil, fmt.Errorf("task daemon hook listen addr not configured")
+	}
+	if err := validateSafeHTTPHookListenAddr(addr); err != nil {
+		return nil, err
 	}
 
 	listener, err := (&net.ListenConfig{}).Listen(ctx, "tcp", addr)
@@ -34,4 +38,22 @@ func newHTTPHookServer(routes []core.TaskDaemonHookRoute) http.Handler {
 	}
 
 	return mux
+}
+
+func validateSafeHTTPHookListenAddr(addr string) error {
+	host, _, err := net.SplitHostPort(addr)
+	if err != nil {
+		return fmt.Errorf("validate task daemon hook listen addr: %w", err)
+	}
+
+	if strings.EqualFold(host, "localhost") {
+		return nil
+	}
+
+	ip := net.ParseIP(host)
+	if ip == nil || !ip.IsLoopback() {
+		return fmt.Errorf("unsafe task daemon hook listen addr %q: host must be loopback", addr)
+	}
+
+	return nil
 }

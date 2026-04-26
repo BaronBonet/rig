@@ -18,6 +18,41 @@ var currentFrontendBuildVersion = "dev"
 
 const currentFrontendProtocolVersion = 6
 
+const (
+	socketCommandCreateTask           = "create_task"
+	socketCommandDeleteTask           = "delete_task"
+	socketCommandFrontendBuildVersion = "frontend_build_version"
+	socketCommandGetTaskActivity      = "get_task_activity"
+	// #nosec G101 -- socket command name, not a credential.
+	socketCommandGetTaskTokenUsage     = "get_task_token_usage"
+	socketCommandHealth                = "health"
+	socketCommandLatestTaskStatus      = "latest_task_status"
+	socketCommandListRepoPullRequests  = "list_repo_pull_requests"
+	socketCommandListTasks             = "list_tasks"
+	socketCommandProtocolVersion       = "protocol_version"
+	socketCommandPullRequestStatus     = "pull_request_status"
+	socketCommandReconnectTaskSession  = "reconnect_task_session"
+	socketCommandStop                  = "stop"
+	socketCommandSubscribeTaskStatus   = "subscribe_task_status"
+	socketEnvelopeError                = "error"
+	socketEnvelopeFrontendBuildVersion = "frontend_build_version"
+	socketEnvelopeHealth               = "health"
+	socketEnvelopeProtocolVersion      = "protocol_version"
+	socketEnvelopeRepoPullRequestsList = "repo_pull_requests_list"
+	socketEnvelopeSubscribed           = "subscribed"
+	socketEnvelopeStopping             = "stopping"
+	socketEnvelopeTaskActivity         = "task_activity"
+	socketEnvelopeTaskCreated          = "task_created"
+	socketEnvelopeTaskCreateProgress   = "task_create_progress"
+	socketEnvelopeTaskDeleted          = "task_deleted"
+	socketEnvelopeTaskSessionReconnect = "task_session_reconnected"
+	socketEnvelopeTaskStatusSnapshot   = "task_status_snapshot"
+	socketEnvelopeTaskStatusUpdate     = "task_status_update"
+	socketEnvelopeTaskTokenUsage       = "task_token_usage"
+	socketEnvelopeTasksList            = "tasks_list"
+	socketEnvelopePullRequestStatus    = "pull_request_status"
+)
+
 func SetFrontendBuildVersion(version string) {
 	version = strings.TrimSpace(version)
 	if version == "" {
@@ -87,7 +122,7 @@ func probeSocketHealth(ctx context.Context, socketPath string) error {
 	wg.Add(2)
 	go func() {
 		defer wg.Done()
-		writeErr = json.NewEncoder(conn).Encode(socketRequest{Command: "health"})
+		writeErr = json.NewEncoder(conn).Encode(socketRequest{Command: socketCommandHealth})
 	}()
 	go func() {
 		defer wg.Done()
@@ -101,7 +136,7 @@ func probeSocketHealth(ctx context.Context, socketPath string) error {
 	if readErr != nil {
 		return readErr
 	}
-	if resp.Type != "health" || !resp.OK {
+	if resp.Type != socketEnvelopeHealth || !resp.OK {
 		if resp.Error != "" {
 			return fmt.Errorf("task daemon unhealthy: %s", resp.Error)
 		}
@@ -121,7 +156,7 @@ func probeFrontendBuildVersion(ctx context.Context, socketPath string) error {
 	}
 	defer conn.Close()
 
-	if err := json.NewEncoder(conn).Encode(socketRequest{Command: "frontend_build_version"}); err != nil {
+	if err := json.NewEncoder(conn).Encode(socketRequest{Command: socketCommandFrontendBuildVersion}); err != nil {
 		return err
 	}
 
@@ -129,10 +164,10 @@ func probeFrontendBuildVersion(ctx context.Context, socketPath string) error {
 	if err := json.NewDecoder(bufio.NewReader(conn)).Decode(&resp); err != nil {
 		return err
 	}
-	if resp.Type == "error" && resp.Error != "" {
+	if resp.Type == socketEnvelopeError && resp.Error != "" {
 		return errors.New(resp.Error)
 	}
-	if resp.Type != "frontend_build_version" || !resp.OK {
+	if resp.Type != socketEnvelopeFrontendBuildVersion || !resp.OK {
 		return fmt.Errorf("task daemon build version probe failed")
 	}
 	if resp.Version != currentFrontendBuildVersion {
@@ -156,7 +191,7 @@ func probeFrontendProtocol(ctx context.Context, socketPath string) error {
 	}
 	defer conn.Close()
 
-	if err := json.NewEncoder(conn).Encode(socketRequest{Command: "protocol_version"}); err != nil {
+	if err := json.NewEncoder(conn).Encode(socketRequest{Command: socketCommandProtocolVersion}); err != nil {
 		return err
 	}
 
@@ -164,10 +199,10 @@ func probeFrontendProtocol(ctx context.Context, socketPath string) error {
 	if err := json.NewDecoder(bufio.NewReader(conn)).Decode(&resp); err != nil {
 		return err
 	}
-	if resp.Type == "error" && resp.Error != "" {
+	if resp.Type == socketEnvelopeError && resp.Error != "" {
 		return errors.New(resp.Error)
 	}
-	if resp.Type != "protocol_version" || !resp.OK {
+	if resp.Type != socketEnvelopeProtocolVersion || !resp.OK {
 		return fmt.Errorf("task daemon protocol probe failed")
 	}
 	if resp.ProtocolVersion != currentFrontendProtocolVersion {
@@ -191,14 +226,14 @@ func receiveTaskCreateEvent(decoder *json.Decoder) (core.TaskCreateEvent, error)
 	}
 
 	switch {
-	case msg.Type == "task_create_progress" && msg.CreateProgress != nil:
+	case msg.Type == socketEnvelopeTaskCreateProgress && msg.CreateProgress != nil:
 		return core.TaskCreateEvent{Progress: msg.CreateProgress}, nil
-	case msg.Type == "task_created" && msg.Task != nil:
+	case msg.Type == socketEnvelopeTaskCreated && msg.Task != nil:
 		return core.TaskCreateEvent{Task: msg.Task}, nil
-	case msg.Type == "error" && msg.Error != "":
+	case msg.Type == socketEnvelopeError && msg.Error != "":
 		return core.TaskCreateEvent{Err: errors.New(msg.Error)}, nil
 	default:
-		return core.TaskCreateEvent{}, fmt.Errorf("unexpected create_task response %q", msg.Type)
+		return core.TaskCreateEvent{}, fmt.Errorf("unexpected %s response %q", socketCommandCreateTask, msg.Type)
 	}
 }
 
@@ -210,11 +245,11 @@ func receiveTaskStatusUpdate(decoder *json.Decoder) (*core.TaskStatusUpdate, err
 		}
 		return nil, err
 	}
-	if msg.Type == "error" && msg.Error != "" {
+	if msg.Type == socketEnvelopeError && msg.Error != "" {
 		return nil, errors.New(msg.Error)
 	}
-	if msg.Type != "task_status_update" || msg.Update == nil {
-		return nil, fmt.Errorf("unexpected subscribe_task_status stream message %q", msg.Type)
+	if msg.Type != socketEnvelopeTaskStatusUpdate || msg.Update == nil {
+		return nil, fmt.Errorf("unexpected %s stream message %q", socketCommandSubscribeTaskStatus, msg.Type)
 	}
 
 	return msg.Update, nil

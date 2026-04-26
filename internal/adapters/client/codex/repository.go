@@ -32,6 +32,7 @@ type repository struct {
 	codexHomeDir func() (string, error)
 	binary       string
 	collectorURL string
+	hookSecret   string
 }
 
 func New(runner subprocess.Runner, cfg Config, hooks HookForwardingConfig) core.ProviderClient {
@@ -44,6 +45,7 @@ func New(runner subprocess.Runner, cfg Config, hooks HookForwardingConfig) core.
 		runner:       runner,
 		binary:       cfg.Binary,
 		collectorURL: collectorURL,
+		hookSecret:   strings.TrimSpace(hooks.HookSecret),
 		codexHomeDir: defaultCodexHomeDir,
 	}
 }
@@ -93,15 +95,18 @@ func (r *repository) EnsureTaskSessionEnvironment(context.Context) error {
 	}
 
 	scriptPath := filepath.Join(codexHome, "hooks", "forward-to-rig.sh")
-	if err := os.MkdirAll(filepath.Dir(scriptPath), 0o755); err != nil {
+	if err := os.MkdirAll(filepath.Dir(scriptPath), 0o700); err != nil {
 		return fmt.Errorf("create codex hooks dir: %w", err)
+	}
+	if err := os.Chmod(filepath.Dir(scriptPath), 0o700); err != nil {
+		return fmt.Errorf("secure codex hooks dir: %w", err)
 	}
 
 	scriptBytes, err := r.renderForwarderScript()
 	if err != nil {
 		return err
 	}
-	if err := os.WriteFile(scriptPath, scriptBytes, 0o755); err != nil {
+	if err := os.WriteFile(scriptPath, scriptBytes, 0o700); err != nil {
 		return fmt.Errorf("write codex forwarder script: %w", err)
 	}
 
@@ -357,8 +362,10 @@ func (r *repository) renderForwarderScript() ([]byte, error) {
 	var buf bytes.Buffer
 	if err := forwarderScriptTemplate.Execute(&buf, struct {
 		CollectorURLQuoted string
+		HookSecretQuoted   string
 	}{
 		CollectorURLQuoted: shellQuote(r.collectorURL),
+		HookSecretQuoted:   shellQuote(r.hookSecret),
 	}); err != nil {
 		return nil, fmt.Errorf("render codex forwarder script: %w", err)
 	}
