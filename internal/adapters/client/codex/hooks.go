@@ -3,6 +3,9 @@ package codex
 import (
 	"bytes"
 	"context"
+	"crypto/rand"
+	"crypto/subtle"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -15,12 +18,28 @@ import (
 )
 
 type HTTPHandler struct {
-	handle func(context.Context, core.HookEventInput) error
-	now    func() time.Time
+	handle     func(context.Context, core.HookEventInput) error
+	hookSecret string
+	now        func() time.Time
 }
 
-func NewHookHTTPHandler(service core.TaskService, now func() time.Time) *HTTPHandler {
-	return newHTTPHandler(now, func(ctx context.Context, input core.HookEventInput) error {
+const (
+	// #nosec G101 -- This is the HTTP header name, not credential material.
+	hookSecretHeader        = "X-Rig-Hook-Secret"
+	maxHookRequestBodyBytes = 1024 * 1024
+)
+
+func NewHookSecret() (string, error) {
+	secret := make([]byte, 32)
+	if _, err := rand.Read(secret); err != nil {
+		return "", fmt.Errorf("generate codex hook secret: %w", err)
+	}
+
+	return hex.EncodeToString(secret), nil
+}
+
+func NewHookHTTPHandler(service core.TaskService, now func() time.Time, hookSecret string) *HTTPHandler {
+	return newHTTPHandler(now, hookSecret, func(ctx context.Context, input core.HookEventInput) error {
 		if service == nil {
 			return fmt.Errorf("task service not configured")
 		}
@@ -29,14 +48,19 @@ func NewHookHTTPHandler(service core.TaskService, now func() time.Time) *HTTPHan
 	})
 }
 
-func newHTTPHandler(now func() time.Time, handle func(context.Context, core.HookEventInput) error) *HTTPHandler {
+func newHTTPHandler(
+	now func() time.Time,
+	hookSecret string,
+	handle func(context.Context, core.HookEventInput) error,
+) *HTTPHandler {
 	if now == nil {
 		now = time.Now
 	}
 
 	return &HTTPHandler{
-		handle: handle,
-		now:    now,
+		handle:     handle,
+		hookSecret: strings.TrimSpace(hookSecret),
+		now:        now,
 	}
 }
 
@@ -47,8 +71,19 @@ func (h *HTTPHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	if !h.authorized(r) {
+		http.Error(w, "unauthorized", http.StatusUnauthorized)
+		return
+	}
+
+	r.Body = http.MaxBytesReader(w, r.Body, maxHookRequestBodyBytes)
 	body, err := io.ReadAll(r.Body)
 	if err != nil {
+		var maxBytesErr *http.MaxBytesError
+		if errors.As(err, &maxBytesErr) {
+			http.Error(w, "request body too large", http.StatusRequestEntityTooLarge)
+			return
+		}
 		http.Error(w, "read body: "+err.Error(), http.StatusBadRequest)
 		return
 	}
@@ -64,6 +99,14 @@ func (h *HTTPHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 
 	w.WriteHeader(http.StatusAccepted)
+}
+
+func (h *HTTPHandler) authorized(r *http.Request) bool {
+	if h.hookSecret == "" {
+		return true
+	}
+
+	return subtle.ConstantTimeCompare([]byte(r.Header.Get(hookSecretHeader)), []byte(h.hookSecret)) == 1
 }
 
 func DecodeHookEventInput(now func() time.Time, headerEventName string, body []byte) core.HookEventInput {

@@ -23,6 +23,26 @@ func TestFrontend_ImplementsTaskFrontend(t *testing.T) {
 	require.NotNil(t, New(Config{}).Frontend())
 }
 
+func TestFrontend_SendUnaryRejectsUnexpectedResponseType(t *testing.T) {
+	t.Parallel()
+
+	socketPath := frontendTestSocketPath(t)
+	serverErrCh := serveOneShotFrontendSocket(t, socketPath, func(req socketRequest, encoder *json.Encoder) error {
+		return encoder.Encode(socketEnvelope{Type: socketEnvelopeTaskCreated, OK: true})
+	})
+
+	frontend := &frontend{socketPath: socketPath}
+
+	resp, err := frontend.sendUnary(
+		t.Context(),
+		socketRequest{Command: socketCommandLatestTaskStatus},
+		socketEnvelopeTaskStatusSnapshot,
+	)
+	require.Nil(t, resp)
+	require.EqualError(t, err, `unexpected latest_task_status response "task_created"`)
+	require.NoError(t, <-serverErrCh)
+}
+
 func TestFrontend_ListTasksSendsListTasksAndReturnsTasks(t *testing.T) {
 	t.Parallel()
 

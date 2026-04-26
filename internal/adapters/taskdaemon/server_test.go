@@ -16,8 +16,48 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func TestServer_ImplementsTaskFrontend(t *testing.T) {
-	var _ core.TaskFrontend = &server{}
+func TestServer_ImplementsSocketBackend(t *testing.T) {
+	var _ socketBackend = &server{}
+}
+
+func TestUnixSocketServer_SecuresSocketDirectoryAndSocketPermissions(t *testing.T) {
+	t.Parallel()
+
+	socketDir := serverTestSocketDir(t)
+	require.NoError(t, os.Chmod(socketDir, 0o755))
+	socketPath := filepath.Join(socketDir, "daemon.sock")
+
+	adapter := New(Config{
+		SocketPath:     socketPath,
+		HookListenAddr: "127.0.0.1:0",
+	})
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	errCh := make(chan error, 1)
+	go func() {
+		errCh <- adapter.Serve(ctx, core.NewMockTaskService(t), nil, nil)
+	}()
+	waitForUnixSocketServer(t, socketPath)
+
+	socketDirInfo, err := os.Stat(socketDir)
+	require.NoError(t, err)
+	require.Equal(t, os.FileMode(0o700), socketDirInfo.Mode().Perm())
+
+	socketInfo, err := os.Stat(socketPath)
+	require.NoError(t, err)
+	require.Equal(t, os.FileMode(0o600), socketInfo.Mode().Perm())
+
+	cancel()
+	require.NoError(t, <-errCh)
+}
+
+func TestAuthorizeUnixSocketPeerUIDAllowsOnlyMatchingUID(t *testing.T) {
+	t.Parallel()
+
+	require.NoError(t, authorizeUnixSocketPeerUID(501, 501))
+	require.Error(t, authorizeUnixSocketPeerUID(502, 501))
 }
 
 func TestUnixSocketServer_CreateTaskCallsTaskService(t *testing.T) {
@@ -586,6 +626,18 @@ func TestHTTPHookServer_DelegatesToInjectedHookHandler(t *testing.T) {
 	require.True(t, called)
 }
 
+func TestListenForHTTPHooksRejectsNonLoopbackAddress(t *testing.T) {
+	t.Parallel()
+
+	listener, err := listenForHTTPHooks(t.Context(), "0.0.0.0:0")
+	if listener != nil {
+		require.NoError(t, listener.Close())
+	}
+
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "unsafe")
+}
+
 func waitForUnixSocketServer(t *testing.T, socketPath string) {
 	t.Helper()
 
@@ -603,12 +655,24 @@ func waitForUnixSocketServer(t *testing.T, socketPath string) {
 func serverTestSocketPath(t *testing.T) string {
 	t.Helper()
 
-	path := filepath.Join(os.TempDir(), "rig-taskdaemon-"+time.Now().UTC().Format("20060102150405.000000000")+".sock")
+	path := filepath.Join(serverTestSocketDir(t), "daemon.sock")
 	t.Cleanup(func() {
 		_ = os.Remove(path)
 	})
 
 	return path
+}
+
+func serverTestSocketDir(t *testing.T) string {
+	t.Helper()
+
+	dir, err := os.MkdirTemp(os.TempDir(), "rig-td-")
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		_ = os.RemoveAll(dir)
+	})
+
+	return dir
 }
 
 func createTaskViaSocket(ctx context.Context, socketPath string, input core.CreateTaskInput) (*core.Task, error) {

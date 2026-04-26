@@ -5,6 +5,7 @@ import (
 	"context"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 
@@ -30,7 +31,7 @@ func TestNewHookHTTPHandler_DecodesCodexHookAndDelegatesToTaskService(t *testing
 		Cwd:            "/tmp/repo-task",
 		PromptText:     "fix the retry flow",
 	}).Return(nil).Once()
-	handler := NewHookHTTPHandler(service, func() time.Time { return now })
+	handler := NewHookHTTPHandler(service, func() time.Time { return now }, "secret-token")
 
 	req := httptest.NewRequestWithContext(
 		context.Background(),
@@ -39,11 +40,48 @@ func TestNewHookHTTPHandler_DecodesCodexHookAndDelegatesToTaskService(t *testing
 		bytes.NewBufferString(payload),
 	)
 	req.Header.Set("X-Codex-Hook-Event", "SessionStart")
+	req.Header.Set(hookSecretHeader, "secret-token")
 
 	rec := httptest.NewRecorder()
 	handler.ServeHTTP(rec, req)
 
 	require.Equal(t, http.StatusAccepted, rec.Code)
+}
+
+func TestNewHookHTTPHandler_RejectsMissingSecret(t *testing.T) {
+	handler := NewHookHTTPHandler(core.NewMockTaskService(t), time.Now, "secret-token")
+
+	req := httptest.NewRequestWithContext(
+		t.Context(),
+		http.MethodPost,
+		"/hook",
+		bytes.NewBufferString(`{"hook_event_name":"SessionStart"}`),
+	)
+
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+
+	require.Equal(t, http.StatusUnauthorized, rec.Code)
+}
+
+func TestNewHookHTTPHandler_RejectsOversizedBody(t *testing.T) {
+	handler := newHTTPHandler(time.Now, "secret-token", func(context.Context, core.HookEventInput) error {
+		t.Fatal("handler should not receive oversized hook payload")
+		return nil
+	})
+
+	req := httptest.NewRequestWithContext(
+		t.Context(),
+		http.MethodPost,
+		"/hook",
+		strings.NewReader(strings.Repeat("x", maxHookRequestBodyBytes+1)),
+	)
+	req.Header.Set(hookSecretHeader, "secret-token")
+
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+
+	require.Equal(t, http.StatusRequestEntityTooLarge, rec.Code)
 }
 
 func TestRepositoryHookEventToTaskStatus_MapsCodexEvent(t *testing.T) {

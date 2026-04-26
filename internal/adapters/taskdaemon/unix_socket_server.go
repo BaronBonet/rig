@@ -10,34 +10,59 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"syscall"
 
 	"rig/internal/core"
 )
 
+// socketBackend is the operation set the daemon socket can actually serve.
+// It intentionally excludes core.TaskFrontend.AttachTaskSession: attach needs
+// the foreground rig process and its terminal/stdio/TMUX environment, while the
+// daemon is a background process serving JSON over a Unix socket.
+type socketBackend interface {
+	GetTaskActivity(ctx context.Context, taskID string, limit int) ([]core.TaskActivityEvent, error)
+	GetTaskTokenUsage(ctx context.Context, taskID string) (*core.TaskTokenUsage, error)
+	ListRepoPullRequests(ctx context.Context, cwd string) ([]core.RepoPullRequest, error)
+	PullRequestStatus(ctx context.Context, repoRoot string, branchName string) (*core.PRStatus, error)
+	ReconnectTaskSession(ctx context.Context, taskID string) error
+	CreateTaskStream(ctx context.Context, input core.CreateTaskInput) (<-chan core.TaskCreateEvent, error)
+	DeleteTask(ctx context.Context, taskID string) error
+	ListTasks(ctx context.Context) ([]*core.Task, error)
+	LatestTaskStatus(ctx context.Context, taskID string) (*core.TaskStatusUpdate, error)
+	SubscribeTaskStatus(ctx context.Context, taskID string) (<-chan core.TaskStatusUpdate, error)
+}
+
 type unixSocketServer struct {
-	frontend   core.TaskFrontend
+	backend    socketBackend
 	stop       func()
 	socketPath string
 }
+
+const (
+	socketDirMode  = 0o700
+	socketFileMode = 0o600
+)
 
 func (s *unixSocketServer) Serve(ctx context.Context) error {
 	if s.socketPath == "" {
 		return fmt.Errorf("task daemon socket path not configured")
 	}
-	if s.frontend == nil {
-		return fmt.Errorf("task daemon frontend not configured")
+	if s.backend == nil {
+		return fmt.Errorf("task daemon backend not configured")
 	}
 
-	if err := os.MkdirAll(filepath.Dir(s.socketPath), 0o755); err != nil {
-		return fmt.Errorf("prepare task daemon socket directory: %w", err)
-	}
-	if err := os.Remove(s.socketPath); err != nil && !errors.Is(err, os.ErrNotExist) {
-		return fmt.Errorf("remove stale task daemon socket: %w", err)
+	if err := prepareUnixSocketPath(s.socketPath); err != nil {
+		return err
 	}
 
 	listener, err := (&net.ListenConfig{}).Listen(ctx, "unix", s.socketPath)
 	if err != nil {
 		return fmt.Errorf("listen on task daemon socket: %w", err)
+	}
+	if err := os.Chmod(s.socketPath, socketFileMode); err != nil {
+		_ = listener.Close()
+		_ = os.Remove(s.socketPath)
+		return fmt.Errorf("secure task daemon socket permissions: %w", err)
 	}
 	defer listener.Close()
 	defer os.Remove(s.socketPath)
@@ -60,8 +85,27 @@ func (s *unixSocketServer) Serve(ctx context.Context) error {
 	}
 }
 
+func prepareUnixSocketPath(socketPath string) error {
+	socketDir := filepath.Dir(socketPath)
+	if err := os.MkdirAll(socketDir, socketDirMode); err != nil {
+		return fmt.Errorf("prepare task daemon socket directory: %w", err)
+	}
+	if err := os.Chmod(socketDir, socketDirMode); err != nil {
+		return fmt.Errorf("secure task daemon socket directory permissions: %w", err)
+	}
+	if err := os.Remove(socketPath); err != nil && !errors.Is(err, os.ErrNotExist) {
+		return fmt.Errorf("remove stale task daemon socket: %w", err)
+	}
+
+	return nil
+}
+
 func (s *unixSocketServer) handleConn(ctx context.Context, conn net.Conn) {
 	defer conn.Close()
+
+	if err := authorizeUnixSocketPeer(conn); err != nil {
+		return
+	}
 
 	connCtx, cancel := context.WithCancel(ctx)
 	defer cancel()
@@ -71,68 +115,79 @@ func (s *unixSocketServer) handleConn(ctx context.Context, conn net.Conn) {
 
 	var req socketRequest
 	if err := decoder.Decode(&req); err != nil {
-		_ = writeSocketEnvelope(encoder, socketEnvelope{Type: "error", Error: err.Error()})
+		_ = writeSocketEnvelope(encoder, socketEnvelope{Type: socketEnvelopeError, Error: err.Error()})
 		return
 	}
 
 	switch req.Command {
-	case "health":
-		_ = writeSocketEnvelope(encoder, socketEnvelope{Type: "health", OK: true})
-	case "protocol_version":
+	case socketCommandHealth:
+		_ = writeSocketEnvelope(encoder, socketEnvelope{Type: socketEnvelopeHealth, OK: true})
+	case socketCommandProtocolVersion:
 		_ = writeSocketEnvelope(encoder, socketEnvelope{
-			Type:            "protocol_version",
+			Type:            socketEnvelopeProtocolVersion,
 			OK:              true,
 			ProtocolVersion: currentFrontendProtocolVersion,
 		})
-	case "frontend_build_version":
+	case socketCommandFrontendBuildVersion:
 		_ = writeSocketEnvelope(encoder, socketEnvelope{
-			Type:    "frontend_build_version",
+			Type:    socketEnvelopeFrontendBuildVersion,
 			OK:      true,
 			Version: currentFrontendBuildVersion,
 		})
-	case "create_task":
+	case socketCommandCreateTask:
 		s.handleCreateTask(ctx, encoder, req)
-	case "delete_task":
+	case socketCommandDeleteTask:
 		s.handleDeleteTask(connCtx, encoder, req)
-	case "reconnect_task_session":
+	case socketCommandReconnectTaskSession:
 		s.handleReconnectTaskSession(connCtx, encoder, req)
-	case "list_repo_pull_requests":
+	case socketCommandListRepoPullRequests:
 		s.handleListRepoPullRequests(ctx, encoder, req)
-	case "pull_request_status":
+	case socketCommandPullRequestStatus:
 		s.handlePullRequestStatus(ctx, encoder, req)
-	case "list_tasks":
+	case socketCommandListTasks:
 		s.handleListTasks(ctx, encoder)
-	case "get_task_activity":
+	case socketCommandGetTaskActivity:
 		s.handleGetTaskActivity(connCtx, encoder, req)
-	case "get_task_token_usage":
+	case socketCommandGetTaskTokenUsage:
 		s.handleGetTaskTokenUsage(connCtx, encoder, req)
-	case "latest_task_status":
+	case socketCommandLatestTaskStatus:
 		s.handleLatestTaskStatus(connCtx, encoder, req)
-	case "subscribe_task_status":
+	case socketCommandSubscribeTaskStatus:
 		go cancelOnConnClose(conn, cancel)
 		s.handleSubscribeTaskStatus(connCtx, encoder, req)
-	case "stop":
-		_ = writeSocketEnvelope(encoder, socketEnvelope{Type: "stopping", OK: true})
+	case socketCommandStop:
+		_ = writeSocketEnvelope(encoder, socketEnvelope{Type: socketEnvelopeStopping, OK: true})
 		if s.stop != nil {
 			s.stop()
 		}
 	default:
 		_ = writeSocketEnvelope(
 			encoder,
-			socketEnvelope{Type: "error", Error: fmt.Sprintf("unsupported command %q", req.Command)},
+			socketEnvelope{Type: socketEnvelopeError, Error: fmt.Sprintf("unsupported command %q", req.Command)},
 		)
 	}
 }
 
+func authorizeUnixSocketPeerUID(peerUID uint32, allowedUID uint32) error {
+	if peerUID != allowedUID {
+		return syscall.EACCES
+	}
+
+	return nil
+}
+
 func (s *unixSocketServer) handleCreateTask(ctx context.Context, encoder *json.Encoder, req socketRequest) {
 	if req.Input == nil {
-		_ = writeSocketEnvelope(encoder, socketEnvelope{Type: "error", Error: "create_task input required"})
+		_ = writeSocketEnvelope(encoder, socketEnvelope{
+			Type:  socketEnvelopeError,
+			Error: socketCommandCreateTask + " input required",
+		})
 		return
 	}
 
-	events, err := s.frontend.CreateTaskStream(ctx, *req.Input)
+	events, err := s.backend.CreateTaskStream(ctx, *req.Input)
 	if err != nil {
-		_ = writeSocketEnvelope(encoder, socketEnvelope{Type: "error", Error: err.Error()})
+		_ = writeSocketEnvelope(encoder, socketEnvelope{Type: socketEnvelopeError, Error: err.Error()})
 		return
 	}
 
@@ -140,40 +195,46 @@ func (s *unixSocketServer) handleCreateTask(ctx context.Context, encoder *json.E
 		switch {
 		case event.Progress != nil:
 			if err := writeSocketEnvelope(encoder, socketEnvelope{
-				Type:           "task_create_progress",
+				Type:           socketEnvelopeTaskCreateProgress,
 				OK:             true,
 				CreateProgress: event.Progress,
 			}); err != nil {
 				return
 			}
 		case event.Task != nil:
-			_ = writeSocketEnvelope(encoder, socketEnvelope{Type: "task_created", OK: true, Task: event.Task})
+			_ = writeSocketEnvelope(
+				encoder,
+				socketEnvelope{Type: socketEnvelopeTaskCreated, OK: true, Task: event.Task},
+			)
 			return
 		case event.Err != nil:
-			_ = writeSocketEnvelope(encoder, socketEnvelope{Type: "error", Error: event.Err.Error()})
+			_ = writeSocketEnvelope(encoder, socketEnvelope{Type: socketEnvelopeError, Error: event.Err.Error()})
 			return
 		}
 	}
 
 	_ = writeSocketEnvelope(
 		encoder,
-		socketEnvelope{Type: "error", Error: "create task stream closed without terminal result"},
+		socketEnvelope{Type: socketEnvelopeError, Error: "create task stream closed without terminal result"},
 	)
 }
 
 func (s *unixSocketServer) handleDeleteTask(ctx context.Context, encoder *json.Encoder, req socketRequest) {
 	taskID := strings.TrimSpace(req.TaskID)
 	if taskID == "" {
-		_ = writeSocketEnvelope(encoder, socketEnvelope{Type: "error", Error: "delete_task task_id required"})
+		_ = writeSocketEnvelope(encoder, socketEnvelope{
+			Type:  socketEnvelopeError,
+			Error: socketCommandDeleteTask + " task_id required",
+		})
 		return
 	}
 
-	if err := s.frontend.DeleteTask(ctx, taskID); err != nil {
-		_ = writeSocketEnvelope(encoder, socketEnvelope{Type: "error", Error: err.Error()})
+	if err := s.backend.DeleteTask(ctx, taskID); err != nil {
+		_ = writeSocketEnvelope(encoder, socketEnvelope{Type: socketEnvelopeError, Error: err.Error()})
 		return
 	}
 
-	_ = writeSocketEnvelope(encoder, socketEnvelope{Type: "task_deleted", OK: true})
+	_ = writeSocketEnvelope(encoder, socketEnvelope{Type: socketEnvelopeTaskDeleted, OK: true})
 }
 
 func (s *unixSocketServer) handleReconnectTaskSession(ctx context.Context, encoder *json.Encoder, req socketRequest) {
@@ -181,83 +242,89 @@ func (s *unixSocketServer) handleReconnectTaskSession(ctx context.Context, encod
 	if taskID == "" {
 		_ = writeSocketEnvelope(
 			encoder,
-			socketEnvelope{Type: "error", Error: "reconnect_task_session task_id required"},
+			socketEnvelope{Type: socketEnvelopeError, Error: socketCommandReconnectTaskSession + " task_id required"},
 		)
 		return
 	}
 
-	if err := s.frontend.ReconnectTaskSession(ctx, taskID); err != nil {
-		_ = writeSocketEnvelope(encoder, socketEnvelope{Type: "error", Error: err.Error()})
+	if err := s.backend.ReconnectTaskSession(ctx, taskID); err != nil {
+		_ = writeSocketEnvelope(encoder, socketEnvelope{Type: socketEnvelopeError, Error: err.Error()})
 		return
 	}
 
-	_ = writeSocketEnvelope(encoder, socketEnvelope{Type: "task_session_reconnected", OK: true})
+	_ = writeSocketEnvelope(encoder, socketEnvelope{Type: socketEnvelopeTaskSessionReconnect, OK: true})
 }
 
 func (s *unixSocketServer) handleListTasks(ctx context.Context, encoder *json.Encoder) {
-	tasks, err := s.frontend.ListTasks(ctx)
+	tasks, err := s.backend.ListTasks(ctx)
 	if err != nil {
-		_ = writeSocketEnvelope(encoder, socketEnvelope{Type: "error", Error: err.Error()})
+		_ = writeSocketEnvelope(encoder, socketEnvelope{Type: socketEnvelopeError, Error: err.Error()})
 		return
 	}
 
-	_ = writeSocketEnvelope(encoder, socketEnvelope{Type: "tasks_list", OK: true, Tasks: tasks})
+	_ = writeSocketEnvelope(encoder, socketEnvelope{Type: socketEnvelopeTasksList, OK: true, Tasks: tasks})
 }
 
 func (s *unixSocketServer) handleGetTaskActivity(ctx context.Context, encoder *json.Encoder, req socketRequest) {
 	taskID := strings.TrimSpace(req.TaskID)
 	if taskID == "" {
-		_ = writeSocketEnvelope(encoder, socketEnvelope{Type: "error", Error: "get_task_activity task_id required"})
+		_ = writeSocketEnvelope(encoder, socketEnvelope{
+			Type:  socketEnvelopeError,
+			Error: socketCommandGetTaskActivity + " task_id required",
+		})
 		return
 	}
 
-	activity, err := s.frontend.GetTaskActivity(ctx, taskID, req.Limit)
+	activity, err := s.backend.GetTaskActivity(ctx, taskID, req.Limit)
 	if err != nil {
-		_ = writeSocketEnvelope(encoder, socketEnvelope{Type: "error", Error: err.Error()})
+		_ = writeSocketEnvelope(encoder, socketEnvelope{Type: socketEnvelopeError, Error: err.Error()})
 		return
 	}
 
-	_ = writeSocketEnvelope(encoder, socketEnvelope{Type: "task_activity", OK: true, Activity: activity})
+	_ = writeSocketEnvelope(encoder, socketEnvelope{Type: socketEnvelopeTaskActivity, OK: true, Activity: activity})
 }
 
 func (s *unixSocketServer) handleGetTaskTokenUsage(ctx context.Context, encoder *json.Encoder, req socketRequest) {
 	taskID := strings.TrimSpace(req.TaskID)
 	if taskID == "" {
-		_ = writeSocketEnvelope(encoder, socketEnvelope{Type: "error", Error: "get_task_token_usage task_id required"})
+		_ = writeSocketEnvelope(encoder, socketEnvelope{
+			Type:  socketEnvelopeError,
+			Error: socketCommandGetTaskTokenUsage + " task_id required",
+		})
 		return
 	}
 
-	usage, err := s.frontend.GetTaskTokenUsage(ctx, taskID)
+	usage, err := s.backend.GetTaskTokenUsage(ctx, taskID)
 	if err != nil {
-		_ = writeSocketEnvelope(encoder, socketEnvelope{Type: "error", Error: err.Error()})
+		_ = writeSocketEnvelope(encoder, socketEnvelope{Type: socketEnvelopeError, Error: err.Error()})
 		return
 	}
 
-	_ = writeSocketEnvelope(encoder, socketEnvelope{Type: "task_token_usage", OK: true, Usage: usage})
+	_ = writeSocketEnvelope(encoder, socketEnvelope{Type: socketEnvelopeTaskTokenUsage, OK: true, Usage: usage})
 }
 
 func (s *unixSocketServer) handleListRepoPullRequests(ctx context.Context, encoder *json.Encoder, req socketRequest) {
-	prs, err := s.frontend.ListRepoPullRequests(ctx, strings.TrimSpace(req.Cwd))
+	prs, err := s.backend.ListRepoPullRequests(ctx, strings.TrimSpace(req.Cwd))
 	if err != nil {
-		_ = writeSocketEnvelope(encoder, socketEnvelope{Type: "error", Error: err.Error()})
+		_ = writeSocketEnvelope(encoder, socketEnvelope{Type: socketEnvelopeError, Error: err.Error()})
 		return
 	}
 
 	_ = writeSocketEnvelope(encoder, socketEnvelope{
-		Type:         "repo_pull_requests_list",
+		Type:         socketEnvelopeRepoPullRequestsList,
 		OK:           true,
 		PullRequests: prs,
 	})
 }
 
 func (s *unixSocketServer) handlePullRequestStatus(ctx context.Context, encoder *json.Encoder, req socketRequest) {
-	status, err := s.frontend.PullRequestStatus(
+	status, err := s.backend.PullRequestStatus(
 		ctx,
 		strings.TrimSpace(req.Cwd),
 		strings.TrimSpace(req.BranchName),
 	)
 	if err != nil {
-		_ = writeSocketEnvelope(encoder, socketEnvelope{Type: "error", Error: err.Error()})
+		_ = writeSocketEnvelope(encoder, socketEnvelope{Type: socketEnvelopeError, Error: err.Error()})
 		return
 	}
 
@@ -265,36 +332,39 @@ func (s *unixSocketServer) handlePullRequestStatus(ctx context.Context, encoder 
 		status = &core.PRStatus{State: core.PRStateNone}
 	}
 	_ = writeSocketEnvelope(encoder, socketEnvelope{
-		Type: "pull_request_status",
+		Type: socketEnvelopePullRequestStatus,
 		OK:   true,
 		PR:   status,
 	})
 }
 
 func (s *unixSocketServer) handleLatestTaskStatus(ctx context.Context, encoder *json.Encoder, req socketRequest) {
-	update, err := s.frontend.LatestTaskStatus(ctx, strings.TrimSpace(req.TaskID))
+	update, err := s.backend.LatestTaskStatus(ctx, strings.TrimSpace(req.TaskID))
 	if err != nil {
-		_ = writeSocketEnvelope(encoder, socketEnvelope{Type: "error", Error: err.Error()})
+		_ = writeSocketEnvelope(encoder, socketEnvelope{Type: socketEnvelopeError, Error: err.Error()})
 		return
 	}
 
-	_ = writeSocketEnvelope(encoder, socketEnvelope{Type: "task_status_snapshot", OK: true, Update: update})
+	_ = writeSocketEnvelope(encoder, socketEnvelope{Type: socketEnvelopeTaskStatusSnapshot, OK: true, Update: update})
 }
 
 func (s *unixSocketServer) handleSubscribeTaskStatus(ctx context.Context, encoder *json.Encoder, req socketRequest) {
 	taskID := strings.TrimSpace(req.TaskID)
 	if taskID == "" {
-		_ = writeSocketEnvelope(encoder, socketEnvelope{Type: "error", Error: "subscribe_task_status task_id required"})
+		_ = writeSocketEnvelope(encoder, socketEnvelope{
+			Type:  socketEnvelopeError,
+			Error: socketCommandSubscribeTaskStatus + " task_id required",
+		})
 		return
 	}
 
-	updates, err := s.frontend.SubscribeTaskStatus(ctx, taskID)
+	updates, err := s.backend.SubscribeTaskStatus(ctx, taskID)
 	if err != nil {
-		_ = writeSocketEnvelope(encoder, socketEnvelope{Type: "error", Error: err.Error()})
+		_ = writeSocketEnvelope(encoder, socketEnvelope{Type: socketEnvelopeError, Error: err.Error()})
 		return
 	}
 
-	if err := encoder.Encode(socketEnvelope{Type: "subscribed", OK: true}); err != nil {
+	if err := encoder.Encode(socketEnvelope{Type: socketEnvelopeSubscribed, OK: true}); err != nil {
 		return
 	}
 
@@ -306,7 +376,10 @@ func (s *unixSocketServer) handleSubscribeTaskStatus(ctx context.Context, encode
 			if !ok {
 				return
 			}
-			if err := encoder.Encode(socketEnvelope{Type: "task_status_update", Update: &update}); err != nil {
+			if err := encoder.Encode(socketEnvelope{
+				Type:   socketEnvelopeTaskStatusUpdate,
+				Update: &update,
+			}); err != nil {
 				return
 			}
 		}

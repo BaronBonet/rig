@@ -1,0 +1,205 @@
+vars: {
+  d2-config: {
+    layout-engine: elk
+    sketch: true
+  }
+}
+direction: right
+
+***: {
+  style: {
+    border-radius: 5
+    stroke-width: 3
+  }
+}
+
+tui: {
+  label: "TUI"
+  sublabel: "prompt input\nor PR picker"
+  style: {
+    fill: "#3b4261"
+    stroke: "#8caaee"
+    font-color: white
+  }
+}
+
+socket: {
+  label: "Unix socket"
+  sublabel: "create_task stream"
+  shape: queue
+  style: {
+    fill: "#2a2e42"
+    stroke: "#8caaee"
+    font-color: white
+  }
+}
+
+service: {
+  label: "core.TaskService"
+  direction: down
+  style: {
+    fill: "#485e30"
+    stroke: "#a6d189"
+    font-color: white
+  }
+
+  detect: {
+    label: "Detect repo"
+  }
+  suggest: {
+    label: "Suggest task name\n(prompt tasks only)"
+  }
+  record: {
+    label: "Create task record"
+  }
+  worktree: {
+    label: "Create worktree"
+  }
+  prepare: {
+    label: "Prepare workspace"
+  }
+  launch: {
+    label: "Start task runtime"
+  }
+
+  detect -> suggest: "prompt flow"
+  detect -> record: "PR flow"
+  suggest -> record
+  record -> worktree
+  worktree -> prepare
+  prepare -> launch
+}
+
+sqlite: {
+  label: "SQLite"
+  shape: cylinder
+  sublabel: "tasks"
+  style: {
+    fill: "#1a1b2e"
+    stroke: "#babbf1"
+    font-color: white
+  }
+}
+
+git: {
+  label: "Git"
+  sublabel: "repo detection\nworktree create"
+  style: {
+    fill: "#59493f"
+    stroke: "#ef9f76"
+    font-color: white
+  }
+}
+
+workspace: {
+  label: "Workspace manager"
+  sublabel: "seed copy\nsetup script\nbootstrap files"
+  style: {
+    fill: "#59493f"
+    stroke: "#ef9f76"
+    font-color: white
+  }
+}
+
+codex: {
+  label: "Codex adapter"
+  sublabel: "codex exec\nhook install\nlaunch spec"
+  style: {
+    fill: "#4a2f45"
+    stroke: "#f4b8e4"
+    font-color: white
+  }
+}
+
+tmux: {
+  label: "tmux"
+  sublabel: "new session\nstart codex\nprefill prompt"
+  style: {
+    fill: "#59493f"
+    stroke: "#ef9f76"
+    font-color: white
+  }
+}
+
+task: {
+  label: "Created task"
+  sublabel: "worktree path\nbranch name\ntmux session"
+  style: {
+    fill: "#485e30"
+    stroke: "#a6d189"
+    font-color: white
+  }
+}
+
+tui -> socket: "1. create_task request\nprompt or PR source" {
+  style: {
+    stroke: "#8caaee"
+    stroke-width: 3
+    animated: true
+  }
+}
+socket -> service: "2. CreateTaskWithProgress" {
+  style: {
+    stroke: "#a6d189"
+    stroke-width: 3
+    animated: true
+  }
+}
+
+service.detect -> git: "3. git rev-parse\nrepo root and base branch" {
+  style: {
+    stroke: "#ef9f76"
+    stroke-width: 3
+    animated: true
+  }
+}
+service.suggest -> codex: "4. codex exec\nname suggestion" {
+  style: {
+    stroke: "#f4b8e4"
+    stroke-width: 3
+    animated: true
+  }
+}
+service.record -> sqlite: "5. insert tasks row" {
+  style: {
+    stroke: "#e5c890"
+    stroke-width: 5
+    animated: true
+  }
+}
+service.worktree -> git: "6. create branch/worktree\nor checkout PR branch" {
+  style: {
+    stroke: "#ef9f76"
+    stroke-width: 3
+    animated: true
+  }
+}
+service.prepare -> workspace: "7. setup workspace\nand bootstrap files" {
+  style: {
+    stroke: "#ef9f76"
+    stroke-width: 3
+    animated: true
+  }
+}
+service.launch -> codex: "8. ensure hooks\nbuild launch spec" {
+  style: {
+    stroke: "#f4b8e4"
+    stroke-width: 3
+    animated: true
+  }
+}
+service.launch -> tmux: "9. start task session" {
+  style: {
+    stroke: "#ef9f76"
+    stroke-width: 3
+    animated: true
+  }
+}
+service.launch -> task: "10. return task"
+socket -> tui: "progress envelopes:\nsuggesting_name\ncreating_worktree\npreparing_workspace\nstarting_session\nthen task_created" {
+  style: {
+    stroke: "#8caaee"
+    stroke-width: 3
+    animated: true
+  }
+}

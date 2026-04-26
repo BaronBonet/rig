@@ -2,11 +2,11 @@
 
 This file is mirrored in `AGENTS.md`. Keep both files in sync.
 
-This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
+This file provides guidance to coding agents working with code in this repository.
 
 ## Project
 
-**rig** is a macOS CLI tool (Go) that creates isolated development environments for AI-assisted coding tasks. It manages git worktrees, tmux sessions, and LLM provider integrations (Codex and Claude) to run parallel coding tasks with observability.
+**rig** is a macOS CLI tool (Go) that creates isolated development environments for AI-assisted coding tasks. It manages git worktrees, tmux sessions, Codex integration, and a task daemon to run parallel coding tasks with observability.
 
 ## Commands
 
@@ -41,17 +41,17 @@ Hexagonal architecture (Ports & Adapters) with dependency injection.
 - `errors.go` — Domain-specific errors
 
 ### Adapters (`internal/adapters/`)
-- `handler/cli/` — Cobra commands + Bubbletea TUI (root command launches interactive task list)
+- `handler/tui/` — Bubbletea TUI (root command launches interactive task list)
 - `client/tmux/` — Tmux session management
 - `client/git/` — Git worktree operations
-- `client/codex/`, `client/claude/` — LLM provider implementations of `ProviderClient`
+- `client/codex/` — Codex implementation of `ProviderClient`
 - `client/github/` — PR status checks
 - `repository/sqlite/` — SQLite persistence (goose migrations, sqlc-generated queries)
-- `filesystem/` — Config loading, workspace seeding, session usage reading
-- `observability/` — Hook HTTP server (claude hooks), observer daemon (tmux monitoring)
+- `repository/workspace/` — Workspace config loading, seeding, and setup scripts
+- `taskdaemon/` — Daemon process, Unix socket frontend, and hook HTTP server
 
 ### Infrastructure (`internal/infrastructure/`)
-- `config.go` — Env var parsing (`AGENT_PROVIDER`, `AGENT_SQLITE_PATH`, `AGENT_HOOK_LISTEN_ADDR`, etc.)
+- `config.go` — Env var parsing (`RIG_PROVIDER`, `RIG_SQLITE_PATH`, `RIG_DAEMON_HOOK_LISTEN_ADDRESS`, etc.)
 
 ### Entry point (`cmd/rig/main.go`)
 - Wires all adapters into `core.Service` via constructor injection

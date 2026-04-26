@@ -64,13 +64,18 @@ type TaskCreateEvent struct {
 }
 
 // TaskFrontend is the frontend-facing task application port used by the TUI.
-// In the active runtime, `rig` gets a daemon-backed implementation from the
-// taskdaemon adapter and passes it into the TUI. The TUI only knows about this
-// port; it does not know about sockets, daemon startup, or in-process service
-// wiring.
+// In the active runtime, `rig` gets a composed implementation from the
+// taskdaemon adapter:
+//   - most methods are backed by daemon RPC over the local socket
+//   - AttachTaskSession is local-only because it attaches this foreground
+//     terminal to tmux and cannot be truthfully served by the background daemon
+//
+// The TUI only knows about this port; it does not know about sockets, daemon
+// startup, tmux client mechanics, or in-process service wiring.
 type TaskFrontend interface {
-	// AttachTaskSession attaches to an existing task session in tmux for
-	// interactive use.
+	// AttachTaskSession attaches the current terminal to an existing task tmux
+	// session for interactive use. This is intentionally client-local behavior,
+	// not part of the daemon socket protocol.
 	AttachTaskSession(ctx context.Context, task *Task) error
 	// GetTaskActivity returns recent persisted activity events for the selected
 	// task detail view, ordered oldest-to-newest within the requested window.

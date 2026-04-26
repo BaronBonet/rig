@@ -24,5 +24,9 @@ func ValidateConfig(cfg Config) error {
 		return fmt.Errorf("sqlite path %q must include a parent directory", cfg.Path)
 	}
 
-	return os.MkdirAll(filepath.Dir(cfg.Path), 0o755)
+	dir := filepath.Dir(cfg.Path)
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		return err
+	}
+	return os.Chmod(dir, 0o700)
 }

@@ -692,10 +692,13 @@ func waitForSocketRemoval(socketPath string, timeout time.Duration) error {
 func processTestSocketPath(t *testing.T) string {
 	t.Helper()
 
-	path := filepath.Join(
-		os.TempDir(),
-		"rig-taskdaemonprocess-"+time.Now().UTC().Format("20060102150405.000000000")+".sock",
-	)
+	dir, err := os.MkdirTemp(os.TempDir(), "rig-tdp-")
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		_ = os.RemoveAll(dir)
+	})
+
+	path := filepath.Join(dir, "daemon.sock")
 	t.Cleanup(func() {
 		_ = os.Remove(path)
 	})

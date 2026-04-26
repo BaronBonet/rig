@@ -133,14 +133,25 @@ provider/runtime paths were removed rather than carried forward as dead weight.
 The important runtime split is:
 
 - `TaskFrontend` is the client-side application port used by the TUI
-- the taskdaemon adapter's `Frontend()` method returns the Unix-socket client
-  that implements that port
+- the taskdaemon adapter's `Frontend()` method returns a composed frontend that
+  implements that port:
+  - daemon-backed task operations are sent over the Unix socket
+  - `AttachTaskSession` remains local tmux behavior in the foreground `rig`
+    process
 - `TaskDaemon.Serve(...)` is the daemon-side server path that serves both the
   frontend socket protocol and the provider hook HTTP routes
+- the daemon socket server depends on a package-local `socketBackend`, not
+  `TaskFrontend`, because the background daemon cannot truthfully attach the
+  user's current terminal to tmux
 
 So the TUI does not talk to `TaskService` directly. It talks to a
-daemon-backed `TaskFrontend`, and the daemon server forwards those requests
+composed `TaskFrontend`, and the daemon server forwards socket-backed requests
 into `TaskService`.
+
+`AttachTaskSession` is intentionally outside the daemon socket protocol. It
+needs the caller's terminal, stdio, and `TMUX` environment. The daemon can
+reconnect or recreate a missing runtime session, but the foreground TUI process
+must perform the actual terminal attach.
 
 The current interactive recovery flow is:
 
