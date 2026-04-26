@@ -120,11 +120,19 @@ func (r *healthCheckRepository) UpsertTaskResumeMetadata(context.Context, core.T
 	return errHealthCheckRepositoryOnly
 }
 
+func (r *healthCheckRepository) UpsertTaskProviderSession(context.Context, core.TaskProviderSession) error {
+	return errHealthCheckRepositoryOnly
+}
+
 func (r *healthCheckRepository) LatestTaskStatus(context.Context, string) (*core.TaskStatusUpdate, error) {
 	return nil, errHealthCheckRepositoryOnly
 }
 
 func (r *healthCheckRepository) LatestTaskResumeMetadata(context.Context, string) (*core.TaskResumeMetadata, error) {
+	return nil, errHealthCheckRepositoryOnly
+}
+
+func (r *healthCheckRepository) ListTaskProviderSessions(context.Context, string) ([]core.TaskProviderSession, error) {
 	return nil, errHealthCheckRepositoryOnly
 }
 

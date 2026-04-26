@@ -309,6 +309,35 @@ func TestFrontend_CreateTaskStreamLatestTaskStatusAndSubscribeTaskStatus(t *test
 		require.NoError(t, <-serverErrCh)
 	})
 
+	t.Run("get task token usage", func(t *testing.T) {
+		t.Parallel()
+
+		socketPath := frontendTestSocketPath(t)
+		expectedUsage := &core.TaskTokenUsage{
+			SessionCount: 2,
+			InputTokens:  130,
+			OutputTokens: 60,
+			TotalTokens:  190,
+		}
+		requestCh := make(chan socketRequest, 1)
+		serverErrCh := serveOneShotFrontendSocket(t, socketPath, func(req socketRequest, encoder *json.Encoder) error {
+			requestCh <- req
+			return encoder.Encode(socketEnvelope{
+				Type:  "task_token_usage",
+				OK:    true,
+				Usage: expectedUsage,
+			})
+		})
+
+		frontend := New(Config{SocketPath: socketPath}).Frontend()
+
+		usage, err := frontend.GetTaskTokenUsage(t.Context(), "task-123")
+		require.NoError(t, err)
+		require.Equal(t, socketRequest{Command: "get_task_token_usage", TaskID: "task-123"}, <-requestCh)
+		require.Equal(t, expectedUsage, usage)
+		require.NoError(t, <-serverErrCh)
+	})
+
 	t.Run("subscribe task status", func(t *testing.T) {
 		t.Parallel()
 

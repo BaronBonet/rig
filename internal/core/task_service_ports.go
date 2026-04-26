@@ -75,6 +75,9 @@ type TaskFrontend interface {
 	// GetTaskActivity returns recent persisted activity events for the selected
 	// task detail view, ordered oldest-to-newest within the requested window.
 	GetTaskActivity(ctx context.Context, taskID string, limit int) ([]TaskActivityEvent, error)
+	// GetTaskTokenUsage returns the summed token usage across provider sessions
+	// observed for the selected task.
+	GetTaskTokenUsage(ctx context.Context, taskID string) (*TaskTokenUsage, error)
 	// ListRepoPullRequests lists pull requests for the repository that contains
 	// cwd and annotates whether each PR branch already has a local Rig
 	// workspace.
@@ -167,6 +170,9 @@ type TaskService interface {
 	// GetTaskActivity returns recent persisted activity events for the selected
 	// task detail view, ordered oldest-to-newest within the requested window.
 	GetTaskActivity(ctx context.Context, taskID string, limit int) ([]TaskActivityEvent, error)
+	// GetTaskTokenUsage returns the summed token usage across provider sessions
+	// observed for the selected task.
+	GetTaskTokenUsage(ctx context.Context, taskID string) (*TaskTokenUsage, error)
 	// ListTasks returns all known tasks.
 	ListTasks(ctx context.Context) ([]*Task, error)
 	// LatestTaskStatus returns the latest published live status for a task, or
@@ -251,6 +257,9 @@ type ProviderClient interface {
 	// HookEventToTaskStatus normalizes a provider hook event into a task status
 	// update when the event contributes to the live task status stream.
 	HookEventToTaskStatus(input HookEventInput) (*TaskStatusUpdate, error)
+	// ReadSessionTokenUsage reads provider-specific token usage from one
+	// provider transcript.
+	ReadSessionTokenUsage(ctx context.Context, transcriptPath string) (*SessionTokenUsage, error)
 }
 
 // GitWorktreeClient manages the Git worktree operations needed by the new task

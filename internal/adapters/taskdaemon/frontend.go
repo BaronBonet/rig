@@ -40,6 +40,21 @@ func (f *frontend) GetTaskActivity(ctx context.Context, taskID string, limit int
 	return resp.Activity, nil
 }
 
+func (f *frontend) GetTaskTokenUsage(ctx context.Context, taskID string) (*core.TaskTokenUsage, error) {
+	resp, err := f.send(ctx, socketRequest{
+		Command: "get_task_token_usage",
+		TaskID:  taskID,
+	})
+	if err != nil {
+		return nil, err
+	}
+	if resp.Type != "task_token_usage" || !resp.OK {
+		return nil, unexpectedResponseError("get_task_token_usage", *resp)
+	}
+
+	return resp.Usage, nil
+}
+
 func (f *frontend) ListRepoPullRequests(ctx context.Context, cwd string) ([]core.RepoPullRequest, error) {
 	resp, err := f.send(ctx, socketRequest{
 		Command: "list_repo_pull_requests",

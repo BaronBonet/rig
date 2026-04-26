@@ -90,6 +90,9 @@ type providerClientState struct {
 	hookErr             error
 	hookUpdate          *TaskStatusUpdate
 	hookInput           HookEventInput
+	errByTranscript     map[string]error
+	usageByTranscript   map[string]*SessionTokenUsage
+	tokenUsageCalls     []providerTokenUsageCall
 }
 
 type pullRequestClientState struct {
@@ -102,6 +105,10 @@ type pullRequestClientState struct {
 	lastListRepoRoot     string
 	lastStatusRepoRoot   string
 	checkStatusCalls     int
+}
+
+type providerTokenUsageCall struct {
+	transcriptPath string
 }
 
 type workspaceManagerState struct {
@@ -349,6 +356,25 @@ func configureProviderClientMock(client *MockProviderClient, state *providerClie
 			}
 			update := *state.hookUpdate
 			return &update, nil
+		},
+	).Maybe()
+	client.EXPECT().ReadSessionTokenUsage(mock.Anything, mock.Anything).RunAndReturn(
+		func(_ context.Context, transcriptPath string) (*SessionTokenUsage, error) {
+			state.tokenUsageCalls = append(state.tokenUsageCalls, providerTokenUsageCall{
+				transcriptPath: transcriptPath,
+			})
+			if state.errByTranscript != nil && state.errByTranscript[transcriptPath] != nil {
+				return nil, state.errByTranscript[transcriptPath]
+			}
+			if state.usageByTranscript == nil {
+				return nil, nil
+			}
+			usage := state.usageByTranscript[transcriptPath]
+			if usage == nil {
+				return nil, nil
+			}
+			copy := *usage
+			return &copy, nil
 		},
 	).Maybe()
 }

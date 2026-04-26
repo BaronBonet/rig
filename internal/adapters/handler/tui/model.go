@@ -16,6 +16,7 @@ type taskRow struct {
 	task        *core.Task
 	activity    []core.TaskActivityEvent
 	status      *core.TaskStatusUpdate
+	tokenUsage  *core.TaskTokenUsage
 	pullRequest *core.PRStatus
 }
 
@@ -80,6 +81,12 @@ type taskActivityLoadedMsg struct {
 	activity []core.TaskActivityEvent
 	err      error
 	taskID   string
+}
+
+type taskTokenUsageLoadedMsg struct {
+	usage  *core.TaskTokenUsage
+	err    error
+	taskID string
 }
 
 type taskStatusSubscriptionReadyMsg struct {
@@ -267,6 +274,14 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		m.setTaskActivity(msg.taskID, msg.activity)
 		return m, nil
+	case taskTokenUsageLoadedMsg:
+		if msg.err != nil {
+			m.err = msg.err
+			return m, nil
+		}
+		m.err = nil
+		m.setTaskTokenUsage(msg.taskID, msg.usage)
+		return m, nil
 	case taskStatusSubscriptionReadyMsg:
 		if msg.err != nil {
 			return m, nil
@@ -277,6 +292,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.setTaskStatus(msg.taskID, &update)
 		return m, tea.Batch(
 			taskActivityCmd(m.statusContext, m.frontend, msg.taskID, taskActivityPreviewLimit),
+			taskTokenUsageCmd(m.statusContext, m.frontend, msg.taskID),
 			waitForTaskStatusCmd(msg.taskID, msg.updates),
 		)
 	case taskStatusSubscriptionClosedMsg:
@@ -412,6 +428,7 @@ func (m model) afterTasksLoadedCmds() []tea.Cmd {
 		cmds = append(cmds, m.taskStatusTrackingCmds(taskID)...)
 		if taskID != "" {
 			cmds = append(cmds, taskActivityCmd(m.statusContext, m.frontend, taskID, taskActivityPreviewLimit))
+			cmds = append(cmds, taskTokenUsageCmd(m.statusContext, m.frontend, taskID))
 		}
 		if cmd := m.taskPullRequestStatusCmd(row.task); cmd != nil {
 			cmds = append(cmds, cmd)
@@ -734,6 +751,21 @@ func (m *model) setTaskActivity(taskID string, activity []core.TaskActivityEvent
 			continue
 		}
 		m.rows[i].activity = append([]core.TaskActivityEvent(nil), activity...)
+		return
+	}
+}
+
+func (m *model) setTaskTokenUsage(taskID string, usage *core.TaskTokenUsage) {
+	for i := range m.rows {
+		if m.rows[i].task == nil || m.rows[i].task.ID != taskID {
+			continue
+		}
+		if usage == nil {
+			m.rows[i].tokenUsage = nil
+			return
+		}
+		copy := *usage
+		m.rows[i].tokenUsage = &copy
 		return
 	}
 }

@@ -23,6 +23,7 @@ func TestTaskFrontendContract_ExposesCreateAndStatusReadMethods(t *testing.T) {
 		AttachTaskSession(context.Context, *Task) error
 		CreateTaskStream(context.Context, CreateTaskInput) (<-chan TaskCreateEvent, error)
 		GetTaskActivity(context.Context, string, int) ([]TaskActivityEvent, error)
+		GetTaskTokenUsage(context.Context, string) (*TaskTokenUsage, error)
 		LatestTaskStatus(context.Context, string) (*TaskStatusUpdate, error)
 		SubscribeTaskStatus(context.Context, string) (<-chan TaskStatusUpdate, error)
 	} = (TaskFrontend)(nil)
@@ -67,6 +68,77 @@ func TestTaskStatusService_GetTaskActivityReturnsRepositoryEvents(t *testing.T) 
 			ObservedAt: time.Date(2026, time.April, 23, 10, 1, 0, 0, time.UTC),
 		},
 	}, events)
+}
+
+func TestTaskStatusService_GetTaskTokenUsageSumsLatestTranscriptPerProviderSession(t *testing.T) {
+	svc := newTestTaskService(t)
+	svc.taskRepo.providerSessionsByTask["task-123"] = []TaskProviderSession{
+		{
+			TaskID:            "task-123",
+			Provider:          ProviderCodex,
+			ProviderSessionID: "sess-a",
+			TranscriptPath:    "/tmp/codex-a-old.jsonl",
+			LastObservedAt:    time.Date(2026, time.April, 25, 9, 0, 0, 0, time.UTC),
+		},
+		{
+			TaskID:            "task-123",
+			Provider:          ProviderCodex,
+			ProviderSessionID: "sess-b",
+			TranscriptPath:    "/tmp/codex-b.jsonl",
+			LastObservedAt:    time.Date(2026, time.April, 25, 9, 5, 0, 0, time.UTC),
+		},
+		{
+			TaskID:            "task-123",
+			Provider:          ProviderCodex,
+			ProviderSessionID: "sess-a",
+			TranscriptPath:    "/tmp/codex-a-resumed.jsonl",
+			LastObservedAt:    time.Date(2026, time.April, 25, 9, 10, 0, 0, time.UTC),
+		},
+		{
+			TaskID:            "task-123",
+			Provider:          ProviderCodex,
+			ProviderSessionID: "sess-b",
+			LastObservedAt:    time.Date(2026, time.April, 25, 9, 20, 0, 0, time.UTC),
+		},
+	}
+	svc.providerRepo.usageByTranscript = map[string]*SessionTokenUsage{
+		"/tmp/codex-a-old.jsonl": {
+			InputTokens:  50,
+			OutputTokens: 50,
+			TotalTokens:  100,
+		},
+		"/tmp/codex-a-resumed.jsonl": {
+			InputTokens:              100,
+			CachedInputTokens:        25,
+			CacheCreationInputTokens: 15,
+			OutputTokens:             40,
+			ReasoningOutputTokens:    10,
+			TotalTokens:              140,
+		},
+		"/tmp/codex-b.jsonl": {
+			InputTokens:              30,
+			CachedInputTokens:        5,
+			CacheCreationInputTokens: 10,
+			OutputTokens:             20,
+			TotalTokens:              50,
+		},
+	}
+
+	usage, err := svc.service.GetTaskTokenUsage(t.Context(), "task-123")
+	require.NoError(t, err)
+	require.Equal(t, &TaskTokenUsage{
+		SessionCount:             2,
+		InputTokens:              130,
+		CachedInputTokens:        30,
+		CacheCreationInputTokens: 25,
+		OutputTokens:             60,
+		ReasoningOutputTokens:    10,
+		TotalTokens:              190,
+	}, usage)
+	require.Equal(t, []providerTokenUsageCall{
+		{transcriptPath: "/tmp/codex-b.jsonl"},
+		{transcriptPath: "/tmp/codex-a-resumed.jsonl"},
+	}, svc.providerRepo.tokenUsageCalls)
 }
 
 func TestTaskStatusService_LatestReturnsNilWhenTaskHasNoStatus(t *testing.T) {

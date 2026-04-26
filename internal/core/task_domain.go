@@ -137,6 +137,44 @@ type TaskProviderSession struct {
 	Cwd               string    `json:"cwd"`
 }
 
+type SessionTokenUsage struct {
+	InputTokens              int `json:"input_tokens"`
+	OutputTokens             int `json:"output_tokens"`
+	CachedInputTokens        int `json:"cached_input_tokens"`
+	CacheCreationInputTokens int `json:"cache_creation_input_tokens"`
+	ReasoningOutputTokens    int `json:"reasoning_output_tokens"`
+	TotalTokens              int `json:"total_tokens"`
+}
+
+func (u SessionTokenUsage) IsZero() bool {
+	return u.InputTokens == 0 &&
+		u.OutputTokens == 0 &&
+		u.CachedInputTokens == 0 &&
+		u.CacheCreationInputTokens == 0 &&
+		u.ReasoningOutputTokens == 0 &&
+		u.TotalTokens == 0
+}
+
+type TaskTokenUsage struct {
+	SessionCount             int `json:"session_count"`
+	InputTokens              int `json:"input_tokens"`
+	OutputTokens             int `json:"output_tokens"`
+	CachedInputTokens        int `json:"cached_input_tokens"`
+	CacheCreationInputTokens int `json:"cache_creation_input_tokens"`
+	ReasoningOutputTokens    int `json:"reasoning_output_tokens"`
+	TotalTokens              int `json:"total_tokens"`
+}
+
+func (u TaskTokenUsage) IsZero() bool {
+	return u.SessionCount == 0 &&
+		u.InputTokens == 0 &&
+		u.OutputTokens == 0 &&
+		u.CachedInputTokens == 0 &&
+		u.CacheCreationInputTokens == 0 &&
+		u.ReasoningOutputTokens == 0 &&
+		u.TotalTokens == 0
+}
+
 // Provider identifies the supported interactive runtime backing a task.
 type Provider string
 

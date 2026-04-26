@@ -179,9 +179,10 @@ func TestModel_AfterLoadRequestsLatestStatusAndSubscriptionsForEachTask(t *testi
 	require.True(t, ok)
 
 	msgs := runBatchCmd(t, cmd)
-	require.Len(t, msgs, 6)
+	require.Len(t, msgs, 8)
 	require.Equal(t, []string{"task-1", "task-2"}, frontend.latestTaskStatusCalls)
 	require.Equal(t, []string{"task-1:6", "task-2:6"}, frontend.getTaskActivityCalls)
+	require.Equal(t, []string{"task-1", "task-2"}, frontend.getTaskTokenUsageCalls)
 	require.Equal(t, []string{"task-1", "task-2"}, frontend.subscribeTaskStatusCalls)
 }
 
@@ -450,7 +451,7 @@ func TestModel_TaskStatusUpdateReloadsTaskActivity(t *testing.T) {
 
 	batchMsg, ok := runCmd(t, followCmd).(tea.BatchMsg)
 	require.True(t, ok)
-	require.Len(t, batchMsg, 2)
+	require.Len(t, batchMsg, 3)
 
 	activityMsg, ok := batchMsg[0]().(taskActivityLoadedMsg)
 	require.True(t, ok)
@@ -459,7 +460,90 @@ func TestModel_TaskStatusUpdateReloadsTaskActivity(t *testing.T) {
 	got, ok = next.(model)
 	require.True(t, ok)
 	require.Len(t, got.rows[0].activity, 1)
+
+	tokenMsg, ok := batchMsg[1]().(taskTokenUsageLoadedMsg)
+	require.True(t, ok)
+	require.Equal(t, []string{"task-1", "task-1"}, frontend.getTaskTokenUsageCalls)
+	next, _ = got.Update(tokenMsg)
+	got, ok = next.(model)
+	require.True(t, ok)
 	require.Equal(t, "fresh activity", got.rows[0].activity[0].Text)
+}
+
+func TestModel_TokenUsageLoadedRendersInSelectedTaskDetail(t *testing.T) {
+	frontend := newFrontendHarness()
+	m := newLoadedModel(frontend)
+	m.rows = []taskRow{{
+		task: &core.Task{
+			ID:          "task-1",
+			DisplayName: "token task",
+			Provider:    core.ProviderCodex,
+			Prompt:      "initial task prompt",
+		},
+	}}
+
+	next, _ := m.Update(taskTokenUsageLoadedMsg{
+		taskID: "task-1",
+		usage: &core.TaskTokenUsage{
+			SessionCount:             2,
+			InputTokens:              130,
+			OutputTokens:             60,
+			CachedInputTokens:        30,
+			CacheCreationInputTokens: 15,
+			ReasoningOutputTokens:    10,
+			TotalTokens:              190,
+		},
+	})
+
+	got, ok := next.(model)
+	require.True(t, ok)
+	view := stripANSI(got.selectedTaskDetailView())
+	require.Contains(t, view, "TOKENS")
+	require.Contains(t, view, "total 190")
+	require.Contains(t, view, "input 130")
+	require.Contains(t, view, "output 60")
+	require.Contains(t, view, "cached 30")
+	require.Contains(t, view, "cache created 15")
+	require.Contains(t, view, "reasoning 10")
+	require.Contains(t, view, "190")
+	require.Contains(t, view, "2 sessions")
+	require.Contains(
+		t,
+		view,
+		"total 190   input 130   output 60   cached 30   cache created 15   reasoning 10   2 sessions",
+	)
+	require.Less(t, strings.Index(view, "SESSION"), strings.Index(view, "TOKENS"))
+	require.Less(t, strings.Index(view, "TOKENS"), strings.Index(view, "INITIAL PROMPT"))
+}
+
+func TestModel_TokenUsageLoadedErrorRendersError(t *testing.T) {
+	frontend := newFrontendHarness()
+	m := newLoadedModel(frontend)
+
+	next, _ := m.Update(taskTokenUsageLoadedMsg{
+		taskID: "task-1",
+		err:    errors.New("token usage unavailable"),
+	})
+
+	got, ok := next.(model)
+	require.True(t, ok)
+	require.ErrorContains(t, got.err, "token usage unavailable")
+	require.Contains(t, stripANSI(got.View().Content), "token usage unavailable")
+}
+
+func TestModel_TokenUsageLoadedSuccessClearsPreviousError(t *testing.T) {
+	frontend := newFrontendHarness()
+	m := newLoadedModel(frontend)
+	m.err = errors.New("token usage unavailable")
+
+	next, _ := m.Update(taskTokenUsageLoadedMsg{
+		taskID: "task-1",
+		usage:  &core.TaskTokenUsage{TotalTokens: 190},
+	})
+
+	got, ok := next.(model)
+	require.True(t, ok)
+	require.NoError(t, got.err)
 }
 
 func TestModel_DetailStatusUsesTaskStatusStyle(t *testing.T) {
@@ -1477,6 +1561,9 @@ type frontendHarness struct {
 	latestTaskStatus          map[string]*core.TaskStatusUpdate
 	latestTaskStatusErr       map[string]error
 	latestTaskStatusCalls     []string
+	getTaskTokenUsage         map[string]*core.TaskTokenUsage
+	getTaskTokenUsageErr      map[string]error
+	getTaskTokenUsageCalls    []string
 	getTaskActivity           map[string][]core.TaskActivityEvent
 	getTaskActivityErr        map[string]error
 	getTaskActivityCalls      []string
@@ -1578,6 +1665,18 @@ func newFrontendHarness() *frontendHarness {
 				return nil, nil
 			}
 			return append([]core.TaskActivityEvent(nil), frontend.getTaskActivity[taskID]...), nil
+		},
+	).Maybe()
+	frontend.mock.EXPECT().GetTaskTokenUsage(mock.Anything, mock.Anything).RunAndReturn(
+		func(_ context.Context, taskID string) (*core.TaskTokenUsage, error) {
+			frontend.getTaskTokenUsageCalls = append(frontend.getTaskTokenUsageCalls, taskID)
+			if frontend.getTaskTokenUsageErr != nil && frontend.getTaskTokenUsageErr[taskID] != nil {
+				return nil, frontend.getTaskTokenUsageErr[taskID]
+			}
+			if frontend.getTaskTokenUsage == nil {
+				return nil, nil
+			}
+			return frontend.getTaskTokenUsage[taskID], nil
 		},
 	).Maybe()
 	frontend.mock.EXPECT().SubscribeTaskStatus(mock.Anything, mock.Anything).RunAndReturn(

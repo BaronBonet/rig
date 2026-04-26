@@ -104,6 +104,8 @@ func (s *unixSocketServer) handleConn(ctx context.Context, conn net.Conn) {
 		s.handleListTasks(ctx, encoder)
 	case "get_task_activity":
 		s.handleGetTaskActivity(connCtx, encoder, req)
+	case "get_task_token_usage":
+		s.handleGetTaskTokenUsage(connCtx, encoder, req)
 	case "latest_task_status":
 		s.handleLatestTaskStatus(connCtx, encoder, req)
 	case "subscribe_task_status":
@@ -216,6 +218,22 @@ func (s *unixSocketServer) handleGetTaskActivity(ctx context.Context, encoder *j
 	}
 
 	_ = writeSocketEnvelope(encoder, socketEnvelope{Type: "task_activity", OK: true, Activity: activity})
+}
+
+func (s *unixSocketServer) handleGetTaskTokenUsage(ctx context.Context, encoder *json.Encoder, req socketRequest) {
+	taskID := strings.TrimSpace(req.TaskID)
+	if taskID == "" {
+		_ = writeSocketEnvelope(encoder, socketEnvelope{Type: "error", Error: "get_task_token_usage task_id required"})
+		return
+	}
+
+	usage, err := s.frontend.GetTaskTokenUsage(ctx, taskID)
+	if err != nil {
+		_ = writeSocketEnvelope(encoder, socketEnvelope{Type: "error", Error: err.Error()})
+		return
+	}
+
+	_ = writeSocketEnvelope(encoder, socketEnvelope{Type: "task_token_usage", OK: true, Usage: usage})
 }
 
 func (s *unixSocketServer) handleListRepoPullRequests(ctx context.Context, encoder *json.Encoder, req socketRequest) {

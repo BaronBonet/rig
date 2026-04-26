@@ -101,6 +101,17 @@ func taskActivityCmd(ctx context.Context, frontend core.TaskFrontend, taskID str
 	}
 }
 
+func taskTokenUsageCmd(ctx context.Context, frontend core.TaskFrontend, taskID string) tea.Cmd {
+	return func() tea.Msg {
+		usage, err := frontend.GetTaskTokenUsage(ctx, taskID)
+		return taskTokenUsageLoadedMsg{
+			taskID: taskID,
+			usage:  usage,
+			err:    err,
+		}
+	}
+}
+
 func pullRequestStatusCmd(
 	ctx context.Context,
 	frontend core.TaskFrontend,
