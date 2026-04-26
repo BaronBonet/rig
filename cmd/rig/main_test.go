@@ -9,26 +9,18 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func TestExecuteSource_InlinesClientRuntimeFlow(t *testing.T) {
+func TestExecuteSource_UsesCobraCommandRuntime(t *testing.T) {
 	t.Parallel()
 
 	content, err := os.ReadFile(filepath.Join(".", "main.go"))
 	require.NoError(t, err)
 	source := string(content)
 
-	for _, forbidden := range []string{
-		"type dependencies struct",
-		"type taskDaemonRuntime interface",
-		"func run(",
-		"func newRuntimeDependencies(",
-		"func isDaemonMode(",
-	} {
-		require.NotContains(t, source, forbidden)
-	}
-
+	require.Contains(t, source, `cmd := newRootCommand(newProductionCommandRuntime(stdout, stderr))`)
 	require.Contains(t, source, `os.Getenv(daemonModeEnvKey) == daemonModeEnvValue`)
 	require.Contains(t, source, `if err := adapter.EnsureRunning(ctx); err != nil`)
 	require.Contains(t, source, `program := tui.NewProgram(`)
+	require.NotContains(t, source, `return run(ctx,`)
 }
 
 func TestDaemonHookRoutes_ExposeCodexHooksOnly(t *testing.T) {
@@ -50,10 +42,108 @@ func TestExecuteSource_ConstructsSingleTaskdaemonAdapterForClientPath(t *testing
 	require.NoError(t, err)
 	source := string(content)
 
-	require.Contains(t, source, `adapter := taskdaemon.New(taskdaemon.Config{`)
+	require.Contains(t, source, `return taskdaemon.New(taskdaemon.Config{`)
 	require.Contains(t, source, `frontend := adapter.Frontend()`)
 	require.NotContains(t, source, `deps :=`)
-	require.NotContains(t, source, `return run(ctx,`)
+	require.NotContains(t, source, `func newRuntimeDependencies(`)
+}
+
+func TestRootCommandRunsTUIByDefault(t *testing.T) {
+	t.Parallel()
+
+	var calls []string
+	cmd := newRootCommand(commandRuntime{
+		version: "test-version",
+		runTUI: func() error {
+			calls = append(calls, "tui")
+			return nil
+		},
+	})
+	cmd.SetArgs([]string{})
+
+	require.NoError(t, cmd.Execute())
+	require.Equal(t, []string{"tui"}, calls)
+}
+
+func TestRootCommandPrintsBareVersion(t *testing.T) {
+	t.Parallel()
+
+	var stdout bytes.Buffer
+	cmd := newRootCommand(commandRuntime{
+		stdout:  &stdout,
+		version: "test-version",
+		runTUI: func() error {
+			t.Fatal("root TUI should not run for --version")
+			return nil
+		},
+	})
+	cmd.SetArgs([]string{"--version"})
+
+	require.NoError(t, cmd.Execute())
+	require.Equal(t, "test-version\n", stdout.String())
+}
+
+func TestRootCommandRoutesDoctor(t *testing.T) {
+	t.Parallel()
+
+	var calls []string
+	cmd := newRootCommand(commandRuntime{
+		version: "test-version",
+		runDoctor: func() error {
+			calls = append(calls, "doctor")
+			return nil
+		},
+	})
+	cmd.SetArgs([]string{"doctor"})
+
+	require.NoError(t, cmd.Execute())
+	require.Equal(t, []string{"doctor"}, calls)
+}
+
+func TestRootCommandRoutesDaemonCommands(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name string
+		args []string
+		want string
+	}{
+		{name: "start", args: []string{"daemon", "start"}, want: "daemon-start"},
+		{name: "stop", args: []string{"daemon", "stop"}, want: "daemon-stop"},
+		{name: "restart", args: []string{"daemon", "restart"}, want: "daemon-restart"},
+		{name: "status", args: []string{"daemon", "status"}, want: "daemon-status"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			var calls []string
+			cmd := newRootCommand(commandRuntime{
+				version: "test-version",
+				runDaemonStart: func() error {
+					calls = append(calls, "daemon-start")
+					return nil
+				},
+				runDaemonStop: func() error {
+					calls = append(calls, "daemon-stop")
+					return nil
+				},
+				runDaemonRestart: func() error {
+					calls = append(calls, "daemon-restart")
+					return nil
+				},
+				runDaemonStatus: func() error {
+					calls = append(calls, "daemon-status")
+					return nil
+				},
+			})
+			cmd.SetArgs(tt.args)
+
+			require.NoError(t, cmd.Execute())
+			require.Equal(t, []string{tt.want}, calls)
+		})
+	}
 }
 
 func TestExecuteWithArgs_VersionFlagPrintsConfiguredVersion(t *testing.T) {

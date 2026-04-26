@@ -112,6 +112,14 @@ type TaskDaemonHookRoute struct {
 	Path    string
 }
 
+type TaskDaemonStatus struct {
+	SocketPath string
+	Error      string
+	Running    bool
+	Healthy    bool
+	Compatible bool
+}
+
 // TODO: is all of this information in the struct required?
 type HookEventInput struct {
 	OccurredAt           time.Time
@@ -138,15 +146,17 @@ type HookEventInput struct {
 // Frontend returns the daemon-backed TaskFrontend client that the TUI uses to
 // talk to the backend over the local socket.
 //
-// EnsureRunning and Restart are lifecycle operations used by composition code
-// to manage the long-lived daemon process.
+// EnsureRunning, Stop, Restart, and Status are lifecycle operations used by
+// composition code to manage the long-lived daemon process.
 //
 // Serve runs the daemon-side transports in the current process. This is used
 // only by the re-executed daemon child process, not by the TUI client path.
 type TaskDaemon interface {
 	Frontend() TaskFrontend
 	EnsureRunning(ctx context.Context) error
+	Stop(ctx context.Context) error
 	Restart(ctx context.Context) error
+	Status(ctx context.Context) (*TaskDaemonStatus, error)
 	Serve(ctx context.Context, service TaskService, hookRoutes []TaskDaemonHookRoute, stop func()) error
 }
 

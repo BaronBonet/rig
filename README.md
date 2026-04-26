@@ -47,6 +47,15 @@ Check environment health:
 rig doctor
 ```
 
+Manage the background task daemon:
+
+```bash
+rig daemon status
+rig daemon start
+rig daemon stop
+rig daemon restart
+```
+
 Configure repository-specific workspace seeding with a `.rig.yaml` file in the repo root:
 
 ```yaml

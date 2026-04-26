@@ -53,11 +53,25 @@ type socketEnvelope struct {
 
 func dialDaemonSocket(ctx context.Context, socketPath string) (net.Conn, error) {
 	var d net.Dialer
-	return d.DialContext(ctx, "unix", socketPath)
+	conn, err := d.DialContext(ctx, "unix", socketPath)
+	if err != nil {
+		return nil, err
+	}
+	if deadline, ok := ctx.Deadline(); ok {
+		if err := conn.SetDeadline(deadline); err != nil {
+			_ = conn.Close()
+			return nil, err
+		}
+	}
+
+	return conn, nil
 }
 
 func probeSocketHealth(ctx context.Context, socketPath string) error {
-	conn, err := dialDaemonSocket(ctx, socketPath)
+	operationCtx, cancel := context.WithTimeout(ctx, socketOperationTimeout)
+	defer cancel()
+
+	conn, err := dialDaemonSocket(operationCtx, socketPath)
 	if err != nil {
 		return err
 	}
@@ -98,7 +112,10 @@ func probeSocketHealth(ctx context.Context, socketPath string) error {
 }
 
 func probeFrontendBuildVersion(ctx context.Context, socketPath string) error {
-	conn, err := dialDaemonSocket(ctx, socketPath)
+	operationCtx, cancel := context.WithTimeout(ctx, socketOperationTimeout)
+	defer cancel()
+
+	conn, err := dialDaemonSocket(operationCtx, socketPath)
 	if err != nil {
 		return err
 	}
@@ -130,7 +147,10 @@ func probeFrontendBuildVersion(ctx context.Context, socketPath string) error {
 }
 
 func probeFrontendProtocol(ctx context.Context, socketPath string) error {
-	conn, err := dialDaemonSocket(ctx, socketPath)
+	operationCtx, cancel := context.WithTimeout(ctx, socketOperationTimeout)
+	defer cancel()
+
+	conn, err := dialDaemonSocket(operationCtx, socketPath)
 	if err != nil {
 		return err
 	}

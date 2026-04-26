@@ -11,11 +11,14 @@ import (
 	"os/exec"
 	"syscall"
 	"time"
+
+	"rig/internal/core"
 )
 
 const (
-	healthyTimeout = 2 * time.Second
-	retryInterval  = 25 * time.Millisecond
+	healthyTimeout         = 2 * time.Second
+	socketOperationTimeout = 2 * time.Second
+	retryInterval          = 25 * time.Millisecond
 )
 
 func ensureRunning(ctx context.Context, cfg Config) error {
@@ -70,12 +73,85 @@ func restartDaemon(ctx context.Context, cfg Config) error {
 	return ensureRunning(ctx, cfg)
 }
 
+func stopDaemonIfRunning(ctx context.Context, cfg Config) error {
+	if cfg.SocketPath == "" {
+		return fmt.Errorf("task daemon socket path not configured")
+	}
+
+	exists, err := taskDaemonSocketPathExists(cfg.SocketPath)
+	if err != nil {
+		return err
+	}
+	if !exists {
+		return nil
+	}
+
+	if err := stopTaskDaemon(ctx, cfg.SocketPath); err != nil {
+		if !isRecoverableStaleSocketError(err) {
+			return err
+		}
+	}
+
+	if err := os.Remove(cfg.SocketPath); err != nil && !errors.Is(err, os.ErrNotExist) {
+		return fmt.Errorf("remove stale task daemon socket: %w", err)
+	}
+
+	return nil
+}
+
+func daemonStatus(ctx context.Context, cfg Config) (*core.TaskDaemonStatus, error) {
+	if cfg.SocketPath == "" {
+		return nil, fmt.Errorf("task daemon socket path not configured")
+	}
+
+	status := &core.TaskDaemonStatus{SocketPath: cfg.SocketPath}
+	exists, err := taskDaemonSocketPathExists(cfg.SocketPath)
+	if err != nil {
+		return nil, err
+	}
+	if !exists {
+		return status, nil
+	}
+
+	status.Running = true
+	if healthErr := probeSocketHealth(ctx, cfg.SocketPath); healthErr != nil {
+		status.Error = healthErr.Error()
+		if isRecoverableStaleSocketError(healthErr) {
+			status.Running = false
+		}
+		return status, nil
+	}
+	status.Healthy = true
+
+	if recordDaemonStatusError(status, probeFrontendProtocol(ctx, cfg.SocketPath)) {
+		return status, nil
+	}
+	if recordDaemonStatusError(status, probeFrontendBuildVersion(ctx, cfg.SocketPath)) {
+		return status, nil
+	}
+
+	status.Compatible = true
+	return status, nil
+}
+
+func recordDaemonStatusError(status *core.TaskDaemonStatus, err error) bool {
+	if err == nil {
+		return false
+	}
+
+	status.Error = err.Error()
+	return true
+}
+
 func stopTaskDaemon(ctx context.Context, socketPath string) error {
 	if socketPath == "" {
 		return fmt.Errorf("task daemon socket path not configured")
 	}
 
-	conn, err := dialDaemonSocket(ctx, socketPath)
+	operationCtx, cancel := context.WithTimeout(ctx, socketOperationTimeout)
+	defer cancel()
+
+	conn, err := dialDaemonSocket(operationCtx, socketPath)
 	if err != nil {
 		return err
 	}

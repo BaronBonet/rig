@@ -40,12 +40,28 @@ func (a *adapter) EnsureRunning(ctx context.Context) error {
 	return ensureRunning(ctx, a.cfg)
 }
 
+func (a *adapter) Stop(ctx context.Context) error {
+	if a == nil {
+		return fmt.Errorf("task daemon adapter not configured")
+	}
+
+	return stopDaemonIfRunning(ctx, a.cfg)
+}
+
 func (a *adapter) Restart(ctx context.Context) error {
 	if a == nil {
 		return fmt.Errorf("task daemon adapter not configured")
 	}
 
 	return restartDaemon(ctx, a.cfg)
+}
+
+func (a *adapter) Status(ctx context.Context) (*core.TaskDaemonStatus, error) {
+	if a == nil {
+		return nil, fmt.Errorf("task daemon adapter not configured")
+	}
+
+	return daemonStatus(ctx, a.cfg)
 }
 
 func (a *adapter) Serve(
