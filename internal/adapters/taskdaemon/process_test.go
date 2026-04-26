@@ -13,6 +13,8 @@ import (
 	"testing"
 	"time"
 
+	"rig/internal/core"
+
 	"github.com/stretchr/testify/require"
 )
 
@@ -120,6 +122,147 @@ func TestAdapterEnsureRunning_UsesDefaultExecutableAndConfiguredEnvToStartDaemon
 	require.NoError(t, adapter.EnsureRunning(context.Background()))
 	require.NoError(t, stopTaskDaemon(context.Background(), socketPath))
 	require.NoError(t, waitForSocketRemoval(socketPath, 2*time.Second))
+}
+
+func TestAdapterStop_ReturnsWhenDaemonSocketIsMissing(t *testing.T) {
+	t.Parallel()
+
+	socketPath := processTestSocketPath(t)
+	adapter := New(Config{SocketPath: socketPath})
+
+	require.NoError(t, adapter.Stop(context.Background()))
+}
+
+func TestAdapterStop_StopsExistingDaemon(t *testing.T) {
+	t.Parallel()
+
+	socketPath := processTestSocketPath(t)
+	startHelperDaemonProcess(t, socketPath)
+
+	adapter := New(Config{SocketPath: socketPath})
+
+	require.NoError(t, adapter.Stop(context.Background()))
+	require.NoError(t, waitForSocketRemoval(socketPath, 2*time.Second))
+}
+
+func TestAdapterStop_ReturnsWhenDaemonAcceptsButDoesNotRespond(t *testing.T) {
+	t.Parallel()
+
+	socketPath := processTestSocketPath(t)
+	listener, err := listenUnixSocket(t.Context(), socketPath)
+	require.NoError(t, err)
+	defer listener.Close()
+
+	connCh := make(chan net.Conn, 1)
+	go func() {
+		conn, acceptErr := listener.Accept()
+		if acceptErr == nil {
+			connCh <- conn
+		}
+	}()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
+	defer cancel()
+
+	errCh := make(chan error, 1)
+	go func() {
+		errCh <- New(Config{SocketPath: socketPath}).Stop(ctx)
+	}()
+
+	select {
+	case err := <-errCh:
+		require.Error(t, err)
+	case <-time.After(500 * time.Millisecond):
+		if conn := receiveAcceptedConn(t, connCh); conn != nil {
+			_ = conn.Close()
+		}
+		t.Fatal("Stop did not return after context deadline")
+	}
+
+	if conn := receiveAcceptedConn(t, connCh); conn != nil {
+		_ = conn.Close()
+	}
+}
+
+func TestAdapterStatusReportsMissingDaemon(t *testing.T) {
+	t.Parallel()
+
+	socketPath := processTestSocketPath(t)
+	adapter := New(Config{SocketPath: socketPath})
+
+	status, err := adapter.Status(context.Background())
+
+	require.NoError(t, err)
+	require.Equal(t, socketPath, status.SocketPath)
+	require.False(t, status.Running)
+	require.False(t, status.Healthy)
+	require.False(t, status.Compatible)
+	require.Empty(t, status.Error)
+}
+
+func TestAdapterStatusReportsHealthyCompatibleDaemon(t *testing.T) {
+	t.Parallel()
+
+	socketPath := processTestSocketPath(t)
+	startHelperDaemonProcess(t, socketPath)
+
+	adapter := New(Config{SocketPath: socketPath})
+
+	status, err := adapter.Status(context.Background())
+
+	require.NoError(t, err)
+	require.Equal(t, socketPath, status.SocketPath)
+	require.True(t, status.Running)
+	require.True(t, status.Healthy)
+	require.True(t, status.Compatible)
+	require.Empty(t, status.Error)
+}
+
+func TestAdapterStatusReportsErrorWhenDaemonAcceptsButDoesNotRespond(t *testing.T) {
+	t.Parallel()
+
+	socketPath := processTestSocketPath(t)
+	listener, err := listenUnixSocket(t.Context(), socketPath)
+	require.NoError(t, err)
+	defer listener.Close()
+
+	connCh := make(chan net.Conn, 1)
+	go func() {
+		conn, acceptErr := listener.Accept()
+		if acceptErr == nil {
+			connCh <- conn
+		}
+	}()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
+	defer cancel()
+
+	statusCh := make(chan *core.TaskDaemonStatus, 1)
+	errCh := make(chan error, 1)
+	go func() {
+		status, statusErr := New(Config{SocketPath: socketPath}).Status(ctx)
+		statusCh <- status
+		errCh <- statusErr
+	}()
+
+	select {
+	case err := <-errCh:
+		require.NoError(t, err)
+		status := <-statusCh
+		require.Equal(t, socketPath, status.SocketPath)
+		require.True(t, status.Running)
+		require.False(t, status.Healthy)
+		require.Contains(t, status.Error, "timeout")
+	case <-time.After(500 * time.Millisecond):
+		if conn := receiveAcceptedConn(t, connCh); conn != nil {
+			_ = conn.Close()
+		}
+		t.Fatal("Status did not return after context deadline")
+	}
+
+	if conn := receiveAcceptedConn(t, connCh); conn != nil {
+		_ = conn.Close()
+	}
 }
 
 func TestFrontendBuildVersion_DefaultsToDev(t *testing.T) {
@@ -558,4 +701,15 @@ func processTestSocketPath(t *testing.T) string {
 	})
 
 	return path
+}
+
+func receiveAcceptedConn(t *testing.T, connCh <-chan net.Conn) net.Conn {
+	t.Helper()
+
+	select {
+	case conn := <-connCh:
+		return conn
+	default:
+		return nil
+	}
 }
