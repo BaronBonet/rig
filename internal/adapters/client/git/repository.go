@@ -2,6 +2,7 @@ package git
 
 import (
 	"context"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -96,6 +97,19 @@ func (r *repository) CreateTaskWorkspaceFromBranch(ctx context.Context, task *co
 		task.BranchName,
 	)
 	return err
+}
+
+func (r *repository) CreateTaskWorkspaceFromPullRequest(
+	ctx context.Context,
+	task *core.Task,
+	pullRequestNumber int,
+) error {
+	refspec := fmt.Sprintf("+refs/pull/%d/head:refs/heads/%s", pullRequestNumber, task.BranchName)
+	if _, err := r.runner.Run(ctx, task.RepoRoot, "git", "fetch", "origin", refspec); err != nil {
+		return err
+	}
+
+	return r.CreateTaskWorkspaceFromBranch(ctx, task)
 }
 
 func (r *repository) RemoveTaskWorkspace(ctx context.Context, task *core.Task) error {

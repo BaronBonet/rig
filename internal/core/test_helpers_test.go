@@ -51,15 +51,16 @@ type taskRepositoryState struct {
 }
 
 type repoClientState struct {
-	healthErr      error
-	detectRepoErr  error
-	branchInUseErr error
-	createErr      error
-	removeErr      error
-	repoContext    RepoContext
-	branchInUse    map[string]bool
-	createdTask    *Task
-	removedTask    *Task
+	healthErr       error
+	detectRepoErr   error
+	branchInUseErr  error
+	createErr       error
+	removeErr       error
+	repoContext     RepoContext
+	branchInUse     map[string]bool
+	createdTask     *Task
+	removedTask     *Task
+	createdPRNumber int
 }
 
 type sessionClientState struct {
@@ -207,6 +208,13 @@ func configureGitWorktreeMock(client *MockGitWorktreeClient, state *repoClientSt
 	client.EXPECT().CreateTaskWorkspaceFromBranch(mock.Anything, mock.Anything).RunAndReturn(
 		func(_ context.Context, task *Task) error {
 			state.createdTask = cloneTask(task)
+			return state.createErr
+		},
+	).Maybe()
+	client.EXPECT().CreateTaskWorkspaceFromPullRequest(mock.Anything, mock.Anything, mock.Anything).RunAndReturn(
+		func(_ context.Context, task *Task, pullRequestNumber int) error {
+			state.createdTask = cloneTask(task)
+			state.createdPRNumber = pullRequestNumber
 			return state.createErr
 		},
 	).Maybe()

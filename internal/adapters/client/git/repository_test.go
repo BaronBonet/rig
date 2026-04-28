@@ -137,6 +137,32 @@ func TestRepositoryCreateTaskWorkspaceFromBranch_UsesExistingBranch(t *testing.T
 	require.NoError(t, err)
 }
 
+func TestRepositoryCreateTaskWorkspaceFromPullRequest_FetchesPRHeadBeforeAddingWorktree(t *testing.T) {
+	runner := subprocess.NewMockRunner(t)
+	runner.EXPECT().
+		Run(
+			mock.Anything,
+			"/tmp/repo",
+			"git",
+			"fetch",
+			"origin",
+			"+refs/pull/42/head:refs/heads/feat/auth-rewrite",
+		).
+		Return(subprocess.Result{}, nil).
+		Once()
+	runner.EXPECT().
+		Run(mock.Anything, "/tmp/repo", "git", "worktree", "add", "/tmp/repo-auth-rewrite", "feat/auth-rewrite").
+		Return(subprocess.Result{}, nil).
+		Once()
+
+	err := New(runner).CreateTaskWorkspaceFromPullRequest(context.Background(), &core.Task{
+		RepoRoot:     "/tmp/repo",
+		BranchName:   "feat/auth-rewrite",
+		WorktreePath: "/tmp/repo-auth-rewrite",
+	}, 42)
+	require.NoError(t, err)
+}
+
 func TestRepositoryRemoveTaskWorkspace_RemovesWorktreePath(t *testing.T) {
 	runner := subprocess.NewMockRunner(t)
 	worktreePath := filepath.Join(t.TempDir(), "repo-auth-rewrite")
