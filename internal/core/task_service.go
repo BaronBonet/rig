@@ -669,7 +669,7 @@ func (s *taskService) createTaskFromPullRequest(
 	if err := s.tasks.CreateTask(ctx, task); err != nil {
 		return nil, err
 	}
-	if err := s.gitWorktree.CreateTaskWorkspaceFromBranch(ctx, task); err != nil {
+	if err := s.gitWorktree.CreateTaskWorkspaceFromPullRequest(ctx, task, pr.Number); err != nil {
 		return task, fmt.Errorf("create worktree: %w", err)
 	}
 	if err := s.prepareTaskWorkspace(ctx, task, repoCtx.Root); err != nil {

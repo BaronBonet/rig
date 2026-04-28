@@ -258,6 +258,7 @@ func TestTaskServiceCreateTask_FromPullRequestBootstrapsWorkspaceBeforeStartingS
 	require.True(t, svc.workspace.bootstrapCalled)
 	require.True(t, svc.workspace.bootstrapCalledBeforeSession)
 	require.NotNil(t, svc.sessionClient.startedTask)
+	require.Equal(t, 42, svc.repoClient.createdPRNumber)
 }
 
 func TestTaskServiceCreateTask_RejectsDuplicatePullRequestBranchBeforePersist(t *testing.T) {

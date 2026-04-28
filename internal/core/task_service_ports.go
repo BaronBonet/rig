@@ -296,6 +296,9 @@ type GitWorktreeClient interface {
 	// CreateTaskWorkspaceFromBranch creates a task worktree by checking out an
 	// already existing branch, such as a branch associated with a pull request.
 	CreateTaskWorkspaceFromBranch(ctx context.Context, task *Task) error
+	// CreateTaskWorkspaceFromPullRequest fetches a pull request head ref into
+	// the task branch before checking it out into the task's worktree path.
+	CreateTaskWorkspaceFromPullRequest(ctx context.Context, task *Task, pullRequestNumber int) error
 	// RemoveTaskWorkspace deletes a task worktree while keeping its branch.
 	RemoveTaskWorkspace(ctx context.Context, task *Task) error
 }
