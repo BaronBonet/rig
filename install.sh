@@ -63,7 +63,8 @@ curl_download() {
 detect_goos() {
 	case "$(uname -s)" in
 	Darwin) echo "darwin" ;;
-	*) fail "macOS is the only supported platform in this prototype" ;;
+	Linux) echo "linux" ;;
+	*) fail "unsupported operating system: $(uname -s); supported platforms are macOS and Linux" ;;
 	esac
 }
 
@@ -99,6 +100,23 @@ download_release_assets() {
 	download_base="$RIG_INSTALL_DOWNLOAD_ROOT/$version"
 	curl_download "$download_base/$archive" "$tmpdir/$archive"
 	curl_download "$download_base/checksums.txt" "$tmpdir/checksums.txt"
+}
+
+verify_checksum() {
+	archive=$1
+	tmpdir=$2
+
+	grep -F "  $archive" "$tmpdir/checksums.txt" >"$tmpdir/checksum.txt" || fail "missing checksum for $archive"
+	(
+		cd "$tmpdir"
+		if command -v shasum >/dev/null 2>&1; then
+			shasum -a 256 -c checksum.txt >/dev/null
+		elif command -v sha256sum >/dev/null 2>&1; then
+			sha256sum -c checksum.txt >/dev/null
+		else
+			fail "missing required command: shasum or sha256sum"
+		fi
+	) || fail "checksum verification failed"
 }
 
 detect_shell_rc() {
@@ -146,7 +164,6 @@ ensure_on_path() {
 main() {
 	require_cmd curl
 	require_cmd tar
-	require_cmd shasum
 	require_cmd install
 
 	goos="$(detect_goos)"
@@ -158,11 +175,7 @@ main() {
 
 	download_release_assets "$version" "$archive" "$tmpdir"
 
-	grep -F "  $archive" "$tmpdir/checksums.txt" >"$tmpdir/checksum.txt" || fail "missing checksum for $archive"
-	(
-		cd "$tmpdir"
-		shasum -a 256 -c checksum.txt >/dev/null
-	) || fail "checksum verification failed"
+	verify_checksum "$archive" "$tmpdir"
 
 	tar -xzf "$tmpdir/$archive" -C "$tmpdir"
 	mkdir -p "$BIN_DIR"

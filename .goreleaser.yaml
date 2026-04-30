@@ -9,11 +9,12 @@ builds:
     binary: rig
     ldflags:
       - -s -w -X main.version={{ .Tag }}
-      - -X rig/internal/adapters/taskdaemon.currentFrontendBuildVersion={{ .Tag }}
+      - -X github.com/BaronBonet/rig/internal/adapters/taskdaemon.currentFrontendBuildVersion={{ .Tag }}
     env:
       - CGO_ENABLED=0
     goos:
       - darwin
+      - linux
     goarch:
       - arm64
       - amd64

@@ -12,9 +12,9 @@ import (
 	"text/template"
 	"unicode"
 
-	"rig/internal/core"
-	"rig/internal/pkg/prompts"
-	"rig/internal/pkg/subprocess"
+	"github.com/BaronBonet/rig/internal/core"
+	"github.com/BaronBonet/rig/internal/pkg/prompts"
+	"github.com/BaronBonet/rig/internal/pkg/subprocess"
 )
 
 //go:embed forward-to-rig.sh.tmpl

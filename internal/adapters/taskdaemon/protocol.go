@@ -11,7 +11,7 @@ import (
 	"strings"
 	"sync"
 
-	"rig/internal/core"
+	"github.com/BaronBonet/rig/internal/core"
 )
 
 var currentFrontendBuildVersion = "dev"

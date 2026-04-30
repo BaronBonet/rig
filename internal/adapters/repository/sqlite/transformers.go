@@ -3,8 +3,8 @@ package sqlite
 import (
 	"time"
 
-	"rig/internal/adapters/repository/sqlite/generated"
-	"rig/internal/core"
+	"github.com/BaronBonet/rig/internal/adapters/repository/sqlite/generated"
+	"github.com/BaronBonet/rig/internal/core"
 )
 
 func createTaskParams(task *core.Task) generated.CreateTaskParams {

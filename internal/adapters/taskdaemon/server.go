@@ -6,7 +6,7 @@ import (
 	"fmt"
 	"net/http"
 
-	"rig/internal/core"
+	"github.com/BaronBonet/rig/internal/core"
 )
 
 type server struct {

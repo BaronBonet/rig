@@ -12,7 +12,7 @@ import (
 	"strings"
 	"syscall"
 
-	"rig/internal/core"
+	"github.com/BaronBonet/rig/internal/core"
 )
 
 // socketBackend is the operation set the daemon socket can actually serve.

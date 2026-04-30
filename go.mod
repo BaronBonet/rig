@@ -1,4 +1,4 @@
-module rig
+module github.com/BaronBonet/rig
 
 go 1.26.2
 

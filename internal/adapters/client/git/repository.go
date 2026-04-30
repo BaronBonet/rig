@@ -7,8 +7,8 @@ import (
 	"path/filepath"
 	"strings"
 
-	"rig/internal/core"
-	"rig/internal/pkg/subprocess"
+	"github.com/BaronBonet/rig/internal/core"
+	"github.com/BaronBonet/rig/internal/pkg/subprocess"
 )
 
 type repository struct {

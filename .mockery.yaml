@@ -10,7 +10,7 @@ all: false
 recursive: false
 dir: "{{ .InterfaceDirRelative }}"
 packages:
-  rig/internal/core:
+  github.com/BaronBonet/rig/internal/core:
     interfaces:
       TaskRepository:
       TaskFrontend:
@@ -21,6 +21,6 @@ packages:
       TaskWorkspaceManager:
       TmuxSessionClient:
       ProviderClient:
-  rig/internal/pkg/subprocess:
+  github.com/BaronBonet/rig/internal/pkg/subprocess:
     interfaces:
       Runner:

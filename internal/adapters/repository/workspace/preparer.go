@@ -7,7 +7,7 @@ import (
 	"path/filepath"
 	"strings"
 
-	"rig/internal/core"
+	"github.com/BaronBonet/rig/internal/core"
 )
 
 type preparer struct{}

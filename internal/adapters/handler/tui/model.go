@@ -6,7 +6,7 @@ import (
 	"path/filepath"
 	"strings"
 
-	"rig/internal/core"
+	"github.com/BaronBonet/rig/internal/core"
 
 	"charm.land/bubbles/v2/textarea"
 	tea "charm.land/bubbletea/v2"
@@ -49,6 +49,7 @@ type model struct {
 	selected      int
 	prSelected    int
 	width         int
+	height        int
 	shimmerTick   int
 	mode          modelMode
 	launchCwd     string
@@ -165,6 +166,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
 	case tea.WindowSizeMsg:
 		m.width = msg.Width
+		m.height = msg.Height
 		return m, nil
 	case tea.PasteMsg:
 		return m.updatePromptPaste(msg)
@@ -872,6 +874,10 @@ func (m model) totalWidth() int {
 		return m.width
 	}
 	return 72
+}
+
+func (m model) totalHeight() int {
+	return m.height
 }
 
 func (m model) selectedRow() *taskRow {

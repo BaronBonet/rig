@@ -9,7 +9,7 @@ import (
 	"testing"
 	"time"
 
-	"rig/internal/core"
+	"github.com/BaronBonet/rig/internal/core"
 
 	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
@@ -119,6 +119,103 @@ func TestModel_ViewSplitsTaskOverviewByRepo(t *testing.T) {
 	require.Less(t, strings.Index(view, "repo-b"), strings.Index(view, "third task"))
 	require.NotContains(t, view, "/tmp/repo-a")
 	require.NotContains(t, view, "/tmp/repo-b")
+}
+
+func TestModel_ViewKeepsCreateStatusVisibleWhenRowsExceedHeight(t *testing.T) {
+	frontend := newFrontendHarness()
+	for i := range 20 {
+		suffix := strconv.Itoa(i)
+		frontend.listTasks = append(frontend.listTasks, &core.Task{
+			ID:          "task-" + suffix,
+			RepoName:    "repo",
+			DisplayName: "task " + suffix,
+			Provider:    core.ProviderCodex,
+		})
+	}
+
+	m := newLoadedModel(frontend)
+	m.width = 96
+	m.height = 14
+	m.createPending = true
+	m.createActive = core.TaskCreateProgressStartingSession
+	m.createDone = []core.TaskCreateProgressStep{
+		core.TaskCreateProgressSuggestingName,
+		core.TaskCreateProgressCreatingWorktree,
+		core.TaskCreateProgressPreparingWorkspace,
+	}
+
+	view := stripANSI(m.View().Content)
+	require.Contains(t, view, "Starting session")
+	require.LessOrEqual(t, len(strings.Split(view, "\n")), m.height)
+}
+
+func TestModel_ViewClearsCreateStatusAfterCreatedTaskIsSelected(t *testing.T) {
+	frontend := newFrontendHarness()
+	for i := range 20 {
+		suffix := strconv.Itoa(i)
+		frontend.listTasks = append(frontend.listTasks, &core.Task{
+			ID:          "task-" + suffix,
+			RepoName:    "repo",
+			DisplayName: "task " + suffix,
+			Provider:    core.ProviderCodex,
+		})
+	}
+
+	m := newLoadedModel(frontend)
+	m.width = 96
+	m.height = 16
+	m.createPending = true
+	m.createActive = core.TaskCreateProgressStartingSession
+	m.createDone = []core.TaskCreateProgressStep{
+		core.TaskCreateProgressSuggestingName,
+		core.TaskCreateProgressCreatingWorktree,
+		core.TaskCreateProgressPreparingWorkspace,
+	}
+
+	next, _ := m.Update(taskCreatedMsg{
+		task: &core.Task{
+			ID:          "task-new",
+			RepoName:    "repo",
+			DisplayName: "new selected task",
+			Provider:    core.ProviderCodex,
+		},
+	})
+
+	got, ok := next.(model)
+	require.True(t, ok)
+
+	view := stripANSI(got.View().Content)
+	require.Contains(t, view, "new selected task")
+	require.NotContains(t, view, "Suggesting name")
+	require.NotContains(t, view, "Creating worktree")
+	require.NotContains(t, view, "Preparing workspace")
+	require.NotContains(t, view, "Starting session")
+	require.LessOrEqual(t, len(strings.Split(view, "\n")), got.height)
+}
+
+func TestModel_ViewKeepsSelectedTaskDetailsVisibleWhenRowsExceedHeight(t *testing.T) {
+	frontend := newFrontendHarness()
+	for i := range 20 {
+		suffix := strconv.Itoa(i)
+		frontend.listTasks = append(frontend.listTasks, &core.Task{
+			ID:           "task-" + suffix,
+			RepoName:     "repo",
+			DisplayName:  "task " + suffix,
+			BranchName:   "feat/task-" + suffix,
+			WorktreePath: "/tmp/task-" + suffix,
+			Provider:     core.ProviderCodex,
+		})
+	}
+
+	m := newLoadedModel(frontend)
+	m.width = 96
+	m.height = 18
+	m.selected = 15
+
+	view := stripANSI(m.View().Content)
+	require.Contains(t, view, "WORKSPACE")
+	require.Contains(t, view, "feat/task-15")
+	require.LessOrEqual(t, len(strings.Split(view, "\n")), m.height)
 }
 
 func TestModel_PRStatusShownInOverviewRowsAndDetailPanel(t *testing.T) {

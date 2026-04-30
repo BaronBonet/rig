@@ -10,7 +10,7 @@ import (
 	"os"
 	"strings"
 
-	"rig/internal/core"
+	"github.com/BaronBonet/rig/internal/core"
 )
 
 func (r *repository) ReadSessionTokenUsage(
