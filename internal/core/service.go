@@ -9,7 +9,7 @@ import (
 	"strings"
 	"time"
 
-	slugpkg "rig/internal/pkg/slug"
+	slugpkg "github.com/BaronBonet/rig/internal/pkg/slug"
 )
 
 type TaskServiceDependencies struct {

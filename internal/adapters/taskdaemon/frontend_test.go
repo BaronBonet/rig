@@ -11,7 +11,7 @@ import (
 	"testing"
 	"time"
 
-	"rig/internal/core"
+	"github.com/BaronBonet/rig/internal/core"
 
 	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"

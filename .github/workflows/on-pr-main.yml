@@ -34,9 +34,6 @@ jobs:
           go-version-file: go.mod
           cache: true
 
-      - name: Install dependencies
-        run: ./scripts/dependencies/install.sh
-
       - name: Generate code
         run: ./scripts/generate/go.sh
 

@@ -11,8 +11,8 @@ import (
 	"sync"
 	"time"
 
-	"rig/internal/adapters/repository/sqlite/generated"
-	"rig/internal/core"
+	"github.com/BaronBonet/rig/internal/adapters/repository/sqlite/generated"
+	"github.com/BaronBonet/rig/internal/core"
 
 	// Register the "sqlite" database/sql driver used by sql.Open.
 	_ "modernc.org/sqlite"

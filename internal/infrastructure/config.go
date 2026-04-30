@@ -5,12 +5,12 @@ import (
 	"os"
 	"path/filepath"
 
-	"rig/internal/adapters/taskdaemon"
-	"rig/internal/core"
+	"github.com/BaronBonet/rig/internal/adapters/taskdaemon"
+	"github.com/BaronBonet/rig/internal/core"
 
-	sqlite "rig/internal/adapters/repository/sqlite"
+	sqlite "github.com/BaronBonet/rig/internal/adapters/repository/sqlite"
 
-	"rig/internal/adapters/client/codex"
+	"github.com/BaronBonet/rig/internal/adapters/client/codex"
 
 	"github.com/caarlos0/env/v11"
 )

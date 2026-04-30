@@ -6,7 +6,7 @@ import (
 	"strings"
 	"time"
 
-	"rig/internal/core"
+	"github.com/BaronBonet/rig/internal/core"
 
 	"charm.land/lipgloss/v2"
 )
@@ -18,6 +18,13 @@ const (
 )
 
 func (m model) listView() string {
+	if m.totalHeight() > 0 {
+		return m.constrainedListView()
+	}
+	return m.unboundedListView()
+}
+
+func (m model) unboundedListView() string {
 	totalWidth := m.totalWidth()
 
 	var builder strings.Builder
@@ -80,6 +87,194 @@ func (m model) listView() string {
 	}
 
 	return strings.TrimRight(builder.String(), "\n")
+}
+
+func (m model) constrainedListView() string {
+	totalWidth := m.totalWidth()
+	totalHeight := m.totalHeight()
+	if totalHeight <= 0 {
+		return m.unboundedListView()
+	}
+
+	lines := []string{
+		renderHeader(
+			headerLabelStyle.Render("RIG"),
+			mutedStyle.Render("n new   r refresh   x clean   q quit"),
+			totalWidth,
+		),
+		dividerStyle.Render(strings.Repeat("─", totalWidth)),
+	}
+
+	if m.err != nil {
+		lines = append(lines, errorStyle.Render("Error: "+m.err.Error()), "")
+	}
+
+	if m.loading {
+		lines = append(lines, dimStyle.Render("Loading tasks..."))
+		lines = append(lines, sectionLines("", m.listCreateStatusView(), totalWidth)...)
+		return joinConstrainedLines(lines, totalHeight)
+	}
+
+	if len(m.rows) == 0 {
+		lines = append(lines, dimStyle.Render("No tasks found."), dimStyle.Render("Press n to create one."))
+		lines = append(lines, sectionLines("", m.listCreateStatusView(), totalWidth)...)
+		return joinConstrainedLines(lines, totalHeight)
+	}
+
+	createSection := sectionLines("", m.listCreateStatusView(), totalWidth)
+	detailSection := sectionLines("", m.selectedTaskDetailView(), totalWidth)
+
+	availableForDetail := totalHeight - len(lines) - len(createSection)
+	if availableForDetail < 0 {
+		availableForDetail = 0
+	}
+	if len(detailSection) > 0 {
+		rowReserve := 0
+		if availableForDetail > 6 {
+			rowReserve = 4
+		}
+		maxDetailLines := availableForDetail - rowReserve
+		if maxDetailLines < 0 {
+			maxDetailLines = 0
+		}
+		if len(detailSection) > maxDetailLines {
+			detailSection = detailSection[:maxDetailLines]
+		}
+	}
+
+	rowBudget := totalHeight - len(lines) - len(detailSection) - len(createSection)
+	if rowBudget < 0 {
+		rowBudget = 0
+	}
+	lines = append(lines, m.visibleTaskListLines(totalWidth, rowBudget)...)
+	lines = append(lines, detailSection...)
+	lines = append(lines, createSection...)
+
+	return joinConstrainedLines(lines, totalHeight)
+}
+
+type taskListBlock struct {
+	rowIndex int
+	lines    []string
+}
+
+func (m model) visibleTaskListLines(totalWidth int, budget int) []string {
+	if budget <= 0 {
+		return nil
+	}
+
+	blocks := m.taskListBlocks(totalWidth)
+	if len(blocks) == 0 {
+		return nil
+	}
+
+	selectedBlock := 0
+	selectedRow := m.selected
+	if selectedRow < 0 {
+		selectedRow = 0
+	}
+	if selectedRow >= len(m.rows) {
+		selectedRow = len(m.rows) - 1
+	}
+	for i, block := range blocks {
+		if block.rowIndex == selectedRow {
+			selectedBlock = i
+			break
+		}
+	}
+
+	start := selectedBlock
+	end := selectedBlock
+	if blockLineCount(blocks[start:end+1]) > budget {
+		return trimBlankEdgeLines(blocks[selectedBlock].lines[:budget])
+	}
+
+	for {
+		expanded := false
+		if start > 0 && blockLineCount(blocks[start-1:end+1]) <= budget {
+			start--
+			expanded = true
+		}
+		if end+1 < len(blocks) && blockLineCount(blocks[start:end+2]) <= budget {
+			end++
+			expanded = true
+		}
+		if !expanded {
+			break
+		}
+	}
+
+	var lines []string
+	for _, block := range blocks[start : end+1] {
+		lines = append(lines, block.lines...)
+	}
+	return trimBlankEdgeLines(lines)
+}
+
+func (m model) taskListBlocks(totalWidth int) []taskListBlock {
+	blocks := make([]taskListBlock, 0, len(m.rows))
+	previousRepoKey := ""
+	for index, row := range m.rows {
+		repoKey := repoGroupKey(row.task)
+		var lines []string
+		if index == 0 || repoKey != previousRepoKey {
+			if index > 0 {
+				lines = append(lines, "")
+			}
+			lines = append(lines, m.renderRepoHeader(row.task, totalWidth))
+			previousRepoKey = repoKey
+		}
+
+		line1, line2 := m.renderRow(index, row, totalWidth)
+		if line1 == "" {
+			continue
+		}
+		lines = append(lines, line1, line2)
+		if index < len(m.rows)-1 && repoGroupKey(m.rows[index+1].task) == repoKey {
+			lines = append(lines, "")
+		}
+		blocks = append(blocks, taskListBlock{rowIndex: index, lines: lines})
+	}
+	return blocks
+}
+
+func blockLineCount(blocks []taskListBlock) int {
+	count := 0
+	for _, block := range blocks {
+		count += len(block.lines)
+	}
+	return count
+}
+
+func sectionLines(prefix string, content string, totalWidth int) []string {
+	content = strings.TrimRight(content, "\n")
+	if content == "" {
+		return nil
+	}
+
+	lines := []string{dividerStyle.Render(strings.Repeat("─", totalWidth))}
+	if prefix != "" {
+		lines = append(lines, prefix)
+	}
+	lines = append(lines, strings.Split(content, "\n")...)
+	return lines
+}
+
+func joinConstrainedLines(lines []string, totalHeight int) string {
+	if totalHeight > 0 && len(lines) > totalHeight {
+		lines = lines[:totalHeight]
+	}
+	return strings.TrimRight(strings.Join(lines, "\n"), "\n")
+}
+
+func trimBlankEdgeLines(lines []string) []string {
+	for len(lines) > 0 && strings.TrimSpace(lines[0]) == "" {
+		lines = lines[1:]
+	}
+	for len(lines) > 0 && strings.TrimSpace(lines[len(lines)-1]) == "" {
+		lines = lines[:len(lines)-1]
+	}
+	return lines
 }
 
 func (m model) renderRepoHeader(task *core.Task, totalWidth int) string {

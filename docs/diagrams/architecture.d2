@@ -13,138 +13,68 @@ direction: right
   }
 }
 
-local: {
-  label: "Local developer machine"
-  direction: right
+tui: {
+  label: "TUI"
+  sublabel: "task list, task creation,\nstatus, attach"
   style: {
-    fill: "#232634"
-    stroke: "#414559"
+    fill: "#3b4261"
+    stroke: "#8caaee"
+    font-color: white
+  }
+}
+
+daemon: {
+  label: "Background task daemon"
+  direction: down
+  style: {
+    fill: "#2a2e42"
+    stroke: "#a6d189"
     font-color: white
   }
 
-  foreground: {
-    label: "Foreground rig process"
-    direction: down
+  socket: {
+    label: "Unix socket server"
+    sublabel: "commands and\nlive updates"
     style: {
-      fill: "#303446"
-      stroke: "#8caaee"
-      font-color: white
-    }
-
-    tui: {
-      label: "Bubble Tea TUI"
-      sublabel: "task list, prompt input,\nPR picker, cleanup"
-      style: {
-        fill: "#3b4261"
-        stroke: "#8caaee"
-        font-color: white
-      }
-    }
-
-    frontend: {
-      label: "Task daemon frontend"
-      sublabel: "Unix socket client\nlocal tmux attach"
-      style: {
-        fill: "#3b4261"
-        stroke: "#8caaee"
-        font-color: white
-      }
-    }
-  }
-
-  daemon: {
-    label: "Background task daemon\nsame rig binary, RIG_MODE=task-daemon"
-    direction: down
-    style: {
-      fill: "#2a2e42"
+      fill: "#485e30"
       stroke: "#a6d189"
       font-color: white
     }
-
-    socket_server: {
-      label: "Unix socket server"
-      sublabel: "JSON commands\n0600 socket"
-      style: {
-        fill: "#485e30"
-        stroke: "#a6d189"
-        font-color: white
-      }
-    }
-
-    hook_server: {
-      label: "HTTP hook server"
-      sublabel: "loopback only\n/codex-hook"
-      style: {
-        fill: "#485e30"
-        stroke: "#a6d189"
-        font-color: white
-      }
-    }
-
-    service: {
-      label: "core.TaskService"
-      sublabel: "orchestrates task lifecycle\nand status ingestion"
-      style: {
-        fill: "#485e30"
-        stroke: "#a6d189"
-        font-color: white
-      }
-    }
   }
 
-  storage: {
-    label: "SQLite"
-    shape: cylinder
-    sublabel: "tasks, status, activity,\nresume metadata, sessions"
+  hooks: {
+    label: "HTTP hook server"
+    sublabel: "local Codex\nhook events"
     style: {
-      fill: "#1a1b2e"
-      stroke: "#babbf1"
-      font-color: white
-    }
-  }
-
-  git: {
-    label: "Git worktrees"
-    sublabel: "isolated task workspaces"
-    style: {
-      fill: "#59493f"
-      stroke: "#ef9f76"
-      font-color: white
-    }
-  }
-
-  tmux: {
-    label: "tmux"
-    sublabel: "one task session per task\nwindows: task, editor"
-    style: {
-      fill: "#59493f"
-      stroke: "#ef9f76"
-      font-color: white
-    }
-  }
-
-  codex: {
-    label: "Codex CLI"
-    sublabel: "runs inside tmux\nemits hooks"
-    style: {
-      fill: "#4a2f45"
-      stroke: "#f4b8e4"
-      font-color: white
-    }
-  }
-
-  codex_home: {
-    label: "CODEX_HOME"
-    sublabel: "hooks.json\nhooks/forward-to-rig.sh"
-    style: {
-      fill: "#4a2f45"
-      stroke: "#f4b8e4"
+      fill: "#485e30"
+      stroke: "#a6d189"
       font-color: white
     }
   }
 }
 
-local.foreground.tui -> local.foreground.frontend: "TaskFrontend calls" {
+sqlite: {
+  label: "SQLite"
+  shape: cylinder
+  sublabel: "tasks, status,\nactivity"
+  style: {
+    fill: "#1a1b2e"
+    stroke: "#babbf1"
+    font-color: white
+  }
+}
+
+codex: {
+  label: "Codex CLI"
+  sublabel: "runs each task in an\nisolated workspace"
+  style: {
+    fill: "#4a2f45"
+    stroke: "#f4b8e4"
+    font-color: white
+  }
+}
+
+tui -> daemon.socket: "create/list tasks\nsubscribe to status" {
   style: {
     stroke: "#8caaee"
     stroke-width: 3
@@ -152,7 +82,7 @@ local.foreground.tui -> local.foreground.frontend: "TaskFrontend calls" {
   }
 }
 
-local.foreground.frontend -> local.daemon.socket_server: "Unix socket\nJSON envelopes" {
+daemon.socket -> tui: "task data and\nlive updates" {
   style: {
     stroke: "#8caaee"
     stroke-width: 3
@@ -160,23 +90,7 @@ local.foreground.frontend -> local.daemon.socket_server: "Unix socket\nJSON enve
   }
 }
 
-local.daemon.socket_server -> local.daemon.service: "socket command\nhandlers" {
-  style: {
-    stroke: "#a6d189"
-    stroke-width: 3
-    animated: true
-  }
-}
-
-local.daemon.hook_server -> local.daemon.service: "HookEventInput" {
-  style: {
-    stroke: "#a6d189"
-    stroke-width: 3
-    animated: true
-  }
-}
-
-local.daemon.service -> local.storage: "persist and query\nread models" {
+daemon -> sqlite: "persist task state" {
   style: {
     stroke: "#e5c890"
     stroke-width: 5
@@ -184,23 +98,7 @@ local.daemon.service -> local.storage: "persist and query\nread models" {
   }
 }
 
-local.daemon.service -> local.git: "detect repo\ncreate/remove worktree" {
-  style: {
-    stroke: "#ef9f76"
-    stroke-width: 3
-    animated: true
-  }
-}
-
-local.daemon.service -> local.tmux: "start, inspect,\nkill sessions" {
-  style: {
-    stroke: "#ef9f76"
-    stroke-width: 3
-    animated: true
-  }
-}
-
-local.daemon.service -> local.codex_home: "install hook\nforwarder config" {
+daemon -> codex: "start or resume work" {
   style: {
     stroke: "#f4b8e4"
     stroke-width: 3
@@ -208,27 +106,10 @@ local.daemon.service -> local.codex_home: "install hook\nforwarder config" {
   }
 }
 
-local.tmux -> local.codex: "launch codex\nor codex resume" {
+codex -> daemon.hooks: "post hooks" {
   style: {
     stroke: "#f4b8e4"
     stroke-width: 3
-    animated: true
-  }
-}
-
-local.codex -> local.daemon.hook_server: "POST hooks\nloopback HTTP" {
-  style: {
-    stroke: "#f4b8e4"
-    stroke-width: 3
-    animated: true
-  }
-}
-
-local.foreground.frontend -> local.tmux: "local attach-session\nor switch-client" {
-  style: {
-    stroke: "#ef9f76"
-    stroke-width: 2
-    stroke-dash: 4
     animated: true
   }
 }

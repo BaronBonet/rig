@@ -12,7 +12,7 @@ import (
 	"syscall"
 	"time"
 
-	"rig/internal/core"
+	"github.com/BaronBonet/rig/internal/core"
 )
 
 const (

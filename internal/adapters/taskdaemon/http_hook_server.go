@@ -7,7 +7,7 @@ import (
 	"net/http"
 	"strings"
 
-	"rig/internal/core"
+	"github.com/BaronBonet/rig/internal/core"
 )
 
 func listenForHTTPHooks(ctx context.Context, addr string) (net.Listener, error) {

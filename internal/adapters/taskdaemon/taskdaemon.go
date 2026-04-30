@@ -4,9 +4,9 @@ import (
 	"context"
 	"fmt"
 
-	"rig/internal/adapters/client/tmux"
-	"rig/internal/core"
-	"rig/internal/pkg/subprocess"
+	"github.com/BaronBonet/rig/internal/adapters/client/tmux"
+	"github.com/BaronBonet/rig/internal/core"
+	"github.com/BaronBonet/rig/internal/pkg/subprocess"
 )
 
 type adapter struct {

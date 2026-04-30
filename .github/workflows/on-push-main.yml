@@ -37,9 +37,6 @@ jobs:
           go-version-file: go.mod
           cache: true
 
-      - name: Install Go dependencies
-        run: ./scripts/dependencies/install.sh
-
       - name: Install GoReleaser
         uses: goreleaser/goreleaser-action@v6
         with:

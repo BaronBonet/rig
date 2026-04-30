@@ -8,7 +8,7 @@ import (
 	"fmt"
 	"io"
 
-	"rig/internal/core"
+	"github.com/BaronBonet/rig/internal/core"
 )
 
 type frontend struct {

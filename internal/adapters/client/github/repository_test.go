@@ -4,8 +4,8 @@ import (
 	"errors"
 	"testing"
 
-	"rig/internal/core"
-	"rig/internal/pkg/subprocess"
+	"github.com/BaronBonet/rig/internal/core"
+	"github.com/BaronBonet/rig/internal/pkg/subprocess"
 
 	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"

@@ -5,7 +5,7 @@ import (
 	"errors"
 	"time"
 
-	"rig/internal/core"
+	"github.com/BaronBonet/rig/internal/core"
 
 	tea "charm.land/bubbletea/v2"
 )

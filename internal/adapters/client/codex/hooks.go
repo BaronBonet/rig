@@ -14,7 +14,7 @@ import (
 	"strings"
 	"time"
 
-	"rig/internal/core"
+	"github.com/BaronBonet/rig/internal/core"
 )
 
 type HTTPHandler struct {

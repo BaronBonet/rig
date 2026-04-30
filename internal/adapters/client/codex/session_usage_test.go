@@ -6,7 +6,7 @@ import (
 	"strings"
 	"testing"
 
-	"rig/internal/core"
+	"github.com/BaronBonet/rig/internal/core"
 
 	"github.com/stretchr/testify/require"
 )
