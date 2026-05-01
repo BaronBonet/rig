@@ -75,25 +75,29 @@ type sessionClientState struct {
 }
 
 type providerClientState struct {
-	healthErr           error
-	suggestErr          error
-	suggestedName       string
-	suggestedSuggestion TaskSuggestion
-	sessionEnvErr       error
-	sessionEnvCalls     int
-	bootstrapErr        error
-	bootstrapSpec       WorkspaceBootstrapSpec
-	bootstrapRequest    *Task
-	launchErr           error
-	launchRequest       TaskSessionLaunchSpec
-	reconnectLaunchErr  error
-	reconnectLaunch     TaskSessionLaunchSpec
-	hookErr             error
-	hookUpdate          *TaskStatusUpdate
-	hookInput           HookEventInput
-	errByTranscript     map[string]error
-	usageByTranscript   map[string]*SessionTokenUsage
-	tokenUsageCalls     []providerTokenUsageCall
+	healthErr              error
+	suggestErr             error
+	suggestedName          string
+	suggestedSuggestion    TaskSuggestion
+	sessionEnvErr          error
+	sessionEnvCalls        int
+	bootstrapErr           error
+	bootstrapSpec          WorkspaceBootstrapSpec
+	bootstrapRequest       *Task
+	launchErr              error
+	launchRequest          TaskSessionLaunchSpec
+	reconnectLaunchErr     error
+	reconnectLaunch        TaskSessionLaunchSpec
+	hookErr                error
+	hookUpdate             *TaskStatusUpdate
+	hookInput              HookEventInput
+	statusRecoveryErr      error
+	statusRecoveryUpdate   *TaskStatusUpdate
+	statusRecoveryCurrent  *TaskStatusUpdate
+	statusRecoverySessions []TaskProviderSession
+	errByTranscript        map[string]error
+	usageByTranscript      map[string]*SessionTokenUsage
+	tokenUsageCalls        []providerTokenUsageCall
 }
 
 type pullRequestClientState struct {
@@ -363,6 +367,21 @@ func configureProviderClientMock(client *MockProviderClient, state *providerClie
 				return nil, nil
 			}
 			update := *state.hookUpdate
+			return &update, nil
+		},
+	).Maybe()
+	client.EXPECT().RecoverLatestTaskStatus(mock.Anything, mock.Anything, mock.Anything).RunAndReturn(
+		func(_ context.Context, current TaskStatusUpdate, sessions []TaskProviderSession) (*TaskStatusUpdate, error) {
+			copyCurrent := current
+			state.statusRecoveryCurrent = &copyCurrent
+			state.statusRecoverySessions = append([]TaskProviderSession(nil), sessions...)
+			if state.statusRecoveryErr != nil {
+				return nil, state.statusRecoveryErr
+			}
+			if state.statusRecoveryUpdate == nil {
+				return nil, nil
+			}
+			update := *state.statusRecoveryUpdate
 			return &update, nil
 		},
 	).Maybe()

@@ -281,6 +281,200 @@ func TestTaskStatusService_LatestStaysWorkingWhenAnyTaskPaneRunsProvider(t *test
 	require.Equal(t, latestHookStatus, *update)
 }
 
+func TestTaskStatusService_LatestRecoversWorkingStatusFromProviderTranscript(t *testing.T) {
+	svc := newTestTaskService(t)
+	svc.taskRepo.listTasks = []*Task{{
+		ID:          "task-123",
+		Provider:    ProviderCodex,
+		TmuxSession: "repo_task",
+	}}
+	svc.sessionClient.inspectState = TaskSessionRuntimeState{
+		Exists:         true,
+		ActiveCommands: []string{"zsh", "codex"},
+	}
+	svc.taskRepo.providerSessionsByTask["task-123"] = []TaskProviderSession{
+		{
+			LastObservedAt:    time.Date(2026, time.April, 19, 11, 2, 0, 0, time.UTC),
+			TaskID:            "task-123",
+			Provider:          ProviderCodex,
+			ProviderSessionID: "session-old",
+			TranscriptPath:    "/tmp/codex-old.jsonl",
+		},
+		{
+			LastObservedAt:    time.Date(2026, time.April, 19, 11, 5, 0, 0, time.UTC),
+			TaskID:            "task-123",
+			Provider:          ProviderCodex,
+			ProviderSessionID: "session-new",
+			TranscriptPath:    "/tmp/codex-new.jsonl",
+		},
+	}
+
+	latestHookStatus := TaskStatusUpdate{
+		TaskID:       "task-123",
+		Provider:     ProviderCodex,
+		Phase:        TaskStatusPhaseWorking,
+		RawEventName: "PostToolUse",
+		ObservedAt:   time.Date(2026, time.April, 19, 11, 3, 0, 0, time.UTC),
+	}
+	recovered := TaskStatusUpdate{
+		TaskID:       "task-123",
+		Provider:     ProviderCodex,
+		Phase:        TaskStatusPhaseWaitingForInput,
+		RawEventName: "TranscriptTaskComplete",
+		ObservedAt:   time.Date(2026, time.April, 19, 11, 4, 0, 0, time.UTC),
+	}
+	svc.providerRepo.statusRecoveryUpdate = &recovered
+	require.NoError(t, svc.taskRepoMock.UpsertTaskStatus(t.Context(), latestHookStatus))
+
+	update, err := svc.service.LatestTaskStatus(t.Context(), "task-123")
+	require.NoError(t, err)
+	require.NotNil(t, update)
+	require.Equal(t, recovered, *update)
+	require.Equal(t, &latestHookStatus, svc.providerRepo.statusRecoveryCurrent)
+	require.Equal(t, svc.taskRepo.providerSessionsByTask["task-123"], svc.providerRepo.statusRecoverySessions)
+}
+
+func TestTaskStatusService_LatestStaysWorkingWhenProviderHasNoRecoveredStatus(t *testing.T) {
+	svc := newTestTaskService(t)
+	svc.taskRepo.listTasks = []*Task{{
+		ID:          "task-123",
+		Provider:    ProviderCodex,
+		TmuxSession: "repo_task",
+	}}
+	svc.sessionClient.inspectState = TaskSessionRuntimeState{
+		Exists:         true,
+		ActiveCommands: []string{"codex"},
+	}
+	svc.taskRepo.providerSessionsByTask["task-123"] = []TaskProviderSession{{
+		LastObservedAt:    time.Date(2026, time.April, 19, 11, 5, 0, 0, time.UTC),
+		TaskID:            "task-123",
+		Provider:          ProviderCodex,
+		ProviderSessionID: "session-new",
+		TranscriptPath:    "/tmp/codex-new.jsonl",
+	}}
+
+	latestHookStatus := TaskStatusUpdate{
+		TaskID:       "task-123",
+		Provider:     ProviderCodex,
+		Phase:        TaskStatusPhaseWorking,
+		RawEventName: "PostToolUse",
+		ObservedAt:   time.Date(2026, time.April, 19, 11, 3, 0, 0, time.UTC),
+	}
+	require.NoError(t, svc.taskRepoMock.UpsertTaskStatus(t.Context(), latestHookStatus))
+
+	update, err := svc.service.LatestTaskStatus(t.Context(), "task-123")
+	require.NoError(t, err)
+	require.NotNil(t, update)
+	require.Equal(t, latestHookStatus, *update)
+}
+
+func TestTaskStatusService_LatestStaysWaitingWhenProviderHasNoRecoveredStatus(t *testing.T) {
+	svc := newTestTaskService(t)
+	svc.taskRepo.listTasks = []*Task{{
+		ID:          "task-123",
+		Provider:    ProviderCodex,
+		TmuxSession: "repo_task",
+	}}
+	svc.sessionClient.inspectState = TaskSessionRuntimeState{
+		Exists:         true,
+		ActiveCommands: []string{"codex"},
+	}
+
+	latestHookStatus := TaskStatusUpdate{
+		TaskID:       "task-123",
+		Provider:     ProviderCodex,
+		Phase:        TaskStatusPhaseWaitingForInput,
+		RawEventName: "Stop",
+		ObservedAt:   time.Date(2026, time.April, 19, 11, 3, 0, 0, time.UTC),
+	}
+	require.NoError(t, svc.taskRepoMock.UpsertTaskStatus(t.Context(), latestHookStatus))
+
+	update, err := svc.service.LatestTaskStatus(t.Context(), "task-123")
+	require.NoError(t, err)
+	require.NotNil(t, update)
+	require.Equal(t, latestHookStatus, *update)
+	require.Equal(t, &latestHookStatus, svc.providerRepo.statusRecoveryCurrent)
+}
+
+func TestTaskStatusService_LatestRecoversWaitingStatusFromProviderTranscriptActivity(t *testing.T) {
+	svc := newTestTaskService(t)
+	svc.taskRepo.listTasks = []*Task{{
+		ID:          "task-123",
+		Provider:    ProviderCodex,
+		TmuxSession: "repo_task",
+	}}
+	svc.sessionClient.inspectState = TaskSessionRuntimeState{
+		Exists:         true,
+		ActiveCommands: []string{"codex"},
+	}
+	svc.taskRepo.providerSessionsByTask["task-123"] = []TaskProviderSession{{
+		LastObservedAt:    time.Date(2026, time.April, 19, 11, 3, 0, 0, time.UTC),
+		TaskID:            "task-123",
+		Provider:          ProviderCodex,
+		ProviderSessionID: "session-new",
+		TranscriptPath:    "/tmp/codex-new.jsonl",
+	}}
+
+	latestHookStatus := TaskStatusUpdate{
+		TaskID:       "task-123",
+		Provider:     ProviderCodex,
+		Phase:        TaskStatusPhaseWaitingForInput,
+		RawEventName: "Stop",
+		ObservedAt:   time.Date(2026, time.April, 19, 11, 3, 0, 0, time.UTC),
+	}
+	recovered := TaskStatusUpdate{
+		TaskID:       "task-123",
+		Provider:     ProviderCodex,
+		Phase:        TaskStatusPhaseWorking,
+		RawEventName: "TranscriptActivity",
+		ObservedAt:   time.Date(2026, time.April, 19, 11, 4, 0, 0, time.UTC),
+	}
+	svc.providerRepo.statusRecoveryUpdate = &recovered
+	require.NoError(t, svc.taskRepoMock.UpsertTaskStatus(t.Context(), latestHookStatus))
+
+	update, err := svc.service.LatestTaskStatus(t.Context(), "task-123")
+	require.NoError(t, err)
+	require.NotNil(t, update)
+	require.Equal(t, recovered, *update)
+	require.Equal(t, &latestHookStatus, svc.providerRepo.statusRecoveryCurrent)
+}
+
+func TestTaskStatusService_LatestReturnsStoppedBeforeTranscriptRecoveryWhenProviderIsAbsent(t *testing.T) {
+	svc := newTestTaskService(t)
+	svc.taskRepo.listTasks = []*Task{{
+		ID:          "task-123",
+		Provider:    ProviderCodex,
+		TmuxSession: "repo_task",
+	}}
+	svc.sessionClient.inspectState = TaskSessionRuntimeState{
+		Exists:         true,
+		ActiveCommands: []string{"zsh"},
+	}
+	svc.providerRepo.statusRecoveryUpdate = &TaskStatusUpdate{
+		TaskID:       "task-123",
+		Provider:     ProviderCodex,
+		Phase:        TaskStatusPhaseWaitingForInput,
+		RawEventName: "TranscriptTaskComplete",
+		ObservedAt:   time.Date(2026, time.April, 19, 11, 4, 0, 0, time.UTC),
+	}
+
+	latestHookStatus := TaskStatusUpdate{
+		TaskID:       "task-123",
+		Provider:     ProviderCodex,
+		Phase:        TaskStatusPhaseWorking,
+		RawEventName: "PostToolUse",
+		ObservedAt:   time.Date(2026, time.April, 19, 11, 3, 0, 0, time.UTC),
+	}
+	require.NoError(t, svc.taskRepoMock.UpsertTaskStatus(t.Context(), latestHookStatus))
+
+	update, err := svc.service.LatestTaskStatus(t.Context(), "task-123")
+	require.NoError(t, err)
+	require.NotNil(t, update)
+	require.Equal(t, TaskStatusPhaseStopped, update.Phase)
+	require.Equal(t, "TaskSessionStopped", update.RawEventName)
+	require.Nil(t, svc.providerRepo.statusRecoveryCurrent)
+}
+
 func TestTaskStatusService_LatestStaysWorkingWhenCodexPaneRunsPlatformBinary(t *testing.T) {
 	svc := newTestTaskService(t)
 	svc.taskRepo.listTasks = []*Task{{

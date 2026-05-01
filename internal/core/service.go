@@ -422,6 +422,10 @@ func (s *taskService) currentTaskStatus(ctx context.Context, update *TaskStatusU
 	}
 
 	if taskSessionRunningProvider(runtime, providerClient.TaskSessionCommandName()) {
+		recovered := s.recoveredTaskStatus(ctx, providerClient, update)
+		if recovered != nil {
+			return recovered
+		}
 		return update
 	}
 
@@ -429,6 +433,26 @@ func (s *taskService) currentTaskStatus(ctx context.Context, update *TaskStatusU
 	stopped.Phase = TaskStatusPhaseStopped
 	stopped.RawEventName = "TaskSessionStopped"
 	return &stopped
+}
+
+func (s *taskService) recoveredTaskStatus(
+	ctx context.Context,
+	providerClient ProviderClient,
+	update *TaskStatusUpdate,
+) *TaskStatusUpdate {
+	if update.Phase == TaskStatusPhaseStopped {
+		return nil
+	}
+
+	sessions, err := s.tasks.ListTaskProviderSessions(ctx, update.TaskID)
+	if err != nil {
+		return nil
+	}
+	recovered, err := providerClient.RecoverLatestTaskStatus(ctx, *update, sessions)
+	if err != nil {
+		return nil
+	}
+	return recovered
 }
 
 func taskSessionRunningProvider(runtime TaskSessionRuntimeState, commandName string) bool {

@@ -283,6 +283,13 @@ type ProviderClient interface {
 	// HookEventToTaskStatus normalizes a provider hook event into a task status
 	// update when the event contributes to the live task status stream.
 	HookEventToTaskStatus(input HookEventInput) (*TaskStatusUpdate, error)
+	// RecoverLatestTaskStatus returns a computed replacement for a stale latest
+	// task status when provider-side state contains a newer observation.
+	RecoverLatestTaskStatus(
+		ctx context.Context,
+		current TaskStatusUpdate,
+		sessions []TaskProviderSession,
+	) (*TaskStatusUpdate, error)
 	// ReadSessionTokenUsage reads provider-specific token usage from one
 	// provider transcript.
 	ReadSessionTokenUsage(ctx context.Context, transcriptPath string) (*SessionTokenUsage, error)
