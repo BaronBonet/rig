@@ -70,6 +70,68 @@ func TestTaskStatusService_GetTaskActivityReturnsRepositoryEvents(t *testing.T) 
 	}, events)
 }
 
+func TestTaskStatusService_GetTaskActivityIncludesRecoveredTranscriptActivity(t *testing.T) {
+	svc := newTestTaskService(t)
+	svc.taskRepo.activityByTask["task-123"] = []TaskActivityEvent{
+		{
+			TaskID:     "task-123",
+			EventName:  "UserPromptSubmit",
+			Role:       TaskActivityRoleUser,
+			Text:       "old prompt",
+			ObservedAt: time.Date(2026, time.April, 23, 10, 0, 0, 0, time.UTC),
+		},
+		{
+			TaskID:     "task-123",
+			EventName:  "Stop",
+			Role:       TaskActivityRoleAssistant,
+			Text:       "Old answer.",
+			ObservedAt: time.Date(2026, time.April, 23, 10, 1, 0, 0, time.UTC),
+		},
+	}
+	svc.taskRepo.providerSessionsByTask["task-123"] = []TaskProviderSession{{
+		TaskID:            "task-123",
+		Provider:          ProviderCodex,
+		ProviderSessionID: "sess-a",
+		TranscriptPath:    "/tmp/codex-a.jsonl",
+		LastObservedAt:    time.Date(2026, time.April, 23, 10, 1, 0, 0, time.UTC),
+	}}
+	recovered := []TaskActivityEvent{
+		{
+			TaskID:     "task-123",
+			EventName:  "TranscriptUserMessage",
+			Role:       TaskActivityRoleUser,
+			Text:       "do it again",
+			ObservedAt: time.Date(2026, time.April, 23, 10, 2, 0, 0, time.UTC),
+		},
+		{
+			TaskID:     "task-123",
+			EventName:  "TranscriptFunctionCall",
+			Role:       TaskActivityRoleAssistant,
+			Text:       "make test",
+			ObservedAt: time.Date(2026, time.April, 23, 10, 3, 0, 0, time.UTC),
+		},
+		{
+			TaskID:     "task-123",
+			EventName:  "TranscriptAssistantMessage",
+			Role:       TaskActivityRoleAssistant,
+			Text:       "Ran it again.",
+			ObservedAt: time.Date(2026, time.April, 23, 10, 4, 0, 0, time.UTC),
+		},
+	}
+	svc.providerRepo.activityByTranscript = map[string][]TaskActivityEvent{
+		"/tmp/codex-a.jsonl": recovered,
+	}
+
+	events, err := svc.service.GetTaskActivity(t.Context(), "task-123", 3)
+
+	require.NoError(t, err)
+	require.Equal(t, recovered, events)
+	require.Equal(t, []providerActivityCall{{
+		transcriptPath: "/tmp/codex-a.jsonl",
+		after:          time.Date(2026, time.April, 23, 10, 1, 0, 0, time.UTC),
+	}}, svc.providerRepo.activityCalls)
+}
+
 func TestTaskStatusService_GetTaskTokenUsageSumsLatestTranscriptPerProviderSession(t *testing.T) {
 	svc := newTestTaskService(t)
 	svc.taskRepo.providerSessionsByTask["task-123"] = []TaskProviderSession{
@@ -195,6 +257,61 @@ func TestTaskStatusService_SubscribeClosesChannelWhenContextIsCancelled(t *testi
 		require.False(t, ok)
 	case <-time.After(time.Second):
 		t.Fatal("timed out waiting for subscription channel to close")
+	}
+}
+
+func TestTaskStatusService_SubscribePublishesRecoveredStatusWithoutHookUpdate(t *testing.T) {
+	svc := newTestTaskService(t)
+	svc.taskRepo.listTasks = []*Task{{
+		ID:          "task-123",
+		Provider:    ProviderCodex,
+		TmuxSession: "repo_task",
+	}}
+	svc.sessionClient.inspectState = TaskSessionRuntimeState{
+		Exists:         true,
+		ActiveCommands: []string{"codex"},
+	}
+	svc.taskRepo.providerSessionsByTask["task-123"] = []TaskProviderSession{{
+		LastObservedAt:    time.Date(2026, time.April, 19, 11, 3, 0, 0, time.UTC),
+		TaskID:            "task-123",
+		Provider:          ProviderCodex,
+		ProviderSessionID: "session-new",
+		TranscriptPath:    "/tmp/codex-new.jsonl",
+	}}
+	latestHookStatus := TaskStatusUpdate{
+		TaskID:       "task-123",
+		Provider:     ProviderCodex,
+		Phase:        TaskStatusPhaseWaitingForInput,
+		RawEventName: "Stop",
+		ObservedAt:   time.Date(2026, time.April, 19, 11, 3, 0, 0, time.UTC),
+	}
+	recovered := TaskStatusUpdate{
+		TaskID:       "task-123",
+		Provider:     ProviderCodex,
+		Phase:        TaskStatusPhaseWorking,
+		RawEventName: "TranscriptActivity",
+		ObservedAt:   time.Date(2026, time.April, 19, 11, 4, 0, 0, time.UTC),
+	}
+	svc.providerRepo.statusRecoveryUpdate = &recovered
+	require.NoError(t, svc.taskRepoMock.UpsertTaskStatus(t.Context(), latestHookStatus))
+
+	previousInterval := taskStatusRecoveryPollInterval
+	taskStatusRecoveryPollInterval = time.Millisecond
+	t.Cleanup(func() {
+		taskStatusRecoveryPollInterval = previousInterval
+	})
+
+	ctx, cancel := context.WithCancel(t.Context())
+	defer cancel()
+
+	updates, err := svc.service.SubscribeTaskStatus(ctx, "task-123")
+	require.NoError(t, err)
+
+	select {
+	case update := <-updates:
+		require.Equal(t, recovered, update)
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for recovered status update")
 	}
 }
 

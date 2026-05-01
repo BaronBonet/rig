@@ -2,8 +2,10 @@ package core
 
 import (
 	"context"
+	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/mock"
 )
@@ -75,29 +77,32 @@ type sessionClientState struct {
 }
 
 type providerClientState struct {
-	healthErr              error
-	suggestErr             error
-	suggestedName          string
-	suggestedSuggestion    TaskSuggestion
-	sessionEnvErr          error
-	sessionEnvCalls        int
-	bootstrapErr           error
-	bootstrapSpec          WorkspaceBootstrapSpec
-	bootstrapRequest       *Task
-	launchErr              error
-	launchRequest          TaskSessionLaunchSpec
-	reconnectLaunchErr     error
-	reconnectLaunch        TaskSessionLaunchSpec
-	hookErr                error
-	hookUpdate             *TaskStatusUpdate
-	hookInput              HookEventInput
-	statusRecoveryErr      error
-	statusRecoveryUpdate   *TaskStatusUpdate
-	statusRecoveryCurrent  *TaskStatusUpdate
-	statusRecoverySessions []TaskProviderSession
-	errByTranscript        map[string]error
-	usageByTranscript      map[string]*SessionTokenUsage
-	tokenUsageCalls        []providerTokenUsageCall
+	healthErr               error
+	suggestErr              error
+	suggestedName           string
+	suggestedSuggestion     TaskSuggestion
+	sessionEnvErr           error
+	sessionEnvCalls         int
+	bootstrapErr            error
+	bootstrapSpec           WorkspaceBootstrapSpec
+	bootstrapRequest        *Task
+	launchErr               error
+	launchRequest           TaskSessionLaunchSpec
+	reconnectLaunchErr      error
+	reconnectLaunch         TaskSessionLaunchSpec
+	hookErr                 error
+	hookUpdate              *TaskStatusUpdate
+	hookInput               HookEventInput
+	statusRecoveryErr       error
+	statusRecoveryUpdate    *TaskStatusUpdate
+	statusRecoveryCurrent   *TaskStatusUpdate
+	statusRecoverySessions  []TaskProviderSession
+	activityErrByTranscript map[string]error
+	activityByTranscript    map[string][]TaskActivityEvent
+	activityCalls           []providerActivityCall
+	errByTranscript         map[string]error
+	usageByTranscript       map[string]*SessionTokenUsage
+	tokenUsageCalls         []providerTokenUsageCall
 }
 
 type pullRequestClientState struct {
@@ -113,6 +118,11 @@ type pullRequestClientState struct {
 }
 
 type providerTokenUsageCall struct {
+	transcriptPath string
+}
+
+type providerActivityCall struct {
+	after          time.Time
 	transcriptPath string
 }
 
@@ -383,6 +393,23 @@ func configureProviderClientMock(client *MockProviderClient, state *providerClie
 			}
 			update := *state.statusRecoveryUpdate
 			return &update, nil
+		},
+	).Maybe()
+	client.EXPECT().ReadSessionActivity(mock.Anything, mock.Anything, mock.Anything).RunAndReturn(
+		func(_ context.Context, session TaskProviderSession, after time.Time) ([]TaskActivityEvent, error) {
+			transcriptPath := strings.TrimSpace(session.TranscriptPath)
+			state.activityCalls = append(state.activityCalls, providerActivityCall{
+				transcriptPath: transcriptPath,
+				after:          after,
+			})
+			if state.activityErrByTranscript != nil && state.activityErrByTranscript[transcriptPath] != nil {
+				return nil, state.activityErrByTranscript[transcriptPath]
+			}
+			if state.activityByTranscript == nil {
+				return nil, nil
+			}
+			events := state.activityByTranscript[transcriptPath]
+			return append([]TaskActivityEvent(nil), events...), nil
 		},
 	).Maybe()
 	client.EXPECT().ReadSessionTokenUsage(mock.Anything, mock.Anything).RunAndReturn(

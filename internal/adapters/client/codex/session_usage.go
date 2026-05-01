@@ -73,7 +73,14 @@ type codexEventPayload struct {
 }
 
 type codexTaskCompletePayload struct {
-	Type string `json:"type"`
+	Arguments string `json:"arguments"`
+	Message   string `json:"message"`
+	Phase     string `json:"phase"`
+	Type      string `json:"type"`
+}
+
+type codexFunctionCallArguments struct {
+	Command string `json:"cmd"`
 }
 
 type codexTranscriptStatus struct {
@@ -114,6 +121,14 @@ func (r *repository) RecoverLatestTaskStatus(
 		RawEventName: status.rawEventName,
 		ObservedAt:   status.observedAt,
 	}, nil
+}
+
+func (r *repository) ReadSessionActivity(
+	ctx context.Context,
+	session core.TaskProviderSession,
+	after time.Time,
+) ([]core.TaskActivityEvent, error) {
+	return readCodexSessionActivity(ctx, session, after)
 }
 
 func newestCodexTranscriptSession(sessions []core.TaskProviderSession) *core.TaskProviderSession {
@@ -203,6 +218,91 @@ func codexEventMessageStatus(observedAt time.Time, eventType string) *codexTrans
 			phase:        core.TaskStatusPhaseWorking,
 		}
 	}
+}
+
+func readCodexSessionActivity(
+	ctx context.Context,
+	session core.TaskProviderSession,
+	after time.Time,
+) ([]core.TaskActivityEvent, error) {
+	taskID := strings.TrimSpace(session.TaskID)
+	if taskID == "" {
+		return nil, nil
+	}
+
+	var events []core.TaskActivityEvent
+	err := scanTranscriptLines(ctx, session.TranscriptPath, func(line []byte) {
+		var envelope codexTranscriptEnvelope
+		if err := json.Unmarshal(line, &envelope); err != nil {
+			return
+		}
+		if envelope.Timestamp.IsZero() || !envelope.Timestamp.After(after) || len(envelope.Payload) == 0 {
+			return
+		}
+
+		activity := codexTranscriptActivityEvent(taskID, envelope)
+		if activity == nil {
+			return
+		}
+		events = append(events, *activity)
+	})
+	return events, err
+}
+
+func codexTranscriptActivityEvent(taskID string, envelope codexTranscriptEnvelope) *core.TaskActivityEvent {
+	var payload codexTaskCompletePayload
+	if err := json.Unmarshal(envelope.Payload, &payload); err != nil {
+		return nil
+	}
+
+	event := core.TaskActivityEvent{
+		ObservedAt: envelope.Timestamp,
+		TaskID:     taskID,
+	}
+	switch envelope.Type {
+	case "event_msg":
+		switch payload.Type {
+		case "user_message":
+			event.EventName = "TranscriptUserMessage"
+			event.Role = core.TaskActivityRoleUser
+			event.Text = compactTranscriptActivityText(payload.Message)
+		case "agent_message":
+			if payload.Phase != "final_answer" {
+				return nil
+			}
+			event.EventName = "TranscriptAssistantMessage"
+			event.Role = core.TaskActivityRoleAssistant
+			event.Text = compactTranscriptActivityText(payload.Message)
+		default:
+			return nil
+		}
+	case "response_item":
+		if payload.Type != "function_call" {
+			return nil
+		}
+		event.EventName = "TranscriptFunctionCall"
+		event.Role = core.TaskActivityRoleAssistant
+		event.Text = compactTranscriptActivityText(codexFunctionCallCommand(payload.Arguments))
+	default:
+		return nil
+	}
+
+	if event.Text == "" {
+		return nil
+	}
+	return &event
+}
+
+func codexFunctionCallCommand(arguments string) string {
+	var parsed codexFunctionCallArguments
+	if err := json.Unmarshal([]byte(arguments), &parsed); err != nil {
+		return ""
+	}
+	return parsed.Command
+}
+
+func compactTranscriptActivityText(value string) string {
+	return strings.Join(strings.Fields(strings.TrimSpace(value)), " ")
 }
 
 func readCodexTokenUsage(ctx context.Context, transcriptPath string) (*core.SessionTokenUsage, error) {
