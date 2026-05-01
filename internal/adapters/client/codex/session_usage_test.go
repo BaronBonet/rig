@@ -69,6 +69,48 @@ func TestRepositoryReadSessionTokenUsage_OpenErrorReturnsError(t *testing.T) {
 	require.Nil(t, usage)
 }
 
+func TestRepositoryReadSessionActivity_ReturnsTranscriptActivityAfterTimestamp(t *testing.T) {
+	repo := &repository{}
+	path := writeJSONL(t, []string{
+		`{"timestamp":"2026-04-19T11:00:00Z","type":"event_msg","payload":{"type":"user_message","message":"old prompt"}}`,
+		`{"timestamp":"2026-04-19T11:02:00Z","type":"event_msg","payload":{"type":"user_message","message":"do it again"}}`,
+		`{"timestamp":"2026-04-19T11:03:00Z","type":"response_item","payload":{"type":"function_call","name":"exec_command","arguments":"{\"cmd\":\"make test\"}"}}`,
+		`{"timestamp":"2026-04-19T11:04:00Z","type":"event_msg","payload":{"type":"agent_message","phase":"final_answer","message":"Ran it again."}}`,
+		`{"timestamp":"2026-04-19T11:05:00Z","type":"event_msg","payload":{"type":"token_count"}}`,
+	})
+
+	events, err := repo.ReadSessionActivity(t.Context(), core.TaskProviderSession{
+		TaskID:         "task-123",
+		Provider:       core.ProviderCodex,
+		TranscriptPath: path,
+	}, time.Date(2026, time.April, 19, 11, 1, 0, 0, time.UTC))
+
+	require.NoError(t, err)
+	require.Equal(t, []core.TaskActivityEvent{
+		{
+			ObservedAt: time.Date(2026, time.April, 19, 11, 2, 0, 0, time.UTC),
+			TaskID:     "task-123",
+			EventName:  "TranscriptUserMessage",
+			Role:       core.TaskActivityRoleUser,
+			Text:       "do it again",
+		},
+		{
+			ObservedAt: time.Date(2026, time.April, 19, 11, 3, 0, 0, time.UTC),
+			TaskID:     "task-123",
+			EventName:  "TranscriptFunctionCall",
+			Role:       core.TaskActivityRoleAssistant,
+			Text:       "make test",
+		},
+		{
+			ObservedAt: time.Date(2026, time.April, 19, 11, 4, 0, 0, time.UTC),
+			TaskID:     "task-123",
+			EventName:  "TranscriptAssistantMessage",
+			Role:       core.TaskActivityRoleAssistant,
+			Text:       "Ran it again.",
+		},
+	}, events)
+}
+
 func TestRepositoryRecoverLatestTaskStatus_ReturnsTaskCompleteFromNewestTranscript(t *testing.T) {
 	repo := &repository{}
 	oldPath := writeJSONL(t, []string{

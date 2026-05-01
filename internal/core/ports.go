@@ -279,6 +279,13 @@ type ProviderClient interface {
 		current TaskStatusUpdate,
 		sessions []TaskProviderSession,
 	) (*TaskStatusUpdate, error)
+	// ReadSessionActivity reads provider-specific user and assistant activity
+	// from one provider transcript after the supplied timestamp.
+	ReadSessionActivity(
+		ctx context.Context,
+		session TaskProviderSession,
+		after time.Time,
+	) ([]TaskActivityEvent, error)
 	// ReadSessionTokenUsage reads provider-specific token usage from one
 	// provider transcript.
 	ReadSessionTokenUsage(ctx context.Context, transcriptPath string) (*SessionTokenUsage, error)

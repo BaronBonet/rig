@@ -34,6 +34,8 @@ type taskService struct {
 	enableWorkspaceSetup bool
 }
 
+var taskStatusRecoveryPollInterval = 2 * time.Second
+
 type HealthCheck struct {
 	Err      error
 	Name     string
@@ -161,13 +163,14 @@ func (s *taskService) ListTasks(ctx context.Context) ([]*Task, error) {
 
 func (s *taskService) GetTaskActivity(ctx context.Context, taskID string, limit int) ([]TaskActivityEvent, error) {
 	taskID = strings.TrimSpace(taskID)
-	if limit <= 0 {
-		return s.tasks.GetTaskActivity(ctx, taskID, limit)
-	}
-
 	events, err := s.tasks.GetTaskActivity(ctx, taskID, 0)
 	if err != nil {
 		return nil, err
+	}
+	events = mergeTaskActivity(events, s.recoveredTaskActivity(ctx, taskID, events))
+
+	if limit <= 0 {
+		return events, nil
 	}
 
 	return activityWindowWithLastUserPrompt(events, limit), nil
@@ -216,6 +219,32 @@ func (s *taskService) GetTaskTokenUsage(ctx context.Context, taskID string) (*Ta
 	}
 
 	return &total, nil
+}
+
+func (s *taskService) recoveredTaskActivity(
+	ctx context.Context,
+	taskID string,
+	events []TaskActivityEvent,
+) []TaskActivityEvent {
+	sessions, err := s.tasks.ListTaskProviderSessions(ctx, taskID)
+	if err != nil {
+		return nil
+	}
+
+	after := latestTaskActivityObservedAt(events)
+	var recovered []TaskActivityEvent
+	for _, session := range latestProviderSessionsByID(sessions) {
+		providerClient, err := s.providerClientFor(session.Provider)
+		if err != nil {
+			continue
+		}
+		activity, err := providerClient.ReadSessionActivity(ctx, session, after)
+		if err != nil {
+			continue
+		}
+		recovered = append(recovered, activity...)
+	}
+	return recovered
 }
 
 func (s *taskService) ListRepoPullRequests(ctx context.Context, cwd string) ([]RepoPullRequest, error) {
@@ -343,7 +372,84 @@ func (s *taskService) SubscribeTaskStatus(
 	ctx context.Context,
 	taskID string,
 ) (<-chan TaskStatusUpdate, error) {
-	return s.tasks.SubscribeTaskStatus(ctx, strings.TrimSpace(taskID))
+	taskID = strings.TrimSpace(taskID)
+	updates, err := s.tasks.SubscribeTaskStatus(ctx, taskID)
+	if err != nil {
+		return nil, err
+	}
+
+	return s.subscribeTaskStatusWithRecovery(ctx, taskID, updates, taskStatusRecoveryPollInterval), nil
+}
+
+func (s *taskService) subscribeTaskStatusWithRecovery(
+	ctx context.Context,
+	taskID string,
+	updates <-chan TaskStatusUpdate,
+	pollInterval time.Duration,
+) <-chan TaskStatusUpdate {
+	recovered := make(chan TaskStatusUpdate, 8)
+
+	go func() {
+		defer close(recovered)
+
+		var lastSent *TaskStatusUpdate
+		send := func(update *TaskStatusUpdate) bool {
+			if update == nil || taskStatusUpdatesEqual(lastSent, update) {
+				return true
+			}
+			copy := *update
+			select {
+			case recovered <- copy:
+				lastSent = &copy
+				return true
+			case <-ctx.Done():
+				return false
+			}
+		}
+
+		if !send(s.latestTaskStatusNoSubscribe(ctx, taskID)) {
+			return
+		}
+
+		ticker := time.NewTicker(pollInterval)
+		defer ticker.Stop()
+
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case update, ok := <-updates:
+				if !ok {
+					return
+				}
+				current := s.currentTaskStatus(ctx, &update)
+				if !send(current) {
+					return
+				}
+			case <-ticker.C:
+				if !send(s.latestTaskStatusNoSubscribe(ctx, taskID)) {
+					return
+				}
+			}
+		}
+	}()
+
+	return recovered
+}
+
+func (s *taskService) latestTaskStatusNoSubscribe(ctx context.Context, taskID string) *TaskStatusUpdate {
+	update, err := s.tasks.LatestTaskStatus(ctx, taskID)
+	if err != nil || update == nil {
+		return nil
+	}
+	return s.currentTaskStatus(ctx, update)
+}
+
+func taskStatusUpdatesEqual(left *TaskStatusUpdate, right *TaskStatusUpdate) bool {
+	if left == nil || right == nil {
+		return left == right
+	}
+	return *left == *right
 }
 
 func (s *taskService) currentTaskStatus(ctx context.Context, update *TaskStatusUpdate) *TaskStatusUpdate {
@@ -561,6 +667,37 @@ func activityWindowWithLastUserPrompt(events []TaskActivityEvent, limit int) []T
 	}
 
 	return append([]TaskActivityEvent{lastUser}, window...)
+}
+
+func latestTaskActivityObservedAt(events []TaskActivityEvent) time.Time {
+	var latest time.Time
+	for _, event := range events {
+		if event.ObservedAt.After(latest) {
+			latest = event.ObservedAt
+		}
+	}
+	return latest
+}
+
+func mergeTaskActivity(stored []TaskActivityEvent, recovered []TaskActivityEvent) []TaskActivityEvent {
+	merged := make([]TaskActivityEvent, 0, len(stored)+len(recovered))
+	merged = append(merged, stored...)
+	merged = append(merged, recovered...)
+	sort.SliceStable(merged, func(i, j int) bool {
+		left := merged[i]
+		right := merged[j]
+		if !left.ObservedAt.Equal(right.ObservedAt) {
+			return left.ObservedAt.Before(right.ObservedAt)
+		}
+		if left.Role != right.Role {
+			return left.Role < right.Role
+		}
+		if left.EventName != right.EventName {
+			return left.EventName < right.EventName
+		}
+		return left.Text < right.Text
+	})
+	return merged
 }
 
 func latestProviderSessionsByID(sessions []TaskProviderSession) []TaskProviderSession {
