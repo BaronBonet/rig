@@ -5,6 +5,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/BaronBonet/rig/internal/core"
 
@@ -66,6 +67,112 @@ func TestRepositoryReadSessionTokenUsage_OpenErrorReturnsError(t *testing.T) {
 
 	require.Error(t, err)
 	require.Nil(t, usage)
+}
+
+func TestRepositoryRecoverLatestTaskStatus_ReturnsTaskCompleteFromNewestTranscript(t *testing.T) {
+	repo := &repository{}
+	oldPath := writeJSONL(t, []string{
+		`{"timestamp":"2026-04-19T11:00:00Z","type":"event_msg","payload":{"type":"task_complete"}}`,
+	})
+	newPath := writeJSONL(t, []string{
+		`{malformed`,
+		`{"timestamp":"2026-04-19T11:02:00Z","type":"event_msg","payload":{"type":"token_count"}}`,
+		`{"timestamp":"2026-04-19T11:03:00Z","type":"response_item","payload":{"type":"task_complete"}}`,
+		`{"timestamp":"2026-04-19T11:04:00Z","type":"event_msg","payload":{"type":"task_complete"}}`,
+	})
+	current := core.TaskStatusUpdate{
+		TaskID:       "task-123",
+		Provider:     core.ProviderCodex,
+		Phase:        core.TaskStatusPhaseWorking,
+		RawEventName: "PostToolUse",
+		ObservedAt:   time.Date(2026, time.April, 19, 11, 1, 0, 0, time.UTC),
+	}
+
+	update, err := repo.RecoverLatestTaskStatus(t.Context(), current, []core.TaskProviderSession{
+		{
+			LastObservedAt: time.Date(2026, time.April, 19, 11, 5, 0, 0, time.UTC),
+			TaskID:         "task-123",
+			Provider:       core.ProviderCodex,
+			TranscriptPath: newPath,
+		},
+		{
+			LastObservedAt: time.Date(2026, time.April, 19, 11, 0, 0, 0, time.UTC),
+			TaskID:         "task-123",
+			Provider:       core.ProviderCodex,
+			TranscriptPath: oldPath,
+		},
+	})
+
+	require.NoError(t, err)
+	require.Equal(t, &core.TaskStatusUpdate{
+		TaskID:       "task-123",
+		Provider:     core.ProviderCodex,
+		Phase:        core.TaskStatusPhaseWaitingForInput,
+		RawEventName: "TranscriptTaskComplete",
+		ObservedAt:   time.Date(2026, time.April, 19, 11, 4, 0, 0, time.UTC),
+	}, update)
+}
+
+func TestRepositoryRecoverLatestTaskStatus_ReturnsWorkingFromNewerTranscriptActivity(t *testing.T) {
+	repo := &repository{}
+	path := writeJSONL(t, []string{
+		`{"timestamp":"2026-04-19T11:02:00Z","type":"event_msg","payload":{"type":"task_complete"}}`,
+		`{"timestamp":"2026-04-19T11:04:00Z","type":"response_item","payload":{"type":"function_call","name":"exec_command"}}`,
+	})
+	current := core.TaskStatusUpdate{
+		TaskID:       "task-123",
+		Provider:     core.ProviderCodex,
+		Phase:        core.TaskStatusPhaseWaitingForInput,
+		RawEventName: "Stop",
+		ObservedAt:   time.Date(2026, time.April, 19, 11, 3, 0, 0, time.UTC),
+	}
+
+	update, err := repo.RecoverLatestTaskStatus(t.Context(), current, []core.TaskProviderSession{{
+		LastObservedAt: time.Date(2026, time.April, 19, 11, 3, 0, 0, time.UTC),
+		TaskID:         "task-123",
+		Provider:       core.ProviderCodex,
+		TranscriptPath: path,
+	}})
+
+	require.NoError(t, err)
+	require.Equal(t, &core.TaskStatusUpdate{
+		TaskID:       "task-123",
+		Provider:     core.ProviderCodex,
+		Phase:        core.TaskStatusPhaseWorking,
+		RawEventName: "TranscriptActivity",
+		ObservedAt:   time.Date(2026, time.April, 19, 11, 4, 0, 0, time.UTC),
+	}, update)
+}
+
+func TestRepositoryRecoverLatestTaskStatus_DoesNotUseTaskCompleteWhenNewerActivityExists(t *testing.T) {
+	repo := &repository{}
+	path := writeJSONL(t, []string{
+		`{"timestamp":"2026-04-19T11:04:00Z","type":"event_msg","payload":{"type":"task_complete"}}`,
+		`{"timestamp":"2026-04-19T11:05:00Z","type":"event_msg","payload":{"type":"agent_message","message":"still working"}}`,
+	})
+	current := core.TaskStatusUpdate{
+		TaskID:       "task-123",
+		Provider:     core.ProviderCodex,
+		Phase:        core.TaskStatusPhaseWorking,
+		RawEventName: "PostToolUse",
+		ObservedAt:   time.Date(2026, time.April, 19, 11, 3, 0, 0, time.UTC),
+	}
+
+	update, err := repo.RecoverLatestTaskStatus(t.Context(), current, []core.TaskProviderSession{{
+		LastObservedAt: time.Date(2026, time.April, 19, 11, 5, 0, 0, time.UTC),
+		TaskID:         "task-123",
+		Provider:       core.ProviderCodex,
+		TranscriptPath: path,
+	}})
+
+	require.NoError(t, err)
+	require.Equal(t, &core.TaskStatusUpdate{
+		TaskID:       "task-123",
+		Provider:     core.ProviderCodex,
+		Phase:        core.TaskStatusPhaseWorking,
+		RawEventName: "TranscriptActivity",
+		ObservedAt:   time.Date(2026, time.April, 19, 11, 5, 0, 0, time.UTC),
+	}, update)
 }
 
 func writeJSONL(t *testing.T, lines []string) string {
