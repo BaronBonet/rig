@@ -80,6 +80,30 @@ func TestModel_ViewRendersTaskMetadata(t *testing.T) {
 	require.Contains(t, view, "15m")
 }
 
+func TestModel_ViewRendersFailedCreationTaskWithRetryHint(t *testing.T) {
+	frontend := newFrontendHarness()
+	frontend.listTasks = []*core.Task{
+		{
+			ID:             "task-1",
+			RepoName:       "repo-a",
+			DisplayName:    "first task",
+			BranchName:     "feat/first-task",
+			Provider:       core.ProviderCodex,
+			CreationStatus: core.TaskCreationStatusFailed,
+			CreationStep:   core.TaskCreateProgressPreparingWorkspace,
+			CreationError:  "setup workspace: docker daemon unavailable",
+		},
+	}
+
+	m := newLoadedModel(frontend)
+
+	view := stripANSI(m.View().Content)
+	require.Contains(t, view, "R retry")
+	require.Contains(t, view, "setup failed")
+	require.Contains(t, view, "Failed while preparing workspace")
+	require.Contains(t, view, "setup workspace: docker daemon unavailable")
+}
+
 func TestModel_ViewSplitsTaskOverviewByRepo(t *testing.T) {
 	frontend := newFrontendHarness()
 	frontend.listTasks = []*core.Task{
@@ -1162,6 +1186,61 @@ func TestModel_CreateTaskFailureKeepsPromptRecoverableAndPreservesListView(t *te
 	require.NotContains(t, view, "Enter task prompt.")
 }
 
+func TestModel_RetryFailedTaskCreationStreamsProgress(t *testing.T) {
+	frontend := newFrontendHarness()
+	frontend.listTasks = []*core.Task{
+		{
+			ID:             "task-1",
+			DisplayName:    "first task",
+			RepoName:       "repo-a",
+			Provider:       core.ProviderCodex,
+			CreationStatus: core.TaskCreationStatusFailed,
+			CreationStep:   core.TaskCreateProgressPreparingWorkspace,
+			CreationError:  "setup workspace: docker daemon unavailable",
+		},
+	}
+	frontend.retryTaskEvents = []core.TaskCreateEvent{
+		{Progress: &core.TaskCreateProgressEvent{Step: core.TaskCreateProgressPreparingWorkspace}},
+		{Task: &core.Task{
+			ID:             "task-1",
+			DisplayName:    "first task",
+			RepoName:       "repo-a",
+			Provider:       core.ProviderCodex,
+			CreationStatus: core.TaskCreationStatusReady,
+		}},
+	}
+
+	m := newLoadedModel(frontend)
+
+	next, cmd := m.Update(tea.KeyPressMsg{Text: "R"})
+	require.NotNil(t, cmd)
+
+	pending, ok := next.(model)
+	require.True(t, ok)
+	require.True(t, pending.createPending)
+
+	initialMsgs := runBatchCmd(t, cmd)
+	require.Equal(t, "task-1", frontend.retryTaskID)
+	require.Equal(t, 1, frontend.retryTaskStreamCalls)
+	progressMsg := requireMsgType[taskCreateEventMsg](t, initialMsgs)
+	requireMsgType[shimmerTickMsg](t, initialMsgs)
+	require.NotNil(t, progressMsg.event.Progress)
+	require.Equal(t, core.TaskCreateProgressPreparingWorkspace, progressMsg.event.Progress.Step)
+
+	next, follow := pending.Update(progressMsg)
+	require.NotNil(t, follow)
+	withProgress, ok := next.(model)
+	require.True(t, ok)
+	require.Equal(t, core.TaskCreateProgressPreparingWorkspace, withProgress.createActive)
+
+	taskRetried := runCmd(t, follow)
+	next, _ = withProgress.Update(taskRetried)
+	got, ok := next.(model)
+	require.True(t, ok)
+	require.False(t, got.createPending)
+	require.Equal(t, core.TaskCreationStatusReady, got.rows[0].task.CreationStatus)
+}
+
 func TestModel_CreateTaskFromPromptReturnsToBrowseImmediatelyAndKeepsOverviewUsable(t *testing.T) {
 	frontend := newFrontendHarness()
 	frontend.listTasks = []*core.Task{
@@ -1653,6 +1732,10 @@ type frontendHarness struct {
 	createTaskEvents          []core.TaskCreateEvent
 	createTaskStreamErr       error
 	createTaskStreamCalls     int
+	retryTaskID               string
+	retryTaskEvents           []core.TaskCreateEvent
+	retryTaskStreamErr        error
+	retryTaskStreamCalls      int
 	deleteTaskErr             error
 	deleteTaskIDs             []string
 	latestTaskStatus          map[string]*core.TaskStatusUpdate
@@ -1699,6 +1782,21 @@ func newFrontendHarness() *frontendHarness {
 			}
 			events := make(chan core.TaskCreateEvent, len(frontend.createTaskEvents))
 			for _, event := range frontend.createTaskEvents {
+				events <- event
+			}
+			close(events)
+			return events, nil
+		},
+	).Maybe()
+	frontend.mock.EXPECT().RetryTaskCreationStream(mock.Anything, mock.Anything).RunAndReturn(
+		func(_ context.Context, taskID string) (<-chan core.TaskCreateEvent, error) {
+			frontend.retryTaskStreamCalls++
+			frontend.retryTaskID = taskID
+			if frontend.retryTaskStreamErr != nil {
+				return nil, frontend.retryTaskStreamErr
+			}
+			events := make(chan core.TaskCreateEvent, len(frontend.retryTaskEvents))
+			for _, event := range frontend.retryTaskEvents {
 				events <- event
 			}
 			close(events)

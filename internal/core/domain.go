@@ -26,7 +26,20 @@ type Task struct {
 	WorktreePath string   `json:"worktree_path"`
 	TmuxSession  string   `json:"tmux_session"`
 	Provider     Provider `json:"provider"`
+	// CreationStatus tracks whether the durable task has completed its initial
+	// workspace/session setup, or whether it can be retried from CreationStep.
+	CreationStatus TaskCreationStatus     `json:"creation_status"`
+	CreationStep   TaskCreateProgressStep `json:"creation_step"`
+	CreationError  string                 `json:"creation_error"`
 }
+
+type TaskCreationStatus string
+
+const (
+	TaskCreationStatusCreating TaskCreationStatus = "creating"
+	TaskCreationStatusReady    TaskCreationStatus = "ready"
+	TaskCreationStatusFailed   TaskCreationStatus = "failed"
+)
 
 type RepoContext struct {
 	// Root is the canonical absolute path to the repository root on disk.

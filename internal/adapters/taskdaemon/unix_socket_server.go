@@ -26,6 +26,7 @@ type socketBackend interface {
 	PullRequestStatus(ctx context.Context, repoRoot string, branchName string) (*core.PRStatus, error)
 	ReconnectTaskSession(ctx context.Context, taskID string) error
 	CreateTaskStream(ctx context.Context, input core.CreateTaskInput) (<-chan core.TaskCreateEvent, error)
+	RetryTaskCreationStream(ctx context.Context, taskID string) (<-chan core.TaskCreateEvent, error)
 	DeleteTask(ctx context.Context, taskID string) error
 	ListTasks(ctx context.Context) ([]*core.Task, error)
 	LatestTaskStatus(ctx context.Context, taskID string) (*core.TaskStatusUpdate, error)
@@ -136,6 +137,8 @@ func (s *unixSocketServer) handleConn(ctx context.Context, conn net.Conn) {
 		})
 	case socketCommandCreateTask:
 		s.handleCreateTask(ctx, encoder, req)
+	case socketCommandRetryTaskCreation:
+		s.handleRetryTaskCreation(ctx, encoder, req)
 	case socketCommandDeleteTask:
 		s.handleDeleteTask(connCtx, encoder, req)
 	case socketCommandReconnectTaskSession:
@@ -191,6 +194,54 @@ func (s *unixSocketServer) handleCreateTask(ctx context.Context, encoder *json.E
 		return
 	}
 
+	for event := range events {
+		switch {
+		case event.Progress != nil:
+			if err := writeSocketEnvelope(encoder, socketEnvelope{
+				Type:           socketEnvelopeTaskCreateProgress,
+				OK:             true,
+				CreateProgress: event.Progress,
+			}); err != nil {
+				return
+			}
+		case event.Task != nil:
+			_ = writeSocketEnvelope(
+				encoder,
+				socketEnvelope{Type: socketEnvelopeTaskCreated, OK: true, Task: event.Task},
+			)
+			return
+		case event.Err != nil:
+			_ = writeSocketEnvelope(encoder, socketEnvelope{Type: socketEnvelopeError, Error: event.Err.Error()})
+			return
+		}
+	}
+
+	_ = writeSocketEnvelope(
+		encoder,
+		socketEnvelope{Type: socketEnvelopeError, Error: "create task stream closed without terminal result"},
+	)
+}
+
+func (s *unixSocketServer) handleRetryTaskCreation(ctx context.Context, encoder *json.Encoder, req socketRequest) {
+	taskID := strings.TrimSpace(req.TaskID)
+	if taskID == "" {
+		_ = writeSocketEnvelope(encoder, socketEnvelope{
+			Type:  socketEnvelopeError,
+			Error: socketCommandRetryTaskCreation + " task ID required",
+		})
+		return
+	}
+
+	events, err := s.backend.RetryTaskCreationStream(ctx, taskID)
+	if err != nil {
+		_ = writeSocketEnvelope(encoder, socketEnvelope{Type: socketEnvelopeError, Error: err.Error()})
+		return
+	}
+
+	writeTaskCreateStream(encoder, events)
+}
+
+func writeTaskCreateStream(encoder *json.Encoder, events <-chan core.TaskCreateEvent) {
 	for event := range events {
 		switch {
 		case event.Progress != nil:

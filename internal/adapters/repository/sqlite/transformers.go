@@ -9,35 +9,41 @@ import (
 
 func createTaskParams(task *core.Task) generated.CreateTaskParams {
 	return generated.CreateTaskParams{
-		ID:           task.ID,
-		Slug:         task.Slug,
-		Prompt:       task.Prompt,
-		DisplayName:  task.DisplayName,
-		RepoRoot:     task.RepoRoot,
-		RepoName:     task.RepoName,
-		BranchName:   task.BranchName,
-		WorktreePath: task.WorktreePath,
-		TmuxSession:  task.TmuxSession,
-		Provider:     string(task.Provider),
-		CreatedAt:    formatTime(task.CreatedAt),
-		UpdatedAt:    formatTime(task.UpdatedAt),
+		ID:             task.ID,
+		Slug:           task.Slug,
+		Prompt:         task.Prompt,
+		DisplayName:    task.DisplayName,
+		RepoRoot:       task.RepoRoot,
+		RepoName:       task.RepoName,
+		BranchName:     task.BranchName,
+		WorktreePath:   task.WorktreePath,
+		TmuxSession:    task.TmuxSession,
+		Provider:       string(task.Provider),
+		CreationStatus: string(normalizeTaskCreationStatus(task.CreationStatus)),
+		CreationStep:   string(task.CreationStep),
+		CreationError:  task.CreationError,
+		CreatedAt:      formatTime(task.CreatedAt),
+		UpdatedAt:      formatTime(task.UpdatedAt),
 	}
 }
 
 func updateTaskParams(task *core.Task) generated.UpdateTaskParams {
 	return generated.UpdateTaskParams{
-		Slug:         task.Slug,
-		Prompt:       task.Prompt,
-		DisplayName:  task.DisplayName,
-		RepoRoot:     task.RepoRoot,
-		RepoName:     task.RepoName,
-		BranchName:   task.BranchName,
-		WorktreePath: task.WorktreePath,
-		TmuxSession:  task.TmuxSession,
-		Provider:     string(task.Provider),
-		CreatedAt:    formatTime(task.CreatedAt),
-		UpdatedAt:    formatTime(task.UpdatedAt),
-		ID:           task.ID,
+		Slug:           task.Slug,
+		Prompt:         task.Prompt,
+		DisplayName:    task.DisplayName,
+		RepoRoot:       task.RepoRoot,
+		RepoName:       task.RepoName,
+		BranchName:     task.BranchName,
+		WorktreePath:   task.WorktreePath,
+		TmuxSession:    task.TmuxSession,
+		Provider:       string(task.Provider),
+		CreationStatus: string(normalizeTaskCreationStatus(task.CreationStatus)),
+		CreationStep:   string(task.CreationStep),
+		CreationError:  task.CreationError,
+		CreatedAt:      formatTime(task.CreatedAt),
+		UpdatedAt:      formatTime(task.UpdatedAt),
+		ID:             task.ID,
 	}
 }
 
@@ -107,24 +113,34 @@ func parseTime(raw string) time.Time {
 	return parsed
 }
 
-func taskFromRow(row generated.Task) *core.Task {
+func taskFromRow(row generated.ListTasksRow) *core.Task {
 	return &core.Task{
-		ID:           row.ID,
-		Slug:         row.Slug,
-		Prompt:       row.Prompt,
-		DisplayName:  row.DisplayName,
-		RepoRoot:     row.RepoRoot,
-		RepoName:     row.RepoName,
-		BranchName:   row.BranchName,
-		WorktreePath: row.WorktreePath,
-		TmuxSession:  row.TmuxSession,
-		Provider:     core.Provider(row.Provider),
-		CreatedAt:    parseTime(row.CreatedAt),
-		UpdatedAt:    parseTime(row.UpdatedAt),
+		ID:             row.ID,
+		Slug:           row.Slug,
+		Prompt:         row.Prompt,
+		DisplayName:    row.DisplayName,
+		RepoRoot:       row.RepoRoot,
+		RepoName:       row.RepoName,
+		BranchName:     row.BranchName,
+		WorktreePath:   row.WorktreePath,
+		TmuxSession:    row.TmuxSession,
+		Provider:       core.Provider(row.Provider),
+		CreationStatus: normalizeTaskCreationStatus(core.TaskCreationStatus(row.CreationStatus)),
+		CreationStep:   core.TaskCreateProgressStep(row.CreationStep),
+		CreationError:  row.CreationError,
+		CreatedAt:      parseTime(row.CreatedAt),
+		UpdatedAt:      parseTime(row.UpdatedAt),
 	}
 }
 
-func tasksFromRows(rows []generated.Task) []*core.Task {
+func normalizeTaskCreationStatus(status core.TaskCreationStatus) core.TaskCreationStatus {
+	if status == "" {
+		return core.TaskCreationStatusReady
+	}
+	return status
+}
+
+func tasksFromRows(rows []generated.ListTasksRow) []*core.Task {
 	tasks := make([]*core.Task, 0, len(rows))
 	for _, row := range rows {
 		tasks = append(tasks, taskFromRow(row))

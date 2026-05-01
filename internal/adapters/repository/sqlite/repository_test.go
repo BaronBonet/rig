@@ -38,32 +38,34 @@ func TestRepositoryCreateTaskAndListTasks_PersistsCoreTaskFields(t *testing.T) {
 	now := time.Now().UTC()
 
 	first := &core.Task{
-		ID:           "task-1",
-		Slug:         "duplicate-name",
-		Prompt:       "first prompt",
-		DisplayName:  "duplicate name",
-		RepoRoot:     "/tmp/repo",
-		RepoName:     "repo",
-		BranchName:   "feat/one",
-		WorktreePath: "/tmp/repo-one",
-		TmuxSession:  "repo_one",
-		Provider:     core.ProviderCodex,
-		CreatedAt:    now,
-		UpdatedAt:    now,
+		ID:             "task-1",
+		Slug:           "duplicate-name",
+		Prompt:         "first prompt",
+		DisplayName:    "duplicate name",
+		RepoRoot:       "/tmp/repo",
+		RepoName:       "repo",
+		BranchName:     "feat/one",
+		WorktreePath:   "/tmp/repo-one",
+		TmuxSession:    "repo_one",
+		Provider:       core.ProviderCodex,
+		CreationStatus: core.TaskCreationStatusReady,
+		CreatedAt:      now,
+		UpdatedAt:      now,
 	}
 	second := &core.Task{
-		ID:           "task-2",
-		Slug:         "duplicate-name-2",
-		Prompt:       "second prompt",
-		DisplayName:  "duplicate name",
-		RepoRoot:     "/tmp/repo",
-		RepoName:     "repo",
-		BranchName:   "feat/two",
-		WorktreePath: "/tmp/repo-two",
-		TmuxSession:  "repo_two",
-		Provider:     core.ProviderCodex,
-		CreatedAt:    now.Add(time.Second),
-		UpdatedAt:    now.Add(time.Second),
+		ID:             "task-2",
+		Slug:           "duplicate-name-2",
+		Prompt:         "second prompt",
+		DisplayName:    "duplicate name",
+		RepoRoot:       "/tmp/repo",
+		RepoName:       "repo",
+		BranchName:     "feat/two",
+		WorktreePath:   "/tmp/repo-two",
+		TmuxSession:    "repo_two",
+		Provider:       core.ProviderCodex,
+		CreationStatus: core.TaskCreationStatusReady,
+		CreatedAt:      now.Add(time.Second),
+		UpdatedAt:      now.Add(time.Second),
 	}
 
 	if err := repo.CreateTask(context.Background(), first); err != nil {
@@ -87,18 +89,19 @@ func TestRepositoryUpdateTask_PersistsMutations(t *testing.T) {
 	now := time.Now().UTC()
 
 	task := &core.Task{
-		ID:           "task-1",
-		Slug:         "task-name",
-		Prompt:       "first prompt",
-		DisplayName:  "task name",
-		RepoRoot:     "/tmp/repo",
-		RepoName:     "repo",
-		BranchName:   "feat/task-name",
-		WorktreePath: "/tmp/repo-task-name",
-		TmuxSession:  "repo_task_name",
-		Provider:     core.ProviderCodex,
-		CreatedAt:    now,
-		UpdatedAt:    now,
+		ID:             "task-1",
+		Slug:           "task-name",
+		Prompt:         "first prompt",
+		DisplayName:    "task name",
+		RepoRoot:       "/tmp/repo",
+		RepoName:       "repo",
+		BranchName:     "feat/task-name",
+		WorktreePath:   "/tmp/repo-task-name",
+		TmuxSession:    "repo_task_name",
+		Provider:       core.ProviderCodex,
+		CreationStatus: core.TaskCreationStatusReady,
+		CreatedAt:      now,
+		UpdatedAt:      now,
 	}
 	if err := repo.CreateTask(context.Background(), task); err != nil {
 		t.Fatalf("create task: %v", err)
@@ -118,6 +121,38 @@ func TestRepositoryUpdateTask_PersistsMutations(t *testing.T) {
 	if !reflect.DeepEqual(tasks, []*core.Task{task}) {
 		t.Fatalf("unexpected tasks after update:\n got: %#v\nwant: %#v", tasks, []*core.Task{task})
 	}
+}
+
+func TestRepositoryUpdateTask_PersistsCreationFailureMetadata(t *testing.T) {
+	repo := newTestRepository(t)
+	now := time.Now().UTC()
+
+	task := &core.Task{
+		ID:             "task-1",
+		Slug:           "task-name",
+		Prompt:         "first prompt",
+		DisplayName:    "task name",
+		RepoRoot:       "/tmp/repo",
+		RepoName:       "repo",
+		BranchName:     "feat/task-name",
+		WorktreePath:   "/tmp/repo-task-name",
+		TmuxSession:    "repo_task_name",
+		Provider:       core.ProviderCodex,
+		CreationStatus: core.TaskCreationStatusCreating,
+		CreatedAt:      now,
+		UpdatedAt:      now,
+	}
+	require.NoError(t, repo.CreateTask(context.Background(), task))
+
+	task.CreationStatus = core.TaskCreationStatusFailed
+	task.CreationStep = core.TaskCreateProgressPreparingWorkspace
+	task.CreationError = "setup workspace: docker daemon unavailable"
+	task.UpdatedAt = now.Add(time.Minute)
+	require.NoError(t, repo.UpdateTask(context.Background(), task))
+
+	tasks, err := repo.ListTasks(context.Background())
+	require.NoError(t, err)
+	require.Equal(t, []*core.Task{task}, tasks)
 }
 
 func TestRepositoryDeleteTask_RemovesTaskAndCascadesLatestStatus(t *testing.T) {
@@ -727,6 +762,9 @@ func TestRepositoryNew_CreatesSchemaForTasksAndLatestStatuses(t *testing.T) {
 		"provider",
 		"created_at",
 		"updated_at",
+		"creation_status",
+		"creation_step",
+		"creation_error",
 	}
 	if !reflect.DeepEqual(names, wantTasks) {
 		t.Fatalf("unexpected tasks columns:\n got: %#v\nwant: %#v", names, wantTasks)

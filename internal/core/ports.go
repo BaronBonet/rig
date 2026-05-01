@@ -96,6 +96,9 @@ type TaskFrontend interface {
 	// CreateTaskStream creates a new task and streams progress events followed by
 	// one terminal result event.
 	CreateTaskStream(ctx context.Context, input CreateTaskInput) (<-chan TaskCreateEvent, error)
+	// RetryTaskCreationStream resumes a failed task creation and streams progress
+	// events followed by one terminal result event.
+	RetryTaskCreationStream(ctx context.Context, taskID string) (<-chan TaskCreateEvent, error)
 	// DeleteTask deletes the task and its local runtime resources while keeping
 	// the Git branch.
 	DeleteTask(ctx context.Context, taskID string) error
@@ -173,6 +176,14 @@ type TaskService interface {
 	CreateTaskWithProgress(
 		ctx context.Context,
 		input CreateTaskInput,
+		reporter TaskCreateProgressReporter,
+	) (*Task, error)
+	// RetryTaskCreationWithProgress resumes a failed task creation from its
+	// recorded failed step while reporting the same progress milestones as
+	// initial creation.
+	RetryTaskCreationWithProgress(
+		ctx context.Context,
+		taskID string,
 		reporter TaskCreateProgressReporter,
 	) (*Task, error)
 	// ListRepoPullRequests lists pull requests for the repository that contains

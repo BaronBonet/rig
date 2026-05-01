@@ -61,8 +61,9 @@ func TestTaskServiceCreateTask_CreatesWorkspaceSessionAndPersistsTask(t *testing
 	require.Equal(t, "feat/billing-retry-flow", task.BranchName)
 	require.Equal(t, "/tmp/repo_billing-retry-flow", svc.repoClient.createdTask.WorktreePath)
 	require.Equal(t, "repo_billing-retry-flow", svc.sessionClient.startedTask.TmuxSession)
-	require.Zero(t, svc.taskRepo.updateCount)
-	require.Nil(t, svc.taskRepo.updatedTask)
+	require.Equal(t, 1, svc.taskRepo.updateCount)
+	require.Equal(t, TaskCreationStatusReady, svc.taskRepo.updatedTask.CreationStatus)
+	require.Empty(t, svc.taskRepo.updatedTask.CreationError)
 	require.True(t, svc.workspace.setupCalled)
 	require.True(t, svc.workspace.bootstrapCalled)
 	require.True(t, svc.workspace.setupCalledBeforeSession)
@@ -170,8 +171,10 @@ func TestTaskServiceCreateTask_ReturnsErrorWithoutPersistingLifecycleWhenWorkspa
 	require.False(t, svc.workspace.bootstrapCalled)
 	require.Nil(t, svc.sessionClient.startedTask)
 	require.EqualError(t, err, "build workspace bootstrap spec: bootstrap failed")
-	require.Zero(t, svc.taskRepo.updateCount)
-	require.Nil(t, svc.taskRepo.updatedTask)
+	require.Equal(t, 1, svc.taskRepo.updateCount)
+	require.Equal(t, TaskCreationStatusFailed, svc.taskRepo.updatedTask.CreationStatus)
+	require.Equal(t, TaskCreateProgressPreparingWorkspace, svc.taskRepo.updatedTask.CreationStep)
+	require.Equal(t, "build workspace bootstrap spec: bootstrap failed", svc.taskRepo.updatedTask.CreationError)
 }
 
 func TestTaskServiceCreateTask_ReturnsErrorWithoutPersistingLifecycleWhenWorkspaceSetupFails(t *testing.T) {
@@ -195,8 +198,56 @@ func TestTaskServiceCreateTask_ReturnsErrorWithoutPersistingLifecycleWhenWorkspa
 	require.False(t, svc.workspace.bootstrapCalled)
 	require.Nil(t, svc.sessionClient.startedTask)
 	require.EqualError(t, err, "setup workspace: setup script failed")
-	require.Zero(t, svc.taskRepo.updateCount)
-	require.Nil(t, svc.taskRepo.updatedTask)
+	require.Equal(t, 1, svc.taskRepo.updateCount)
+	require.Equal(t, TaskCreationStatusFailed, svc.taskRepo.updatedTask.CreationStatus)
+	require.Equal(t, TaskCreateProgressPreparingWorkspace, svc.taskRepo.updatedTask.CreationStep)
+	require.Equal(t, "setup workspace: setup script failed", svc.taskRepo.updatedTask.CreationError)
+}
+
+func TestTaskServiceRetryTaskCreationWithProgress_ResumesPreparingWorkspaceFailure(t *testing.T) {
+	svc := newTestTaskService(t)
+	failedTask := &Task{
+		ID:             "task-1",
+		Slug:           "billing-retry-flow",
+		Prompt:         "add billing retry flow",
+		DisplayName:    "billing retry flow",
+		RepoRoot:       "/tmp/repo",
+		RepoName:       "repo",
+		BranchName:     "feat/billing-retry-flow",
+		WorktreePath:   "/tmp/repo_billing-retry-flow",
+		TmuxSession:    "repo_billing-retry-flow",
+		Provider:       ProviderCodex,
+		CreationStatus: TaskCreationStatusFailed,
+		CreationStep:   TaskCreateProgressPreparingWorkspace,
+		CreationError:  "setup workspace: setup script failed",
+	}
+	svc.taskRepo.listTasks = []*Task{failedTask}
+	svc.providerRepo.bootstrapSpec = WorkspaceBootstrapSpec{Files: []WorkspaceBootstrapFile{{
+		Path:     ".codex/hooks/hooks.json",
+		Content:  []byte("hooks"),
+		FileMode: 0o644,
+	}}}
+
+	var steps []TaskCreateProgressStep
+	reporter := NewMockTaskCreateProgressReporter(t)
+	reporter.EXPECT().ReportTaskCreateProgress(mock.Anything).Run(func(step TaskCreateProgressStep) {
+		steps = append(steps, step)
+	}).Return()
+
+	task, err := svc.service.RetryTaskCreationWithProgress(t.Context(), "task-1", reporter)
+
+	require.NoError(t, err)
+	require.Equal(t, "task-1", task.ID)
+	require.Equal(t, []TaskCreateProgressStep{
+		TaskCreateProgressPreparingWorkspace,
+		TaskCreateProgressStartingSession,
+	}, steps)
+	require.True(t, svc.workspace.setupCalled)
+	require.True(t, svc.workspace.bootstrapCalled)
+	require.NotNil(t, svc.sessionClient.startedTask)
+	require.Equal(t, 3, svc.taskRepo.updateCount)
+	require.Equal(t, TaskCreationStatusReady, svc.taskRepo.updatedTask.CreationStatus)
+	require.Empty(t, svc.taskRepo.updatedTask.CreationError)
 }
 
 func TestTaskServiceCreateTask_BootstrapsWorkspaceWhenRepoSetupIsDisabled(t *testing.T) {
@@ -301,8 +352,10 @@ func TestTaskServiceCreateTask_ReturnsErrorWithoutPersistingLifecycleWhenRuntime
 	require.Error(t, err)
 	require.NotNil(t, task)
 	require.EqualError(t, err, "start task session: tmux failed")
-	require.Zero(t, svc.taskRepo.updateCount)
-	require.Nil(t, svc.taskRepo.updatedTask)
+	require.Equal(t, 1, svc.taskRepo.updateCount)
+	require.Equal(t, TaskCreationStatusFailed, svc.taskRepo.updatedTask.CreationStatus)
+	require.Equal(t, TaskCreateProgressStartingSession, svc.taskRepo.updatedTask.CreationStep)
+	require.Equal(t, "start task session: tmux failed", svc.taskRepo.updatedTask.CreationError)
 }
 
 func TestTaskServiceCreateTask_AppendsNumericSuffixWhenSlugAlreadyExists(t *testing.T) {

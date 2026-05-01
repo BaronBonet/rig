@@ -216,6 +216,61 @@ func TestUnixSocketServer_CreateTaskStreamsTerminalErrorOnFailure(t *testing.T) 
 	require.NoError(t, <-errCh)
 }
 
+func TestUnixSocketServer_RetryTaskCreationStreamsProgressBeforeTerminalResult(t *testing.T) {
+	t.Parallel()
+
+	socketPath := serverTestSocketPath(t)
+	svc := core.NewMockTaskService(t)
+	svc.EXPECT().RetryTaskCreationWithProgress(
+		mock.Anything,
+		"task-1",
+		mock.Anything,
+	).RunAndReturn(func(
+		_ context.Context,
+		taskID string,
+		reporter core.TaskCreateProgressReporter,
+	) (*core.Task, error) {
+		require.Equal(t, "task-1", taskID)
+		require.NotNil(t, reporter)
+		reporter.ReportTaskCreateProgress(core.TaskCreateProgressPreparingWorkspace)
+		reporter.ReportTaskCreateProgress(core.TaskCreateProgressStartingSession)
+		return &core.Task{
+			ID:             "task-1",
+			DisplayName:    "add retries",
+			CreationStatus: core.TaskCreationStatusReady,
+		}, nil
+	})
+	adapter := New(Config{
+		SocketPath:     socketPath,
+		HookListenAddr: "127.0.0.1:0",
+	})
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	errCh := make(chan error, 1)
+	go func() {
+		errCh <- adapter.Serve(ctx, svc, nil, nil)
+	}()
+	waitForUnixSocketServer(t, socketPath)
+
+	events, err := taskCreateStreamViaSocket(context.Background(), socketPath, socketRequest{
+		Command: socketCommandRetryTaskCreation,
+		TaskID:  "task-1",
+	})
+	require.NoError(t, err)
+	require.Len(t, events, 3)
+	require.NotNil(t, events[0].CreateProgress)
+	require.Equal(t, core.TaskCreateProgressPreparingWorkspace, events[0].CreateProgress.Step)
+	require.NotNil(t, events[1].CreateProgress)
+	require.Equal(t, core.TaskCreateProgressStartingSession, events[1].CreateProgress.Step)
+	require.NotNil(t, events[2].Task)
+	require.Equal(t, core.TaskCreationStatusReady, events[2].Task.CreationStatus)
+
+	cancel()
+	require.NoError(t, <-errCh)
+}
+
 func TestUnixSocketServer_ListTasksReturnsTasksSnapshot(t *testing.T) {
 	t.Parallel()
 
@@ -705,16 +760,24 @@ func createTaskStreamViaSocket(
 	socketPath string,
 	input core.CreateTaskInput,
 ) ([]socketEnvelope, error) {
+	return taskCreateStreamViaSocket(ctx, socketPath, socketRequest{
+		Command: "create_task",
+		Input:   &input,
+	})
+}
+
+func taskCreateStreamViaSocket(
+	ctx context.Context,
+	socketPath string,
+	request socketRequest,
+) ([]socketEnvelope, error) {
 	conn, err := dialDaemonSocket(ctx, socketPath)
 	if err != nil {
 		return nil, err
 	}
 	defer conn.Close()
 
-	if err := json.NewEncoder(conn).Encode(socketRequest{
-		Command: "create_task",
-		Input:   &input,
-	}); err != nil {
+	if err := json.NewEncoder(conn).Encode(request); err != nil {
 		return nil, err
 	}
 

@@ -93,15 +93,32 @@ func (f *frontend) CreateTaskStream(
 	ctx context.Context,
 	input core.CreateTaskInput,
 ) (<-chan core.TaskCreateEvent, error) {
+	return f.taskCreateEventStream(ctx, socketRequest{
+		Command: socketCommandCreateTask,
+		Input:   &input,
+	})
+}
+
+func (f *frontend) RetryTaskCreationStream(
+	ctx context.Context,
+	taskID string,
+) (<-chan core.TaskCreateEvent, error) {
+	return f.taskCreateEventStream(ctx, socketRequest{
+		Command: socketCommandRetryTaskCreation,
+		TaskID:  taskID,
+	})
+}
+
+func (f *frontend) taskCreateEventStream(
+	ctx context.Context,
+	request socketRequest,
+) (<-chan core.TaskCreateEvent, error) {
 	conn, err := dialDaemonSocket(ctx, f.socketPath)
 	if err != nil {
 		return nil, err
 	}
 
-	if err := json.NewEncoder(conn).Encode(socketRequest{
-		Command: socketCommandCreateTask,
-		Input:   &input,
-	}); err != nil {
+	if err := json.NewEncoder(conn).Encode(request); err != nil {
 		_ = conn.Close()
 		return nil, err
 	}

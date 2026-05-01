@@ -216,6 +216,8 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.loading = true
 			m.err = nil
 			return m, loadTasksCmd(m.statusContext, m.frontend)
+		case "R":
+			return m.retrySelectedTaskCreation()
 		case "g", "home":
 			m.selected = 0
 		case "G", "end":
@@ -460,6 +462,30 @@ func (m model) submitPrompt() (model, tea.Cmd) {
 			Prompt:   prompt,
 			Provider: defaultCreateProvider,
 		}),
+		shimmerTickCmd(),
+	)
+}
+
+func (m model) retrySelectedTaskCreation() (model, tea.Cmd) {
+	if m.createPending {
+		return m, nil
+	}
+	row := m.selectedRow()
+	if row == nil || row.task == nil || row.task.CreationStatus != core.TaskCreationStatusFailed {
+		return m, nil
+	}
+
+	m.mode = modeBrowse
+	m.createPending = true
+	m.createFromPR = false
+	m.createErr = nil
+	m.err = nil
+	m.shimmerTick = 0
+	m.resetCreateProgress()
+	m.createActive = row.task.CreationStep
+
+	return m, tea.Batch(
+		retryTaskCreationStreamCmd(m.statusContext, m.frontend, row.task.ID),
 		shimmerTickCmd(),
 	)
 }
