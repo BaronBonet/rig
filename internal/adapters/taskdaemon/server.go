@@ -100,6 +100,36 @@ func (s *server) CreateTaskStream(
 	return events, nil
 }
 
+func (s *server) RetryTaskCreationStream(
+	ctx context.Context,
+	taskID string,
+) (<-chan core.TaskCreateEvent, error) {
+	events := make(chan core.TaskCreateEvent, 8)
+
+	go func() {
+		defer close(events)
+
+		task, err := s.service.RetryTaskCreationWithProgress(ctx, taskID, taskCreateEventReporter{
+			ctx:    ctx,
+			events: events,
+		})
+		if err != nil {
+			select {
+			case <-ctx.Done():
+			case events <- core.TaskCreateEvent{Err: err}:
+			}
+			return
+		}
+
+		select {
+		case <-ctx.Done():
+		case events <- core.TaskCreateEvent{Task: task}:
+		}
+	}()
+
+	return events, nil
+}
+
 func (s *server) DeleteTask(ctx context.Context, taskID string) error {
 	return s.service.DeleteTask(ctx, taskID)
 }

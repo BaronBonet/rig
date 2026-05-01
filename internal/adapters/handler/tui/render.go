@@ -30,7 +30,7 @@ func (m model) unboundedListView() string {
 	var builder strings.Builder
 	builder.WriteString(renderHeader(
 		headerLabelStyle.Render("RIG"),
-		mutedStyle.Render("n new   r refresh   x clean   q quit"),
+		mutedStyle.Render(m.listKeybindText()),
 		totalWidth,
 	) + "\n")
 	builder.WriteString(dividerStyle.Render(strings.Repeat("─", totalWidth)) + "\n")
@@ -291,6 +291,10 @@ func (m model) renderRow(index int, row taskRow, totalWidth int) (string, string
 	}
 
 	statusText, statusStyle := taskStatusText(row.status)
+	if failedText, failedStyle := taskCreationFailureStatusText(row.task); failedText != "" {
+		statusText = failedText
+		statusStyle = failedStyle
+	}
 	statusCell := padRightVisible(statusText, colWidthStatus)
 	timeCell := padLeftVisible(taskElapsed(row.task), colWidthElapsed)
 
@@ -367,6 +371,15 @@ func (m model) selectedTaskDetailView() string {
 
 	sessionLines := []string{
 		headerLabelStyle.Render("SESSION"),
+	}
+	if task.CreationStatus == core.TaskCreationStatusFailed {
+		sessionLines = append(
+			sessionLines,
+			errorStyle.Render("Failed while "+lowerFirst(taskCreateProgressLabel(task.CreationStep))),
+		)
+		if creationErr := strings.TrimSpace(task.CreationError); creationErr != "" {
+			sessionLines = append(sessionLines, errorStyle.Render(creationErr))
+		}
 	}
 	if elapsed := taskElapsed(task); elapsed != "" {
 		sessionLines = append(
@@ -581,6 +594,15 @@ func (m model) promptInputView() string {
 	return builder.String()
 }
 
+func (m model) listKeybindText() string {
+	keybinds := "n new   r refresh   x clean   q quit"
+	row := m.selectedRow()
+	if row == nil || row.task == nil || row.task.CreationStatus != core.TaskCreationStatusFailed {
+		return keybinds
+	}
+	return "n new   r refresh   R retry   x clean   q quit"
+}
+
 func (m model) prPickerView() string {
 	totalWidth := m.totalWidth()
 
@@ -769,6 +791,23 @@ func taskStatusText(update *core.TaskStatusUpdate) (string, lipgloss.Style) {
 		return iconStatusIdle + " stopped", dimStyle
 	default:
 		return iconStatusIdle + " idle", dimStyle
+	}
+}
+
+func taskCreationFailureStatusText(task *core.Task) (string, lipgloss.Style) {
+	if task == nil || task.CreationStatus != core.TaskCreationStatusFailed {
+		return "", lipgloss.Style{}
+	}
+
+	switch task.CreationStep {
+	case core.TaskCreateProgressCreatingWorktree:
+		return "× worktree failed", errorStyle
+	case core.TaskCreateProgressPreparingWorkspace:
+		return "× setup failed", errorStyle
+	case core.TaskCreateProgressStartingSession:
+		return "× session failed", errorStyle
+	default:
+		return "× creation failed", errorStyle
 	}
 }
 
@@ -976,4 +1015,11 @@ func emptyFallback(value string, fallback string) string {
 		return fallback
 	}
 	return value
+}
+
+func lowerFirst(value string) string {
+	if value == "" {
+		return ""
+	}
+	return strings.ToLower(value[:1]) + value[1:]
 }

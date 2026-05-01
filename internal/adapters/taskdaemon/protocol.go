@@ -16,7 +16,7 @@ import (
 
 var currentFrontendBuildVersion = "dev"
 
-const currentFrontendProtocolVersion = 6
+const currentFrontendProtocolVersion = 7
 
 const (
 	socketCommandCreateTask           = "create_task"
@@ -32,6 +32,7 @@ const (
 	socketCommandProtocolVersion       = "protocol_version"
 	socketCommandPullRequestStatus     = "pull_request_status"
 	socketCommandReconnectTaskSession  = "reconnect_task_session"
+	socketCommandRetryTaskCreation     = "retry_task_creation"
 	socketCommandStop                  = "stop"
 	socketCommandSubscribeTaskStatus   = "subscribe_task_status"
 	socketEnvelopeError                = "error"

@@ -63,6 +63,16 @@ func createTaskStreamCmd(ctx context.Context, frontend core.TaskFrontend, input 
 	}
 }
 
+func retryTaskCreationStreamCmd(ctx context.Context, frontend core.TaskFrontend, taskID string) tea.Cmd {
+	return func() tea.Msg {
+		events, err := frontend.RetryTaskCreationStream(ctx, taskID)
+		if err != nil {
+			return taskCreateStreamStartFailedMsg{err: err}
+		}
+		return waitForTaskCreateEventCmd(events)()
+	}
+}
+
 func deleteTaskCmd(ctx context.Context, frontend core.TaskFrontend, taskID string) tea.Cmd {
 	return func() tea.Msg {
 		err := frontend.DeleteTask(ctx, taskID)

@@ -155,6 +155,61 @@ func (s *taskService) CreateTaskWithProgress(
 	return s.createTaskFromPrompt(ctx, repoCtx, input, reporter)
 }
 
+func (s *taskService) RetryTaskCreationWithProgress(
+	ctx context.Context,
+	taskID string,
+	reporter TaskCreateProgressReporter,
+) (*Task, error) {
+	task, err := s.taskByID(ctx, taskID)
+	if err != nil {
+		return nil, err
+	}
+	if task.CreationStatus != TaskCreationStatusFailed {
+		return nil, fmt.Errorf("task creation is not failed")
+	}
+
+	switch task.CreationStep {
+	case TaskCreateProgressCreatingWorktree:
+		reportTaskCreateProgress(reporter, TaskCreateProgressCreatingWorktree)
+		if err := s.markTaskCreationStep(ctx, task, TaskCreateProgressCreatingWorktree); err != nil {
+			return task, err
+		}
+		if err := s.gitWorktree.CreateTaskWorkspace(ctx, task); err != nil {
+			return task, s.markTaskCreationFailed(
+				ctx,
+				task,
+				TaskCreateProgressCreatingWorktree,
+				fmt.Errorf("create worktree: %w", err),
+			)
+		}
+		fallthrough
+	case TaskCreateProgressPreparingWorkspace:
+		reportTaskCreateProgress(reporter, TaskCreateProgressPreparingWorkspace)
+		if err := s.markTaskCreationStep(ctx, task, TaskCreateProgressPreparingWorkspace); err != nil {
+			return task, err
+		}
+		if err := s.prepareTaskWorkspace(ctx, task, task.RepoRoot); err != nil {
+			return task, s.markTaskCreationFailed(ctx, task, TaskCreateProgressPreparingWorkspace, err)
+		}
+		fallthrough
+	case TaskCreateProgressStartingSession:
+		reportTaskCreateProgress(reporter, TaskCreateProgressStartingSession)
+		if err := s.markTaskCreationStep(ctx, task, TaskCreateProgressStartingSession); err != nil {
+			return task, err
+		}
+		if _, err := s.startTaskRuntime(ctx, task); err != nil {
+			return task, s.markTaskCreationFailed(ctx, task, TaskCreateProgressStartingSession, err)
+		}
+	default:
+		return nil, fmt.Errorf("task creation failed step %q is not retryable", task.CreationStep)
+	}
+
+	if err := s.markTaskCreationReady(ctx, task); err != nil {
+		return task, err
+	}
+	return task, nil
+}
+
 func (s *taskService) ListTasks(ctx context.Context) ([]*Task, error) {
 	return s.tasks.ListTasks(ctx)
 }
@@ -619,16 +674,23 @@ func (s *taskService) createTaskFromPrompt(
 	}
 	reportTaskCreateProgress(reporter, TaskCreateProgressCreatingWorktree)
 	if err := s.gitWorktree.CreateTaskWorkspace(ctx, task); err != nil {
-		return task, fmt.Errorf("create worktree: %w", err)
+		err = fmt.Errorf("create worktree: %w", err)
+		return task, s.markTaskCreationFailed(ctx, task, TaskCreateProgressCreatingWorktree, err)
 	}
 
 	reportTaskCreateProgress(reporter, TaskCreateProgressPreparingWorkspace)
 	if err := s.prepareTaskWorkspace(ctx, task, repoCtx.Root); err != nil {
-		return task, err
+		return task, s.markTaskCreationFailed(ctx, task, TaskCreateProgressPreparingWorkspace, err)
 	}
 
 	reportTaskCreateProgress(reporter, TaskCreateProgressStartingSession)
-	return s.startTaskRuntime(ctx, task)
+	if _, err := s.startTaskRuntime(ctx, task); err != nil {
+		return task, s.markTaskCreationFailed(ctx, task, TaskCreateProgressStartingSession, err)
+	}
+	if err := s.markTaskCreationReady(ctx, task); err != nil {
+		return task, err
+	}
+	return task, nil
 }
 
 func (s *taskService) createTaskFromPullRequest(
@@ -670,13 +732,20 @@ func (s *taskService) createTaskFromPullRequest(
 		return nil, err
 	}
 	if err := s.gitWorktree.CreateTaskWorkspaceFromPullRequest(ctx, task, pr.Number); err != nil {
-		return task, fmt.Errorf("create worktree: %w", err)
+		err = fmt.Errorf("create worktree: %w", err)
+		return task, s.markTaskCreationFailed(ctx, task, TaskCreateProgressCreatingWorktree, err)
 	}
 	if err := s.prepareTaskWorkspace(ctx, task, repoCtx.Root); err != nil {
-		return task, err
+		return task, s.markTaskCreationFailed(ctx, task, TaskCreateProgressPreparingWorkspace, err)
 	}
 
-	return s.startTaskRuntime(ctx, task)
+	if _, err := s.startTaskRuntime(ctx, task); err != nil {
+		return task, s.markTaskCreationFailed(ctx, task, TaskCreateProgressStartingSession, err)
+	}
+	if err := s.markTaskCreationReady(ctx, task); err != nil {
+		return task, err
+	}
+	return task, nil
 }
 
 func (s *taskService) suggestTaskName(
@@ -762,6 +831,44 @@ func (s *taskService) buildWorkspaceBootstrapSpec(ctx context.Context, task *Tas
 	return providerClient.BuildWorkspaceBootstrapSpec(task)
 }
 
+func (s *taskService) markTaskCreationStep(
+	ctx context.Context,
+	task *Task,
+	step TaskCreateProgressStep,
+) error {
+	task.CreationStatus = TaskCreationStatusCreating
+	task.CreationStep = step
+	task.CreationError = ""
+	task.UpdatedAt = time.Now().UTC()
+	return s.tasks.UpdateTask(ctx, task)
+}
+
+func (s *taskService) markTaskCreationFailed(
+	ctx context.Context,
+	task *Task,
+	step TaskCreateProgressStep,
+	cause error,
+) error {
+	task.CreationStatus = TaskCreationStatusFailed
+	task.CreationStep = step
+	if cause != nil {
+		task.CreationError = cause.Error()
+	}
+	task.UpdatedAt = time.Now().UTC()
+	if err := s.tasks.UpdateTask(ctx, task); err != nil {
+		return fmt.Errorf("%w; persist task creation failure: %w", cause, err)
+	}
+	return cause
+}
+
+func (s *taskService) markTaskCreationReady(ctx context.Context, task *Task) error {
+	task.CreationStatus = TaskCreationStatusReady
+	task.CreationStep = ""
+	task.CreationError = ""
+	task.UpdatedAt = time.Now().UTC()
+	return s.tasks.UpdateTask(ctx, task)
+}
+
 func (s *taskService) resolveTaskIDFromCwd(ctx context.Context, cwd string) (string, error) {
 	cwd = strings.TrimSpace(cwd)
 	if cwd == "" {
@@ -818,17 +925,18 @@ func newPromptTaskRecord(
 	taskID := fmt.Sprintf("%d", now.UnixNano())
 
 	return &Task{
-		ID:           taskID,
-		Slug:         taskSlug,
-		DisplayName:  displayName,
-		RepoRoot:     repoCtx.Root,
-		RepoName:     repoCtx.Name,
-		BranchName:   branchNameForTask(taskSlug, branchType),
-		WorktreePath: taskWorktreePath(repoCtx, taskSlug),
-		TmuxSession:  taskSessionName(repoCtx, taskSlug),
-		Provider:     provider,
-		CreatedAt:    now,
-		UpdatedAt:    now,
+		ID:             taskID,
+		Slug:           taskSlug,
+		DisplayName:    displayName,
+		RepoRoot:       repoCtx.Root,
+		RepoName:       repoCtx.Name,
+		BranchName:     branchNameForTask(taskSlug, branchType),
+		WorktreePath:   taskWorktreePath(repoCtx, taskSlug),
+		TmuxSession:    taskSessionName(repoCtx, taskSlug),
+		Provider:       provider,
+		CreationStatus: TaskCreationStatusCreating,
+		CreatedAt:      now,
+		UpdatedAt:      now,
 	}
 }
 
@@ -848,17 +956,18 @@ func newPullRequestTaskRecord(
 	taskID := fmt.Sprintf("%d", now.UnixNano())
 
 	return &Task{
-		ID:           taskID,
-		Slug:         taskSlug,
-		DisplayName:  displayName,
-		RepoRoot:     repoCtx.Root,
-		RepoName:     repoCtx.Name,
-		BranchName:   strings.TrimSpace(branchName),
-		WorktreePath: taskWorktreePath(repoCtx, taskSlug),
-		TmuxSession:  taskSessionName(repoCtx, taskSlug),
-		Provider:     provider,
-		CreatedAt:    now,
-		UpdatedAt:    now,
+		ID:             taskID,
+		Slug:           taskSlug,
+		DisplayName:    displayName,
+		RepoRoot:       repoCtx.Root,
+		RepoName:       repoCtx.Name,
+		BranchName:     strings.TrimSpace(branchName),
+		WorktreePath:   taskWorktreePath(repoCtx, taskSlug),
+		TmuxSession:    taskSessionName(repoCtx, taskSlug),
+		Provider:       provider,
+		CreationStatus: TaskCreationStatusCreating,
+		CreatedAt:      now,
+		UpdatedAt:      now,
 	}
 }
 
