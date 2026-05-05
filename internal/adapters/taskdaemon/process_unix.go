@@ -8,9 +8,9 @@ import (
 	"syscall"
 )
 
-func configureDetachedProcess(cmd *exec.Cmd, devNull *os.File) {
+func configureDetachedProcess(cmd *exec.Cmd, devNull *os.File, output *os.File) {
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setsid: true}
 	cmd.Stdin = devNull
-	cmd.Stdout = devNull
-	cmd.Stderr = devNull
+	cmd.Stdout = output
+	cmd.Stderr = output
 }
