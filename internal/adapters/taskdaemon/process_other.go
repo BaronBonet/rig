@@ -7,8 +7,8 @@ import (
 	"os/exec"
 )
 
-func configureDetachedProcess(cmd *exec.Cmd, devNull *os.File) {
+func configureDetachedProcess(cmd *exec.Cmd, devNull *os.File, output *os.File) {
 	cmd.Stdin = devNull
-	cmd.Stdout = devNull
-	cmd.Stderr = devNull
+	cmd.Stdout = output
+	cmd.Stderr = output
 }

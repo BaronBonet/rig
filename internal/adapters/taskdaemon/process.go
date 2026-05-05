@@ -9,6 +9,8 @@ import (
 	"net"
 	"os"
 	"os/exec"
+	"path/filepath"
+	"strings"
 	"syscall"
 	"time"
 
@@ -43,7 +45,7 @@ func ensureRunning(ctx context.Context, cfg Config) error {
 		return restartDaemon(ctx, cfg)
 	}
 
-	if err := spawnTaskDaemonProcess(ctx, cfg.ExecPath, cfg.Env); err != nil {
+	if err := spawnTaskDaemonProcess(ctx, cfg.ExecPath, cfg.Env, cfg.SocketPath); err != nil {
 		return err
 	}
 
@@ -175,7 +177,7 @@ func stopTaskDaemon(ctx context.Context, socketPath string) error {
 	return nil
 }
 
-func spawnTaskDaemonProcess(ctx context.Context, execPath string, env []string) error {
+func spawnTaskDaemonProcess(ctx context.Context, execPath string, env []string, socketPath string) error {
 	if err := ctx.Err(); err != nil {
 		return err
 	}
@@ -190,14 +192,22 @@ func spawnTaskDaemonProcess(ctx context.Context, execPath string, env []string) 
 		return err
 	}
 
-	configureDetachedProcess(cmd, devNull)
+	startupLog, err := openTaskDaemonStartupLog(defaultTaskDaemonStartupLogPath(socketPath))
+	if err != nil {
+		_ = devNull.Close()
+		return err
+	}
+
+	configureDetachedProcess(cmd, devNull, startupLog)
 	if err := cmd.Start(); err != nil {
 		_ = devNull.Close()
+		_ = startupLog.Close()
 		return err
 	}
 
 	go func() {
 		defer devNull.Close()
+		defer startupLog.Close()
 		_ = cmd.Wait()
 	}()
 
@@ -221,13 +231,67 @@ func waitForHealthyTaskDaemon(ctx context.Context, socketPath string) error {
 
 		select {
 		case <-waitCtx.Done():
+			startupLogErr := taskDaemonStartupLogError(defaultTaskDaemonStartupLogPath(socketPath))
 			if lastErr != nil {
-				return fmt.Errorf("task daemon did not become healthy: %w", errors.Join(waitCtx.Err(), lastErr))
+				return fmt.Errorf(
+					"task daemon did not become healthy: %w",
+					errors.Join(waitCtx.Err(), lastErr, startupLogErr),
+				)
 			}
-			return fmt.Errorf("task daemon did not become healthy: %w", waitCtx.Err())
+			return fmt.Errorf("task daemon did not become healthy: %w", errors.Join(waitCtx.Err(), startupLogErr))
 		case <-ticker.C:
 		}
 	}
+}
+
+func defaultTaskDaemonStartupLogPath(socketPath string) string {
+	if socketPath == "" {
+		return ""
+	}
+
+	return filepath.Join(filepath.Dir(socketPath), "daemon-startup.log")
+}
+
+func openTaskDaemonStartupLog(logPath string) (*os.File, error) {
+	if logPath == "" {
+		return os.OpenFile(os.DevNull, os.O_WRONLY, 0)
+	}
+
+	if err := os.MkdirAll(filepath.Dir(logPath), socketDirMode); err != nil {
+		return nil, fmt.Errorf("prepare task daemon startup log directory: %w", err)
+	}
+
+	file, err := os.OpenFile(logPath, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, socketFileMode)
+	if err != nil {
+		return nil, fmt.Errorf("open task daemon startup log: %w", err)
+	}
+
+	return file, nil
+}
+
+func taskDaemonStartupLogError(logPath string) error {
+	if logPath == "" {
+		return nil
+	}
+
+	content, err := os.ReadFile(logPath)
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return nil
+		}
+		return fmt.Errorf("read task daemon startup log: %w", err)
+	}
+
+	message := strings.TrimSpace(string(content))
+	if message == "" {
+		return nil
+	}
+	const maxStartupLogBytes = 4096
+	if len(message) > maxStartupLogBytes {
+		message = message[len(message)-maxStartupLogBytes:]
+	}
+
+	return fmt.Errorf("daemon startup log:\n%s", message)
 }
 
 func taskDaemonSocketPathExists(socketPath string) (bool, error) {

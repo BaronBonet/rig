@@ -20,6 +20,7 @@ import (
 
 const (
 	processTestHelperEnv       = "RIG_TASKDAEMONPROCESS_TEST_HELPER"
+	processTestHelperFailEnv   = "RIG_TASKDAEMONPROCESS_TEST_HELPER_FAIL"
 	processTestHelperSocketEnv = "RIG_TASKDAEMONPROCESS_TEST_SOCKET"
 )
 
@@ -85,7 +86,7 @@ func TestSpawnTaskDaemonProcess_StartsDaemonWithDetachedStdio(t *testing.T) {
 	require.NoError(t, spawnTaskDaemonProcess(context.Background(), os.Args[0], []string{
 		processTestHelperEnv + "=1",
 		processTestHelperSocketEnv + "=" + socketPath,
-	}))
+	}, socketPath))
 	require.NoError(t, waitForHealthyTaskDaemon(context.Background(), socketPath))
 	require.NoError(t, stopTaskDaemon(context.Background(), socketPath))
 	require.NoError(t, waitForSocketRemoval(socketPath, 2*time.Second))
@@ -122,6 +123,28 @@ func TestAdapterEnsureRunning_UsesDefaultExecutableAndConfiguredEnvToStartDaemon
 	require.NoError(t, adapter.EnsureRunning(context.Background()))
 	require.NoError(t, stopTaskDaemon(context.Background(), socketPath))
 	require.NoError(t, waitForSocketRemoval(socketPath, 2*time.Second))
+}
+
+func TestAdapterEnsureRunning_IncludesDaemonStartupLogOnTimeout(t *testing.T) {
+	t.Parallel()
+
+	socketPath := processTestSocketPath(t)
+	adapter := New(Config{
+		SocketPath: socketPath,
+		ExecPath:   os.Args[0],
+		Env: []string{
+			processTestHelperEnv + "=1",
+			processTestHelperFailEnv + "=daemon failed for test",
+			processTestHelperSocketEnv + "=" + socketPath,
+		},
+	})
+
+	err := adapter.EnsureRunning(context.Background())
+
+	require.Error(t, err)
+	require.ErrorContains(t, err, "task daemon did not become healthy")
+	require.ErrorContains(t, err, "daemon startup log:")
+	require.ErrorContains(t, err, "daemon failed for test")
 }
 
 func TestAdapterStop_ReturnsWhenDaemonSocketIsMissing(t *testing.T) {
@@ -616,6 +639,11 @@ func handleLegacyTestDaemonConnection(conn net.Conn, stopSeen *atomic.Bool) erro
 }
 
 func runHelperDaemon(socketPath string) {
+	if failMessage := os.Getenv(processTestHelperFailEnv); failMessage != "" {
+		_, _ = fmt.Fprintln(os.Stderr, failMessage)
+		os.Exit(5)
+	}
+
 	if socketPath == "" {
 		os.Exit(2)
 	}
