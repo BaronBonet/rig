@@ -16,3 +16,4 @@ docs/superpowers/*
 .claude/
 !CLAUDE.md
 rig
+.agents

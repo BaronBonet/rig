@@ -15,6 +15,9 @@ const (
 	colWidthAgent   = 7
 	colWidthStatus  = 21
 	colWidthElapsed = 7
+
+	taskListScrollbarTrack = "│"
+	taskListScrollbarThumb = "█"
 )
 
 func (m model) listView() string {
@@ -121,10 +124,34 @@ func (m model) constrainedListView() string {
 		return joinConstrainedLines(lines, totalHeight)
 	}
 
+	createSection, detailSection, rowBudget := m.constrainedListSections(totalWidth, totalHeight, len(lines))
+	if rowBudget < 0 {
+		rowBudget = 0
+	}
+	taskList := m.visibleTaskList(totalWidth, rowBudget)
+	lines = append(lines, taskList.lines...)
+	lines = append(lines, detailSection...)
+	lines = append(lines, createSection...)
+
+	return joinConstrainedLines(lines, totalHeight)
+}
+
+type taskListViewport struct {
+	lines      []string
+	startBlock int
+	endBlock   int
+}
+
+type taskListBlock struct {
+	rowIndex int
+	lines    []string
+}
+
+func (m model) constrainedListSections(totalWidth int, totalHeight int, baseLineCount int) ([]string, []string, int) {
 	createSection := sectionLines("", m.listCreateStatusView(), totalWidth)
 	detailSection := sectionLines("", m.selectedTaskDetailView(), totalWidth)
 
-	availableForDetail := totalHeight - len(lines) - len(createSection)
+	availableForDetail := totalHeight - baseLineCount - len(createSection)
 	if availableForDetail < 0 {
 		availableForDetail = 0
 	}
@@ -142,30 +169,31 @@ func (m model) constrainedListView() string {
 		}
 	}
 
-	rowBudget := totalHeight - len(lines) - len(detailSection) - len(createSection)
-	if rowBudget < 0 {
-		rowBudget = 0
+	return createSection, detailSection, totalHeight - baseLineCount - len(detailSection) - len(createSection)
+}
+
+func (m model) taskListRowBudget(totalWidth int, totalHeight int) int {
+	if totalHeight <= 0 {
+		return 0
 	}
-	lines = append(lines, m.visibleTaskListLines(totalWidth, rowBudget)...)
-	lines = append(lines, detailSection...)
-	lines = append(lines, createSection...)
 
-	return joinConstrainedLines(lines, totalHeight)
+	baseLineCount := 2
+	if m.err != nil {
+		baseLineCount += 2
+	}
+
+	_, _, rowBudget := m.constrainedListSections(totalWidth, totalHeight, baseLineCount)
+	return rowBudget
 }
 
-type taskListBlock struct {
-	rowIndex int
-	lines    []string
-}
-
-func (m model) visibleTaskListLines(totalWidth int, budget int) []string {
+func (m model) visibleTaskList(totalWidth int, budget int) taskListViewport {
 	if budget <= 0 {
-		return nil
+		return taskListViewport{}
 	}
 
 	blocks := m.taskListBlocks(totalWidth)
 	if len(blocks) == 0 {
-		return nil
+		return taskListViewport{}
 	}
 
 	selectedBlock := 0
@@ -186,7 +214,12 @@ func (m model) visibleTaskListLines(totalWidth int, budget int) []string {
 	start := selectedBlock
 	end := selectedBlock
 	if blockLineCount(blocks[start:end+1]) > budget {
-		return trimBlankEdgeLines(blocks[selectedBlock].lines[:budget])
+		lines := trimBlankEdgeLines(blocks[selectedBlock].lines[:budget])
+		return taskListViewport{
+			lines:      withTaskListScrollbar(lines, totalWidth, selectedBlock, selectedBlock, len(blocks)),
+			startBlock: selectedBlock,
+			endBlock:   selectedBlock,
+		}
 	}
 
 	for {
@@ -208,7 +241,12 @@ func (m model) visibleTaskListLines(totalWidth int, budget int) []string {
 	for _, block := range blocks[start : end+1] {
 		lines = append(lines, block.lines...)
 	}
-	return trimBlankEdgeLines(lines)
+	lines = trimBlankEdgeLines(lines)
+	return taskListViewport{
+		lines:      withTaskListScrollbar(lines, totalWidth, start, end, len(blocks)),
+		startBlock: start,
+		endBlock:   end,
+	}
 }
 
 func (m model) taskListBlocks(totalWidth int) []taskListBlock {
@@ -244,6 +282,56 @@ func blockLineCount(blocks []taskListBlock) int {
 		count += len(block.lines)
 	}
 	return count
+}
+
+func withTaskListScrollbar(lines []string, totalWidth int, startBlock int, endBlock int, totalBlocks int) []string {
+	if len(lines) == 0 || totalWidth <= 1 || totalBlocks <= 0 || (startBlock <= 0 && endBlock >= totalBlocks-1) {
+		return lines
+	}
+
+	visibleBlocks := endBlock - startBlock + 1
+	if visibleBlocks < 1 {
+		visibleBlocks = 1
+	}
+
+	thumbHeight := len(lines) * visibleBlocks / totalBlocks
+	if thumbHeight < 1 {
+		thumbHeight = 1
+	}
+	if thumbHeight > len(lines) {
+		thumbHeight = len(lines)
+	}
+
+	thumbTop := 0
+	scrollableBlocks := totalBlocks - visibleBlocks
+	scrollableLines := len(lines) - thumbHeight
+	if scrollableBlocks > 0 && scrollableLines > 0 {
+		thumbTop = startBlock * scrollableLines / scrollableBlocks
+	}
+
+	rendered := make([]string, 0, len(lines))
+	for i, line := range lines {
+		marker := dimStyle.Render(taskListScrollbarTrack)
+		if i >= thumbTop && i < thumbTop+thumbHeight {
+			marker = primaryStyle.Render(taskListScrollbarThumb)
+		}
+		rendered = append(rendered, lineWithRightMarker(line, totalWidth, marker))
+	}
+	return rendered
+}
+
+func lineWithRightMarker(line string, totalWidth int, marker string) string {
+	if totalWidth <= lipgloss.Width(marker) {
+		return line
+	}
+
+	lineWidth := lipgloss.Width(line)
+	targetWidth := totalWidth - lipgloss.Width(marker)
+	if lineWidth > targetWidth {
+		return line
+	}
+
+	return padRightVisible(line, targetWidth) + marker
 }
 
 func sectionLines(prefix string, content string, totalWidth int) []string {
@@ -983,17 +1071,20 @@ func wrapAndTruncate(text string, width int, maxLines int) []string {
 	if text == "" {
 		return nil
 	}
+	if width <= 0 {
+		return nil
+	}
 
 	words := strings.Fields(text)
 	if len(words) == 0 {
 		return nil
 	}
 
-	lines := []string{words[0]}
+	lines := []string{truncateVisible(words[0], width)}
 	for _, word := range words[1:] {
 		current := lines[len(lines)-1]
-		if len(current)+1+len(word) > width {
-			lines = append(lines, word)
+		if lipgloss.Width(current)+1+lipgloss.Width(word) > width {
+			lines = append(lines, truncateVisible(word, width))
 			continue
 		}
 		lines[len(lines)-1] = current + " " + word
@@ -1001,13 +1092,37 @@ func wrapAndTruncate(text string, width int, maxLines int) []string {
 
 	if len(lines) > maxLines {
 		lines = lines[:maxLines]
-		last := lines[maxLines-1]
-		if len(last) > 3 {
-			lines[maxLines-1] = last[:len(last)-3] + "..."
-		}
+		lines[maxLines-1] = truncateVisible(lines[maxLines-1]+"...", width)
 	}
 
 	return lines
+}
+
+func truncateVisible(value string, max int) string {
+	if max <= 0 {
+		return ""
+	}
+	if lipgloss.Width(value) <= max {
+		return value
+	}
+	if max <= 3 {
+		return strings.Repeat(".", max)
+	}
+
+	suffix := "..."
+	suffixWidth := lipgloss.Width(suffix)
+	currentWidth := 0
+	var builder strings.Builder
+	for _, r := range value {
+		runeWidth := lipgloss.Width(string(r))
+		if currentWidth+runeWidth+suffixWidth > max {
+			break
+		}
+		builder.WriteRune(r)
+		currentWidth += runeWidth
+	}
+
+	return builder.String() + suffix
 }
 
 func emptyFallback(value string, fallback string) string {

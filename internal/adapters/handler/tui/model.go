@@ -222,6 +222,10 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.selected = 0
 		case "G", "end":
 			m.selected = len(m.rows) - 1
+		case "pgdown":
+			m.moveSelection(m.taskListPageSize())
+		case "pgup":
+			m.moveSelection(-m.taskListPageSize())
 		case "j", "down":
 			m.moveSelection(1)
 		case "k", "up":
@@ -696,6 +700,24 @@ func (m *model) moveSelection(delta int) {
 
 	m.selected += delta
 	m.clampSelection()
+}
+
+func (m model) taskListPageSize() int {
+	if len(m.rows) == 0 {
+		return 1
+	}
+
+	rowBudget := m.taskListRowBudget(m.totalWidth(), m.totalHeight())
+	if rowBudget <= 0 {
+		return 1
+	}
+
+	viewport := m.visibleTaskList(m.totalWidth(), rowBudget)
+	pageSize := viewport.endBlock - viewport.startBlock + 1
+	if pageSize < 1 {
+		return 1
+	}
+	return pageSize
 }
 
 func (m *model) clampSelection() {

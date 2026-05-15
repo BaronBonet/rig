@@ -242,6 +242,76 @@ func TestModel_ViewKeepsSelectedTaskDetailsVisibleWhenRowsExceedHeight(t *testin
 	require.LessOrEqual(t, len(strings.Split(view, "\n")), m.height)
 }
 
+func TestModel_ViewRendersTaskListScrollbarWhenRowsExceedHeight(t *testing.T) {
+	frontend := newFrontendHarness()
+	for i := range 20 {
+		suffix := strconv.Itoa(i)
+		frontend.listTasks = append(frontend.listTasks, &core.Task{
+			ID:          "task-" + suffix,
+			RepoName:    "repo",
+			DisplayName: "task " + suffix,
+			Provider:    core.ProviderCodex,
+		})
+	}
+
+	m := newLoadedModel(frontend)
+	m.width = 96
+	m.height = 14
+
+	view := m.View().Content
+	require.Contains(t, stripANSI(view), "█")
+	for _, line := range strings.Split(view, "\n") {
+		require.LessOrEqual(t, lipgloss.Width(line), m.totalWidth(), stripANSI(line))
+	}
+}
+
+func TestModel_ViewOmitsTaskListScrollbarWhenRowsFitHeight(t *testing.T) {
+	frontend := newFrontendHarness()
+	for i := range 2 {
+		suffix := strconv.Itoa(i)
+		frontend.listTasks = append(frontend.listTasks, &core.Task{
+			ID:          "task-" + suffix,
+			RepoName:    "repo",
+			DisplayName: "task " + suffix,
+			Provider:    core.ProviderCodex,
+		})
+	}
+
+	m := newLoadedModel(frontend)
+	m.width = 96
+	m.height = 32
+
+	require.NotContains(t, stripANSI(m.View().Content), "█")
+}
+
+func TestModel_PageKeysMoveSelectionByVisibleTaskPage(t *testing.T) {
+	frontend := newFrontendHarness()
+	for i := range 20 {
+		suffix := strconv.Itoa(i)
+		frontend.listTasks = append(frontend.listTasks, &core.Task{
+			ID:          "task-" + suffix,
+			RepoName:    "repo",
+			DisplayName: "task " + suffix,
+			Provider:    core.ProviderCodex,
+		})
+	}
+
+	m := newLoadedModel(frontend)
+	m.width = 96
+	m.height = 18
+	m.selected = 0
+
+	next, _ := m.Update(tea.KeyPressMsg{Code: tea.KeyPgDown})
+	pagedDown, ok := next.(model)
+	require.True(t, ok)
+	require.Greater(t, pagedDown.selected, 1)
+
+	next, _ = pagedDown.Update(tea.KeyPressMsg{Code: tea.KeyPgUp})
+	pagedUp, ok := next.(model)
+	require.True(t, ok)
+	require.Equal(t, 0, pagedUp.selected)
+}
+
 func TestModel_PRStatusShownInOverviewRowsAndDetailPanel(t *testing.T) {
 	frontend := newFrontendHarness()
 	frontend.listTasks = []*core.Task{
@@ -448,6 +518,40 @@ func TestModel_ViewRendersTaskActivity(t *testing.T) {
 		strings.Index(view, "go test"),
 		strings.Index(view, "rg -n task detail"),
 	)
+}
+
+func TestModel_ViewConstrainsTaskActivityColumnsWithLongWords(t *testing.T) {
+	task := &core.Task{
+		ID:          "task-1",
+		RepoName:    "repo-a",
+		DisplayName: "first task",
+		Provider:    core.ProviderCodex,
+	}
+	longURL := "https://sendbird.com/docs/chat/sdk/v4/ios/channel/managing-channels/hide-or-archive-a-group-channel"
+	m := model{
+		width: 96,
+		rows: []taskRow{{
+			task: task,
+			activity: []core.TaskActivityEvent{
+				{
+					TaskID:     task.ID,
+					Role:       core.TaskActivityRoleUser,
+					Text:       "reference " + longURL,
+					ObservedAt: time.Date(2026, time.April, 23, 10, 0, 0, 0, time.UTC),
+				},
+				{
+					TaskID:     task.ID,
+					Role:       core.TaskActivityRoleAssistant,
+					Text:       "assistant response stays readable",
+					ObservedAt: time.Date(2026, time.April, 23, 10, 0, 30, 0, time.UTC),
+				},
+			},
+		}},
+	}
+
+	for _, line := range strings.Split(m.selectedTaskDetailView(), "\n") {
+		require.LessOrEqual(t, lipgloss.Width(line), m.totalWidth(), stripANSI(line))
+	}
 }
 
 func TestRenderRow_CommandStatusKeepsElapsedColumnAligned(t *testing.T) {
