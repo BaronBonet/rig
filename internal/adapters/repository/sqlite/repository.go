@@ -47,7 +47,12 @@ func New(cfg Config) (core.TaskRepository, error) {
 		_ = db.Close()
 		return nil, err
 	}
-	if stale, err := hasStaleTasksSchema(context.Background(), db); err != nil {
+	gooseManaged, err := hasGooseMigrationTable(context.Background(), db)
+	if err != nil {
+		_ = db.Close()
+		return nil, err
+	}
+	if stale, err := hasStaleTasksSchema(context.Background(), db, gooseManaged); err != nil {
 		_ = db.Close()
 		return nil, err
 	} else if stale {
@@ -394,7 +399,25 @@ func chmodSQLiteFiles(path string) error {
 	return nil
 }
 
-func hasStaleTasksSchema(ctx context.Context, db *sql.DB) (bool, error) {
+func hasGooseMigrationTable(ctx context.Context, db *sql.DB) (bool, error) {
+	var exists int
+	if err := db.QueryRowContext(ctx, `
+		select exists(
+			select 1
+			from sqlite_master
+			where type = 'table' and name = 'goose_db_version'
+		)
+	`).Scan(&exists); err != nil {
+		return false, fmt.Errorf("inspect goose migration state: %w", err)
+	}
+	return exists == 1, nil
+}
+
+func hasStaleTasksSchema(ctx context.Context, db *sql.DB, gooseManaged bool) (bool, error) {
+	if gooseManaged {
+		return false, nil
+	}
+
 	rows, err := db.QueryContext(ctx, "pragma table_info(tasks)")
 	if err != nil {
 		return false, fmt.Errorf("inspect tasks schema: %w", err)

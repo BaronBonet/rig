@@ -663,6 +663,17 @@ func TestRepositoryNew_CreatesPrivateDataDirectoryAndDatabaseFile(t *testing.T) 
 	require.Equal(t, os.FileMode(0o600), dbInfo.Mode().Perm())
 }
 
+func TestRepositoryNew_ReopensMigratedDatabase(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "state.db")
+
+	repo := newTestRepositoryAtPath(t, path)
+	require.NoError(t, repo.db.Close())
+
+	reopened, err := New(Config{Path: path})
+	require.NoError(t, err)
+	require.NotNil(t, reopened)
+}
+
 func TestRepositoryNew_ReturnsErrorAndPreservesDBWhenSchemaIsStale(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "state.db")
 
