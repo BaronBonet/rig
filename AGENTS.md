@@ -30,6 +30,20 @@ go test -run TestNewService_CreateTask ./internal/core
 - Do not create a git worktree automatically for Codex work in this repository.
 - Work in the current workspace unless the human explicitly asks for a worktree.
 
+## Agent skills
+
+### Issue tracker
+
+Issues and PRDs are tracked in GitHub Issues for `BaronBonet/rig`. See `docs/agents/issue-tracker.md`.
+
+### Triage labels
+
+Triage labels use the default mattpocock/skills vocabulary. See `docs/agents/triage-labels.md`.
+
+### Domain docs
+
+This repo uses a single-context domain docs layout. See `docs/agents/domain.md`.
+
 ## Architecture
 
 Hexagonal architecture (Ports & Adapters) with dependency injection.

@@ -312,6 +312,42 @@ func TestTaskServiceCreateTask_FromPullRequestBootstrapsWorkspaceBeforeStartingS
 	require.Equal(t, 42, svc.repoClient.createdPRNumber)
 }
 
+func TestTaskServiceCreateTask_FromPullRequestEmitsProgressStepsInOrder(t *testing.T) {
+	svc := newTestTaskService(t)
+	svc.providerRepo.bootstrapSpec = WorkspaceBootstrapSpec{Files: []WorkspaceBootstrapFile{{
+		Path:     ".codex/hooks.json",
+		Content:  []byte("{}"),
+		FileMode: 0o644,
+	}}}
+
+	var steps []TaskCreateProgressStep
+	reporter := NewMockTaskCreateProgressReporter(t)
+	reporter.EXPECT().ReportTaskCreateProgress(mock.Anything).Run(func(step TaskCreateProgressStep) {
+		steps = append(steps, step)
+	}).Return()
+
+	task, err := svc.service.CreateTaskWithProgress(t.Context(), CreateTaskInput{
+		Cwd:      "/tmp/repo",
+		Provider: ProviderCodex,
+		Source: CreateTaskSource{
+			PullRequest: &RepoPullRequest{
+				Number:     42,
+				Title:      "Auth rewrite",
+				BranchName: "feat/auth",
+				State:      PRStateDraft,
+			},
+		},
+	}, reporter)
+
+	require.NoError(t, err)
+	require.NotNil(t, task)
+	require.Equal(t, []TaskCreateProgressStep{
+		TaskCreateProgressCreatingWorktree,
+		TaskCreateProgressPreparingWorkspace,
+		TaskCreateProgressStartingSession,
+	}, steps)
+}
+
 func TestTaskServiceCreateTask_RejectsDuplicatePullRequestBranchBeforePersist(t *testing.T) {
 	svc := newTestTaskService(t)
 	svc.taskRepo.listTasks = []*Task{{

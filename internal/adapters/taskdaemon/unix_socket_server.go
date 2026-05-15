@@ -120,41 +120,16 @@ func (s *unixSocketServer) handleConn(ctx context.Context, conn net.Conn) {
 		return
 	}
 
+	if command, ok := socketUnaryCommands[req.Command]; ok {
+		writeSocketUnaryCommandResponse(connCtx, encoder, s.backend, command, req)
+		return
+	}
+
 	switch req.Command {
-	case socketCommandHealth:
-		_ = writeSocketEnvelope(encoder, socketEnvelope{Type: socketEnvelopeHealth, OK: true})
-	case socketCommandProtocolVersion:
-		_ = writeSocketEnvelope(encoder, socketEnvelope{
-			Type:            socketEnvelopeProtocolVersion,
-			OK:              true,
-			ProtocolVersion: currentFrontendProtocolVersion,
-		})
-	case socketCommandFrontendBuildVersion:
-		_ = writeSocketEnvelope(encoder, socketEnvelope{
-			Type:    socketEnvelopeFrontendBuildVersion,
-			OK:      true,
-			Version: currentFrontendBuildVersion,
-		})
 	case socketCommandCreateTask:
 		s.handleCreateTask(ctx, encoder, req)
 	case socketCommandRetryTaskCreation:
 		s.handleRetryTaskCreation(ctx, encoder, req)
-	case socketCommandDeleteTask:
-		s.handleDeleteTask(connCtx, encoder, req)
-	case socketCommandReconnectTaskSession:
-		s.handleReconnectTaskSession(connCtx, encoder, req)
-	case socketCommandListRepoPullRequests:
-		s.handleListRepoPullRequests(ctx, encoder, req)
-	case socketCommandPullRequestStatus:
-		s.handlePullRequestStatus(ctx, encoder, req)
-	case socketCommandListTasks:
-		s.handleListTasks(ctx, encoder)
-	case socketCommandGetTaskActivity:
-		s.handleGetTaskActivity(connCtx, encoder, req)
-	case socketCommandGetTaskTokenUsage:
-		s.handleGetTaskTokenUsage(connCtx, encoder, req)
-	case socketCommandLatestTaskStatus:
-		s.handleLatestTaskStatus(connCtx, encoder, req)
 	case socketCommandSubscribeTaskStatus:
 		go cancelOnConnClose(conn, cancel)
 		s.handleSubscribeTaskStatus(connCtx, encoder, req)
@@ -194,32 +169,7 @@ func (s *unixSocketServer) handleCreateTask(ctx context.Context, encoder *json.E
 		return
 	}
 
-	for event := range events {
-		switch {
-		case event.Progress != nil:
-			if err := writeSocketEnvelope(encoder, socketEnvelope{
-				Type:           socketEnvelopeTaskCreateProgress,
-				OK:             true,
-				CreateProgress: event.Progress,
-			}); err != nil {
-				return
-			}
-		case event.Task != nil:
-			_ = writeSocketEnvelope(
-				encoder,
-				socketEnvelope{Type: socketEnvelopeTaskCreated, OK: true, Task: event.Task},
-			)
-			return
-		case event.Err != nil:
-			_ = writeSocketEnvelope(encoder, socketEnvelope{Type: socketEnvelopeError, Error: event.Err.Error()})
-			return
-		}
-	}
-
-	_ = writeSocketEnvelope(
-		encoder,
-		socketEnvelope{Type: socketEnvelopeError, Error: "create task stream closed without terminal result"},
-	)
+	writeTaskCreateStream(encoder, events)
 }
 
 func (s *unixSocketServer) handleRetryTaskCreation(ctx context.Context, encoder *json.Encoder, req socketRequest) {
@@ -268,135 +218,6 @@ func writeTaskCreateStream(encoder *json.Encoder, events <-chan core.TaskCreateE
 		encoder,
 		socketEnvelope{Type: socketEnvelopeError, Error: "create task stream closed without terminal result"},
 	)
-}
-
-func (s *unixSocketServer) handleDeleteTask(ctx context.Context, encoder *json.Encoder, req socketRequest) {
-	taskID := strings.TrimSpace(req.TaskID)
-	if taskID == "" {
-		_ = writeSocketEnvelope(encoder, socketEnvelope{
-			Type:  socketEnvelopeError,
-			Error: socketCommandDeleteTask + " task_id required",
-		})
-		return
-	}
-
-	if err := s.backend.DeleteTask(ctx, taskID); err != nil {
-		_ = writeSocketEnvelope(encoder, socketEnvelope{Type: socketEnvelopeError, Error: err.Error()})
-		return
-	}
-
-	_ = writeSocketEnvelope(encoder, socketEnvelope{Type: socketEnvelopeTaskDeleted, OK: true})
-}
-
-func (s *unixSocketServer) handleReconnectTaskSession(ctx context.Context, encoder *json.Encoder, req socketRequest) {
-	taskID := strings.TrimSpace(req.TaskID)
-	if taskID == "" {
-		_ = writeSocketEnvelope(
-			encoder,
-			socketEnvelope{Type: socketEnvelopeError, Error: socketCommandReconnectTaskSession + " task_id required"},
-		)
-		return
-	}
-
-	if err := s.backend.ReconnectTaskSession(ctx, taskID); err != nil {
-		_ = writeSocketEnvelope(encoder, socketEnvelope{Type: socketEnvelopeError, Error: err.Error()})
-		return
-	}
-
-	_ = writeSocketEnvelope(encoder, socketEnvelope{Type: socketEnvelopeTaskSessionReconnect, OK: true})
-}
-
-func (s *unixSocketServer) handleListTasks(ctx context.Context, encoder *json.Encoder) {
-	tasks, err := s.backend.ListTasks(ctx)
-	if err != nil {
-		_ = writeSocketEnvelope(encoder, socketEnvelope{Type: socketEnvelopeError, Error: err.Error()})
-		return
-	}
-
-	_ = writeSocketEnvelope(encoder, socketEnvelope{Type: socketEnvelopeTasksList, OK: true, Tasks: tasks})
-}
-
-func (s *unixSocketServer) handleGetTaskActivity(ctx context.Context, encoder *json.Encoder, req socketRequest) {
-	taskID := strings.TrimSpace(req.TaskID)
-	if taskID == "" {
-		_ = writeSocketEnvelope(encoder, socketEnvelope{
-			Type:  socketEnvelopeError,
-			Error: socketCommandGetTaskActivity + " task_id required",
-		})
-		return
-	}
-
-	activity, err := s.backend.GetTaskActivity(ctx, taskID, req.Limit)
-	if err != nil {
-		_ = writeSocketEnvelope(encoder, socketEnvelope{Type: socketEnvelopeError, Error: err.Error()})
-		return
-	}
-
-	_ = writeSocketEnvelope(encoder, socketEnvelope{Type: socketEnvelopeTaskActivity, OK: true, Activity: activity})
-}
-
-func (s *unixSocketServer) handleGetTaskTokenUsage(ctx context.Context, encoder *json.Encoder, req socketRequest) {
-	taskID := strings.TrimSpace(req.TaskID)
-	if taskID == "" {
-		_ = writeSocketEnvelope(encoder, socketEnvelope{
-			Type:  socketEnvelopeError,
-			Error: socketCommandGetTaskTokenUsage + " task_id required",
-		})
-		return
-	}
-
-	usage, err := s.backend.GetTaskTokenUsage(ctx, taskID)
-	if err != nil {
-		_ = writeSocketEnvelope(encoder, socketEnvelope{Type: socketEnvelopeError, Error: err.Error()})
-		return
-	}
-
-	_ = writeSocketEnvelope(encoder, socketEnvelope{Type: socketEnvelopeTaskTokenUsage, OK: true, Usage: usage})
-}
-
-func (s *unixSocketServer) handleListRepoPullRequests(ctx context.Context, encoder *json.Encoder, req socketRequest) {
-	prs, err := s.backend.ListRepoPullRequests(ctx, strings.TrimSpace(req.Cwd))
-	if err != nil {
-		_ = writeSocketEnvelope(encoder, socketEnvelope{Type: socketEnvelopeError, Error: err.Error()})
-		return
-	}
-
-	_ = writeSocketEnvelope(encoder, socketEnvelope{
-		Type:         socketEnvelopeRepoPullRequestsList,
-		OK:           true,
-		PullRequests: prs,
-	})
-}
-
-func (s *unixSocketServer) handlePullRequestStatus(ctx context.Context, encoder *json.Encoder, req socketRequest) {
-	status, err := s.backend.PullRequestStatus(
-		ctx,
-		strings.TrimSpace(req.Cwd),
-		strings.TrimSpace(req.BranchName),
-	)
-	if err != nil {
-		_ = writeSocketEnvelope(encoder, socketEnvelope{Type: socketEnvelopeError, Error: err.Error()})
-		return
-	}
-
-	if status == nil {
-		status = &core.PRStatus{State: core.PRStateNone}
-	}
-	_ = writeSocketEnvelope(encoder, socketEnvelope{
-		Type: socketEnvelopePullRequestStatus,
-		OK:   true,
-		PR:   status,
-	})
-}
-
-func (s *unixSocketServer) handleLatestTaskStatus(ctx context.Context, encoder *json.Encoder, req socketRequest) {
-	update, err := s.backend.LatestTaskStatus(ctx, strings.TrimSpace(req.TaskID))
-	if err != nil {
-		_ = writeSocketEnvelope(encoder, socketEnvelope{Type: socketEnvelopeError, Error: err.Error()})
-		return
-	}
-
-	_ = writeSocketEnvelope(encoder, socketEnvelope{Type: socketEnvelopeTaskStatusSnapshot, OK: true, Update: update})
 }
 
 func (s *unixSocketServer) handleSubscribeTaskStatus(ctx context.Context, encoder *json.Encoder, req socketRequest) {

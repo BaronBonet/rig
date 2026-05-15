@@ -20,6 +20,27 @@ func TestServer_ImplementsSocketBackend(t *testing.T) {
 	var _ socketBackend = &server{}
 }
 
+func TestSocketUnaryCommandsRegisterUnaryCommands(t *testing.T) {
+	t.Parallel()
+
+	require.Contains(t, socketUnaryCommands, socketCommandHealth)
+	require.Contains(t, socketUnaryCommands, socketCommandProtocolVersion)
+	require.Contains(t, socketUnaryCommands, socketCommandFrontendBuildVersion)
+	require.Contains(t, socketUnaryCommands, socketCommandDeleteTask)
+	require.Contains(t, socketUnaryCommands, socketCommandReconnectTaskSession)
+	require.Contains(t, socketUnaryCommands, socketCommandGetTaskActivity)
+	require.Contains(t, socketUnaryCommands, socketCommandGetTaskTokenUsage)
+	require.Contains(t, socketUnaryCommands, socketCommandLatestTaskStatus)
+	require.Contains(t, socketUnaryCommands, socketCommandListRepoPullRequests)
+	require.Contains(t, socketUnaryCommands, socketCommandListTasks)
+	require.Contains(t, socketUnaryCommands, socketCommandPullRequestStatus)
+
+	require.NotContains(t, socketUnaryCommands, socketCommandCreateTask)
+	require.NotContains(t, socketUnaryCommands, socketCommandRetryTaskCreation)
+	require.NotContains(t, socketUnaryCommands, socketCommandSubscribeTaskStatus)
+	require.NotContains(t, socketUnaryCommands, socketCommandStop)
+}
+
 func TestUnixSocketServer_SecuresSocketDirectoryAndSocketPermissions(t *testing.T) {
 	t.Parallel()
 
