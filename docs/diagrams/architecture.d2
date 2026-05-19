@@ -64,9 +64,19 @@ sqlite: {
   }
 }
 
+tmux: {
+  label: "Tmux session"
+  sublabel: "task window in an\nisolated worktree"
+  style: {
+    fill: "#233f45"
+    stroke: "#81c8be"
+    font-color: white
+  }
+}
+
 codex: {
   label: "Codex CLI"
-  sublabel: "runs each task in an\nisolated workspace"
+  sublabel: "interactive\nprovider process"
   style: {
     fill: "#4a2f45"
     stroke: "#f4b8e4"
@@ -98,7 +108,15 @@ daemon -> sqlite: "persist task state" {
   }
 }
 
-daemon -> codex: "start or resume work" {
+daemon -> tmux: "create or reconnect\ntask session" {
+  style: {
+    stroke: "#81c8be"
+    stroke-width: 3
+    animated: true
+  }
+}
+
+tmux -> codex: "launch codex or\ncodex resume" {
   style: {
     stroke: "#f4b8e4"
     stroke-width: 3

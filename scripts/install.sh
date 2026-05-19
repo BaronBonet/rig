@@ -83,7 +83,7 @@ latest_tag() {
 		tag="$(curl_fetch "$RIG_INSTALL_API_URL" | sed -n 's/.*"tag_name"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' | head -n 1)"
 	fi
 
-	[ -n "$tag" ] || fail "could not resolve the latest GitHub release; authenticate with gh or set GH_TOKEN for private repos"
+	[ -n "$tag" ] || fail "could not resolve the latest GitHub release; authenticate with gh or set GH_TOKEN"
 	echo "$tag"
 }
 

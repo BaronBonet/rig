@@ -102,7 +102,7 @@ func (m model) constrainedListView() string {
 	lines := []string{
 		renderHeader(
 			m.renderHeaderLabel(),
-			mutedStyle.Render("n new   r refresh   x clean   q quit"),
+			mutedStyle.Render(m.listKeybindText()),
 			totalWidth,
 		),
 		dividerStyle.Render(strings.Repeat("─", totalWidth)),
