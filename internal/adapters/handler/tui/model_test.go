@@ -69,7 +69,7 @@ func TestModel_ViewRendersTaskMetadata(t *testing.T) {
 	require.True(t, ok)
 
 	view := stripANSI(got.View().Content)
-	require.Contains(t, view, "RIG")
+	require.Contains(t, view, "RIG dev")
 	require.Contains(t, view, "n new   r refresh   x clean   q quit")
 	require.Contains(t, view, "first task")
 	require.Contains(t, view, "repo-a")
@@ -78,6 +78,20 @@ func TestModel_ViewRendersTaskMetadata(t *testing.T) {
 	require.Contains(t, view, "WORKSPACE")
 	require.Contains(t, view, "SESSION")
 	require.Contains(t, view, "15m")
+}
+
+func TestModel_ViewRendersConfiguredVersionInHeader(t *testing.T) {
+	frontend := newFrontendHarness()
+
+	m := newModelWithLaunchCwdAndVersion(frontend.mock, "/tmp/repo", "1.2.3")
+	msg := runCmd(t, m.Init())
+	next, _ := m.Update(msg)
+
+	got, ok := next.(model)
+	require.True(t, ok)
+
+	view := stripANSI(got.View().Content)
+	require.Contains(t, view, "RIG 1.2.3")
 }
 
 func TestModel_ViewRendersFailedCreationTaskWithRetryHint(t *testing.T) {

@@ -32,7 +32,7 @@ func (m model) unboundedListView() string {
 
 	var builder strings.Builder
 	builder.WriteString(renderHeader(
-		headerLabelStyle.Render("RIG"),
+		m.renderHeaderLabel(),
 		mutedStyle.Render(m.listKeybindText()),
 		totalWidth,
 	) + "\n")
@@ -101,7 +101,7 @@ func (m model) constrainedListView() string {
 
 	lines := []string{
 		renderHeader(
-			headerLabelStyle.Render("RIG"),
+			m.renderHeaderLabel(),
 			mutedStyle.Render("n new   r refresh   x clean   q quit"),
 			totalWidth,
 		),
@@ -635,7 +635,7 @@ func (m model) promptInputView() string {
 
 	var builder strings.Builder
 	builder.WriteString(renderHeader(
-		headerLabelStyle.Render("RIG"),
+		m.renderHeaderLabel(),
 		mutedStyle.Render("new task"),
 		totalWidth,
 	) + "\n")
@@ -701,7 +701,7 @@ func (m model) prPickerView() string {
 
 	var builder strings.Builder
 	builder.WriteString(renderHeader(
-		headerLabelStyle.Render("RIG"),
+		m.renderHeaderLabel(),
 		mutedStyle.Render(headerSuffix),
 		totalWidth,
 	) + "\n")
@@ -835,7 +835,7 @@ func (m model) confirmationView() string {
 
 	var builder strings.Builder
 	builder.WriteString(renderHeader(
-		headerLabelStyle.Render("RIG"),
+		m.renderHeaderLabel(),
 		errorStyle.Render("cleanup"),
 		totalWidth,
 	) + "\n")
@@ -1025,6 +1025,10 @@ func renderHeader(left string, right string, totalWidth int) string {
 		gap = 2
 	}
 	return left + strings.Repeat(" ", gap) + right
+}
+
+func (m model) renderHeaderLabel() string {
+	return headerLabelStyle.Render("RIG") + " " + mutedStyle.Render(normalizeBuildVersion(m.buildVersion))
 }
 
 func truncateStr(value string, max int) string {

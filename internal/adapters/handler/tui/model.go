@@ -31,6 +31,8 @@ const (
 
 const defaultCreateProvider = core.ProviderCodex
 
+const defaultBuildVersion = "dev"
+
 const taskActivityPreviewLimit = 6
 
 // nolint:recvcheck // bubbletea requires value receivers for tea.Model.
@@ -53,6 +55,7 @@ type model struct {
 	shimmerTick   int
 	mode          modelMode
 	launchCwd     string
+	buildVersion  string
 	prRepoRoot    string
 	prRepoName    string
 	loading       bool
@@ -145,6 +148,10 @@ func newModel(frontend core.TaskFrontend) model {
 }
 
 func newModelWithLaunchCwd(frontend core.TaskFrontend, launchCwd string) model {
+	return newModelWithLaunchCwdAndVersion(frontend, launchCwd, defaultBuildVersion)
+}
+
+func newModelWithLaunchCwdAndVersion(frontend core.TaskFrontend, launchCwd string, buildVersion string) model {
 	statusContext, cancelStatus := context.WithCancel(context.Background())
 
 	return model{
@@ -152,10 +159,19 @@ func newModelWithLaunchCwd(frontend core.TaskFrontend, launchCwd string) model {
 		statusContext: statusContext,
 		cancelStatus:  cancelStatus,
 		launchCwd:     strings.TrimSpace(launchCwd),
+		buildVersion:  normalizeBuildVersion(buildVersion),
 		promptInput:   newPromptInput(),
 		loading:       true,
 		mode:          modeBrowse,
 	}
+}
+
+func normalizeBuildVersion(buildVersion string) string {
+	buildVersion = strings.TrimSpace(buildVersion)
+	if buildVersion == "" {
+		return defaultBuildVersion
+	}
+	return buildVersion
 }
 
 func (m model) Init() tea.Cmd {
