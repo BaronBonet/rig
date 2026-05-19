@@ -83,6 +83,35 @@ func TestTaskServiceCreateTask_CreatesWorkspaceSessionAndPersistsTask(t *testing
 	}, svc.sessionClient.startedLaunch)
 }
 
+func TestTaskServiceCreateTask_EnsuresProviderSessionEnvironmentBeforeStartingSession(t *testing.T) {
+	svc := newTestTaskService(t)
+	svc.providerRepo.suggestedName = "billing retry flow"
+
+	task, err := svc.service.CreateTaskWithProgress(t.Context(), CreateTaskInput{
+		Cwd:    "/tmp/repo",
+		Prompt: "add billing retry flow",
+	}, nil)
+
+	require.NoError(t, err)
+	require.NotNil(t, task)
+	require.Contains(t, svc.events, "ensure_task_session_environment")
+	require.Contains(t, svc.events, "start_task_session")
+	require.Less(
+		t,
+		indexOfEvent(svc.events, "ensure_task_session_environment"),
+		indexOfEvent(svc.events, "start_task_session"),
+	)
+}
+
+func indexOfEvent(events []string, target string) int {
+	for i, event := range events {
+		if event == target {
+			return i
+		}
+	}
+	return -1
+}
+
 func TestTaskServiceCreateTask_FailsWhenRequestedProviderIsUnavailable(t *testing.T) {
 	svc := newTestTaskService(t)
 

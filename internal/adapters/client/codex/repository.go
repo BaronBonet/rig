@@ -24,8 +24,19 @@ var forwarderScriptTemplate = template.Must(template.New("forward-to-rig.sh").Pa
 
 const (
 	readyMarker          = "›"
-	defaultCodexHooksURL = "http://127.0.0.1:4124/codex-hook"
+	codexHookPath        = "/codex-hook"
+	legacyCodexHookPath  = "/hook"
+	defaultCodexHooksURL = "http://127.0.0.1:4124" + codexHookPath
 )
+
+var requiredRigHookEvents = []string{
+	"SessionStart",
+	"UserPromptSubmit",
+	"Stop",
+	"PreToolUse",
+	"PermissionRequest",
+	"PostToolUse",
+}
 
 type repository struct {
 	runner       subprocess.Runner
@@ -50,9 +61,30 @@ func New(runner subprocess.Runner, cfg Config, hooks HookForwardingConfig) core.
 	}
 }
 
-func (r *repository) HealthCheck(ctx context.Context) error {
-	_, err := r.runner.Run(ctx, "", r.binary, "--version")
-	return err
+func NewHookForwardingConfig(hookListenAddr string, hookSecret string) HookForwardingConfig {
+	collectorURL := strings.TrimSpace(hookListenAddr)
+	if collectorURL != "" &&
+		!strings.HasPrefix(collectorURL, "http://") &&
+		!strings.HasPrefix(collectorURL, "https://") {
+		collectorURL = "http://" + collectorURL + codexHookPath
+	}
+
+	return HookForwardingConfig{
+		CollectorURL: collectorURL,
+		HookSecret:   strings.TrimSpace(hookSecret),
+	}
+}
+
+func (r *repository) Doctor(ctx context.Context) error {
+	if _, err := r.runner.Run(ctx, "", r.binary, "--version"); err != nil {
+		return err
+	}
+
+	if err := r.healthCheckHookForwarding(); err != nil {
+		return fmt.Errorf("codex rig hook forwarding: %w", err)
+	}
+
+	return nil
 }
 
 func (r *repository) SuggestTaskName(ctx context.Context, prompt string) (core.TaskSuggestion, error) {
@@ -142,8 +174,13 @@ func (r *repository) BuildTaskSessionLaunchSpec(task *core.Task) (core.TaskSessi
 		prefillInput = []string{task.Prompt}
 	}
 
+	command, err := r.codexTaskCommand()
+	if err != nil {
+		return core.TaskSessionLaunchSpec{}, err
+	}
+
 	return core.TaskSessionLaunchSpec{
-		Command:      []string{r.binary},
+		Command:      command,
 		ReadyMarker:  readyMarker,
 		PrefillInput: prefillInput,
 	}, nil
@@ -158,8 +195,13 @@ func (r *repository) BuildReconnectTaskSessionLaunchSpec(
 		return core.TaskSessionLaunchSpec{}, fmt.Errorf("session ID is required")
 	}
 
+	command, err := r.codexTaskCommand("resume", sessionID)
+	if err != nil {
+		return core.TaskSessionLaunchSpec{}, err
+	}
+
 	return core.TaskSessionLaunchSpec{
-		Command:     []string{r.binary, "resume", sessionID},
+		Command:     command,
 		ReadyMarker: readyMarker,
 	}, nil
 }
@@ -170,6 +212,20 @@ func (r *repository) TaskSessionCommandName() string {
 		return "codex"
 	}
 	return commandName
+}
+
+func (r *repository) codexTaskCommand(args ...string) ([]string, error) {
+	codexHome, err := r.resolveCodexHomeDir()
+	if err != nil {
+		return nil, err
+	}
+	codexHome = strings.TrimSpace(codexHome)
+	if codexHome == "" {
+		return nil, fmt.Errorf("codex home is required")
+	}
+
+	command := []string{"env", "CODEX_HOME=" + codexHome, r.binary}
+	return append(command, args...), nil
 }
 
 func readOutputFile(path string) string {
@@ -289,6 +345,59 @@ func (r *repository) loadHookConfig(path string) (hookConfig, error) {
 	}
 
 	return cfg, nil
+}
+
+func (r *repository) healthCheckHookForwarding() error {
+	codexHome, err := r.resolveCodexHomeDir()
+	if err != nil {
+		return err
+	}
+	codexHome = strings.TrimSpace(codexHome)
+	if codexHome == "" {
+		return fmt.Errorf("codex home is required")
+	}
+
+	scriptPath := filepath.Join(codexHome, "hooks", "forward-to-rig.sh")
+	scriptInfo, err := os.Stat(scriptPath)
+	if err != nil {
+		return fmt.Errorf("stat %s: %w", scriptPath, err)
+	}
+	if scriptInfo.IsDir() {
+		return fmt.Errorf("%s must be a file", scriptPath)
+	}
+	if scriptInfo.Mode().Perm()&0o111 == 0 {
+		return fmt.Errorf("%s must be executable", scriptPath)
+	}
+	scriptBytes, err := os.ReadFile(scriptPath)
+	if err != nil {
+		return fmt.Errorf("read %s: %w", scriptPath, err)
+	}
+	if !strings.Contains(string(scriptBytes), r.collectorURL) {
+		return fmt.Errorf("%s collector URL must include %s", scriptPath, r.collectorURL)
+	}
+
+	cfg, err := r.loadHookConfig(filepath.Join(codexHome, "hooks.json"))
+	if err != nil {
+		return err
+	}
+	for _, eventName := range requiredRigHookEvents {
+		if !hookConfigHasScriptCommand(cfg, eventName, scriptPath) {
+			return fmt.Errorf("missing %s hook for %s", eventName, scriptPath)
+		}
+	}
+
+	return nil
+}
+
+func hookConfigHasScriptCommand(cfg hookConfig, eventName string, scriptPath string) bool {
+	for _, rule := range cfg.Hooks[eventName] {
+		for _, hook := range rule.Hooks {
+			if hook.Type == "command" && strings.Contains(hook.Command, scriptPath) {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 func (r *repository) ensureRigHookRules(cfg *hookConfig, scriptPath string) error {

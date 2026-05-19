@@ -72,10 +72,10 @@ func (s *taskService) HealthCheck(ctx context.Context) ([]HealthCheck, error) {
 	checks = append(checks, runRequiredHealthCheck(ctx, "tmux", s.tmuxSession))
 
 	if s.defaultProvider != "" {
-		checks = append(checks, runRequiredHealthCheck(ctx, string(s.defaultProvider), s.providers[s.defaultProvider]))
+		checks = append(checks, runRequiredDoctorCheck(ctx, string(s.defaultProvider), s.providers[s.defaultProvider]))
 	}
 	for _, provider := range additionalProviderNames(s.providers, s.defaultProvider) {
-		checks = append(checks, runRequiredHealthCheck(ctx, string(provider), s.providers[provider]))
+		checks = append(checks, runRequiredDoctorCheck(ctx, string(provider), s.providers[provider]))
 	}
 
 	checks = append(checks, runOptionalHealthCheck(ctx, "gh", s.pullRequests))
@@ -88,12 +88,32 @@ type healthChecker interface {
 	HealthCheck(ctx context.Context) error
 }
 
+type doctorChecker interface {
+	Doctor(ctx context.Context) error
+}
+
 func runRequiredHealthCheck(ctx context.Context, name string, checker healthChecker) HealthCheck {
 	return runHealthCheck(ctx, name, true, checker)
 }
 
 func runOptionalHealthCheck(ctx context.Context, name string, checker healthChecker) HealthCheck {
 	return runHealthCheck(ctx, name, false, checker)
+}
+
+func runRequiredDoctorCheck(ctx context.Context, name string, checker doctorChecker) HealthCheck {
+	if checker == nil {
+		return HealthCheck{
+			Name:     name,
+			Required: true,
+			Err:      fmt.Errorf("not configured"),
+		}
+	}
+
+	return HealthCheck{
+		Name:     name,
+		Required: true,
+		Err:      checker.Doctor(ctx),
+	}
 }
 
 func runHealthCheck(ctx context.Context, name string, required bool, checker healthChecker) HealthCheck {

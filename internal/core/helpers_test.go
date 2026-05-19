@@ -12,6 +12,7 @@ import (
 
 type testTaskServiceHarness struct {
 	service TaskService
+	events  []string
 
 	taskRepoMock *MockTaskRepository
 	taskRepo     taskRepositoryState
@@ -70,6 +71,7 @@ type sessionClientState struct {
 	startErr      error
 	deleteErr     error
 	inspectErr    error
+	events        *[]string
 	startedTask   *Task
 	deletedTask   *Task
 	startedLaunch TaskSessionLaunchSpec
@@ -83,6 +85,7 @@ type providerClientState struct {
 	suggestedSuggestion     TaskSuggestion
 	sessionEnvErr           error
 	sessionEnvCalls         int
+	events                  *[]string
 	bootstrapErr            error
 	bootstrapSpec           WorkspaceBootstrapSpec
 	bootstrapRequest        *Task
@@ -157,6 +160,8 @@ func newTestTaskService(t *testing.T) *testTaskServiceHarness {
 		Exists:         true,
 		ActiveCommands: []string{"codex"},
 	}
+	h.sessionClient.events = &h.events
+	h.providerRepo.events = &h.events
 	h.taskRepo.latestByTask = make(map[string]TaskStatusUpdate)
 	h.taskRepo.latestResumeByTask = make(map[string]TaskResumeMetadata)
 	h.taskRepo.providerSessionsByTask = make(map[string][]TaskProviderSession)
@@ -283,6 +288,9 @@ func configureTmuxSessionMock(client *MockTmuxSessionClient, state *sessionClien
 	).Maybe()
 	client.EXPECT().StartTaskSession(mock.Anything, mock.Anything, mock.Anything).RunAndReturn(
 		func(_ context.Context, task *Task, launch TaskSessionLaunchSpec) error {
+			if state.events != nil {
+				*state.events = append(*state.events, "start_task_session")
+			}
 			state.startedTask = cloneTask(task)
 			state.startedLaunch = launch
 			return state.startErr
@@ -306,7 +314,7 @@ func configureTmuxSessionMock(client *MockTmuxSessionClient, state *sessionClien
 }
 
 func configureProviderClientMock(client *MockProviderClient, state *providerClientState) {
-	client.EXPECT().HealthCheck(mock.Anything).RunAndReturn(
+	client.EXPECT().Doctor(mock.Anything).RunAndReturn(
 		func(context.Context) error {
 			return state.healthErr
 		},
@@ -324,6 +332,9 @@ func configureProviderClientMock(client *MockProviderClient, state *providerClie
 	).Maybe()
 	client.EXPECT().EnsureTaskSessionEnvironment(mock.Anything).RunAndReturn(
 		func(context.Context) error {
+			if state.events != nil {
+				*state.events = append(*state.events, "ensure_task_session_environment")
+			}
 			state.sessionEnvCalls++
 			return state.sessionEnvErr
 		},

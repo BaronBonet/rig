@@ -383,7 +383,11 @@ func runDoctor(stdout io.Writer, cfg *infrastructure.ApplicationConfig) error {
 func newDoctorService(cfg *infrastructure.ApplicationConfig) core.TaskService {
 	runner := subprocess.ExecRunner{}
 	providers := map[core.Provider]core.ProviderClient{
-		core.ProviderCodex: codex.New(runner, cfg.Codex, codex.HookForwardingConfig{}),
+		core.ProviderCodex: codex.New(
+			runner,
+			cfg.Codex,
+			codex.NewHookForwardingConfig(cfg.Daemon.HookListenAddr, ""),
+		),
 	}
 
 	return core.NewTaskService(core.TaskServiceDependencies{
@@ -446,10 +450,7 @@ func serveTaskDaemon(
 		core.ProviderCodex: codex.New(
 			runner,
 			cfg.Codex,
-			codex.HookForwardingConfig{
-				CollectorURL: "http://" + cfg.Daemon.HookListenAddr + "/codex-hook",
-				HookSecret:   hookSecret,
-			},
+			codex.NewHookForwardingConfig(cfg.Daemon.HookListenAddr, hookSecret),
 		),
 	}
 
@@ -464,12 +465,7 @@ func serveTaskDaemon(
 		DefaultProvider:      cfg.Provider,
 	})
 
-	codexHooks := codex.NewHookHTTPHandler(service, nil, hookSecret)
 	adapter := taskdaemon.New(cfg.Daemon)
 
-	return adapter.Serve(ctx, service, []core.TaskDaemonHookRoute{
-		{Path: "/hook", Handler: codexHooks},
-		{Path: "/codex-hook", Handler: codexHooks},
-	},
-		stop)
+	return adapter.Serve(ctx, service, codex.NewHookRoutes(service, nil, hookSecret), stop)
 }

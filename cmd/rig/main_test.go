@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/require"
@@ -32,8 +33,11 @@ func TestDaemonHookRoutes_ExposeCodexHooksOnly(t *testing.T) {
 	source := string(content)
 
 	require.NotContains(t, source, "func daemonHookRoutes(")
-	require.Contains(t, source, `{Path: "/hook", Handler: codexHooks}`)
-	require.Contains(t, source, `{Path: "/codex-hook", Handler: codexHooks}`)
+	require.NotContains(t, source, `"/codex-hook"`)
+	require.NotContains(t, source, `"/hook"`)
+	require.NotContains(t, source, "CollectorURL:")
+	require.Contains(t, source, "codex.NewHookForwardingConfig(")
+	require.Contains(t, source, "codex.NewHookRoutes(")
 }
 
 func TestExecuteSource_ConstructsSingleTaskdaemonAdapterForClientPath(t *testing.T) {
@@ -171,9 +175,11 @@ func TestExecuteWithArgsDoctorReportsHealthyEnvironment(t *testing.T) {
 	writeExecutable(t, binDir, "tmux")
 	writeExecutable(t, binDir, "codex")
 
-	t.Setenv("HOME", t.TempDir())
+	home := t.TempDir()
+	t.Setenv("HOME", home)
 	t.Setenv("PATH", binDir)
 	t.Setenv("RIG_PROVIDER", "codex")
+	installRigCodexHooksFixture(t, home, "http://127.0.0.1:4124/codex-hook")
 
 	var stdout bytes.Buffer
 	err := executeWithArgs([]string{"doctor"}, &stdout, nil)
@@ -258,4 +264,30 @@ func writeExecutable(t *testing.T, dir string, name string) {
 
 	path := filepath.Join(dir, name)
 	require.NoError(t, os.WriteFile(path, []byte("#!/bin/sh\nexit 0\n"), 0o755))
+}
+
+func installRigCodexHooksFixture(t *testing.T, home string, collectorURL string) {
+	t.Helper()
+
+	codexHome := filepath.Join(home, ".codex")
+	hooksDir := filepath.Join(codexHome, "hooks")
+	require.NoError(t, os.MkdirAll(hooksDir, 0o700))
+
+	scriptPath := filepath.Join(hooksDir, "forward-to-rig.sh")
+	require.NoError(t, os.WriteFile(scriptPath, []byte("#!/bin/sh\n# "+collectorURL+"\n"), 0o700))
+
+	var hooks strings.Builder
+	hooks.WriteString(`{"hooks":{`)
+	events := []string{"SessionStart", "UserPromptSubmit", "Stop", "PreToolUse", "PermissionRequest", "PostToolUse"}
+	for i, eventName := range events {
+		if i > 0 {
+			hooks.WriteString(",")
+		}
+		hooks.WriteString(`"` + eventName + `":[{"hooks":[{"type":"command","command":"`)
+		hooks.WriteString(scriptPath + " " + eventName)
+		hooks.WriteString(`"}]}]`)
+	}
+	hooks.WriteString("}}\n")
+
+	require.NoError(t, os.WriteFile(filepath.Join(codexHome, "hooks.json"), []byte(hooks.String()), 0o644))
 }

@@ -48,6 +48,18 @@ func NewHookHTTPHandler(service core.TaskService, now func() time.Time, hookSecr
 	})
 }
 
+func NewHookRoutes(
+	service core.TaskService,
+	now func() time.Time,
+	hookSecret string,
+) []core.TaskDaemonHookRoute {
+	handler := NewHookHTTPHandler(service, now, hookSecret)
+	return []core.TaskDaemonHookRoute{
+		{Path: legacyCodexHookPath, Handler: handler},
+		{Path: codexHookPath, Handler: handler},
+	}
+}
+
 func newHTTPHandler(
 	now func() time.Time,
 	hookSecret string,
