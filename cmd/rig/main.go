@@ -254,6 +254,7 @@ func runTUI(stdout io.Writer) error {
 		return err
 	}
 
+	displayVersion := taskdaemon.FrontendBuildVersion()
 	execPath, err := os.Executable()
 	if err != nil {
 		return err
@@ -294,9 +295,10 @@ func runTUI(stdout io.Writer) error {
 	if stdout == nil {
 		stdout = os.Stdout
 	}
-	program := tui.NewProgram(
+	program := tui.NewProgramWithVersion(
 		frontend,
 		sourceRoot,
+		displayVersion,
 		tea.WithInput(os.Stdin),
 		tea.WithOutput(stdout),
 	)

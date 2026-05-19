@@ -292,6 +292,7 @@ func TestFrontendBuildVersion_DefaultsToDev(t *testing.T) {
 	t.Parallel()
 
 	require.NotEmpty(t, currentFrontendBuildVersion)
+	require.Equal(t, currentFrontendBuildVersion, FrontendBuildVersion())
 	require.Equal(
 		t,
 		"dev",

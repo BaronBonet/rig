@@ -117,7 +117,11 @@ func handleDeleteTaskCommand(ctx context.Context, backend socketBackend, req soc
 	return socketEnvelope{Type: socketEnvelopeTaskDeleted, OK: true}, nil
 }
 
-func handleReconnectTaskSessionCommand(ctx context.Context, backend socketBackend, req socketRequest) (socketEnvelope, error) {
+func handleReconnectTaskSessionCommand(
+	ctx context.Context,
+	backend socketBackend,
+	req socketRequest,
+) (socketEnvelope, error) {
 	taskID, err := requiredSocketTaskID(req, socketCommandReconnectTaskSession)
 	if err != nil {
 		return socketEnvelope{}, err
@@ -129,7 +133,11 @@ func handleReconnectTaskSessionCommand(ctx context.Context, backend socketBacken
 	return socketEnvelope{Type: socketEnvelopeTaskSessionReconnect, OK: true}, nil
 }
 
-func handleGetTaskActivityCommand(ctx context.Context, backend socketBackend, req socketRequest) (socketEnvelope, error) {
+func handleGetTaskActivityCommand(
+	ctx context.Context,
+	backend socketBackend,
+	req socketRequest,
+) (socketEnvelope, error) {
 	taskID, err := requiredSocketTaskID(req, socketCommandGetTaskActivity)
 	if err != nil {
 		return socketEnvelope{}, err
@@ -143,7 +151,11 @@ func handleGetTaskActivityCommand(ctx context.Context, backend socketBackend, re
 	return socketEnvelope{Type: socketEnvelopeTaskActivity, OK: true, Activity: activity}, nil
 }
 
-func handleGetTaskTokenUsageCommand(ctx context.Context, backend socketBackend, req socketRequest) (socketEnvelope, error) {
+func handleGetTaskTokenUsageCommand(
+	ctx context.Context,
+	backend socketBackend,
+	req socketRequest,
+) (socketEnvelope, error) {
 	taskID, err := requiredSocketTaskID(req, socketCommandGetTaskTokenUsage)
 	if err != nil {
 		return socketEnvelope{}, err
@@ -157,7 +169,11 @@ func handleGetTaskTokenUsageCommand(ctx context.Context, backend socketBackend, 
 	return socketEnvelope{Type: socketEnvelopeTaskTokenUsage, OK: true, Usage: usage}, nil
 }
 
-func handleLatestTaskStatusCommand(ctx context.Context, backend socketBackend, req socketRequest) (socketEnvelope, error) {
+func handleLatestTaskStatusCommand(
+	ctx context.Context,
+	backend socketBackend,
+	req socketRequest,
+) (socketEnvelope, error) {
 	update, err := backend.LatestTaskStatus(ctx, strings.TrimSpace(req.TaskID))
 	if err != nil {
 		return socketEnvelope{}, err
@@ -166,7 +182,11 @@ func handleLatestTaskStatusCommand(ctx context.Context, backend socketBackend, r
 	return socketEnvelope{Type: socketEnvelopeTaskStatusSnapshot, OK: true, Update: update}, nil
 }
 
-func handleListRepoPullRequestsCommand(ctx context.Context, backend socketBackend, req socketRequest) (socketEnvelope, error) {
+func handleListRepoPullRequestsCommand(
+	ctx context.Context,
+	backend socketBackend,
+	req socketRequest,
+) (socketEnvelope, error) {
 	prs, err := backend.ListRepoPullRequests(ctx, strings.TrimSpace(req.Cwd))
 	if err != nil {
 		return socketEnvelope{}, err
@@ -188,7 +208,11 @@ func handleListTasksCommand(ctx context.Context, backend socketBackend, _ socket
 	return socketEnvelope{Type: socketEnvelopeTasksList, OK: true, Tasks: tasks}, nil
 }
 
-func handlePullRequestStatusCommand(ctx context.Context, backend socketBackend, req socketRequest) (socketEnvelope, error) {
+func handlePullRequestStatusCommand(
+	ctx context.Context,
+	backend socketBackend,
+	req socketRequest,
+) (socketEnvelope, error) {
 	status, err := backend.PullRequestStatus(
 		ctx,
 		strings.TrimSpace(req.Cwd),

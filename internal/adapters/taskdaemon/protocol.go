@@ -62,6 +62,11 @@ func SetFrontendBuildVersion(version string) {
 	currentFrontendBuildVersion = version
 }
 
+// FrontendBuildVersion returns the build version embedded in the current frontend binary.
+func FrontendBuildVersion() string {
+	return currentFrontendBuildVersion
+}
+
 type socketRequest struct {
 	Input      *core.CreateTaskInput `json:"input,omitempty"`
 	Command    string                `json:"command"`

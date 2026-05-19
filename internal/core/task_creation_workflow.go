@@ -66,7 +66,14 @@ func retryTaskCreationWithProgress(
 		return nil, fmt.Errorf("task creation failed step %q is not retryable", task.CreationStep)
 	}
 
-	if err := runTaskCreationSteps(ctx, service, task, reporter, steps, taskCreationStepPersistenceEachStep); err != nil {
+	if err := runTaskCreationSteps(
+		ctx,
+		service,
+		task,
+		reporter,
+		steps,
+		taskCreationStepPersistenceEachStep,
+	); err != nil {
 		return task, err
 	}
 	return task, nil
@@ -118,7 +125,14 @@ func createTaskFromPrompt(
 			return service.gitWorktree.CreateTaskWorkspace(ctx, task)
 		},
 	)
-	if err := runTaskCreationSteps(ctx, service, task, reporter, steps, taskCreationStepPersistenceReadyOnly); err != nil {
+	if err := runTaskCreationSteps(
+		ctx,
+		service,
+		task,
+		reporter,
+		steps,
+		taskCreationStepPersistenceReadyOnly,
+	); err != nil {
 		return task, err
 	}
 	return task, nil
@@ -173,7 +187,14 @@ func createTaskFromPullRequest(
 			return service.gitWorktree.CreateTaskWorkspaceFromPullRequest(ctx, task, pr.Number)
 		},
 	)
-	if err := runTaskCreationSteps(ctx, service, task, reporter, steps, taskCreationStepPersistenceReadyOnly); err != nil {
+	if err := runTaskCreationSteps(
+		ctx,
+		service,
+		task,
+		reporter,
+		steps,
+		taskCreationStepPersistenceReadyOnly,
+	); err != nil {
 		return task, err
 	}
 	return task, nil
