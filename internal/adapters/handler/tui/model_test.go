@@ -118,6 +118,31 @@ func TestModel_ViewRendersFailedCreationTaskWithRetryHint(t *testing.T) {
 	require.Contains(t, view, "setup workspace: docker daemon unavailable")
 }
 
+func TestModel_ConstrainedViewRendersSessionFailureRetryHint(t *testing.T) {
+	frontend := newFrontendHarness()
+	frontend.listTasks = []*core.Task{
+		{
+			ID:             "task-1",
+			RepoName:       "repo-a",
+			DisplayName:    "first task",
+			BranchName:     "feat/first-task",
+			Provider:       core.ProviderCodex,
+			CreationStatus: core.TaskCreationStatusFailed,
+			CreationStep:   core.TaskCreateProgressStartingSession,
+			CreationError:  "start task session: tmux failed",
+		},
+	}
+
+	m := newLoadedModel(frontend)
+	m.width = 120
+	m.height = 30
+
+	view := stripANSI(m.View().Content)
+	require.Contains(t, view, "R retry")
+	require.Contains(t, view, "session failed")
+	require.Contains(t, view, "Failed while starting session")
+}
+
 func TestModel_ViewSplitsTaskOverviewByRepo(t *testing.T) {
 	frontend := newFrontendHarness()
 	frontend.listTasks = []*core.Task{

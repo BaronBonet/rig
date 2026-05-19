@@ -48,7 +48,7 @@ func (r *repository) StartTaskSession(ctx context.Context, task *core.Task, laun
 	}
 
 	if err := r.sendKeysToWindow(ctx, task.TmuxSession, taskWindowName, launch.Command); err != nil {
-		return err
+		return r.cleanupStartedSession(ctx, task.TmuxSession, err)
 	}
 
 	if len(launch.PrefillInput) == 0 {
@@ -56,10 +56,14 @@ func (r *repository) StartTaskSession(ctx context.Context, task *core.Task, laun
 	}
 
 	if err := r.waitForPrompt(ctx, task.TmuxSession, taskWindowName, launch.ReadyMarker); err != nil {
-		return err
+		return r.cleanupStartedSession(ctx, task.TmuxSession, err)
 	}
 
-	return r.typeInWindow(ctx, task.TmuxSession, taskWindowName, launch.PrefillInput)
+	if err := r.typeInWindow(ctx, task.TmuxSession, taskWindowName, launch.PrefillInput); err != nil {
+		return r.cleanupStartedSession(ctx, task.TmuxSession, err)
+	}
+
+	return nil
 }
 
 func (r *repository) AttachTaskSession(ctx context.Context, task *core.Task) error {
@@ -181,6 +185,15 @@ func (r *repository) createSession(ctx context.Context, sessionName, workingDir 
 	return err
 }
 
+func (r *repository) cleanupStartedSession(ctx context.Context, sessionName string, cause error) error {
+	_, cleanupErr := r.runner.Run(ctx, "", "tmux", "kill-session", "-t", exactSessionTarget(sessionName))
+	if cleanupErr != nil {
+		return errors.Join(cause, cleanupErr)
+	}
+
+	return cause
+}
+
 func (r *repository) sendKeysToWindow(ctx context.Context, session, window string, command []string) error {
 	quoted := make([]string, 0, len(command))
 	for _, part := range command {
@@ -222,16 +235,39 @@ func (r *repository) capturePaneContent(ctx context.Context, session, window str
 }
 
 func (r *repository) typeInWindow(ctx context.Context, session, window string, command []string) error {
-	_, err := r.runner.Run(
+	text := strings.Join(command, " ")
+	bufferName := "rig-prefill-" + normalizedSessionName(session) + "-" + window
+
+	_, err := r.runner.RunWithStdin(ctx, subprocess.RunWithStdinOptions{
+		Cwd:   "",
+		Name:  "tmux",
+		Args:  []string{"load-buffer", "-b", bufferName, "-"},
+		Stdin: text,
+	})
+	if err != nil {
+		return fmt.Errorf("load task input into tmux buffer: %w", err)
+	}
+
+	_, pasteErr := r.runner.Run(
 		ctx,
 		"",
 		"tmux",
-		"send-keys",
+		"paste-buffer",
 		"-t",
 		exactWindowTarget(session, window),
-		strings.Join(command, " "),
+		"-b",
+		bufferName,
 	)
-	return err
+
+	_, deleteErr := r.runner.Run(ctx, "", "tmux", "delete-buffer", "-b", bufferName)
+	if pasteErr != nil {
+		if deleteErr != nil {
+			return errors.Join(pasteErr, deleteErr)
+		}
+		return pasteErr
+	}
+
+	return deleteErr
 }
 
 func (r *repository) waitForPrompt(ctx context.Context, session, window, marker string) error {
