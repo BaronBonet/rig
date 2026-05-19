@@ -261,8 +261,9 @@ type TaskRepository interface {
 // ProviderClient wraps provider-specific behavior behind one application
 // contract.
 type ProviderClient interface {
-	// HealthCheck verifies that the provider dependency is available.
-	HealthCheck(ctx context.Context) error
+	// Doctor verifies that the provider dependency and provider-specific Rig
+	// integration are available.
+	Doctor(ctx context.Context) error
 	// SuggestTaskName derives a task display name and branch type from a prompt.
 	SuggestTaskName(ctx context.Context, prompt string) (TaskSuggestion, error)
 	// EnsureTaskSessionEnvironment applies any provider-specific runtime

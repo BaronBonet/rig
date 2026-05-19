@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/BaronBonet/rig/internal/core"
@@ -15,24 +16,28 @@ import (
 )
 
 func TestRepositoryBuildTaskSessionLaunchSpec_StartsCodexAndPrefillsTaskPrompt(t *testing.T) {
-	repo := New(subprocess.NewMockRunner(t), Config{Binary: "codex"}, HookForwardingConfig{})
+	codexHome := t.TempDir()
+	repo := New(subprocess.NewMockRunner(t), Config{Binary: "codex"}, HookForwardingConfig{}).(*repository)
+	repo.codexHomeDir = func() (string, error) { return codexHome, nil }
 
 	launch, err := repo.BuildTaskSessionLaunchSpec(&core.Task{Prompt: "add billing retry flow"})
 	require.NoError(t, err)
 	require.Equal(t, core.TaskSessionLaunchSpec{
-		Command:      []string{"codex"},
+		Command:      []string{"env", "CODEX_HOME=" + codexHome, "codex"},
 		ReadyMarker:  "›",
 		PrefillInput: []string{"add billing retry flow"},
 	}, launch)
 }
 
 func TestRepositoryBuildReconnectTaskSessionLaunchSpec_UsesCodexResume(t *testing.T) {
-	repo := New(subprocess.NewMockRunner(t), Config{Binary: "codex"}, HookForwardingConfig{})
+	codexHome := t.TempDir()
+	repo := New(subprocess.NewMockRunner(t), Config{Binary: "codex"}, HookForwardingConfig{}).(*repository)
+	repo.codexHomeDir = func() (string, error) { return codexHome, nil }
 
 	launch, err := repo.BuildReconnectTaskSessionLaunchSpec(&core.Task{}, "sess-1")
 	require.NoError(t, err)
 	require.Equal(t, core.TaskSessionLaunchSpec{
-		Command:     []string{"codex", "resume", "sess-1"},
+		Command:     []string{"env", "CODEX_HOME=" + codexHome, "codex", "resume", "sess-1"},
 		ReadyMarker: "›",
 	}, launch)
 }
@@ -86,6 +91,89 @@ func TestRepositoryEnsureTaskSessionEnvironment_InstallsRigHooksIntoCodexHome(t 
 	require.Contains(t, string(scriptBytes), `X-Rig-Hook-Secret: $hook_secret`)
 	require.Contains(t, string(scriptBytes), "secret-token")
 	require.Contains(t, string(hooksJSON), scriptPath)
+}
+
+func TestRepositoryDoctorReportsMissingRigHookInstall(t *testing.T) {
+	runner := subprocess.NewMockRunner(t)
+	runner.EXPECT().Run(mock.Anything, "", "codex", "--version").Return(subprocess.Result{}, nil)
+	repo := New(runner, Config{Binary: "codex"}, HookForwardingConfig{
+		CollectorURL: "http://127.0.0.1:4124/codex-hook",
+	}).(*repository)
+	repo.codexHomeDir = func() (string, error) { return t.TempDir(), nil }
+
+	err := repo.Doctor(t.Context())
+
+	require.ErrorContains(t, err, "codex rig hook forwarding")
+	require.ErrorContains(t, err, "forward-to-rig.sh")
+}
+
+func TestRepositoryDoctorAcceptsInstalledRigHooks(t *testing.T) {
+	tempDir := t.TempDir()
+	runner := subprocess.NewMockRunner(t)
+	runner.EXPECT().Run(mock.Anything, "", "codex", "--version").Return(subprocess.Result{}, nil)
+	repo := New(runner, Config{Binary: "codex"}, HookForwardingConfig{
+		CollectorURL: "http://127.0.0.1:4124/codex-hook",
+	}).(*repository)
+	repo.codexHomeDir = func() (string, error) { return tempDir, nil }
+
+	require.NoError(t, repo.EnsureTaskSessionEnvironment(t.Context()))
+
+	err := repo.Doctor(t.Context())
+
+	require.NoError(t, err)
+}
+
+func TestRepositoryDoctorReportsMissingRigHookEvents(t *testing.T) {
+	tempDir := t.TempDir()
+	hooksDir := filepath.Join(tempDir, "hooks")
+	require.NoError(t, os.MkdirAll(hooksDir, 0o700))
+	scriptPath := filepath.Join(hooksDir, "forward-to-rig.sh")
+	require.NoError(t, os.WriteFile(scriptPath, []byte("#!/bin/sh\n# http://127.0.0.1:4124/codex-hook\n"), 0o700))
+	require.NoError(t, os.WriteFile(filepath.Join(tempDir, "hooks.json"), []byte(`{
+  "hooks": {
+    "SessionStart": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "`+strings.ReplaceAll(scriptPath, `\`, `\\`)+` SessionStart"
+          }
+        ]
+      }
+    ]
+  }
+}`), 0o644))
+	runner := subprocess.NewMockRunner(t)
+	runner.EXPECT().Run(mock.Anything, "", "codex", "--version").Return(subprocess.Result{}, nil)
+	repo := New(runner, Config{Binary: "codex"}, HookForwardingConfig{
+		CollectorURL: "http://127.0.0.1:4124/codex-hook",
+	}).(*repository)
+	repo.codexHomeDir = func() (string, error) { return tempDir, nil }
+
+	err := repo.Doctor(t.Context())
+
+	require.ErrorContains(t, err, "missing UserPromptSubmit hook")
+}
+
+func TestRepositoryDoctorReportsStaleHookCollectorURL(t *testing.T) {
+	tempDir := t.TempDir()
+	repo := New(subprocess.NewMockRunner(t), Config{Binary: "codex"}, HookForwardingConfig{
+		CollectorURL: "http://127.0.0.1:4124/codex-hook",
+	}).(*repository)
+	repo.codexHomeDir = func() (string, error) { return tempDir, nil }
+	require.NoError(t, repo.EnsureTaskSessionEnvironment(t.Context()))
+
+	runner := subprocess.NewMockRunner(t)
+	runner.EXPECT().Run(mock.Anything, "", "codex", "--version").Return(subprocess.Result{}, nil)
+	staleRepo := New(runner, Config{Binary: "codex"}, HookForwardingConfig{
+		CollectorURL: "http://127.0.0.1:4999/codex-hook",
+	}).(*repository)
+	staleRepo.codexHomeDir = func() (string, error) { return tempDir, nil }
+
+	err := staleRepo.Doctor(t.Context())
+
+	require.ErrorContains(t, err, "collector URL")
+	require.ErrorContains(t, err, "http://127.0.0.1:4999/codex-hook")
 }
 
 func TestRepositoryEnsureTaskSessionEnvironment_MergesExistingHooks(t *testing.T) {

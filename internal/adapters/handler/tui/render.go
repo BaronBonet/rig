@@ -862,7 +862,7 @@ func (m model) confirmationView() string {
 
 func taskStatusText(update *core.TaskStatusUpdate) (string, lipgloss.Style) {
 	if update == nil {
-		return iconStatusIdle + " idle", dimStyle
+		return iconStatusIdle + " no status", dimStyle
 	}
 
 	switch update.Phase {

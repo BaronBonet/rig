@@ -598,6 +598,13 @@ func TestRenderRow_CommandStatusKeepsElapsedColumnAligned(t *testing.T) {
 	)
 }
 
+func TestTaskStatusText_NoStatusDoesNotRenderIdle(t *testing.T) {
+	statusText, _ := taskStatusText(nil)
+
+	require.Contains(t, statusText, "no status")
+	require.NotContains(t, statusText, "idle")
+}
+
 func TestModel_TaskRowUpdatesWhenSubscriptionUpdateArrives(t *testing.T) {
 	frontend := newFrontendHarness()
 	frontend.listTasks = []*core.Task{
