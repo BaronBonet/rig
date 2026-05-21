@@ -43,6 +43,10 @@ func (r *repository) StartTaskSession(ctx context.Context, task *core.Task, laun
 		return err
 	}
 
+	if len(launch.Command) == 0 {
+		return nil
+	}
+
 	if err := r.sendKeysToWindow(ctx, task.TmuxSession, taskWindowName, launch.Command); err != nil {
 		return err
 	}

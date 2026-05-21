@@ -33,7 +33,7 @@ func TestTaskServiceReconnectTaskSession_RestartsTmuxWithReconnectLaunchSpec(t *
 	require.True(t, svc.workspace.bootstrapCalled)
 }
 
-func TestTaskServiceReconnectTaskSession_FailsWhenResumeMetadataIsMissing(t *testing.T) {
+func TestTaskServiceReconnectTaskSession_RecreatesTmuxWithoutProviderWhenResumeMetadataIsMissing(t *testing.T) {
 	svc := newTestTaskService(t)
 	svc.taskRepo.listTasks = []*Task{{
 		ID:           "task-1",
@@ -47,8 +47,13 @@ func TestTaskServiceReconnectTaskSession_FailsWhenResumeMetadataIsMissing(t *tes
 
 	err := svc.service.ReconnectTaskSession(t.Context(), "task-1")
 
-	require.EqualError(t, err, `reconnect task session: no resume metadata for task "task-1"`)
-	require.Nil(t, svc.sessionClient.startedTask)
+	require.NoError(t, err)
+	require.NotNil(t, svc.sessionClient.startedTask)
+	require.Equal(t, "task-1", svc.sessionClient.startedTask.ID)
+	require.Empty(t, svc.sessionClient.startedLaunch.Command)
+	require.Empty(t, svc.sessionClient.startedLaunch.ReadyMarker)
+	require.Empty(t, svc.sessionClient.startedLaunch.PrefillInput)
+	require.Equal(t, 0, svc.providerRepo.sessionEnvCalls)
 }
 
 func TestTaskServiceReconnectTaskSession_FailsWhenProviderSessionEnvironmentSetupFails(t *testing.T) {
