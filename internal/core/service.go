@@ -260,7 +260,13 @@ func (s *taskService) ReconnectTaskSession(ctx context.Context, taskID string) e
 		return fmt.Errorf("load task resume metadata: %w", err)
 	}
 	if resumeMetadata == nil || strings.TrimSpace(resumeMetadata.SessionID) == "" {
-		return fmt.Errorf("reconnect task session: no resume metadata for task %q", task.ID)
+		if err := s.prepareTaskWorkspace(ctx, task, task.RepoRoot); err != nil {
+			return err
+		}
+		if err := s.tmuxSession.StartTaskSession(ctx, task, TaskSessionLaunchSpec{}); err != nil {
+			return fmt.Errorf("reconnect task session: %w", err)
+		}
+		return nil
 	}
 
 	if err := s.prepareTaskWorkspace(ctx, task, task.RepoRoot); err != nil {

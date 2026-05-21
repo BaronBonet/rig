@@ -51,6 +51,28 @@ func TestRepositoryStartTaskSession_LaunchesCommandAndPrefillsInputWithoutSubmit
 	require.Equal(t, promptSubmitDelay, slept)
 }
 
+func TestRepositoryStartTaskSession_LeavesShellIdleWhenLaunchCommandIsEmpty(t *testing.T) {
+	runner := subprocess.NewMockRunner(t)
+	repo := New(runner).(*repository)
+	repo.sleep = func(time.Duration) {}
+
+	mock.InOrder(
+		expectTmuxRun(runner, subprocess.Result{}, nil,
+			"new-session", "-d", "-s", "repo_task", "-n", "task", "-c", "/tmp/repo-task",
+		),
+		expectTmuxRun(runner, subprocess.Result{}, nil,
+			"new-window", "-d", "-t", "=repo_task", "-n", "editor", "-c", "/tmp/repo-task",
+		),
+	)
+
+	err := repo.StartTaskSession(context.Background(), &core.Task{
+		TmuxSession:  "repo_task",
+		WorktreePath: "/tmp/repo-task",
+	}, core.TaskSessionLaunchSpec{})
+
+	require.NoError(t, err)
+}
+
 func TestRepositoryStartTaskSession_CleansUpSessionWhenEditorWindowCreationFails(t *testing.T) {
 	runner := subprocess.NewMockRunner(t)
 	repo := New(runner).(*repository)
