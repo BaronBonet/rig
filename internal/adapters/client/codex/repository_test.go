@@ -83,6 +83,8 @@ func TestRepositoryEnsureTaskSessionEnvironment_InstallsRigHooksIntoCodexHome(t 
 	require.Contains(t, cfg.Hooks, "PreToolUse")
 	require.Contains(t, cfg.Hooks, "PermissionRequest")
 	require.Contains(t, cfg.Hooks, "PostToolUse")
+	require.Len(t, cfg.Hooks["PermissionRequest"], 1)
+	require.Empty(t, cfg.Hooks["PermissionRequest"][0].Matcher)
 
 	scriptPath := filepath.Join(tempDir, "hooks", "forward-to-rig.sh")
 	scriptBytes, err := os.ReadFile(scriptPath)
@@ -211,6 +213,54 @@ func TestRepositoryEnsureTaskSessionEnvironment_MergesExistingHooks(t *testing.T
 	require.Len(t, cfg.Hooks["SessionStart"], 2)
 	require.Contains(t, string(hooksJSON), "/tmp/existing-hook")
 	require.Len(t, cfg.Hooks["UserPromptSubmit"], 1)
+}
+
+func TestRepositoryEnsureTaskSessionEnvironment_ReplacesStaleRigHookRules(t *testing.T) {
+	tempDir := t.TempDir()
+	staleScriptPath := filepath.Join(tempDir, "hooks", "forward-to-rig.sh")
+	repo := New(subprocess.NewMockRunner(t), Config{Binary: "codex"}, HookForwardingConfig{
+		CollectorURL: "http://127.0.0.1:4124/codex-hook",
+	}).(*repository)
+	repo.codexHomeDir = func() (string, error) { return tempDir, nil }
+
+	staleRigCommand := strings.ReplaceAll(repo.commandForEvent(staleScriptPath, "PermissionRequest"), `\`, `\\`)
+	require.NoError(t, os.WriteFile(filepath.Join(tempDir, "hooks.json"), []byte(`{
+  "hooks": {
+    "PermissionRequest": [
+      {
+        "matcher": "Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "`+staleRigCommand+`"
+          }
+        ]
+      },
+      {
+        "matcher": "mcp__server__tool",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "/bin/sh /tmp/existing-permission-hook"
+          }
+        ]
+      }
+    ]
+  }
+}`), 0o644))
+
+	err := repo.EnsureTaskSessionEnvironment(t.Context())
+	require.NoError(t, err)
+
+	hooksJSON, err := os.ReadFile(filepath.Join(tempDir, "hooks.json"))
+	require.NoError(t, err)
+
+	var cfg hookConfig
+	require.NoError(t, json.Unmarshal(hooksJSON, &cfg))
+	require.Len(t, cfg.Hooks["PermissionRequest"], 2)
+	require.Equal(t, "mcp__server__tool", cfg.Hooks["PermissionRequest"][0].Matcher)
+	require.Empty(t, cfg.Hooks["PermissionRequest"][1].Matcher)
+	require.Contains(t, cfg.Hooks["PermissionRequest"][1].Hooks[0].Command, staleScriptPath)
 }
 
 func TestRepositorySuggestTaskName_DelegatesToCodexProposal(t *testing.T) {

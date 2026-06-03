@@ -291,7 +291,6 @@ func (r *repository) renderHooksJSON(scriptPath string) ([]byte, error) {
 			},
 			"PermissionRequest": {
 				{
-					Matcher: "Bash",
 					Hooks: []hookCommand{
 						{Type: "command", Command: r.commandForEvent(scriptPath, "PermissionRequest")},
 					},
@@ -416,6 +415,7 @@ func (r *repository) ensureRigHookRules(cfg *hookConfig, scriptPath string) erro
 	}
 
 	for eventName, rules := range rigCfg.Hooks {
+		cfg.Hooks[eventName] = hookRulesWithoutScriptCommand(cfg.Hooks[eventName], scriptPath)
 		for _, rule := range rules {
 			if !containsHookRule(cfg.Hooks[eventName], rule) {
 				cfg.Hooks[eventName] = append(cfg.Hooks[eventName], rule)
@@ -424,6 +424,26 @@ func (r *repository) ensureRigHookRules(cfg *hookConfig, scriptPath string) erro
 	}
 
 	return nil
+}
+
+func hookRulesWithoutScriptCommand(rules []hookRule, scriptPath string) []hookRule {
+	filtered := rules[:0]
+	for _, rule := range rules {
+		if hookRuleHasScriptCommand(rule, scriptPath) {
+			continue
+		}
+		filtered = append(filtered, rule)
+	}
+	return filtered
+}
+
+func hookRuleHasScriptCommand(rule hookRule, scriptPath string) bool {
+	for _, hook := range rule.Hooks {
+		if hook.Type == "command" && strings.Contains(hook.Command, scriptPath) {
+			return true
+		}
+	}
+	return false
 }
 
 func containsHookRule(existing []hookRule, candidate hookRule) bool {
