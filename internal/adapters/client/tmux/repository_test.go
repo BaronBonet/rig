@@ -18,8 +18,8 @@ func TestRepositoryStartTaskSession_LaunchesCommandAndPrefillsInputWithoutSubmit
 	runner := subprocess.NewMockRunner(t)
 	repo := New(runner).(*repository)
 	repo.now = func() time.Time { return time.Unix(0, 0) }
-	var slept time.Duration
-	repo.sleep = func(d time.Duration) { slept = d }
+	var slept []time.Duration
+	repo.sleep = func(d time.Duration) { slept = append(slept, d) }
 
 	mock.InOrder(
 		expectTmuxRun(runner, subprocess.Result{}, nil,
@@ -34,17 +34,8 @@ func TestRepositoryStartTaskSession_LaunchesCommandAndPrefillsInputWithoutSubmit
 		expectTmuxRun(runner, subprocess.Result{Stdout: "›"}, nil,
 			"capture-pane", "-t", "=repo_task:task", "-p",
 		),
-		expectTmuxRunWithStdin(runner, subprocess.RunWithStdinOptions{
-			Cwd:   "",
-			Name:  "tmux",
-			Args:  []string{"load-buffer", "-b", "rig-prefill-repo_task-task", "-"},
-			Stdin: "fix billing retry flow",
-		}, subprocess.Result{}, nil),
 		expectTmuxRun(runner, subprocess.Result{}, nil,
-			"paste-buffer", "-t", "=repo_task:task", "-b", "rig-prefill-repo_task-task",
-		),
-		expectTmuxRun(runner, subprocess.Result{}, nil,
-			"delete-buffer", "-b", "rig-prefill-repo_task-task",
+			"send-keys", "-l", "-t", "=repo_task:task", "--", "fix billing retry flow",
 		),
 	)
 
@@ -58,10 +49,10 @@ func TestRepositoryStartTaskSession_LaunchesCommandAndPrefillsInputWithoutSubmit
 	})
 
 	require.NoError(t, err)
-	require.Equal(t, promptSubmitDelay, slept)
+	require.Equal(t, []time.Duration{promptSubmitDelay, promptInputSettleDelay}, slept)
 }
 
-func TestRepositoryStartTaskSession_PrefillsLargeInputThroughTmuxBuffer(t *testing.T) {
+func TestRepositoryStartTaskSession_PrefillsLargeInputInLiteralChunks(t *testing.T) {
 	runner := subprocess.NewMockRunner(t)
 	repo := New(runner).(*repository)
 	repo.now = func() time.Time { return time.Unix(0, 0) }
@@ -82,19 +73,10 @@ func TestRepositoryStartTaskSession_PrefillsLargeInputThroughTmuxBuffer(t *testi
 		expectTmuxRun(runner, subprocess.Result{Stdout: "›"}, nil,
 			"capture-pane", "-t", "=repo_task:task", "-p",
 		),
-		expectTmuxRunWithStdin(runner, subprocess.RunWithStdinOptions{
-			Cwd:   "",
-			Name:  "tmux",
-			Args:  []string{"load-buffer", "-b", "rig-prefill-repo_task-task", "-"},
-			Stdin: prompt,
-		}, subprocess.Result{}, nil),
-		expectTmuxRun(runner, subprocess.Result{}, nil,
-			"paste-buffer", "-t", "=repo_task:task", "-b", "rig-prefill-repo_task-task",
-		),
-		expectTmuxRun(runner, subprocess.Result{}, nil,
-			"delete-buffer", "-b", "rig-prefill-repo_task-task",
-		),
 	)
+	for _, chunk := range splitTextChunks(prompt, promptInputChunkSize) {
+		expectTmuxRun(runner, subprocess.Result{}, nil, "send-keys", "-l", "-t", "=repo_task:task", "--", chunk)
+	}
 
 	err := repo.StartTaskSession(context.Background(), &core.Task{
 		TmuxSession:  "repo_task",
@@ -175,12 +157,9 @@ func TestRepositoryStartTaskSession_CleansUpSessionWhenPrefillFails(t *testing.T
 		expectTmuxRun(runner, subprocess.Result{Stdout: "›"}, nil,
 			"capture-pane", "-t", "=repo_task:task", "-p",
 		),
-		expectTmuxRunWithStdin(runner, subprocess.RunWithStdinOptions{
-			Cwd:   "",
-			Name:  "tmux",
-			Args:  []string{"load-buffer", "-b", "rig-prefill-repo_task-task", "-"},
-			Stdin: "fix billing retry flow",
-		}, subprocess.Result{}, errors.New("load-buffer failed")),
+		expectTmuxRun(runner, subprocess.Result{}, errors.New("send-keys failed"),
+			"send-keys", "-l", "-t", "=repo_task:task", "--", "fix billing retry flow",
+		),
 		expectTmuxRun(runner, subprocess.Result{}, nil,
 			"kill-session", "-t", "=repo_task",
 		),
@@ -195,7 +174,7 @@ func TestRepositoryStartTaskSession_CleansUpSessionWhenPrefillFails(t *testing.T
 		PrefillInput: []string{"fix billing retry flow"},
 	})
 
-	require.EqualError(t, err, "load task input into tmux buffer: load-buffer failed")
+	require.EqualError(t, err, "send-keys failed")
 }
 
 func TestRepositoryAttachTaskSession_SwitchesClientWhenInsideTmux(t *testing.T) {
@@ -355,13 +334,4 @@ func expectTmuxRun(runner *subprocess.MockRunner, result subprocess.Result, err 
 		callArgs = append(callArgs, arg)
 	}
 	return runner.On("Run", callArgs...).Return(result, err).Once()
-}
-
-func expectTmuxRunWithStdin(
-	runner *subprocess.MockRunner,
-	opts subprocess.RunWithStdinOptions,
-	result subprocess.Result,
-	err error,
-) *mock.Call {
-	return runner.On("RunWithStdin", mock.Anything, opts).Return(result, err).Once()
 }
