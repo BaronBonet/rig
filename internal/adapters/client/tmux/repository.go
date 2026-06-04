@@ -14,8 +14,6 @@ import (
 
 const (
 	promptSubmitDelay      = 500 * time.Millisecond
-	promptInputChunkSize   = 2048
-	promptInputChunkDelay  = 10 * time.Millisecond
 	promptInputSettleDelay = 500 * time.Millisecond
 	taskWindowName         = "task"
 )
@@ -240,53 +238,39 @@ func (r *repository) capturePaneContent(ctx context.Context, session, window str
 
 func (r *repository) typeInWindow(ctx context.Context, session, window string, command []string) error {
 	text := strings.Join(command, " ")
+	bufferName := "rig-prefill-" + normalizedSessionName(session) + "-" + window
 
-	chunks := splitTextChunks(text, promptInputChunkSize)
-	for index, chunk := range chunks {
-		_, err := r.runner.Run(
-			ctx,
-			"",
-			"tmux",
-			"send-keys",
-			"-l",
-			"-t",
-			exactWindowTarget(session, window),
-			"--",
-			chunk,
-		)
-		if err != nil {
-			return err
+	_, err := r.runner.RunWithStdin(ctx, subprocess.RunWithStdinOptions{
+		Cwd:   "",
+		Name:  "tmux",
+		Args:  []string{"load-buffer", "-b", bufferName, "-"},
+		Stdin: text,
+	})
+	if err != nil {
+		return fmt.Errorf("load task input into tmux buffer: %w", err)
+	}
+
+	_, pasteErr := r.runner.Run(
+		ctx,
+		"",
+		"tmux",
+		"paste-buffer",
+		"-p",
+		"-t",
+		exactWindowTarget(session, window),
+		"-b",
+		bufferName,
+	)
+
+	_, deleteErr := r.runner.Run(ctx, "", "tmux", "delete-buffer", "-b", bufferName)
+	if pasteErr != nil {
+		if deleteErr != nil {
+			return errors.Join(pasteErr, deleteErr)
 		}
-		if index < len(chunks)-1 {
-			r.sleep(promptInputChunkDelay)
-		}
+		return pasteErr
 	}
 
-	return nil
-}
-
-func splitTextChunks(text string, chunkSize int) []string {
-	if text == "" {
-		return nil
-	}
-	if chunkSize <= 0 {
-		return []string{text}
-	}
-
-	chunks := make([]string, 0, len(text)/chunkSize+1)
-	var builder strings.Builder
-	for _, char := range text {
-		if builder.Len()+len(string(char)) > chunkSize && builder.Len() > 0 {
-			chunks = append(chunks, builder.String())
-			builder.Reset()
-		}
-		builder.WriteRune(char)
-	}
-	if builder.Len() > 0 {
-		chunks = append(chunks, builder.String())
-	}
-
-	return chunks
+	return deleteErr
 }
 
 func (r *repository) waitForPrompt(ctx context.Context, session, window, marker string) error {
