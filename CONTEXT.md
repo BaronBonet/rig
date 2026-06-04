@@ -23,8 +23,17 @@ Use `rig` for the CLI command and Rig for the product or system.
 - Repository context: The repository root, name, and base branch used when Rig
   creates or inspects a task.
 - Session: The tmux-backed interactive environment for a task.
-- Provider: The AI coding runtime backing a task. The current provider is
-  Codex.
+- Provider: An AI coding runtime that can back a task, such as Codex.
+- Supported provider: A provider Rig knows how to integrate with.
+- Configured provider: A supported provider the user has enabled for task
+  creation and switching.
+- Provider setup: The mandatory first-run flow where the user chooses configured
+  providers and a default provider.
+- Active provider: The single provider Rig should launch or resume for a task.
+- Default provider: The user-level provider Rig preselects when creating a
+  task.
+- Provider adoption: Rig making a manually launched provider session the active
+  provider for a task.
 - Provider session: A provider runtime session observed for a task, including
   its provider session ID, transcript path, model, working directory, and latest
   event name.
@@ -48,6 +57,30 @@ Use `rig` for the CLI command and Rig for the product or system.
   provider sessions.
 - Pull request status: The GitHub pull request state associated with a task
   branch, if any.
+
+## Relationships
+
+- A Task has exactly one Active provider.
+- A Default provider becomes the Active provider for a new Task unless the user
+  selects a different provider during Task creation.
+- An environment-selected Default provider must be one of the user's Configured
+  providers.
+- A Configured provider must also be a Supported provider.
+- A Configured provider must pass Rig's provider setup checks before it can be
+  used for Task creation.
+- The Task creation UI offers only Configured providers.
+- Provider setup produces the user's Configured providers.
+- Tasks remain visible even when their Active provider is not currently a
+  Configured provider.
+- A Task may have many Provider sessions over time.
+- A Provider session belongs to exactly one Task and one Provider.
+- A Task's Runtime status is driven only by its Active provider.
+- Provider adoption changes a Task's Active provider without creating a new
+  Task.
+- Provider adoption occurs when Rig observes the start of a manually launched
+  Provider session in a Task workspace.
+- The Active provider reflects the provider expected to own the Task's
+  interactive Session.
 
 ## Language Rules
 
