@@ -648,7 +648,7 @@ func (m model) promptInputView() string {
 	builder.WriteString(dimStyle.Render("Enter task prompt.") + "\n\n")
 	builder.WriteString(
 		mutedStyle.Render("provider  ") +
-			providerStyle(string(defaultCreateProvider)).Render(string(defaultCreateProvider)) +
+			providerStyle(string(m.taskCreateProvider())).Render(string(m.taskCreateProvider())) +
 			"\n\n",
 	)
 

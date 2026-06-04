@@ -18,5 +18,19 @@ func NewProgramWithVersion(
 	buildVersion string,
 	opts ...tea.ProgramOption,
 ) *tea.Program {
-	return tea.NewProgram(newModelWithLaunchCwdAndVersion(frontend, launchCwd, buildVersion), opts...)
+	return NewProgramWithVersionAndProvider(frontend, launchCwd, buildVersion, core.ProviderCodex, opts...)
+}
+
+// NewProgramWithVersionAndProvider creates the task TUI with a configured task creation provider.
+func NewProgramWithVersionAndProvider(
+	frontend core.TaskFrontend,
+	launchCwd string,
+	buildVersion string,
+	createProvider core.Provider,
+	opts ...tea.ProgramOption,
+) *tea.Program {
+	return tea.NewProgram(
+		newModelWithLaunchCwdVersionAndProvider(frontend, launchCwd, buildVersion, createProvider),
+		opts...,
+	)
 }

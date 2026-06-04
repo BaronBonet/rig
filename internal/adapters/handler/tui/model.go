@@ -29,39 +29,38 @@ const (
 	modeCleanupConfirm
 )
 
-const defaultCreateProvider = core.ProviderCodex
-
 const defaultBuildVersion = "dev"
 
 const taskActivityPreviewLimit = 6
 
 // nolint:recvcheck // bubbletea requires value receivers for tea.Model.
 type model struct {
-	frontend      core.TaskFrontend
-	statusContext context.Context
-	err           error
-	createErr     error
-	cancelStatus  context.CancelFunc
-	rows          []taskRow
-	prRows        []core.RepoPullRequest
-	prompt        string
-	promptInput   textarea.Model
-	createActive  core.TaskCreateProgressStep
-	createDone    []core.TaskCreateProgressStep
-	selected      int
-	prSelected    int
-	width         int
-	height        int
-	shimmerTick   int
-	mode          modelMode
-	launchCwd     string
-	buildVersion  string
-	prRepoRoot    string
-	prRepoName    string
-	loading       bool
-	createPending bool
-	createFromPR  bool
-	deletePending bool
+	frontend       core.TaskFrontend
+	statusContext  context.Context
+	err            error
+	createErr      error
+	cancelStatus   context.CancelFunc
+	rows           []taskRow
+	prRows         []core.RepoPullRequest
+	prompt         string
+	promptInput    textarea.Model
+	createActive   core.TaskCreateProgressStep
+	createDone     []core.TaskCreateProgressStep
+	selected       int
+	prSelected     int
+	width          int
+	height         int
+	shimmerTick    int
+	mode           modelMode
+	launchCwd      string
+	buildVersion   string
+	createProvider core.Provider
+	prRepoRoot     string
+	prRepoName     string
+	loading        bool
+	createPending  bool
+	createFromPR   bool
+	deletePending  bool
 }
 
 type tasksLoadedMsg struct {
@@ -152,17 +151,30 @@ func newModelWithLaunchCwd(frontend core.TaskFrontend, launchCwd string) model {
 }
 
 func newModelWithLaunchCwdAndVersion(frontend core.TaskFrontend, launchCwd string, buildVersion string) model {
+	return newModelWithLaunchCwdVersionAndProvider(frontend, launchCwd, buildVersion, core.ProviderCodex)
+}
+
+func newModelWithLaunchCwdVersionAndProvider(
+	frontend core.TaskFrontend,
+	launchCwd string,
+	buildVersion string,
+	createProvider core.Provider,
+) model {
 	statusContext, cancelStatus := context.WithCancel(context.Background())
+	if createProvider == "" {
+		createProvider = core.ProviderCodex
+	}
 
 	return model{
-		frontend:      frontend,
-		statusContext: statusContext,
-		cancelStatus:  cancelStatus,
-		launchCwd:     strings.TrimSpace(launchCwd),
-		buildVersion:  normalizeBuildVersion(buildVersion),
-		promptInput:   newPromptInput(),
-		loading:       true,
-		mode:          modeBrowse,
+		frontend:       frontend,
+		statusContext:  statusContext,
+		cancelStatus:   cancelStatus,
+		launchCwd:      strings.TrimSpace(launchCwd),
+		buildVersion:   normalizeBuildVersion(buildVersion),
+		createProvider: createProvider,
+		promptInput:    newPromptInput(),
+		loading:        true,
+		mode:           modeBrowse,
 	}
 }
 
@@ -480,7 +492,7 @@ func (m model) submitPrompt() (model, tea.Cmd) {
 		createTaskStreamCmd(m.statusContext, m.frontend, core.CreateTaskInput{
 			Cwd:      m.currentCreateCwd(),
 			Prompt:   prompt,
-			Provider: defaultCreateProvider,
+			Provider: m.taskCreateProvider(),
 		}),
 		shimmerTickCmd(),
 	)
@@ -619,7 +631,7 @@ func (m model) updatePRPicker(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		return m, tea.Batch(
 			createTaskStreamCmd(m.statusContext, m.frontend, core.CreateTaskInput{
 				Cwd:      m.prRepoRoot,
-				Provider: defaultCreateProvider,
+				Provider: m.taskCreateProvider(),
 				Source: core.CreateTaskSource{
 					PullRequest: &selected,
 				},
@@ -629,6 +641,13 @@ func (m model) updatePRPicker(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	default:
 		return m, nil
 	}
+}
+
+func (m model) taskCreateProvider() core.Provider {
+	if m.createProvider == "" {
+		return core.ProviderCodex
+	}
+	return m.createProvider
 }
 
 func (m model) enterPromptInputMode(initialValue string) (tea.Model, tea.Cmd) {

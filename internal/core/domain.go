@@ -192,7 +192,8 @@ func (u TaskTokenUsage) IsZero() bool {
 type Provider string
 
 const (
-	ProviderCodex Provider = "codex"
+	ProviderCodex  Provider = "codex"
+	ProviderClaude Provider = "claude"
 )
 
 // TaskSessionLaunchSpec is the handoff from a provider client to the tmux

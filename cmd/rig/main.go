@@ -6,8 +6,10 @@ import (
 	"io"
 	"os"
 	"os/signal"
+	"strings"
 	"syscall"
 
+	"github.com/BaronBonet/rig/internal/adapters/client/claude"
 	"github.com/BaronBonet/rig/internal/adapters/client/codex"
 	"github.com/BaronBonet/rig/internal/adapters/client/git"
 	"github.com/BaronBonet/rig/internal/adapters/client/github"
@@ -63,6 +65,15 @@ func newProductionCommandRuntime(stdout io.Writer, stderr io.Writer) commandRunt
 			}
 
 			return runDoctor(stdout, cfg)
+		},
+		runSetup: func(options setupOptions) error {
+			cfg, existing, err := infrastructure.LoadConfigForProviderSetup()
+			if err != nil {
+				return err
+			}
+
+			_, err = runProviderSetup(context.Background(), stdout, cfg, existing, options)
+			return err
 		},
 		runDaemonStart: func() error {
 			return runDaemonLifecycleCommand(
@@ -125,6 +136,7 @@ type commandRuntime struct {
 
 	runTUI           func() error
 	runDoctor        func() error
+	runSetup         func(setupOptions) error
 	runDaemonStart   func() error
 	runDaemonStop    func() error
 	runDaemonRestart func() error
@@ -154,6 +166,7 @@ func newRootCommand(runtime commandRuntime) *cobra.Command {
 	root.SetVersionTemplate("{{.Version}}\n")
 
 	root.AddCommand(newDoctorCommand(runtime))
+	root.AddCommand(newSetupCommand(runtime))
 	root.AddCommand(newDaemonCommand(runtime))
 
 	return root
@@ -168,6 +181,68 @@ func newDoctorCommand(runtime commandRuntime) *cobra.Command {
 			return runCommand(runtime.runDoctor)
 		},
 	}
+}
+
+type setupOptions struct {
+	Providers       []core.Provider
+	DefaultProvider core.Provider
+}
+
+func newSetupCommand(runtime commandRuntime) *cobra.Command {
+	var providerValues []string
+	var defaultProvider string
+
+	cmd := &cobra.Command{
+		Use:   "setup",
+		Short: "Configure Rig providers",
+		Args:  cobra.NoArgs,
+		RunE: func(_ *cobra.Command, _ []string) error {
+			providers, err := parseSetupProviders(providerValues)
+			if err != nil {
+				return err
+			}
+			defaultProvider := core.Provider(strings.TrimSpace(defaultProvider))
+			if defaultProvider != "" && !infrastructure.IsSupportedProvider(defaultProvider) {
+				return fmt.Errorf("unknown default provider %q", defaultProvider)
+			}
+
+			return runCommand(func() error {
+				if runtime.runSetup == nil {
+					return fmt.Errorf("command not configured")
+				}
+
+				return runtime.runSetup(setupOptions{
+					Providers:       providers,
+					DefaultProvider: defaultProvider,
+				})
+			})
+		},
+	}
+	cmd.Flags().StringArrayVar(&providerValues, "provider", nil, "Provider to configure: codex or claude")
+	cmd.Flags().StringVar(&defaultProvider, "default-provider", "", "Default configured provider")
+	return cmd
+}
+
+func parseSetupProviders(values []string) ([]core.Provider, error) {
+	providers := make([]core.Provider, 0, len(values))
+	seen := map[core.Provider]struct{}{}
+	for _, value := range values {
+		for _, part := range strings.Split(value, ",") {
+			provider := core.Provider(strings.TrimSpace(part))
+			if provider == "" {
+				continue
+			}
+			if !infrastructure.IsSupportedProvider(provider) {
+				return nil, fmt.Errorf("unknown provider %q", provider)
+			}
+			if _, ok := seen[provider]; ok {
+				continue
+			}
+			seen[provider] = struct{}{}
+			providers = append(providers, provider)
+		}
+	}
+	return providers, nil
 }
 
 func newDaemonCommand(runtime commandRuntime) *cobra.Command {
@@ -250,6 +325,17 @@ func runDaemonLifecycleCommand(
 
 func runTUI(stdout io.Writer) error {
 	cfg, err := infrastructure.LoadConfig()
+	if infrastructure.IsProviderSetupRequired(err) {
+		setupCfg, existing, setupErr := infrastructure.LoadConfigForProviderSetup()
+		if setupErr != nil {
+			return setupErr
+		}
+		cfg, setupErr = runProviderSetup(context.Background(), stdout, setupCfg, existing, setupOptions{})
+		if setupErr != nil {
+			return setupErr
+		}
+		err = nil
+	}
 	if err != nil {
 		return err
 	}
@@ -295,10 +381,11 @@ func runTUI(stdout io.Writer) error {
 	if stdout == nil {
 		stdout = os.Stdout
 	}
-	program := tui.NewProgramWithVersion(
+	program := tui.NewProgramWithVersionAndProvider(
 		frontend,
 		sourceRoot,
 		displayVersion,
+		cfg.Provider,
 		tea.WithInput(os.Stdin),
 		tea.WithOutput(stdout),
 	)
@@ -371,6 +458,7 @@ func runDoctor(stdout io.Writer, cfg *infrastructure.ApplicationConfig) error {
 
 	fmt.Fprintln(stdout, "Rig doctor")
 	fmt.Fprintf(stdout, "Provider: %s\n", cfg.Provider)
+	fmt.Fprintf(stdout, "Configured providers: %s\n", providerList(cfg.ProviderSetup.ConfiguredProviders))
 	fmt.Fprintf(stdout, "SQLite: %s\n", cfg.SQLite.Path)
 	fmt.Fprintf(stdout, "Daemon socket: %s\n\n", cfg.Daemon.SocketPath)
 
@@ -382,20 +470,13 @@ func runDoctor(stdout io.Writer, cfg *infrastructure.ApplicationConfig) error {
 
 func newDoctorService(cfg *infrastructure.ApplicationConfig) core.TaskService {
 	runner := subprocess.ExecRunner{}
-	providers := map[core.Provider]core.ProviderClient{
-		core.ProviderCodex: codex.New(
-			runner,
-			cfg.Codex,
-			codex.NewHookForwardingConfig(cfg.Daemon.HookListenAddr, ""),
-		),
-	}
 
 	return core.NewTaskService(core.TaskServiceDependencies{
 		Tasks:           sqlite.NewHealthCheckRepository(cfg.SQLite),
 		GitWorktree:     git.New(runner),
 		TmuxSession:     tmux.New(runner),
 		PullRequests:    github.New(runner),
-		Providers:       providers,
+		Providers:       newConfiguredProviderClients(runner, cfg, ""),
 		DefaultProvider: cfg.Provider,
 	})
 }
@@ -446,20 +527,12 @@ func serveTaskDaemon(
 		return err
 	}
 
-	providers := map[core.Provider]core.ProviderClient{
-		core.ProviderCodex: codex.New(
-			runner,
-			cfg.Codex,
-			codex.NewHookForwardingConfig(cfg.Daemon.HookListenAddr, hookSecret),
-		),
-	}
-
 	service := core.NewTaskService(core.TaskServiceDependencies{
 		Tasks:                taskRepo,
 		GitWorktree:          git.New(runner),
 		TmuxSession:          tmux.New(runner),
 		PullRequests:         github.New(runner),
-		Providers:            providers,
+		Providers:            newConfiguredProviderClients(runner, cfg, hookSecret),
 		Workspace:            repositoryworkspace.New(),
 		EnableWorkspaceSetup: true,
 		DefaultProvider:      cfg.Provider,
@@ -467,5 +540,189 @@ func serveTaskDaemon(
 
 	adapter := taskdaemon.New(cfg.Daemon)
 
-	return adapter.Serve(ctx, service, codex.NewHookRoutes(service, nil, hookSecret), stop)
+	return adapter.Serve(ctx, service, newConfiguredHookRoutes(service, cfg, hookSecret), stop)
+}
+
+func runProviderSetup(
+	ctx context.Context,
+	stdout io.Writer,
+	cfg *infrastructure.ApplicationConfig,
+	existing infrastructure.ProviderSetup,
+	options setupOptions,
+) (*infrastructure.ApplicationConfig, error) {
+	if cfg == nil {
+		return nil, fmt.Errorf("application config not configured")
+	}
+	if stdout == nil {
+		stdout = os.Stdout
+	}
+
+	runner := subprocess.ExecRunner{}
+	explicitProviders := len(options.Providers) > 0
+	targets := options.Providers
+	if !explicitProviders {
+		targets = infrastructure.SupportedProviders()
+	}
+
+	var configured []core.Provider
+	var setupErrors []string
+	for _, provider := range targets {
+		client, err := newProviderClient(runner, cfg, provider, "")
+		if err != nil {
+			return nil, err
+		}
+		if err := configureProvider(ctx, client); err != nil {
+			if explicitProviders {
+				return nil, fmt.Errorf("configure %s provider: %w", provider, err)
+			}
+			setupErrors = append(setupErrors, fmt.Sprintf("%s: %s", provider, err))
+			continue
+		}
+		configured = append(configured, provider)
+	}
+
+	if len(configured) == 0 {
+		if len(setupErrors) == 0 {
+			return nil, fmt.Errorf("provider setup required: no supported providers found")
+		}
+		return nil, fmt.Errorf(
+			"provider setup required: no supported providers found (%s)",
+			strings.Join(setupErrors, "; "),
+		)
+	}
+
+	defaultProvider := selectSetupDefaultProvider(configured, existing, options.DefaultProvider)
+	setup := infrastructure.ProviderSetup{
+		ConfiguredProviders: configured,
+		DefaultProvider:     defaultProvider,
+	}.Normalized()
+	if err := setup.Validate(); err != nil {
+		return nil, err
+	}
+	if err := infrastructure.SaveProviderSetup(cfg.ConfigPath, setup); err != nil {
+		return nil, err
+	}
+
+	cfg.ProviderSetup = setup
+	cfg.Provider = setup.DefaultProvider
+	if err := validateRuntimeOverride(cfg); err != nil {
+		return nil, err
+	}
+
+	fmt.Fprintln(stdout, "Rig provider setup complete")
+	fmt.Fprintf(stdout, "Configured providers: %s\n", providerList(setup.ConfiguredProviders))
+	fmt.Fprintf(stdout, "Default provider: %s\n", setup.DefaultProvider)
+
+	return cfg, nil
+}
+
+func configureProvider(ctx context.Context, client core.ProviderClient) error {
+	if client == nil {
+		return fmt.Errorf("provider client not configured")
+	}
+	if err := client.EnsureTaskSessionEnvironment(ctx); err != nil {
+		return err
+	}
+	return client.Doctor(ctx)
+}
+
+func selectSetupDefaultProvider(
+	configured []core.Provider,
+	existing infrastructure.ProviderSetup,
+	requested core.Provider,
+) core.Provider {
+	if requested != "" {
+		return requested
+	}
+	if existing.HasProvider(existing.DefaultProvider) {
+		for _, provider := range configured {
+			if provider == existing.DefaultProvider {
+				return provider
+			}
+		}
+	}
+	return configured[0]
+}
+
+func validateRuntimeOverride(cfg *infrastructure.ApplicationConfig) error {
+	envProvider := strings.TrimSpace(os.Getenv("RIG_PROVIDER"))
+	if envProvider == "" {
+		return nil
+	}
+
+	provider := core.Provider(envProvider)
+	if !infrastructure.IsSupportedProvider(provider) {
+		return fmt.Errorf("invalid RIG_PROVIDER %q", provider)
+	}
+	if !cfg.ProviderSetup.HasProvider(provider) {
+		return fmt.Errorf("invalid RIG_PROVIDER %q: provider is not configured; run rig setup", provider)
+	}
+	cfg.Provider = provider
+	return nil
+}
+
+func newConfiguredProviderClients(
+	runner subprocess.Runner,
+	cfg *infrastructure.ApplicationConfig,
+	hookSecret string,
+) map[core.Provider]core.ProviderClient {
+	providers := make(map[core.Provider]core.ProviderClient, len(cfg.ProviderSetup.ConfiguredProviders))
+	for _, provider := range cfg.ProviderSetup.ConfiguredProviders {
+		client, err := newProviderClient(runner, cfg, provider, hookSecret)
+		if err != nil {
+			continue
+		}
+		providers[provider] = client
+	}
+	return providers
+}
+
+func newProviderClient(
+	runner subprocess.Runner,
+	cfg *infrastructure.ApplicationConfig,
+	provider core.Provider,
+	hookSecret string,
+) (core.ProviderClient, error) {
+	switch provider {
+	case core.ProviderCodex:
+		return codex.New(
+			runner,
+			cfg.Codex,
+			codex.NewHookForwardingConfig(cfg.Daemon.HookListenAddr, hookSecret),
+		), nil
+	case core.ProviderClaude:
+		return claude.New(
+			runner,
+			cfg.Claude,
+			claude.NewHookForwardingConfig(cfg.Daemon.HookListenAddr, hookSecret),
+		), nil
+	default:
+		return nil, fmt.Errorf("unknown provider %q", provider)
+	}
+}
+
+func newConfiguredHookRoutes(
+	service core.TaskService,
+	cfg *infrastructure.ApplicationConfig,
+	hookSecret string,
+) []core.TaskDaemonHookRoute {
+	var routes []core.TaskDaemonHookRoute
+	if cfg.ProviderSetup.HasProvider(core.ProviderCodex) {
+		routes = append(routes, codex.NewHookRoutes(service, nil, hookSecret)...)
+	}
+	if cfg.ProviderSetup.HasProvider(core.ProviderClaude) {
+		routes = append(routes, claude.NewHookRoutes(service, nil, hookSecret)...)
+	}
+	return routes
+}
+
+func providerList(providers []core.Provider) string {
+	parts := make([]string, 0, len(providers))
+	for _, provider := range providers {
+		parts = append(parts, string(provider))
+	}
+	if len(parts) == 0 {
+		return "-"
+	}
+	return strings.Join(parts, ", ")
 }

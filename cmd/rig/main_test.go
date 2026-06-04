@@ -7,6 +7,9 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/BaronBonet/rig/internal/core"
+	"github.com/BaronBonet/rig/internal/infrastructure"
+
 	"github.com/stretchr/testify/require"
 )
 
@@ -21,11 +24,11 @@ func TestExecuteSource_UsesCobraCommandRuntime(t *testing.T) {
 	require.Contains(t, source, `os.Getenv(daemonModeEnvKey) == daemonModeEnvValue`)
 	require.Contains(t, source, `if err := adapter.EnsureRunning(ctx); err != nil`)
 	require.Contains(t, source, `displayVersion := taskdaemon.FrontendBuildVersion()`)
-	require.Contains(t, source, `program := tui.NewProgramWithVersion(`)
+	require.Contains(t, source, `program := tui.NewProgramWithVersionAndProvider(`)
 	require.NotContains(t, source, `return run(ctx,`)
 }
 
-func TestDaemonHookRoutes_ExposeCodexHooksOnly(t *testing.T) {
+func TestDaemonHookRoutes_AreComposedFromConfiguredProviders(t *testing.T) {
 	t.Parallel()
 
 	content, err := os.ReadFile(filepath.Join(".", "main.go"))
@@ -37,7 +40,8 @@ func TestDaemonHookRoutes_ExposeCodexHooksOnly(t *testing.T) {
 	require.NotContains(t, source, `"/hook"`)
 	require.NotContains(t, source, "CollectorURL:")
 	require.Contains(t, source, "codex.NewHookForwardingConfig(")
-	require.Contains(t, source, "codex.NewHookRoutes(")
+	require.Contains(t, source, "claude.NewHookForwardingConfig(")
+	require.Contains(t, source, "newConfiguredHookRoutes(")
 }
 
 func TestExecuteSource_ConstructsSingleTaskdaemonAdapterForClientPath(t *testing.T) {
@@ -103,6 +107,41 @@ func TestRootCommandRoutesDoctor(t *testing.T) {
 
 	require.NoError(t, cmd.Execute())
 	require.Equal(t, []string{"doctor"}, calls)
+}
+
+func TestRootCommandRoutesSetup(t *testing.T) {
+	t.Parallel()
+
+	var got setupOptions
+	cmd := newRootCommand(commandRuntime{
+		version: "test-version",
+		runSetup: func(options setupOptions) error {
+			got = options
+			return nil
+		},
+	})
+	cmd.SetArgs([]string{"setup", "--provider", "codex,claude", "--default-provider", "claude"})
+
+	require.NoError(t, cmd.Execute())
+	require.Equal(t, []core.Provider{core.ProviderCodex, core.ProviderClaude}, got.Providers)
+	require.Equal(t, core.ProviderClaude, got.DefaultProvider)
+}
+
+func TestRootCommandSetupRejectsUnknownProvider(t *testing.T) {
+	t.Parallel()
+
+	cmd := newRootCommand(commandRuntime{
+		version: "test-version",
+		runSetup: func(setupOptions) error {
+			t.Fatal("setup should not run for an unknown provider")
+			return nil
+		},
+	})
+	cmd.SetArgs([]string{"setup", "--provider", "gemini"})
+
+	err := cmd.Execute()
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "unknown provider")
 }
 
 func TestRootCommandRoutesDaemonCommands(t *testing.T) {
@@ -179,6 +218,7 @@ func TestExecuteWithArgsDoctorReportsHealthyEnvironment(t *testing.T) {
 	t.Setenv("HOME", home)
 	t.Setenv("PATH", binDir)
 	t.Setenv("RIG_PROVIDER", "codex")
+	installRigProviderSetupFixture(t, home, []core.Provider{core.ProviderCodex}, core.ProviderCodex)
 	installRigCodexHooksFixture(t, home, "http://127.0.0.1:4124/codex-hook")
 
 	var stdout bytes.Buffer
@@ -199,9 +239,11 @@ func TestExecuteWithArgsDoctorFailsWhenRequiredCommandMissing(t *testing.T) {
 	writeExecutable(t, binDir, "git")
 	writeExecutable(t, binDir, "codex")
 
-	t.Setenv("HOME", t.TempDir())
+	home := t.TempDir()
+	t.Setenv("HOME", home)
 	t.Setenv("PATH", binDir)
 	t.Setenv("RIG_PROVIDER", "codex")
+	installRigProviderSetupFixture(t, home, []core.Provider{core.ProviderCodex}, core.ProviderCodex)
 
 	var stdout bytes.Buffer
 	err := executeWithArgs([]string{"doctor"}, &stdout, nil)
@@ -220,10 +262,12 @@ func TestExecuteWithArgsDoctorFailsWhenSQLiteIsUnhealthy(t *testing.T) {
 	dbPath := filepath.Join(t.TempDir(), "tasks.db")
 	require.NoError(t, os.WriteFile(dbPath, []byte("not a sqlite database"), 0o644))
 
-	t.Setenv("HOME", t.TempDir())
+	home := t.TempDir()
+	t.Setenv("HOME", home)
 	t.Setenv("PATH", binDir)
 	t.Setenv("RIG_PROVIDER", "codex")
 	t.Setenv("RIG_SQLITE_PATH", dbPath)
+	installRigProviderSetupFixture(t, home, []core.Provider{core.ProviderCodex}, core.ProviderCodex)
 
 	var stdout bytes.Buffer
 	err := executeWithArgs([]string{"doctor"}, &stdout, nil)
@@ -231,6 +275,59 @@ func TestExecuteWithArgsDoctorFailsWhenSQLiteIsUnhealthy(t *testing.T) {
 	require.Error(t, err)
 	require.ErrorContains(t, err, "sqlite")
 	require.Contains(t, stdout.String(), "FAIL sqlite")
+}
+
+func TestExecuteWithArgsSetupUsesProviderBinaryOverrides(t *testing.T) {
+	binDir := t.TempDir()
+	writeExecutable(t, binDir, "codex-custom")
+
+	home := t.TempDir()
+	configPath := filepath.Join(home, "rig-config.json")
+	t.Setenv("HOME", home)
+	t.Setenv("PATH", binDir)
+	t.Setenv("RIG_CONFIG_PATH", configPath)
+	t.Setenv("RIG_CODEX_BINARY", "codex-custom")
+	t.Setenv("CODEX_HOME", filepath.Join(home, ".codex"))
+
+	var stdout bytes.Buffer
+	err := executeWithArgs([]string{"setup", "--provider", "codex"}, &stdout, nil)
+
+	require.NoError(t, err)
+	require.Contains(t, stdout.String(), "Rig provider setup complete")
+
+	setup, err := infrastructure.LoadProviderSetup(configPath)
+	require.NoError(t, err)
+	require.Equal(t, []core.Provider{core.ProviderCodex}, setup.ConfiguredProviders)
+	require.Equal(t, core.ProviderCodex, setup.DefaultProvider)
+	require.FileExists(t, filepath.Join(home, ".codex", "hooks", "forward-to-rig.sh"))
+}
+
+func TestExecuteWithArgsSetupRerunAddsDiscoveredProviderAndPreservesDefault(t *testing.T) {
+	binDir := t.TempDir()
+	writeExecutable(t, binDir, "codex")
+	writeExecutable(t, binDir, "claude")
+
+	home := t.TempDir()
+	configPath := filepath.Join(home, "rig-config.json")
+	t.Setenv("HOME", home)
+	t.Setenv("PATH", binDir)
+	t.Setenv("RIG_CONFIG_PATH", configPath)
+	t.Setenv("CODEX_HOME", filepath.Join(home, ".codex"))
+	require.NoError(t, infrastructure.SaveProviderSetup(configPath, infrastructure.ProviderSetup{
+		ConfiguredProviders: []core.Provider{core.ProviderCodex},
+		DefaultProvider:     core.ProviderCodex,
+	}))
+
+	var stdout bytes.Buffer
+	err := executeWithArgs([]string{"setup"}, &stdout, nil)
+
+	require.NoError(t, err)
+
+	setup, err := infrastructure.LoadProviderSetup(configPath)
+	require.NoError(t, err)
+	require.Equal(t, []core.Provider{core.ProviderClaude, core.ProviderCodex}, setup.ConfiguredProviders)
+	require.Equal(t, core.ProviderCodex, setup.DefaultProvider)
+	require.FileExists(t, filepath.Join(home, ".claude", "hooks", "forward-to-rig.sh"))
 }
 
 func TestTaskDaemonBuildIdentityIncludesExecutableMetadataForDevBuilds(t *testing.T) {
@@ -264,6 +361,22 @@ func writeExecutable(t *testing.T, dir string, name string) {
 
 	path := filepath.Join(dir, name)
 	require.NoError(t, os.WriteFile(path, []byte("#!/bin/sh\nexit 0\n"), 0o755))
+}
+
+func installRigProviderSetupFixture(
+	t *testing.T,
+	home string,
+	providers []core.Provider,
+	defaultProvider core.Provider,
+) {
+	t.Helper()
+
+	configPath := filepath.Join(home, "rig-config.json")
+	t.Setenv("RIG_CONFIG_PATH", configPath)
+	require.NoError(t, infrastructure.SaveProviderSetup(configPath, infrastructure.ProviderSetup{
+		ConfiguredProviders: providers,
+		DefaultProvider:     defaultProvider,
+	}))
 }
 
 func installRigCodexHooksFixture(t *testing.T, home string, collectorURL string) {
