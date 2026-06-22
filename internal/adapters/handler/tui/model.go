@@ -364,13 +364,19 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		case msg.event.Progress != nil:
 			m.advanceCreateProgress(msg.event.Progress.Step)
 			return m, waitForTaskCreateEventCmd(msg.events)
-		case msg.event.Task != nil:
-			return m.Update(taskCreatedMsg{task: msg.event.Task})
 		case msg.event.Err != nil:
 			m.createPending = false
 			m.shimmerTick = 0
 			m.createErr = msg.event.Err
+			if msg.event.Task != nil {
+				if index := m.upsertTaskRow(msg.event.Task); index >= 0 {
+					m.selected = index
+				}
+				m.clampSelection()
+			}
 			return m, nil
+		case msg.event.Task != nil:
+			return m.Update(taskCreatedMsg{task: msg.event.Task})
 		default:
 			return m, waitForTaskCreateEventCmd(msg.events)
 		}

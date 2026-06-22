@@ -205,7 +205,13 @@ func TestUnixSocketServer_CreateTaskStreamsTerminalErrorOnFailure(t *testing.T) 
 		require.Equal(t, "add retries", input.Prompt)
 		require.NotNil(t, reporter)
 		reporter.ReportTaskCreateProgress(core.TaskCreateProgressPreparingWorkspace)
-		return nil, assertiveError("create failed")
+		return &core.Task{
+			ID:             "task-1",
+			DisplayName:    "add retries",
+			CreationStatus: core.TaskCreationStatusFailed,
+			CreationStep:   core.TaskCreateProgressPreparingWorkspace,
+			CreationError:  "create failed",
+		}, assertiveError("create failed")
 	})
 	adapter := New(Config{
 		SocketPath:     socketPath,
@@ -232,6 +238,10 @@ func TestUnixSocketServer_CreateTaskStreamsTerminalErrorOnFailure(t *testing.T) 
 	require.Equal(t, core.TaskCreateProgressPreparingWorkspace, events[0].CreateProgress.Step)
 	require.Equal(t, "error", events[1].Type)
 	require.Equal(t, "create failed", events[1].Error)
+	require.NotNil(t, events[1].Task)
+	require.Equal(t, "task-1", events[1].Task.ID)
+	require.Equal(t, core.TaskCreationStatusFailed, events[1].Task.CreationStatus)
+	require.Equal(t, core.TaskCreateProgressPreparingWorkspace, events[1].Task.CreationStep)
 
 	cancel()
 	require.NoError(t, <-errCh)

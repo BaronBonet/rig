@@ -86,7 +86,7 @@ func (s *server) CreateTaskStream(
 		if err != nil {
 			select {
 			case <-ctx.Done():
-			case events <- core.TaskCreateEvent{Err: err}:
+			case events <- core.TaskCreateEvent{Err: err, Task: task}:
 			}
 			return
 		}
@@ -116,7 +116,7 @@ func (s *server) RetryTaskCreationStream(
 		if err != nil {
 			select {
 			case <-ctx.Done():
-			case events <- core.TaskCreateEvent{Err: err}:
+			case events <- core.TaskCreateEvent{Err: err, Task: task}:
 			}
 			return
 		}

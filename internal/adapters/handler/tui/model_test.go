@@ -1336,6 +1336,72 @@ func TestModel_CreateTaskFailureKeepsPromptRecoverableAndPreservesListView(t *te
 	require.NotContains(t, view, "Enter task prompt.")
 }
 
+func TestModel_CreateTaskFailureWithTaskSnapshotEnablesRetry(t *testing.T) {
+	frontend := newFrontendHarness()
+	frontend.listTasks = []*core.Task{
+		{ID: "task-1", DisplayName: "first task", RepoName: "repo-a", Provider: core.ProviderCodex},
+		{ID: "task-2", DisplayName: "second task", RepoName: "repo-b", Provider: core.ProviderCodex},
+	}
+	failedTask := &core.Task{
+		ID:             "task-3",
+		DisplayName:    "live sync for embeddings",
+		RepoName:       "repo-a",
+		Provider:       core.ProviderCodex,
+		CreationStatus: core.TaskCreationStatusFailed,
+		CreationStep:   core.TaskCreateProgressPreparingWorkspace,
+		CreationError:  "setup workspace: database not setup",
+	}
+	frontend.createTaskEvents = []core.TaskCreateEvent{
+		{Progress: &core.TaskCreateProgressEvent{Step: core.TaskCreateProgressPreparingWorkspace}},
+		{Err: errors.New("setup workspace: database not setup"), Task: failedTask},
+	}
+
+	m := newLoadedModel(frontend)
+	m.mode = modePromptInput
+	m.prompt = "live sync for embeddings"
+
+	next, cmd := m.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
+	require.NotNil(t, cmd)
+
+	pending, ok := next.(model)
+	require.True(t, ok)
+
+	initialMsgs := runBatchCmd(t, cmd)
+	progressMsg := requireMsgType[taskCreateEventMsg](t, initialMsgs)
+	next, follow := pending.Update(progressMsg)
+	require.NotNil(t, follow)
+
+	withProgress, ok := next.(model)
+	require.True(t, ok)
+	createFailed := runCmd(t, follow)
+	next, follow = withProgress.Update(createFailed)
+	require.Nil(t, follow)
+
+	got, ok := next.(model)
+	require.True(t, ok)
+	require.False(t, got.createPending)
+	require.ErrorContains(t, got.createErr, "database not setup")
+	require.Len(t, got.rows, 3)
+	require.NotNil(t, got.selectedRow())
+	require.Equal(t, "task-3", got.selectedRow().task.ID)
+	require.Equal(t, core.TaskCreationStatusFailed, got.selectedRow().task.CreationStatus)
+
+	view := stripANSI(got.View().Content)
+	require.Contains(t, view, "live sync for embeddings")
+	require.Contains(t, view, "setup workspace: database not setup")
+	require.Contains(t, view, "R retry")
+
+	next, retryCmd := got.Update(tea.KeyPressMsg{Text: "R"})
+	require.NotNil(t, retryCmd)
+
+	retrying, ok := next.(model)
+	require.True(t, ok)
+	require.True(t, retrying.createPending)
+	runBatchCmd(t, retryCmd)
+	require.Equal(t, "task-3", frontend.retryTaskID)
+	require.Equal(t, 1, frontend.retryTaskStreamCalls)
+}
+
 func TestModel_RetryFailedTaskCreationStreamsProgress(t *testing.T) {
 	frontend := newFrontendHarness()
 	frontend.listTasks = []*core.Task{
