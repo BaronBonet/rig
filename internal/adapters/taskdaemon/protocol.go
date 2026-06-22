@@ -237,7 +237,7 @@ func receiveTaskCreateEvent(decoder *json.Decoder) (core.TaskCreateEvent, error)
 	case msg.Type == socketEnvelopeTaskCreated && msg.Task != nil:
 		return core.TaskCreateEvent{Task: msg.Task}, nil
 	case msg.Type == socketEnvelopeError && msg.Error != "":
-		return core.TaskCreateEvent{Err: errors.New(msg.Error)}, nil
+		return core.TaskCreateEvent{Err: errors.New(msg.Error), Task: msg.Task}, nil
 	default:
 		return core.TaskCreateEvent{}, fmt.Errorf("unexpected %s response %q", socketCommandCreateTask, msg.Type)
 	}

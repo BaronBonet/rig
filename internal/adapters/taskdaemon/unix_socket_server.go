@@ -202,14 +202,18 @@ func writeTaskCreateStream(encoder *json.Encoder, events <-chan core.TaskCreateE
 			}); err != nil {
 				return
 			}
+		case event.Err != nil:
+			_ = writeSocketEnvelope(encoder, socketEnvelope{
+				Type:  socketEnvelopeError,
+				Error: event.Err.Error(),
+				Task:  event.Task,
+			})
+			return
 		case event.Task != nil:
 			_ = writeSocketEnvelope(
 				encoder,
 				socketEnvelope{Type: socketEnvelopeTaskCreated, OK: true, Task: event.Task},
 			)
-			return
-		case event.Err != nil:
-			_ = writeSocketEnvelope(encoder, socketEnvelope{Type: socketEnvelopeError, Error: event.Err.Error()})
 			return
 		}
 	}
