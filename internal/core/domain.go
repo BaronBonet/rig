@@ -1,6 +1,7 @@
 package core
 
 import (
+	"fmt"
 	"os"
 	"time"
 )
@@ -192,8 +193,72 @@ func (u TaskTokenUsage) IsZero() bool {
 type Provider string
 
 const (
-	ProviderCodex Provider = "codex"
+	ProviderCodex  Provider = "codex"
+	ProviderClaude Provider = "claude"
 )
+
+// SupportedProviders returns every provider Rig knows how to integrate with,
+// in stable display order. Supported is not the same as configured: a provider
+// becomes usable only after the user enables it during provider setup.
+func SupportedProviders() []Provider {
+	return []Provider{ProviderCodex, ProviderClaude}
+}
+
+func IsSupportedProvider(provider Provider) bool {
+	for _, supported := range SupportedProviders() {
+		if provider == supported {
+			return true
+		}
+	}
+	return false
+}
+
+// ProviderSetup is the user-level provider configuration produced by provider
+// setup. It lives in user config, never in the task database.
+type ProviderSetup struct {
+	Configured []Provider `json:"configured"`
+	Default    Provider   `json:"default"`
+}
+
+func (s ProviderSetup) IsConfigured(provider Provider) bool {
+	for _, configured := range s.Configured {
+		if configured == provider {
+			return true
+		}
+	}
+	return false
+}
+
+func (s ProviderSetup) Validate() error {
+	if len(s.Configured) == 0 {
+		return fmt.Errorf("provider setup requires at least one configured provider")
+	}
+	seen := make(map[Provider]bool, len(s.Configured))
+	for _, provider := range s.Configured {
+		if !IsSupportedProvider(provider) {
+			return fmt.Errorf("provider %q is not a supported provider", provider)
+		}
+		if seen[provider] {
+			return fmt.Errorf("provider %q is configured more than once", provider)
+		}
+		seen[provider] = true
+	}
+	if s.Default == "" {
+		return fmt.Errorf("provider setup requires a default provider")
+	}
+	if !s.IsConfigured(s.Default) {
+		return fmt.Errorf("default provider %q is not a configured provider", s.Default)
+	}
+	return nil
+}
+
+// ProviderDetection reports whether one supported provider passed Rig's
+// provider setup checks on this machine.
+type ProviderDetection struct {
+	Provider Provider `json:"provider"`
+	Ready    bool     `json:"ready"`
+	Detail   string   `json:"detail,omitempty"`
+}
 
 // TaskSessionLaunchSpec is the handoff from a provider client to the tmux
 // session client for starting an interactive task session.

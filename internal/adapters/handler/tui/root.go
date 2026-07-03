@@ -20,3 +20,15 @@ func NewProgramWithVersion(
 ) *tea.Program {
 	return tea.NewProgram(newModelWithLaunchCwdAndVersion(frontend, launchCwd, buildVersion), opts...)
 }
+
+// NewSetupProgram creates a TUI program that runs only the provider setup
+// flow and exits once setup is saved. It backs the `rig setup` command.
+func NewSetupProgram(
+	frontend core.TaskFrontend,
+	buildVersion string,
+	opts ...tea.ProgramOption,
+) *tea.Program {
+	m := newModelWithLaunchCwdAndVersion(frontend, "", buildVersion)
+	m.setupOnly = true
+	return tea.NewProgram(m, opts...)
+}

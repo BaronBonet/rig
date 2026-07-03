@@ -4,22 +4,30 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 
+	"github.com/BaronBonet/rig/internal/adapters/client/claude"
+	"github.com/BaronBonet/rig/internal/adapters/client/codex"
+	"github.com/BaronBonet/rig/internal/adapters/repository/userconfig"
 	"github.com/BaronBonet/rig/internal/adapters/taskdaemon"
 	"github.com/BaronBonet/rig/internal/core"
 
 	sqlite "github.com/BaronBonet/rig/internal/adapters/repository/sqlite"
 
-	"github.com/BaronBonet/rig/internal/adapters/client/codex"
-
 	"github.com/caarlos0/env/v11"
 )
 
 type ApplicationConfig struct {
-	Provider core.Provider `env:"RIG_PROVIDER" envDefault:"codex"`
-	SQLite   sqlite.Config
-	Codex    codex.Config
-	Daemon   taskdaemon.Config
+	// Provider is the optional runtime default-provider override
+	// (RIG_PROVIDER). The user's default provider normally comes from
+	// provider setup in user-level config; when set, this override must name a
+	// configured provider.
+	Provider   core.Provider `env:"RIG_PROVIDER"`
+	SQLite     sqlite.Config
+	Codex      codex.Config
+	Claude     claude.Config
+	UserConfig userconfig.Config
+	Daemon     taskdaemon.Config
 }
 
 // LoadConfig loads the application configuration from environment variables.
@@ -36,20 +44,23 @@ func LoadConfig() (*ApplicationConfig, error) {
 	if err := env.Parse(&config); err != nil {
 		return nil, err
 	}
-	if err := validateProvider(config.Provider); err != nil {
+	if err := validateProviderOverride(config.Provider); err != nil {
 		return nil, err
 	}
 
 	return &config, nil
 }
 
-func validateProvider(provider core.Provider) error {
-	switch provider {
-	case core.ProviderCodex:
+func validateProviderOverride(provider core.Provider) error {
+	if provider == "" || core.IsSupportedProvider(provider) {
 		return nil
-	default:
-		return fmt.Errorf("invalid RIG_PROVIDER %q: expected codex", provider)
 	}
+
+	supported := make([]string, 0, len(core.SupportedProviders()))
+	for _, name := range core.SupportedProviders() {
+		supported = append(supported, string(name))
+	}
+	return fmt.Errorf("invalid RIG_PROVIDER %q: expected one of %s", provider, strings.Join(supported, ", "))
 }
 
 func defaultDaemonSocketPath() string {

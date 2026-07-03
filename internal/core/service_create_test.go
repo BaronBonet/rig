@@ -122,7 +122,7 @@ func TestTaskServiceCreateTask_FailsWhenRequestedProviderIsUnavailable(t *testin
 	}, nil)
 
 	require.Nil(t, task)
-	require.EqualError(t, err, `provider "gemini" unavailable`)
+	require.EqualError(t, err, `provider "gemini" is not configured: run rig setup to enable it`)
 	require.Nil(t, svc.taskRepo.createdTask)
 	require.Nil(t, svc.repoClient.createdTask)
 	require.False(t, svc.workspace.setupCalled)
@@ -296,7 +296,7 @@ func TestTaskServiceCreateTask_BootstrapsWorkspaceWhenRepoSetupIsDisabled(t *tes
 		},
 		Workspace:            svc.workspaceMock,
 		EnableWorkspaceSetup: false,
-		DefaultProvider:      ProviderCodex,
+		ProviderConfig:       svc.providerConfigMock,
 	})
 
 	task, err := svc.service.CreateTaskWithProgress(t.Context(), CreateTaskInput{

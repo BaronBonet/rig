@@ -646,11 +646,12 @@ func (m model) promptInputView() string {
 	}
 
 	builder.WriteString(dimStyle.Render("Enter task prompt.") + "\n\n")
-	builder.WriteString(
-		mutedStyle.Render("provider  ") +
-			providerStyle(string(defaultCreateProvider)).Render(string(defaultCreateProvider)) +
-			"\n\n",
-	)
+	createProvider := string(m.effectiveCreateProvider())
+	providerLine := mutedStyle.Render("provider  ") + providerStyle(createProvider).Render(createProvider)
+	if len(m.configuredProviders()) > 1 {
+		providerLine += mutedStyle.Render("  ·  ") + keybindStyle.Render("tab") + mutedStyle.Render(" cycle")
+	}
+	builder.WriteString(providerLine + "\n\n")
 
 	promptBoxWidth := totalWidth - 4
 	if promptBoxWidth < 20 {
@@ -683,12 +684,125 @@ func (m model) promptInputView() string {
 }
 
 func (m model) listKeybindText() string {
-	keybinds := "n new   r refresh   x clean   q quit"
+	keybinds := "n new   p provider   r refresh   x clean   q quit"
 	row := m.selectedRow()
 	if row == nil || row.task == nil || row.task.CreationStatus != core.TaskCreationStatusFailed {
 		return keybinds
 	}
-	return "n new   r refresh   R retry   x clean   q quit"
+	return "n new   p provider   r refresh   R retry   x clean   q quit"
+}
+
+func (m model) providerSetupView() string {
+	totalWidth := m.totalWidth()
+
+	var builder strings.Builder
+	builder.WriteString(renderHeader(
+		m.renderHeaderLabel(),
+		mutedStyle.Render("provider setup"),
+		totalWidth,
+	) + "\n")
+	builder.WriteString(dividerStyle.Render(strings.Repeat("─", totalWidth)) + "\n\n")
+
+	builder.WriteString(primaryStyle.Bold(true).Render("Provider setup") + "\n")
+	builder.WriteString(
+		dimStyle.Render("Enable the AI coding providers rig may launch. At least one is required.") + "\n\n",
+	)
+
+	if m.setupErr != nil {
+		builder.WriteString(errorStyle.Render("Error: "+m.setupErr.Error()) + "\n\n")
+	}
+
+	if m.setupDetecting {
+		builder.WriteString(renderShimmer("Checking provider availability...", m.shimmerTick) + "\n")
+		return builder.String()
+	}
+
+	for index, row := range m.setupRows {
+		cursor := "  "
+		if index == m.setupSelected {
+			cursor = "> "
+		}
+
+		checkbox := "[ ]"
+		if row.enabled {
+			checkbox = "[x]"
+		}
+
+		name := providerStyle(string(row.provider)).Render(padRight(string(row.provider), 8))
+		state := healthyStyle.Render("ready")
+		if !row.ready {
+			checkbox = "[-]"
+			state = errorStyle.Render("unavailable")
+		}
+
+		line := cursor + checkbox + " " + name + " " + state
+		if row.provider == m.setupDefault && row.enabled {
+			line += mutedStyle.Render("  (default)")
+		}
+		builder.WriteString(line + "\n")
+		if !row.ready && strings.TrimSpace(row.detail) != "" {
+			for _, detailLine := range wrapAndTruncate(row.detail, totalWidth-8, 2) {
+				builder.WriteString("       " + dimStyle.Render(detailLine) + "\n")
+			}
+		}
+	}
+
+	if m.setupSaving {
+		builder.WriteString("\n" + renderShimmer("Installing provider hooks...", m.shimmerTick) + "\n")
+	}
+
+	builder.WriteString("\n")
+	builder.WriteString(
+		keybindStyle.Render("space") + mutedStyle.Render(" toggle · ") +
+			keybindStyle.Render("d") + mutedStyle.Render(" default · ") +
+			keybindStyle.Render("enter") + mutedStyle.Render(" save · ") +
+			keybindStyle.Render("q") + mutedStyle.Render(" quit"),
+	)
+
+	return builder.String()
+}
+
+func (m model) switchProviderView() string {
+	totalWidth := m.totalWidth()
+
+	var builder strings.Builder
+	builder.WriteString(renderHeader(
+		m.renderHeaderLabel(),
+		mutedStyle.Render("switch provider"),
+		totalWidth,
+	) + "\n")
+	builder.WriteString(dividerStyle.Render(strings.Repeat("─", totalWidth)) + "\n\n")
+
+	row := m.selectedRow()
+	if row != nil && row.task != nil {
+		current := string(row.task.Provider)
+		builder.WriteString(
+			primaryStyle.Render(emptyFallback(row.task.DisplayName, row.task.ID)) + "\n" +
+				mutedStyle.Render("active provider  ") + providerStyle(current).Render(current) + "\n\n",
+		)
+	}
+
+	if m.switchPending {
+		builder.WriteString(renderShimmer("Switching provider...", m.shimmerTick) + "\n")
+		return builder.String()
+	}
+
+	builder.WriteString(dimStyle.Render("Switch this task to:") + "\n\n")
+	for index, provider := range m.switchOptions {
+		cursor := "  "
+		if index == m.switchSelected {
+			cursor = "> "
+		}
+		builder.WriteString(cursor + providerStyle(string(provider)).Render(string(provider)) + "\n")
+	}
+
+	builder.WriteString("\n")
+	builder.WriteString(
+		keybindStyle.Render("enter") + mutedStyle.Render(" switch · ") +
+			keybindStyle.Render("esc") + mutedStyle.Render(" cancel"),
+	)
+
+	return builder.String()
 }
 
 func (m model) prPickerView() string {

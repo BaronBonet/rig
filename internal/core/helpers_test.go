@@ -27,8 +27,19 @@ type testTaskServiceHarness struct {
 	pullRequests          pullRequestClientState
 	providerClientMock    *MockProviderClient
 	providerRepo          providerClientState
+	claudeClientMock      *MockProviderClient
+	claudeRepo            providerClientState
 	workspaceMock         *MockTaskWorkspaceManager
 	workspace             workspaceManagerState
+	providerConfigMock    *MockProviderConfigStore
+	providerConfig        providerConfigState
+}
+
+type providerConfigState struct {
+	getErr     error
+	saveErr    error
+	setup      *ProviderSetup
+	savedSetup *ProviderSetup
 }
 
 type taskRepositoryState struct {
@@ -79,6 +90,7 @@ type sessionClientState struct {
 }
 
 type providerClientState struct {
+	commandName             string
 	healthErr               error
 	suggestErr              error
 	suggestedName           string
@@ -106,6 +118,14 @@ type providerClientState struct {
 	errByTranscript         map[string]error
 	usageByTranscript       map[string]*SessionTokenUsage
 	tokenUsageCalls         []providerTokenUsageCall
+	builtLaunchSpecs        []TaskSessionLaunchSpec
+}
+
+func (s *providerClientState) mockCommandName() string {
+	if s.commandName != "" {
+		return s.commandName
+	}
+	return "codex"
 }
 
 type pullRequestClientState struct {
@@ -162,6 +182,13 @@ func newTestTaskService(t *testing.T) *testTaskServiceHarness {
 	}
 	h.sessionClient.events = &h.events
 	h.providerRepo.events = &h.events
+	h.providerRepo.commandName = "codex"
+	h.claudeRepo.events = &h.events
+	h.claudeRepo.commandName = "claude"
+	h.providerConfig.setup = &ProviderSetup{
+		Configured: []Provider{ProviderCodex},
+		Default:    ProviderCodex,
+	}
 	h.taskRepo.latestByTask = make(map[string]TaskStatusUpdate)
 	h.taskRepo.latestResumeByTask = make(map[string]TaskResumeMetadata)
 	h.taskRepo.providerSessionsByTask = make(map[string][]TaskProviderSession)
@@ -172,13 +199,17 @@ func newTestTaskService(t *testing.T) *testTaskServiceHarness {
 	h.sessionClientMock = NewMockTmuxSessionClient(t)
 	h.pullRequestClientMock = NewMockPullRequestClient(t)
 	h.providerClientMock = NewMockProviderClient(t)
+	h.claudeClientMock = NewMockProviderClient(t)
 	h.workspaceMock = NewMockTaskWorkspaceManager(t)
+	h.providerConfigMock = NewMockProviderConfigStore(t)
 	configureTaskRepositoryMock(h.taskRepoMock, &h.taskRepo)
 	configureGitWorktreeMock(h.repoClientMock, &h.repoClient)
 	configureTmuxSessionMock(h.sessionClientMock, &h.sessionClient)
 	configurePullRequestClientMock(h.pullRequestClientMock, &h.pullRequests)
 	configureProviderClientMock(h.providerClientMock, &h.providerRepo)
+	configureProviderClientMock(h.claudeClientMock, &h.claudeRepo)
 	configureWorkspaceManagerMock(h.workspaceMock, &h.workspace, &h.sessionClient)
+	configureProviderConfigMock(h.providerConfigMock, &h.providerConfig)
 
 	h.service = NewTaskService(TaskServiceDependencies{
 		Tasks:        h.taskRepoMock,
@@ -186,14 +217,41 @@ func newTestTaskService(t *testing.T) *testTaskServiceHarness {
 		TmuxSession:  h.sessionClientMock,
 		PullRequests: h.pullRequestClientMock,
 		Providers: map[Provider]ProviderClient{
-			ProviderCodex: h.providerClientMock,
+			ProviderCodex:  h.providerClientMock,
+			ProviderClaude: h.claudeClientMock,
 		},
 		Workspace:            h.workspaceMock,
 		EnableWorkspaceSetup: true,
-		DefaultProvider:      ProviderCodex,
+		ProviderConfig:       h.providerConfigMock,
 	})
 
 	return h
+}
+
+func configureProviderConfigMock(store *MockProviderConfigStore, state *providerConfigState) {
+	store.EXPECT().GetProviderSetup(mock.Anything).RunAndReturn(
+		func(context.Context) (*ProviderSetup, error) {
+			if state.getErr != nil {
+				return nil, state.getErr
+			}
+			if state.setup == nil {
+				return nil, nil
+			}
+			setup := *state.setup
+			setup.Configured = append([]Provider(nil), state.setup.Configured...)
+			return &setup, nil
+		},
+	).Maybe()
+	store.EXPECT().SaveProviderSetup(mock.Anything, mock.Anything).RunAndReturn(
+		func(_ context.Context, setup ProviderSetup) error {
+			if state.saveErr != nil {
+				return state.saveErr
+			}
+			saved := setup
+			state.savedSetup = &saved
+			return nil
+		},
+	).Maybe()
 }
 
 func configureGitWorktreeMock(client *MockGitWorktreeClient, state *repoClientState) {
@@ -356,11 +414,15 @@ func configureProviderClientMock(client *MockProviderClient, state *providerClie
 			if hasCustomLaunchSpec(state.launchRequest) {
 				return state.launchRequest, nil
 			}
-			return TaskSessionLaunchSpec{
-				Command:      []string{"codex"},
-				ReadyMarker:  "›",
-				PrefillInput: []string{task.Prompt},
-			}, nil
+			launch := TaskSessionLaunchSpec{
+				Command:     []string{state.mockCommandName()},
+				ReadyMarker: "›",
+			}
+			if task.Prompt != "" {
+				launch.PrefillInput = []string{task.Prompt}
+			}
+			state.builtLaunchSpecs = append(state.builtLaunchSpecs, launch)
+			return launch, nil
 		},
 	).Maybe()
 	client.EXPECT().BuildReconnectTaskSessionLaunchSpec(mock.Anything, mock.Anything).RunAndReturn(
@@ -372,12 +434,12 @@ func configureProviderClientMock(client *MockProviderClient, state *providerClie
 				return state.reconnectLaunch, nil
 			}
 			return TaskSessionLaunchSpec{
-				Command:     []string{"codex", "resume", sessionID},
+				Command:     []string{state.mockCommandName(), "resume", sessionID},
 				ReadyMarker: "›",
 			}, nil
 		},
 	).Maybe()
-	client.EXPECT().TaskSessionCommandName().Return("codex").Maybe()
+	client.EXPECT().TaskSessionCommandName().RunAndReturn(state.mockCommandName).Maybe()
 	client.EXPECT().HookEventToTaskStatus(mock.Anything).RunAndReturn(
 		func(input HookEventInput) (*TaskStatusUpdate, error) {
 			state.hookInput = input

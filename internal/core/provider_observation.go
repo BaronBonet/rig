@@ -43,9 +43,9 @@ func getTaskTokenUsage(ctx context.Context, service *taskService, taskID string)
 		if transcriptPath == "" {
 			continue
 		}
-		providerClient, err := service.providerClientFor(session.Provider)
+		providerClient, err := service.supportedClientFor(session.Provider)
 		if err != nil {
-			return nil, err
+			continue
 		}
 		usage, err := providerClient.ReadSessionTokenUsage(ctx, transcriptPath)
 		if err != nil {
@@ -99,9 +99,20 @@ func handleProviderHookEvent(ctx context.Context, service *taskService, input Ho
 		return ErrUnmanagedHookEvent
 	}
 
-	providerClient, err := service.providerClientFor(input.Provider)
+	providerClient, err := service.supportedClientFor(input.Provider)
 	if err != nil {
 		return err
+	}
+
+	// Hook routes exist for every supported provider, so the service decides
+	// here whether an incoming hook is actionable: hooks from providers the
+	// user has not configured are ignored without task changes.
+	setup, err := service.GetProviderSetup(ctx)
+	if err != nil {
+		return err
+	}
+	if setup == nil || !setup.IsConfigured(input.Provider) {
+		return ErrUnmanagedHookEvent
 	}
 
 	input.TaskID = strings.TrimSpace(input.TaskID)
@@ -113,11 +124,30 @@ func handleProviderHookEvent(ctx context.Context, service *taskService, input Ho
 		input.TaskID = resolvedTaskID
 	}
 
+	drivesRuntimeStatus := true
+	if task, taskErr := service.taskByID(ctx, input.TaskID); taskErr == nil && task.Provider != input.Provider {
+		if isProviderAdoptionEvent(input) {
+			// Manual provider adoption: a configured provider started a session in
+			// this task's workspace, so it becomes the active provider immediately.
+			// Rig's tmux session reference is intentionally left untouched.
+			if _, adoptErr := service.recordActiveProvider(ctx, task, input.Provider); adoptErr != nil {
+				return adoptErr
+			}
+		} else {
+			// Late hooks from a provider that is no longer active may still record
+			// session history and activity, but never drive current runtime status.
+			drivesRuntimeStatus = false
+		}
+	}
+
 	if err := recordProviderHookSession(ctx, service, input); err != nil {
 		return err
 	}
 	if err := recordProviderHookActivity(ctx, service, input); err != nil {
 		return err
+	}
+	if !drivesRuntimeStatus {
+		return nil
 	}
 
 	update, err := providerClient.HookEventToTaskStatus(input)
@@ -133,6 +163,13 @@ func handleProviderHookEvent(ctx context.Context, service *taskService, input Ho
 	}
 
 	return service.tasks.UpsertTaskStatus(ctx, *update)
+}
+
+// isProviderAdoptionEvent reports whether a hook event may adopt a manually
+// launched provider as the task's active provider. Only session-start events
+// qualify so that late or stray hooks cannot change the active provider.
+func isProviderAdoptionEvent(input HookEventInput) bool {
+	return strings.TrimSpace(input.EventName) == "SessionStart"
 }
 
 func subscribeTaskStatusWithRecovery(
@@ -215,7 +252,7 @@ func currentTaskStatus(ctx context.Context, service *taskService, update *TaskSt
 		return update
 	}
 
-	providerClient, err := service.providerClientFor(task.Provider)
+	providerClient, err := service.supportedClientFor(task.Provider)
 	if err != nil {
 		return update
 	}
@@ -269,7 +306,7 @@ func recoveredTaskActivity(
 	after := latestTaskActivityObservedAt(events)
 	var recovered []TaskActivityEvent
 	for _, session := range latestProviderSessionsByID(sessions) {
-		providerClient, err := service.providerClientFor(session.Provider)
+		providerClient, err := service.supportedClientFor(session.Provider)
 		if err != nil {
 			continue
 		}

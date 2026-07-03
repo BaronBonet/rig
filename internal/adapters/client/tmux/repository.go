@@ -40,8 +40,13 @@ func (r *repository) HealthCheck(ctx context.Context) error {
 }
 
 func (r *repository) StartTaskSession(ctx context.Context, task *core.Task, launch core.TaskSessionLaunchSpec) error {
-	if err := r.createSession(ctx, task.TmuxSession, task.WorktreePath); err != nil {
-		return err
+	// Provider switches launch into an existing idle session; only reconnects
+	// and fresh tasks need a new session created.
+	alreadyExists := r.sessionExists(ctx, task.TmuxSession)
+	if !alreadyExists {
+		if err := r.createSession(ctx, task.TmuxSession, task.WorktreePath); err != nil {
+			return err
+		}
 	}
 
 	if len(launch.Command) == 0 {
@@ -49,6 +54,9 @@ func (r *repository) StartTaskSession(ctx context.Context, task *core.Task, laun
 	}
 
 	if err := r.sendKeysToWindow(ctx, task.TmuxSession, taskWindowName, launch.Command); err != nil {
+		if alreadyExists {
+			return err
+		}
 		return r.cleanupStartedSession(ctx, task.TmuxSession, err)
 	}
 
@@ -57,15 +65,33 @@ func (r *repository) StartTaskSession(ctx context.Context, task *core.Task, laun
 	}
 
 	if err := r.waitForPrompt(ctx, task.TmuxSession, taskWindowName, launch.ReadyMarker); err != nil {
+		if alreadyExists {
+			return err
+		}
 		return r.cleanupStartedSession(ctx, task.TmuxSession, err)
 	}
 	r.sleep(promptInputSettleDelay)
 
 	if err := r.typeInWindow(ctx, task.TmuxSession, taskWindowName, launch.PrefillInput); err != nil {
+		if alreadyExists {
+			return err
+		}
 		return r.cleanupStartedSession(ctx, task.TmuxSession, err)
 	}
 
 	return nil
+}
+
+func (r *repository) sessionExists(ctx context.Context, sessionName string) bool {
+	_, err := r.runner.Run(
+		ctx,
+		"",
+		"tmux",
+		"has-session",
+		"-t",
+		exactSessionTarget(sessionName),
+	)
+	return err == nil
 }
 
 func (r *repository) AttachTaskSession(ctx context.Context, task *core.Task) error {
@@ -105,7 +131,7 @@ func (r *repository) InspectTaskSession(ctx context.Context, task *core.Task) (c
 		"-t",
 		exactWindowTarget(task.TmuxSession, taskWindowName),
 		"-F",
-		"#{pane_current_command}",
+		"#{pane_current_command}\t#{pane_pid}",
 	)
 	if isMissingSessionError(err, result) {
 		return core.TaskSessionRuntimeState{}, nil
@@ -114,10 +140,46 @@ func (r *repository) InspectTaskSession(ctx context.Context, task *core.Task) (c
 		return core.TaskSessionRuntimeState{}, err
 	}
 
+	commands, panePIDs := panesFromTmuxOutput(result.Stdout)
+	// pane_current_command reports the foreground process title, which some
+	// provider CLIs rewrite (Claude Code sets it to its version string), so the
+	// comm names of each pane's child processes are reported as well.
+	commands = append(commands, r.paneChildCommands(ctx, panePIDs)...)
+
 	return core.TaskSessionRuntimeState{
 		Exists:         true,
-		ActiveCommands: paneCommandsFromTmuxOutput(result.Stdout),
+		ActiveCommands: commands,
 	}, nil
+}
+
+// paneChildCommands returns the process comm names of the direct children of
+// each pane's root process, typically the CLI the pane shell is running.
+func (r *repository) paneChildCommands(ctx context.Context, panePIDs []string) []string {
+	if len(panePIDs) == 0 {
+		return nil
+	}
+
+	result, err := r.runner.Run(ctx, "", "ps", "-axo", "ppid=,comm=")
+	if err != nil {
+		return nil
+	}
+
+	wanted := make(map[string]bool, len(panePIDs))
+	for _, pid := range panePIDs {
+		wanted[pid] = true
+	}
+
+	var commands []string
+	for _, line := range strings.Split(result.Stdout, "\n") {
+		fields := strings.Fields(line)
+		if len(fields) < 2 {
+			continue
+		}
+		if wanted[fields[0]] {
+			commands = append(commands, strings.Join(fields[1:], " "))
+		}
+	}
+	return commands
 }
 
 func (r *repository) DeleteTaskSession(ctx context.Context, task *core.Task) error {
@@ -310,17 +372,27 @@ func normalizedSessionName(session string) string {
 	return strings.ReplaceAll(session, ":", "-")
 }
 
-func paneCommandsFromTmuxOutput(output string) []string {
+func panesFromTmuxOutput(output string) ([]string, []string) {
 	lines := strings.Split(output, "\n")
 	commands := make([]string, 0, len(lines))
+	pids := make([]string, 0, len(lines))
 	for _, line := range lines {
-		command := strings.TrimSpace(line)
-		if command == "" {
+		line = strings.TrimSpace(line)
+		if line == "" {
 			continue
 		}
-		commands = append(commands, command)
+		command, pid, hasPID := strings.Cut(line, "\t")
+		command = strings.TrimSpace(command)
+		if command != "" {
+			commands = append(commands, command)
+		}
+		if hasPID {
+			if pid = strings.TrimSpace(pid); pid != "" {
+				pids = append(pids, pid)
+			}
+		}
 	}
-	return commands
+	return commands, pids
 }
 
 func isMissingSessionError(err error, result subprocess.Result) bool {

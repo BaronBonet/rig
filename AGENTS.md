@@ -55,17 +55,20 @@ Hexagonal architecture (Ports & Adapters) with dependency injection.
 - `errors.go` — Domain-specific errors
 
 ### Adapters (`internal/adapters/`)
-- `handler/tui/` — Bubbletea TUI (root command launches interactive task list)
+- `handler/tui/` — Bubbletea TUI (root command launches interactive task list; also the provider setup and switch screens)
 - `client/tmux/` — Tmux session management
 - `client/git/` — Git worktree operations
 - `client/codex/` — Codex implementation of `ProviderClient`
+- `client/claude/` — Claude Code implementation of `ProviderClient` (workspace-scoped hook registration)
 - `client/github/` — PR status checks
+- `registry/` — Provider client and hook-route composition for all supported providers
 - `repository/sqlite/` — SQLite persistence (goose migrations, sqlc-generated queries)
+- `repository/userconfig/` — User-level provider setup config (`~/.config/rig/config.json`)
 - `repository/workspace/` — Workspace config loading, seeding, and setup scripts
 - `taskdaemon/` — Daemon process, Unix socket frontend, and hook HTTP server
 
 ### Infrastructure (`internal/infrastructure/`)
-- `config.go` — Env var parsing (`RIG_PROVIDER`, `RIG_SQLITE_PATH`, `RIG_DAEMON_HOOK_LISTEN_ADDRESS`, etc.)
+- `config.go` — Env var parsing (`RIG_PROVIDER`, `RIG_CODEX_BINARY`, `RIG_CLAUDE_BINARY`, `RIG_USER_CONFIG_PATH`, `RIG_SQLITE_PATH`, `RIG_DAEMON_HOOK_LISTEN_ADDRESS`, etc.)
 
 ### Entry point (`cmd/rig/main.go`)
 - Wires all adapters into `core.Service` via constructor injection

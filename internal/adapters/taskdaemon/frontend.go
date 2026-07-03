@@ -89,6 +89,53 @@ func (f *frontend) ReconnectTaskSession(ctx context.Context, taskID string) erro
 	return err
 }
 
+func (f *frontend) GetProviderSetup(ctx context.Context) (*core.ProviderSetup, error) {
+	resp, err := f.sendUnary(ctx, socketRequest{
+		Command: socketCommandGetProviderSetup,
+	}, socketEnvelopeProviderSetup)
+	if err != nil {
+		return nil, err
+	}
+
+	return resp.ProviderSetup, nil
+}
+
+func (f *frontend) SaveProviderSetup(ctx context.Context, setup core.ProviderSetup) error {
+	_, err := f.sendUnary(ctx, socketRequest{
+		Command:       socketCommandSaveProviderSetup,
+		ProviderSetup: &setup,
+	}, socketEnvelopeProviderSetupSaved)
+	return err
+}
+
+func (f *frontend) DetectProviders(ctx context.Context) ([]core.ProviderDetection, error) {
+	resp, err := f.sendUnary(ctx, socketRequest{
+		Command: socketCommandDetectProviders,
+	}, socketEnvelopeProviderDetections)
+	if err != nil {
+		return nil, err
+	}
+
+	return resp.Detections, nil
+}
+
+func (f *frontend) SwitchTaskProvider(
+	ctx context.Context,
+	taskID string,
+	provider core.Provider,
+) (*core.Task, error) {
+	resp, err := f.sendUnary(ctx, socketRequest{
+		Command:  socketCommandSwitchTaskProvider,
+		TaskID:   taskID,
+		Provider: provider,
+	}, socketEnvelopeTaskProviderSwitched)
+	if err != nil {
+		return nil, err
+	}
+
+	return resp.Task, nil
+}
+
 func (f *frontend) CreateTaskStream(
 	ctx context.Context,
 	input core.CreateTaskInput,

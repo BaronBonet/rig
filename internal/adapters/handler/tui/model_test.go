@@ -35,10 +35,7 @@ func TestModel_InitLoadsAllTasksAcrossRepos(t *testing.T) {
 	}
 
 	m := newModel(frontend.mock)
-	cmd := m.Init()
-	require.NotNil(t, cmd)
-
-	msg := runCmd(t, cmd)
+	m, msg := initModel(t, m)
 	next, _ := m.Update(msg)
 
 	got, ok := next.(model)
@@ -62,7 +59,7 @@ func TestModel_ViewRendersTaskMetadata(t *testing.T) {
 	}
 
 	m := newModel(frontend.mock)
-	msg := runCmd(t, m.Init())
+	m, msg := initModel(t, m)
 	next, _ := m.Update(msg)
 
 	got, ok := next.(model)
@@ -70,7 +67,7 @@ func TestModel_ViewRendersTaskMetadata(t *testing.T) {
 
 	view := stripANSI(got.View().Content)
 	require.Contains(t, view, "RIG dev")
-	require.Contains(t, view, "n new   r refresh   x clean   q quit")
+	require.Contains(t, view, "n new   p provider   r refresh   x clean   q quit")
 	require.Contains(t, view, "first task")
 	require.Contains(t, view, "repo-a")
 	require.Contains(t, view, "feat/first-task")
@@ -84,7 +81,7 @@ func TestModel_ViewRendersConfiguredVersionInHeader(t *testing.T) {
 	frontend := newFrontendHarness()
 
 	m := newModelWithLaunchCwdAndVersion(frontend.mock, "/tmp/repo", "1.2.3")
-	msg := runCmd(t, m.Init())
+	m, msg := initModel(t, m)
 	next, _ := m.Update(msg)
 
 	got, ok := next.(model)
@@ -170,7 +167,7 @@ func TestModel_ViewSplitsTaskOverviewByRepo(t *testing.T) {
 	}
 
 	m := newModel(frontend.mock)
-	msg := runCmd(t, m.Init())
+	m, msg := initModel(t, m)
 	next, _ := m.Update(msg)
 
 	got, ok := next.(model)
@@ -368,7 +365,7 @@ func TestModel_PRStatusShownInOverviewRowsAndDetailPanel(t *testing.T) {
 	}
 
 	m := newModel(frontend.mock)
-	loadMsg := runCmd(t, m.Init())
+	m, loadMsg := initModel(t, m)
 	next, cmd := m.Update(loadMsg)
 	require.NotNil(t, cmd)
 
@@ -401,7 +398,7 @@ func TestModel_AfterLoadRequestsLatestStatusAndSubscriptionsForEachTask(t *testi
 	}
 
 	m := newModel(frontend.mock)
-	loadMsg := runCmd(t, m.Init())
+	m, loadMsg := initModel(t, m)
 	next, cmd := m.Update(loadMsg)
 	require.NotNil(t, cmd)
 
@@ -428,7 +425,7 @@ func TestModel_AfterLoadRequestsTaskActivityForEachTask(t *testing.T) {
 	}
 
 	m := newModel(frontend.mock)
-	loadMsg := runCmd(t, m.Init())
+	m, loadMsg := initModel(t, m)
 	next, cmd := m.Update(loadMsg)
 	require.NotNil(t, cmd)
 
@@ -455,7 +452,7 @@ func TestModel_LatestStatusSeedUpdatesRenderedPhase(t *testing.T) {
 	}
 
 	m := newModel(frontend.mock)
-	loadMsg := runCmd(t, m.Init())
+	m, loadMsg := initModel(t, m)
 	next, cmd := m.Update(loadMsg)
 	require.NotNil(t, cmd)
 
@@ -525,7 +522,7 @@ func TestModel_ViewRendersTaskActivity(t *testing.T) {
 	}
 
 	m := newModel(frontend.mock)
-	loadMsg := runCmd(t, m.Init())
+	m, loadMsg := initModel(t, m)
 	next, cmd := m.Update(loadMsg)
 	require.NotNil(t, cmd)
 
@@ -641,7 +638,7 @@ func TestModel_TaskRowUpdatesWhenSubscriptionUpdateArrives(t *testing.T) {
 	}
 
 	m := newModel(frontend.mock)
-	loadMsg := runCmd(t, m.Init())
+	m, loadMsg := initModel(t, m)
 	next, cmd := m.Update(loadMsg)
 	require.NotNil(t, cmd)
 
@@ -694,7 +691,7 @@ func TestModel_TaskStatusUpdateReloadsTaskActivity(t *testing.T) {
 	}
 
 	m := newModel(frontend.mock)
-	loadMsg := runCmd(t, m.Init())
+	m, loadMsg := initModel(t, m)
 	next, cmd := m.Update(loadMsg)
 	require.NotNil(t, cmd)
 
@@ -861,7 +858,7 @@ func TestModel_StatusEnrichmentFailuresDoNotCollapseListView(t *testing.T) {
 	}
 
 	m := newModel(frontend.mock)
-	loadMsg := runCmd(t, m.Init())
+	m, loadMsg := initModel(t, m)
 	next, cmd := m.Update(loadMsg)
 	require.NotNil(t, cmd)
 
@@ -896,7 +893,7 @@ func TestModel_InitUsesLifecycleContextForInitialLoad(t *testing.T) {
 	require.NotNil(t, cmd)
 
 	m.cancelStatus()
-	runCmd(t, cmd)
+	runBatchCmd(t, cmd)
 
 	require.NotNil(t, frontend.listTasksContext)
 	require.ErrorIs(t, frontend.listTasksContext.Err(), context.Canceled)
@@ -1697,7 +1694,7 @@ func TestModel_PRPickerEnterCreatesTaskFromSelectedPR(t *testing.T) {
 	require.Equal(t, modeBrowse, pending.mode)
 	require.True(t, pending.createPending)
 	view := stripANSI(pending.View().Content)
-	require.Contains(t, view, "n new   r refresh   x clean   q quit")
+	require.Contains(t, view, "n new   p provider   r refresh   x clean   q quit")
 	require.Contains(t, view, "Creating task from pull request")
 	require.NotContains(t, view, "Suggesting name")
 	require.Less(t, strings.Index(view, "existing task"), strings.Index(view, "Creating task from pull request"))
@@ -1769,7 +1766,7 @@ func TestModel_PRPickerCreateFailureReturnsToBrowseWithProgressAndError(t *testi
 	require.ErrorContains(t, got.createErr, "create failed")
 
 	view = stripANSI(got.View().Content)
-	require.Contains(t, view, "n new   r refresh   x clean   q quit")
+	require.Contains(t, view, "n new   p provider   r refresh   x clean   q quit")
 	require.Contains(t, view, "Creating task from pull request")
 	require.NotContains(t, view, "Creating worktree")
 	require.Contains(t, view, "create failed")
@@ -1874,6 +1871,13 @@ func TestModel_CleanupFailurePreservesRowsAndShowsError(t *testing.T) {
 }
 
 func newLoadedModel(frontend *frontendHarness) model {
+	setup := frontend.providerSetup
+	if setup == nil {
+		setup = &core.ProviderSetup{
+			Configured: []core.Provider{core.ProviderCodex},
+			Default:    core.ProviderCodex,
+		}
+	}
 	return model{
 		frontend:      frontend.mock,
 		launchCwd:     "/tmp/repo",
@@ -1881,7 +1885,20 @@ func newLoadedModel(frontend *frontendHarness) model {
 		statusContext: context.Background(),
 		rows:          rowsFromTasks(frontend.listTasks),
 		mode:          modeBrowse,
+		providerSetup: setup,
 	}
+}
+
+// initModel runs Init, applies the provider setup message, and returns the
+// updated model plus the tasks-loaded message for the test to apply.
+func initModel(t *testing.T, m model) (model, tea.Msg) {
+	t.Helper()
+	msgs := runBatchCmd(t, m.Init())
+	setupMsg := requireMsgType[providerSetupLoadedMsg](t, msgs)
+	next, _ := m.Update(setupMsg)
+	got, ok := next.(model)
+	require.True(t, ok)
+	return got, requireMsgType[tasksLoadedMsg](t, msgs)
 }
 
 func runCmd(t *testing.T, cmd tea.Cmd) tea.Msg {
@@ -1966,10 +1983,68 @@ type frontendHarness struct {
 	subscribeTaskStatus       map[string]chan core.TaskStatusUpdate
 	subscribeTaskStatusErr    map[string]error
 	subscribeTaskStatusCalls  []string
+	providerSetup             *core.ProviderSetup
+	providerSetupErr          error
+	getProviderSetupCalls     int
+	savedProviderSetup        *core.ProviderSetup
+	saveProviderSetupErr      error
+	detections                []core.ProviderDetection
+	detectProvidersErr        error
+	detectProvidersCalls      int
+	switchedTaskID            string
+	switchedProvider          core.Provider
+	switchTaskResult          *core.Task
+	switchTaskErr             error
+	switchTaskCalls           int
 }
 
 func newFrontendHarness() *frontendHarness {
-	frontend := &frontendHarness{mock: &core.MockTaskFrontend{}}
+	frontend := &frontendHarness{
+		mock: &core.MockTaskFrontend{},
+		providerSetup: &core.ProviderSetup{
+			Configured: []core.Provider{core.ProviderCodex},
+			Default:    core.ProviderCodex,
+		},
+	}
+	frontend.mock.EXPECT().GetProviderSetup(mock.Anything).RunAndReturn(
+		func(context.Context) (*core.ProviderSetup, error) {
+			frontend.getProviderSetupCalls++
+			if frontend.providerSetupErr != nil {
+				return nil, frontend.providerSetupErr
+			}
+			return frontend.providerSetup, nil
+		},
+	).Maybe()
+	frontend.mock.EXPECT().SaveProviderSetup(mock.Anything, mock.Anything).RunAndReturn(
+		func(_ context.Context, setup core.ProviderSetup) error {
+			if frontend.saveProviderSetupErr != nil {
+				return frontend.saveProviderSetupErr
+			}
+			saved := setup
+			frontend.savedProviderSetup = &saved
+			return nil
+		},
+	).Maybe()
+	frontend.mock.EXPECT().DetectProviders(mock.Anything).RunAndReturn(
+		func(context.Context) ([]core.ProviderDetection, error) {
+			frontend.detectProvidersCalls++
+			if frontend.detectProvidersErr != nil {
+				return nil, frontend.detectProvidersErr
+			}
+			return append([]core.ProviderDetection(nil), frontend.detections...), nil
+		},
+	).Maybe()
+	frontend.mock.EXPECT().SwitchTaskProvider(mock.Anything, mock.Anything, mock.Anything).RunAndReturn(
+		func(_ context.Context, taskID string, provider core.Provider) (*core.Task, error) {
+			frontend.switchTaskCalls++
+			frontend.switchedTaskID = taskID
+			frontend.switchedProvider = provider
+			if frontend.switchTaskErr != nil {
+				return nil, frontend.switchTaskErr
+			}
+			return frontend.switchTaskResult, nil
+		},
+	).Maybe()
 	frontend.mock.EXPECT().AttachTaskSession(mock.Anything, mock.Anything).RunAndReturn(
 		func(ctx context.Context, task *core.Task) error {
 			frontend.attachTaskSessionCalls++

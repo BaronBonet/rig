@@ -93,6 +93,17 @@ type TaskFrontend interface {
 	// ReconnectTaskSession recreates a missing task runtime session from
 	// persisted provider resume metadata.
 	ReconnectTaskSession(ctx context.Context, taskID string) error
+	// GetProviderSetup returns the user's provider setup, or nil when provider
+	// setup has never completed.
+	GetProviderSetup(ctx context.Context) (*ProviderSetup, error)
+	// SaveProviderSetup validates and persists the user's provider setup.
+	SaveProviderSetup(ctx context.Context, setup ProviderSetup) error
+	// DetectProviders reports which supported providers pass provider setup
+	// checks on this machine.
+	DetectProviders(ctx context.Context) ([]ProviderDetection, error)
+	// SwitchTaskProvider makes another configured provider the task's active
+	// provider by launching it in the existing task workspace.
+	SwitchTaskProvider(ctx context.Context, taskID string, provider Provider) (*Task, error)
 	// CreateTaskStream creates a new task and streams progress events followed by
 	// one terminal result event.
 	CreateTaskStream(ctx context.Context, input CreateTaskInput) (<-chan TaskCreateEvent, error)
@@ -217,6 +228,32 @@ type TaskService interface {
 	// ReconnectTaskSession recreates a missing task runtime session from
 	// persisted provider resume metadata.
 	ReconnectTaskSession(ctx context.Context, taskID string) error
+	// GetProviderSetup returns the user's provider setup, or nil when provider
+	// setup has never completed.
+	GetProviderSetup(ctx context.Context) (*ProviderSetup, error)
+	// SaveProviderSetup validates and persists the user's provider setup after
+	// running provider setup checks for every configured provider.
+	SaveProviderSetup(ctx context.Context, setup ProviderSetup) error
+	// DetectProviders reports which supported providers pass provider setup
+	// checks on this machine.
+	DetectProviders(ctx context.Context) ([]ProviderDetection, error)
+	// SwitchTaskProvider makes another configured provider the task's active
+	// provider by launching it in the existing task workspace. It refuses while
+	// the current provider process is still running and only records the new
+	// active provider after the new provider launches successfully.
+	SwitchTaskProvider(ctx context.Context, taskID string, provider Provider) (*Task, error)
+}
+
+// ProviderConfigStore reads and writes the user-level provider setup that
+// records which supported providers are configured and which one is the
+// default. Provider setup intentionally lives outside the task database.
+type ProviderConfigStore interface {
+	// GetProviderSetup returns the persisted provider setup, or nil when
+	// provider setup has never completed. Implementations apply any validated
+	// runtime default-provider override before returning.
+	GetProviderSetup(ctx context.Context) (*ProviderSetup, error)
+	// SaveProviderSetup validates and atomically persists the provider setup.
+	SaveProviderSetup(ctx context.Context, setup ProviderSetup) error
 }
 
 // TaskRepository persists task records and returns their durable state.

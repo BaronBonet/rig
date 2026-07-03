@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"sort"
 	"strings"
 )
 
@@ -15,7 +14,7 @@ type TaskServiceDependencies struct {
 	PullRequests         PullRequestClient
 	Providers            map[Provider]ProviderClient
 	Workspace            TaskWorkspaceManager
-	DefaultProvider      Provider
+	ProviderConfig       ProviderConfigStore
 	EnableWorkspaceSetup bool
 }
 
@@ -26,7 +25,7 @@ type taskService struct {
 	pullRequests         PullRequestClient
 	providers            map[Provider]ProviderClient
 	workspace            TaskWorkspaceManager
-	defaultProvider      Provider
+	providerConfig       ProviderConfigStore
 	enableWorkspaceSetup bool
 }
 
@@ -62,7 +61,7 @@ func NewTaskService(deps TaskServiceDependencies) TaskService {
 		providers:            deps.Providers,
 		workspace:            deps.Workspace,
 		enableWorkspaceSetup: deps.EnableWorkspaceSetup,
-		defaultProvider:      deps.DefaultProvider,
+		providerConfig:       deps.ProviderConfig,
 	}
 }
 
@@ -71,11 +70,18 @@ func (s *taskService) HealthCheck(ctx context.Context) ([]HealthCheck, error) {
 	checks = append(checks, runRequiredHealthCheck(ctx, "git", s.gitWorktree))
 	checks = append(checks, runRequiredHealthCheck(ctx, "tmux", s.tmuxSession))
 
-	if s.defaultProvider != "" {
-		checks = append(checks, runRequiredDoctorCheck(ctx, string(s.defaultProvider), s.providers[s.defaultProvider]))
-	}
-	for _, provider := range additionalProviderNames(s.providers, s.defaultProvider) {
-		checks = append(checks, runRequiredDoctorCheck(ctx, string(provider), s.providers[provider]))
+	setup, err := s.GetProviderSetup(ctx)
+	switch {
+	case err != nil:
+		checks = append(checks, HealthCheck{Name: "provider setup", Required: true, Err: err})
+	case setup == nil:
+		checks = append(checks, HealthCheck{Name: "provider setup", Required: true, Err: ErrProviderSetupRequired})
+	default:
+		// Doctor validates every configured provider. Supported providers the
+		// user has not configured are intentionally not checked.
+		for _, provider := range configuredProvidersInOrder(*setup) {
+			checks = append(checks, runRequiredDoctorCheck(ctx, string(provider), s.providers[provider]))
+		}
 	}
 
 	checks = append(checks, runOptionalHealthCheck(ctx, "gh", s.pullRequests))
@@ -132,18 +138,25 @@ func runHealthCheck(ctx context.Context, name string, required bool, checker hea
 	}
 }
 
-func additionalProviderNames(providers map[Provider]ProviderClient, defaultProvider Provider) []Provider {
-	names := make([]Provider, 0, len(providers))
-	for provider := range providers {
-		if provider == defaultProvider {
+// configuredProvidersInOrder returns the configured providers with the default
+// provider first and the rest in supported-provider order.
+func configuredProvidersInOrder(setup ProviderSetup) []Provider {
+	ordered := make([]Provider, 0, len(setup.Configured))
+	if setup.IsConfigured(setup.Default) {
+		ordered = append(ordered, setup.Default)
+	}
+	for _, provider := range SupportedProviders() {
+		if provider == setup.Default || !setup.IsConfigured(provider) {
 			continue
 		}
-		names = append(names, provider)
+		ordered = append(ordered, provider)
 	}
-	sort.Slice(names, func(i, j int) bool {
-		return names[i] < names[j]
-	})
-	return names
+	for _, provider := range setup.Configured {
+		if !IsSupportedProvider(provider) && provider != setup.Default {
+			ordered = append(ordered, provider)
+		}
+	}
+	return ordered
 }
 
 func (s *taskService) CreateTaskWithProgress(
@@ -255,41 +268,54 @@ func (s *taskService) ReconnectTaskSession(ctx context.Context, taskID string) e
 		return err
 	}
 
+	providerClient, err := s.configuredClientFor(ctx, task.Provider)
+	if err != nil {
+		return err
+	}
+
 	resumeMetadata, err := s.tasks.LatestTaskResumeMetadata(ctx, task.ID)
 	if err != nil {
 		return fmt.Errorf("load task resume metadata: %w", err)
 	}
-	if resumeMetadata == nil || strings.TrimSpace(resumeMetadata.SessionID) == "" {
-		if err := s.prepareTaskWorkspace(ctx, task, task.RepoRoot); err != nil {
-			return err
-		}
-		if err := s.tmuxSession.StartTaskSession(ctx, task, TaskSessionLaunchSpec{}); err != nil {
-			return fmt.Errorf("reconnect task session: %w", err)
-		}
-		return nil
+	// Resume metadata recorded for a previous active provider cannot resume the
+	// current one; reconnect launches the active provider fresh instead.
+	if resumeMetadata != nil && resumeMetadata.Provider != task.Provider {
+		resumeMetadata = nil
 	}
 
 	if err := s.prepareTaskWorkspace(ctx, task, task.RepoRoot); err != nil {
-		return err
-	}
-
-	providerClient, err := s.providerClientFor(task.Provider)
-	if err != nil {
 		return err
 	}
 	if err := providerClient.EnsureTaskSessionEnvironment(ctx); err != nil {
 		return fmt.Errorf("ensure task session environment: %w", err)
 	}
 
-	launch, err := providerClient.BuildReconnectTaskSessionLaunchSpec(task, resumeMetadata.SessionID)
-	if err != nil {
-		return fmt.Errorf("build reconnect task session launch spec: %w", err)
+	var launch TaskSessionLaunchSpec
+	if resumeMetadata != nil && strings.TrimSpace(resumeMetadata.SessionID) != "" {
+		launch, err = providerClient.BuildReconnectTaskSessionLaunchSpec(task, resumeMetadata.SessionID)
+		if err != nil {
+			return fmt.Errorf("build reconnect task session launch spec: %w", err)
+		}
+	} else {
+		launch, err = promptlessTaskSessionLaunchSpec(providerClient, task)
+		if err != nil {
+			return fmt.Errorf("build task session launch spec: %w", err)
+		}
 	}
+
 	if err := s.tmuxSession.StartTaskSession(ctx, task, launch); err != nil {
 		return fmt.Errorf("reconnect task session: %w", err)
 	}
 
 	return nil
+}
+
+// promptlessTaskSessionLaunchSpec builds a fresh provider launch spec without
+// prefilling the original task prompt, for reconnects and provider switches.
+func promptlessTaskSessionLaunchSpec(providerClient ProviderClient, task *Task) (TaskSessionLaunchSpec, error) {
+	launchTask := *task
+	launchTask.Prompt = ""
+	return providerClient.BuildTaskSessionLaunchSpec(&launchTask)
 }
 
 func (s *taskService) LatestTaskStatus(ctx context.Context, taskID string) (*TaskStatusUpdate, error) {
@@ -307,11 +333,11 @@ func (s *taskService) HandleHookEvent(ctx context.Context, input HookEventInput)
 	return handleProviderHookEvent(ctx, s, input)
 }
 
-func (s *taskService) providerClientFor(provider Provider) (ProviderClient, error) {
-	if provider == "" {
-		provider = s.defaultProvider
-	}
-
+// supportedClientFor returns the adapter client for a supported provider
+// without requiring the provider to be configured. Use it for read-side
+// behavior that must keep working for tasks whose active provider is no
+// longer configured.
+func (s *taskService) supportedClientFor(provider Provider) (ProviderClient, error) {
 	providerClient, ok := s.providers[provider]
 	if !ok {
 		return nil, fmt.Errorf("provider %q unavailable", provider)
@@ -320,8 +346,31 @@ func (s *taskService) providerClientFor(provider Provider) (ProviderClient, erro
 	return providerClient, nil
 }
 
+// configuredClientFor returns the adapter client for a provider the user has
+// configured through provider setup. An empty provider resolves to the user's
+// default provider. Provider-dependent task actions must use this so that
+// unconfigured providers fail with a clear error instead of misbehaving.
+func (s *taskService) configuredClientFor(ctx context.Context, provider Provider) (ProviderClient, error) {
+	setup, err := s.GetProviderSetup(ctx)
+	if err != nil {
+		return nil, err
+	}
+	if setup == nil {
+		return nil, ErrProviderSetupRequired
+	}
+
+	if provider == "" {
+		provider = setup.Default
+	}
+	if !setup.IsConfigured(provider) {
+		return nil, fmt.Errorf("provider %q is not configured: run rig setup to enable it", provider)
+	}
+
+	return s.supportedClientFor(provider)
+}
+
 func (s *taskService) startTaskRuntime(ctx context.Context, task *Task) (*Task, error) {
-	providerClient, err := s.providerClientFor(task.Provider)
+	providerClient, err := s.configuredClientFor(ctx, task.Provider)
 	if err != nil {
 		return task, err
 	}
@@ -364,7 +413,7 @@ func (s *taskService) prepareTaskWorkspace(ctx context.Context, task *Task, repo
 }
 
 func (s *taskService) buildWorkspaceBootstrapSpec(ctx context.Context, task *Task) (WorkspaceBootstrapSpec, error) {
-	providerClient, err := s.providerClientFor(task.Provider)
+	providerClient, err := s.configuredClientFor(ctx, task.Provider)
 	if err != nil {
 		return WorkspaceBootstrapSpec{}, err
 	}

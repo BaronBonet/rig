@@ -25,6 +25,10 @@ type socketBackend interface {
 	ListRepoPullRequests(ctx context.Context, cwd string) ([]core.RepoPullRequest, error)
 	PullRequestStatus(ctx context.Context, repoRoot string, branchName string) (*core.PRStatus, error)
 	ReconnectTaskSession(ctx context.Context, taskID string) error
+	GetProviderSetup(ctx context.Context) (*core.ProviderSetup, error)
+	SaveProviderSetup(ctx context.Context, setup core.ProviderSetup) error
+	DetectProviders(ctx context.Context) ([]core.ProviderDetection, error)
+	SwitchTaskProvider(ctx context.Context, taskID string, provider core.Provider) (*core.Task, error)
 	CreateTaskStream(ctx context.Context, input core.CreateTaskInput) (<-chan core.TaskCreateEvent, error)
 	RetryTaskCreationStream(ctx context.Context, taskID string) (<-chan core.TaskCreateEvent, error)
 	DeleteTask(ctx context.Context, taskID string) error

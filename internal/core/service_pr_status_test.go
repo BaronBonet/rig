@@ -27,13 +27,13 @@ func TestTaskService_PullRequestStatusFetchesLatestBranchStatus(t *testing.T) {
 func TestTaskService_PullRequestStatusReturnsNoneWhenNoClientConfigured(t *testing.T) {
 	h := newTestTaskService(t)
 	h.service = NewTaskService(TaskServiceDependencies{
-		Tasks:           h.taskRepoMock,
-		GitWorktree:     h.repoClientMock,
-		TmuxSession:     h.sessionClientMock,
-		PullRequests:    nil,
-		Providers:       map[Provider]ProviderClient{ProviderCodex: h.providerClientMock},
-		Workspace:       h.workspaceMock,
-		DefaultProvider: ProviderCodex,
+		Tasks:          h.taskRepoMock,
+		GitWorktree:    h.repoClientMock,
+		TmuxSession:    h.sessionClientMock,
+		PullRequests:   nil,
+		Providers:      map[Provider]ProviderClient{ProviderCodex: h.providerClientMock},
+		Workspace:      h.workspaceMock,
+		ProviderConfig: h.providerConfigMock,
 	})
 
 	status, err := h.service.PullRequestStatus(context.Background(), "/tmp/repo", "feat/auth")

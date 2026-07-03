@@ -12,6 +12,18 @@ import (
 
 const shimmerTickInterval = 90 * time.Millisecond
 
+// activityRefreshInterval paces the background refresh of the selected
+// task's activity and token usage. Status updates stream live, but activity
+// accumulates without status changes (and transcript-recovered activity has
+// no hook events at all), so the detail view polls to stay fresh.
+var activityRefreshInterval = 5 * time.Second
+
+func activityRefreshTickCmd() tea.Cmd {
+	return tea.Tick(activityRefreshInterval, func(time.Time) tea.Msg {
+		return activityRefreshTickMsg{}
+	})
+}
+
 func loadTasksCmd(ctx context.Context, frontend core.TaskFrontend) tea.Cmd {
 	return func() tea.Msg {
 		tasks, err := frontend.ListTasks(ctx)
@@ -79,6 +91,51 @@ func deleteTaskCmd(ctx context.Context, frontend core.TaskFrontend, taskID strin
 		return taskDeletedMsg{
 			taskID: taskID,
 			err:    err,
+		}
+	}
+}
+
+func getProviderSetupCmd(ctx context.Context, frontend core.TaskFrontend) tea.Cmd {
+	return func() tea.Msg {
+		setup, err := frontend.GetProviderSetup(ctx)
+		return providerSetupLoadedMsg{
+			setup: setup,
+			err:   err,
+		}
+	}
+}
+
+func detectProvidersCmd(ctx context.Context, frontend core.TaskFrontend) tea.Cmd {
+	return func() tea.Msg {
+		detections, err := frontend.DetectProviders(ctx)
+		return providerDetectionsMsg{
+			detections: detections,
+			err:        err,
+		}
+	}
+}
+
+func saveProviderSetupCmd(ctx context.Context, frontend core.TaskFrontend, setup core.ProviderSetup) tea.Cmd {
+	return func() tea.Msg {
+		err := frontend.SaveProviderSetup(ctx, setup)
+		return providerSetupSavedMsg{
+			setup: setup,
+			err:   err,
+		}
+	}
+}
+
+func switchTaskProviderCmd(
+	ctx context.Context,
+	frontend core.TaskFrontend,
+	taskID string,
+	provider core.Provider,
+) tea.Cmd {
+	return func() tea.Msg {
+		task, err := frontend.SwitchTaskProvider(ctx, taskID, provider)
+		return taskProviderSwitchedMsg{
+			task: task,
+			err:  err,
 		}
 	}
 }

@@ -16,12 +16,14 @@ import (
 
 var currentFrontendBuildVersion = "dev"
 
-const currentFrontendProtocolVersion = 7
+const currentFrontendProtocolVersion = 8
 
 const (
 	socketCommandCreateTask           = "create_task"
 	socketCommandDeleteTask           = "delete_task"
+	socketCommandDetectProviders      = "detect_providers"
 	socketCommandFrontendBuildVersion = "frontend_build_version"
+	socketCommandGetProviderSetup     = "get_provider_setup"
 	socketCommandGetTaskActivity      = "get_task_activity"
 	// #nosec G101 -- socket command name, not a credential.
 	socketCommandGetTaskTokenUsage     = "get_task_token_usage"
@@ -33,9 +35,15 @@ const (
 	socketCommandPullRequestStatus     = "pull_request_status"
 	socketCommandReconnectTaskSession  = "reconnect_task_session"
 	socketCommandRetryTaskCreation     = "retry_task_creation"
+	socketCommandSaveProviderSetup     = "save_provider_setup"
 	socketCommandStop                  = "stop"
 	socketCommandSubscribeTaskStatus   = "subscribe_task_status"
+	socketCommandSwitchTaskProvider    = "switch_task_provider"
 	socketEnvelopeError                = "error"
+	socketEnvelopeProviderDetections   = "provider_detections"
+	socketEnvelopeProviderSetup        = "provider_setup"
+	socketEnvelopeProviderSetupSaved   = "provider_setup_saved"
+	socketEnvelopeTaskProviderSwitched = "task_provider_switched"
 	socketEnvelopeFrontendBuildVersion = "frontend_build_version"
 	socketEnvelopeHealth               = "health"
 	socketEnvelopeProtocolVersion      = "protocol_version"
@@ -68,12 +76,14 @@ func FrontendBuildVersion() string {
 }
 
 type socketRequest struct {
-	Input      *core.CreateTaskInput `json:"input,omitempty"`
-	Command    string                `json:"command"`
-	Cwd        string                `json:"cwd,omitempty"`
-	BranchName string                `json:"branch_name,omitempty"`
-	Limit      int                   `json:"limit,omitempty"`
-	TaskID     string                `json:"task_id,omitempty"`
+	Input         *core.CreateTaskInput `json:"input,omitempty"`
+	ProviderSetup *core.ProviderSetup   `json:"provider_setup,omitempty"`
+	Command       string                `json:"command"`
+	Cwd           string                `json:"cwd,omitempty"`
+	BranchName    string                `json:"branch_name,omitempty"`
+	Provider      core.Provider         `json:"provider,omitempty"`
+	Limit         int                   `json:"limit,omitempty"`
+	TaskID        string                `json:"task_id,omitempty"`
 }
 
 type socketEnvelope struct {
@@ -86,6 +96,8 @@ type socketEnvelope struct {
 	Update          *core.TaskStatusUpdate        `json:"update,omitempty"`
 	Usage           *core.TaskTokenUsage          `json:"usage,omitempty"`
 	PR              *core.PRStatus                `json:"pr,omitempty"`
+	ProviderSetup   *core.ProviderSetup           `json:"provider_setup,omitempty"`
+	Detections      []core.ProviderDetection      `json:"detections,omitempty"`
 	Tasks           []*core.Task                  `json:"tasks,omitempty"`
 	PullRequests    []core.RepoPullRequest        `json:"pull_requests,omitempty"`
 	ProtocolVersion int                           `json:"protocol_version,omitempty"`

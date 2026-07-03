@@ -57,6 +57,42 @@ func (s *server) ReconnectTaskSession(ctx context.Context, taskID string) error 
 	return s.service.ReconnectTaskSession(ctx, taskID)
 }
 
+func (s *server) GetProviderSetup(ctx context.Context) (*core.ProviderSetup, error) {
+	if s.service == nil {
+		return nil, fmt.Errorf("task service not configured")
+	}
+
+	return s.service.GetProviderSetup(ctx)
+}
+
+func (s *server) SaveProviderSetup(ctx context.Context, setup core.ProviderSetup) error {
+	if s.service == nil {
+		return fmt.Errorf("task service not configured")
+	}
+
+	return s.service.SaveProviderSetup(ctx, setup)
+}
+
+func (s *server) DetectProviders(ctx context.Context) ([]core.ProviderDetection, error) {
+	if s.service == nil {
+		return nil, fmt.Errorf("task service not configured")
+	}
+
+	return s.service.DetectProviders(ctx)
+}
+
+func (s *server) SwitchTaskProvider(
+	ctx context.Context,
+	taskID string,
+	provider core.Provider,
+) (*core.Task, error) {
+	if s.service == nil {
+		return nil, fmt.Errorf("task service not configured")
+	}
+
+	return s.service.SwitchTaskProvider(ctx, taskID, provider)
+}
+
 type taskCreateEventReporter struct {
 	ctx    context.Context
 	events chan<- core.TaskCreateEvent
