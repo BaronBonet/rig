@@ -18,6 +18,7 @@ var (
 	colorWarning  = lipgloss.Color("#c4a24e")
 	colorError    = lipgloss.Color("#c05050")
 	colorCodex    = lipgloss.Color("#5ac4a0")
+	colorClaude   = lipgloss.Color("#d97757")
 	colorPRMerged = lipgloss.Color("#9b7ce8")
 )
 
@@ -46,6 +47,9 @@ var (
 
 	codexStyle = lipgloss.NewStyle().
 			Foreground(colorCodex)
+
+	claudeStyle = lipgloss.NewStyle().
+			Foreground(colorClaude)
 
 	prMergedStyle = lipgloss.NewStyle().
 			Foreground(colorPRMerged)
@@ -78,7 +82,10 @@ var (
 			Padding(0, 1)
 )
 
-func providerStyle(string) lipgloss.Style {
+func providerStyle(provider string) lipgloss.Style {
+	if strings.HasPrefix(strings.TrimSpace(provider), "claude") {
+		return claudeStyle
+	}
 	return codexStyle
 }
 

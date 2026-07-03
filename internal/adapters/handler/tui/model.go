@@ -27,9 +27,9 @@ const (
 	modePromptInput
 	modePRPicker
 	modeCleanupConfirm
+	modeProviderSetup
+	modeSwitchProvider
 )
-
-const defaultCreateProvider = core.ProviderCodex
 
 const defaultBuildVersion = "dev"
 
@@ -37,31 +37,51 @@ const taskActivityPreviewLimit = 6
 
 // nolint:recvcheck // bubbletea requires value receivers for tea.Model.
 type model struct {
-	frontend      core.TaskFrontend
-	statusContext context.Context
-	err           error
-	createErr     error
-	cancelStatus  context.CancelFunc
-	rows          []taskRow
-	prRows        []core.RepoPullRequest
-	prompt        string
-	promptInput   textarea.Model
-	createActive  core.TaskCreateProgressStep
-	createDone    []core.TaskCreateProgressStep
-	selected      int
-	prSelected    int
-	width         int
-	height        int
-	shimmerTick   int
-	mode          modelMode
-	launchCwd     string
-	buildVersion  string
-	prRepoRoot    string
-	prRepoName    string
-	loading       bool
-	createPending bool
-	createFromPR  bool
-	deletePending bool
+	frontend       core.TaskFrontend
+	statusContext  context.Context
+	err            error
+	createErr      error
+	setupErr       error
+	cancelStatus   context.CancelFunc
+	rows           []taskRow
+	prRows         []core.RepoPullRequest
+	providerSetup  *core.ProviderSetup
+	setupRows      []providerSetupRow
+	switchOptions  []core.Provider
+	prompt         string
+	promptInput    textarea.Model
+	createActive   core.TaskCreateProgressStep
+	createDone     []core.TaskCreateProgressStep
+	createProvider core.Provider
+	setupDefault   core.Provider
+	selected       int
+	prSelected     int
+	setupSelected  int
+	switchSelected int
+	width          int
+	height         int
+	shimmerTick    int
+	mode           modelMode
+	launchCwd      string
+	buildVersion   string
+	prRepoRoot     string
+	prRepoName     string
+	loading        bool
+	createPending  bool
+	createFromPR   bool
+	deletePending  bool
+	setupOnly      bool
+	setupDetecting bool
+	setupSaving    bool
+	switchPending  bool
+}
+
+// providerSetupRow is one supported provider in the provider setup UI.
+type providerSetupRow struct {
+	provider core.Provider
+	detail   string
+	ready    bool
+	enabled  bool
 }
 
 type tasksLoadedMsg struct {
@@ -141,7 +161,29 @@ type repoPullRequestsLoadedMsg struct {
 	repoName string
 }
 
+type providerSetupLoadedMsg struct {
+	setup *core.ProviderSetup
+	err   error
+}
+
+type providerDetectionsMsg struct {
+	err        error
+	detections []core.ProviderDetection
+}
+
+type providerSetupSavedMsg struct {
+	err   error
+	setup core.ProviderSetup
+}
+
+type taskProviderSwitchedMsg struct {
+	task *core.Task
+	err  error
+}
+
 type shimmerTickMsg struct{}
+
+type activityRefreshTickMsg struct{}
 
 func newModel(frontend core.TaskFrontend) model {
 	return newModelWithLaunchCwd(frontend, "")
@@ -175,7 +217,57 @@ func normalizeBuildVersion(buildVersion string) string {
 }
 
 func (m model) Init() tea.Cmd {
-	return loadTasksCmd(m.statusContext, m.frontend)
+	return tea.Batch(
+		getProviderSetupCmd(m.statusContext, m.frontend),
+		loadTasksCmd(m.statusContext, m.frontend),
+		activityRefreshTickCmd(),
+	)
+}
+
+// configuredProviders returns the user's configured providers in supported
+// order, or nil before provider setup has completed.
+func (m model) configuredProviders() []core.Provider {
+	if m.providerSetup == nil {
+		return nil
+	}
+
+	ordered := make([]core.Provider, 0, len(m.providerSetup.Configured))
+	for _, provider := range core.SupportedProviders() {
+		if m.providerSetup.IsConfigured(provider) {
+			ordered = append(ordered, provider)
+		}
+	}
+	return ordered
+}
+
+// effectiveCreateProvider is the provider new tasks will use: the provider
+// the user cycled to with Tab, falling back to the configured default.
+func (m model) effectiveCreateProvider() core.Provider {
+	if m.providerSetup == nil {
+		return m.createProvider
+	}
+	if m.createProvider != "" && m.providerSetup.IsConfigured(m.createProvider) {
+		return m.createProvider
+	}
+	return m.providerSetup.Default
+}
+
+// cycleCreateProvider advances the create-flow provider selection to the next
+// configured provider. With a single configured provider it is a no-op.
+func (m *model) cycleCreateProvider() {
+	providers := m.configuredProviders()
+	if len(providers) < 2 {
+		return
+	}
+
+	current := m.effectiveCreateProvider()
+	for index, provider := range providers {
+		if provider == current {
+			m.createProvider = providers[(index+1)%len(providers)]
+			return
+		}
+	}
+	m.createProvider = providers[0]
 }
 
 func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
@@ -209,6 +301,12 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if m.mode == modeCleanupConfirm {
 			return m.updateCleanupConfirm(msg)
 		}
+		if m.mode == modeProviderSetup {
+			return m.updateProviderSetup(msg)
+		}
+		if m.mode == modeSwitchProvider {
+			return m.updateSwitchProvider(msg)
+		}
 
 		if isQuitKey(msg) {
 			if m.cancelStatus != nil {
@@ -227,7 +325,14 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			if m.createPending {
 				return m, nil
 			}
+			if m.providerSetup == nil {
+				return m.enterProviderSetupMode()
+			}
 			return m.enterPromptInputMode("")
+		case "p":
+			return m.enterSwitchProviderMode()
+		case "S":
+			return m.enterProviderSetupMode()
 		case "r":
 			m.loading = true
 			m.err = nil
@@ -314,13 +419,77 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case taskStatusUpdatedMsg:
 		update := msg.update
 		m.setTaskStatus(msg.taskID, &update)
-		return m, tea.Batch(
+		cmds := []tea.Cmd{
 			taskActivityCmd(m.statusContext, m.frontend, msg.taskID, taskActivityPreviewLimit),
 			taskTokenUsageCmd(m.statusContext, m.frontend, msg.taskID),
 			waitForTaskStatusCmd(msg.taskID, msg.updates),
-		)
+		}
+		// A live status from a different provider than the task record means
+		// the daemon adopted a manually launched provider; reload tasks so the
+		// displayed active provider reflects reality.
+		if row := m.taskRowByID(msg.taskID); row != nil && row.task != nil &&
+			update.Provider != "" && row.task.Provider != update.Provider {
+			cmds = append(cmds, loadTasksCmd(m.statusContext, m.frontend))
+		}
+		return m, tea.Batch(cmds...)
 	case taskStatusSubscriptionClosedMsg:
 		return m, nil
+	case providerSetupLoadedMsg:
+		if msg.err != nil {
+			// Invalid provider setup gates the TUI the same way missing setup
+			// does; the setup screen shows what went wrong.
+			m.setupErr = msg.err
+			next, cmd := m.enterProviderSetupMode()
+			return next, cmd
+		}
+		m.providerSetup = msg.setup
+		if msg.setup == nil || m.setupOnly {
+			next, cmd := m.enterProviderSetupMode()
+			return next, cmd
+		}
+		return m, nil
+	case providerDetectionsMsg:
+		m.setupDetecting = false
+		if msg.err != nil {
+			m.setupErr = msg.err
+			return m, nil
+		}
+		m.applyProviderDetections(msg.detections)
+		return m, nil
+	case providerSetupSavedMsg:
+		m.setupSaving = false
+		if msg.err != nil {
+			m.setupErr = msg.err
+			return m, nil
+		}
+		saved := msg.setup
+		m.providerSetup = &saved
+		m.setupErr = nil
+		m.createProvider = ""
+		if m.setupOnly {
+			if m.cancelStatus != nil {
+				m.cancelStatus()
+			}
+			return m, tea.Quit
+		}
+		m.mode = modeBrowse
+		m.loading = true
+		return m, loadTasksCmd(m.statusContext, m.frontend)
+	case taskProviderSwitchedMsg:
+		m.switchPending = false
+		m.shimmerTick = 0
+		m.mode = modeBrowse
+		if msg.err != nil {
+			// A failed or refused switch keeps the previous active provider.
+			m.err = msg.err
+			return m, nil
+		}
+		m.err = nil
+		if index := m.upsertTaskRow(msg.task); index >= 0 {
+			m.selected = index
+		}
+		m.clampSelection()
+		return m, tea.Batch(m.taskStatusTrackingCmds(taskID(msg.task))...)
 	case repoPullRequestsLoadedMsg:
 		m.createErr = msg.err
 		if msg.err != nil {
@@ -410,6 +579,16 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.removeTaskRow(msg.taskID)
 		m.clampSelection()
 		return m, nil
+	case activityRefreshTickMsg:
+		cmds := []tea.Cmd{activityRefreshTickCmd()}
+		if row := m.selectedRow(); row != nil && row.task != nil && taskID(row.task) != "" {
+			id := taskID(row.task)
+			cmds = append(cmds,
+				taskActivityCmd(m.statusContext, m.frontend, id, taskActivityPreviewLimit),
+				taskTokenUsageCmd(m.statusContext, m.frontend, id),
+			)
+		}
+		return m, tea.Batch(cmds...)
 	case shimmerTickMsg:
 		if !m.createPending && !m.deletePending {
 			return m, nil
@@ -433,6 +612,10 @@ func (m model) View() tea.View {
 		body = m.prPickerView()
 	case modeCleanupConfirm:
 		body = m.confirmationView()
+	case modeProviderSetup:
+		body = m.providerSetupView()
+	case modeSwitchProvider:
+		body = m.switchProviderView()
 	}
 
 	view := tea.NewView(body)
@@ -486,7 +669,7 @@ func (m model) submitPrompt() (model, tea.Cmd) {
 		createTaskStreamCmd(m.statusContext, m.frontend, core.CreateTaskInput{
 			Cwd:      m.currentCreateCwd(),
 			Prompt:   prompt,
-			Provider: defaultCreateProvider,
+			Provider: m.effectiveCreateProvider(),
 		}),
 		shimmerTickCmd(),
 	)
@@ -531,6 +714,11 @@ func (m model) updatePromptInput(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	switch typed := msg.(type) {
 	case tea.KeyPressMsg:
+		if typed.String() == "tab" {
+			// Tab cycles through configured providers for the new task.
+			m.cycleCreateProvider()
+			return m, nil
+		}
 		if typed.String() == "ctrl+p" {
 			repoRoot, repoName, ok := m.currentRepoScope()
 			if !ok {
@@ -625,13 +813,16 @@ func (m model) updatePRPicker(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		return m, tea.Batch(
 			createTaskStreamCmd(m.statusContext, m.frontend, core.CreateTaskInput{
 				Cwd:      m.prRepoRoot,
-				Provider: defaultCreateProvider,
+				Provider: m.effectiveCreateProvider(),
 				Source: core.CreateTaskSource{
 					PullRequest: &selected,
 				},
 			}),
 			shimmerTickCmd(),
 		)
+	case "tab":
+		m.cycleCreateProvider()
+		return m, nil
 	default:
 		return m, nil
 	}
@@ -795,6 +986,15 @@ func (m *model) selectTask(targetTaskID string) bool {
 	}
 
 	return false
+}
+
+func (m *model) taskRowByID(taskID string) *taskRow {
+	for i := range m.rows {
+		if m.rows[i].task != nil && m.rows[i].task.ID == taskID {
+			return &m.rows[i]
+		}
+	}
+	return nil
 }
 
 func (m *model) setTaskStatus(taskID string, status *core.TaskStatusUpdate) {

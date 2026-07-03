@@ -6,14 +6,16 @@ import (
 	"io"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"syscall"
 
-	"github.com/BaronBonet/rig/internal/adapters/client/codex"
 	"github.com/BaronBonet/rig/internal/adapters/client/git"
 	"github.com/BaronBonet/rig/internal/adapters/client/github"
 	"github.com/BaronBonet/rig/internal/adapters/client/tmux"
 	"github.com/BaronBonet/rig/internal/adapters/handler/tui"
+	"github.com/BaronBonet/rig/internal/adapters/registry"
 	"github.com/BaronBonet/rig/internal/adapters/repository/sqlite"
+	"github.com/BaronBonet/rig/internal/adapters/repository/userconfig"
 	"github.com/BaronBonet/rig/internal/adapters/taskdaemon"
 	"github.com/BaronBonet/rig/internal/core"
 	"github.com/BaronBonet/rig/internal/infrastructure"
@@ -55,6 +57,9 @@ func newProductionCommandRuntime(stdout io.Writer, stderr io.Writer) commandRunt
 		version: version,
 		runTUI: func() error {
 			return runTUI(stdout)
+		},
+		runSetup: func() error {
+			return runProviderSetup(stdout)
 		},
 		runDoctor: func() error {
 			cfg, err := infrastructure.LoadConfig()
@@ -124,6 +129,7 @@ type commandRuntime struct {
 	version string
 
 	runTUI           func() error
+	runSetup         func() error
 	runDoctor        func() error
 	runDaemonStart   func() error
 	runDaemonStop    func() error
@@ -153,10 +159,22 @@ func newRootCommand(runtime commandRuntime) *cobra.Command {
 	root.SetErr(runtime.stderr)
 	root.SetVersionTemplate("{{.Version}}\n")
 
+	root.AddCommand(newSetupCommand(runtime))
 	root.AddCommand(newDoctorCommand(runtime))
 	root.AddCommand(newDaemonCommand(runtime))
 
 	return root
+}
+
+func newSetupCommand(runtime commandRuntime) *cobra.Command {
+	return &cobra.Command{
+		Use:   "setup",
+		Short: "Configure the AI coding providers rig may use",
+		Args:  cobra.NoArgs,
+		RunE: func(_ *cobra.Command, _ []string) error {
+			return runCommand(runtime.runSetup)
+		},
+	}
 }
 
 func newDoctorCommand(runtime commandRuntime) *cobra.Command {
@@ -306,6 +324,41 @@ func runTUI(stdout io.Writer) error {
 	return err
 }
 
+func runProviderSetup(stdout io.Writer) error {
+	cfg, err := infrastructure.LoadConfig()
+	if err != nil {
+		return err
+	}
+
+	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer cancel()
+
+	adapter, err := newClientTaskDaemon(cfg)
+	if err != nil {
+		return err
+	}
+	if err := adapter.EnsureRunning(ctx); err != nil {
+		return err
+	}
+
+	frontend := adapter.Frontend()
+	if frontend == nil {
+		return fmt.Errorf("task frontend not configured")
+	}
+
+	if stdout == nil {
+		stdout = os.Stdout
+	}
+	program := tui.NewSetupProgram(
+		frontend,
+		taskdaemon.FrontendBuildVersion(),
+		tea.WithInput(os.Stdin),
+		tea.WithOutput(stdout),
+	)
+	_, err = program.Run()
+	return err
+}
+
 func newClientTaskDaemon(cfg *infrastructure.ApplicationConfig) (core.TaskDaemon, error) {
 	execPath, err := os.Executable()
 	if err != nil {
@@ -370,7 +423,10 @@ func runDoctor(stdout io.Writer, cfg *infrastructure.ApplicationConfig) error {
 	service := newDoctorService(cfg)
 
 	fmt.Fprintln(stdout, "Rig doctor")
-	fmt.Fprintf(stdout, "Provider: %s\n", cfg.Provider)
+	if cfg.Provider != "" {
+		fmt.Fprintf(stdout, "Provider override (RIG_PROVIDER): %s\n", cfg.Provider)
+	}
+	fmt.Fprintf(stdout, "User config: %s\n", userConfigPathForDisplay(cfg))
 	fmt.Fprintf(stdout, "SQLite: %s\n", cfg.SQLite.Path)
 	fmt.Fprintf(stdout, "Daemon socket: %s\n\n", cfg.Daemon.SocketPath)
 
@@ -382,22 +438,28 @@ func runDoctor(stdout io.Writer, cfg *infrastructure.ApplicationConfig) error {
 
 func newDoctorService(cfg *infrastructure.ApplicationConfig) core.TaskService {
 	runner := subprocess.ExecRunner{}
-	providers := map[core.Provider]core.ProviderClient{
-		core.ProviderCodex: codex.New(
-			runner,
-			cfg.Codex,
-			codex.NewHookForwardingConfig(cfg.Daemon.HookListenAddr, ""),
-		),
-	}
+	providers := registry.NewProviderClients(registry.Dependencies{
+		Runner:         runner,
+		Codex:          cfg.Codex,
+		Claude:         cfg.Claude,
+		HookListenAddr: cfg.Daemon.HookListenAddr,
+	})
 
 	return core.NewTaskService(core.TaskServiceDependencies{
-		Tasks:           sqlite.NewHealthCheckRepository(cfg.SQLite),
-		GitWorktree:     git.New(runner),
-		TmuxSession:     tmux.New(runner),
-		PullRequests:    github.New(runner),
-		Providers:       providers,
-		DefaultProvider: cfg.Provider,
+		Tasks:          sqlite.NewHealthCheckRepository(cfg.SQLite),
+		GitWorktree:    git.New(runner),
+		TmuxSession:    tmux.New(runner),
+		PullRequests:   github.New(runner),
+		Providers:      providers,
+		ProviderConfig: userconfig.New(cfg.UserConfig, cfg.Provider),
 	})
+}
+
+func userConfigPathForDisplay(cfg *infrastructure.ApplicationConfig) string {
+	if path := cfg.UserConfig.Path; path != "" {
+		return path
+	}
+	return userconfig.DefaultConfigPath()
 }
 
 func renderHealthChecks(stdout io.Writer, checks []core.HealthCheck) {
@@ -441,19 +503,24 @@ func serveTaskDaemon(
 	}
 
 	runner := subprocess.ExecRunner{}
-	hookSecret, err := codex.NewHookSecret()
+	// The hook secret persists across daemon restarts so forwarder scripts
+	// written by earlier daemons keep authenticating.
+	hookSecret, err := registry.LoadOrCreateHookSecret(
+		filepath.Join(filepath.Dir(cfg.Daemon.SocketPath), "hook-secret"),
+	)
 	if err != nil {
 		return err
 	}
 
-	providers := map[core.Provider]core.ProviderClient{
-		core.ProviderCodex: codex.New(
-			runner,
-			cfg.Codex,
-			codex.NewHookForwardingConfig(cfg.Daemon.HookListenAddr, hookSecret),
-		),
-	}
+	providers := registry.NewProviderClients(registry.Dependencies{
+		Runner:         runner,
+		Codex:          cfg.Codex,
+		Claude:         cfg.Claude,
+		HookListenAddr: cfg.Daemon.HookListenAddr,
+		HookSecret:     hookSecret,
+	})
 
+	providerConfig := userconfig.New(cfg.UserConfig, cfg.Provider)
 	service := core.NewTaskService(core.TaskServiceDependencies{
 		Tasks:                taskRepo,
 		GitWorktree:          git.New(runner),
@@ -462,10 +529,14 @@ func serveTaskDaemon(
 		Providers:            providers,
 		Workspace:            repositoryworkspace.New(),
 		EnableWorkspaceSetup: true,
-		DefaultProvider:      cfg.Provider,
+		ProviderConfig:       providerConfig,
 	})
+
+	for _, refreshErr := range registry.RefreshProviderEnvironments(ctx, providers, providerConfig) {
+		fmt.Fprintln(os.Stderr, refreshErr)
+	}
 
 	adapter := taskdaemon.New(cfg.Daemon)
 
-	return adapter.Serve(ctx, service, codex.NewHookRoutes(service, nil, hookSecret), stop)
+	return adapter.Serve(ctx, service, registry.NewHookRoutes(service, nil, hookSecret), stop)
 }

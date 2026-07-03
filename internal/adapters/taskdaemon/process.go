@@ -18,7 +18,11 @@ import (
 )
 
 const (
-	healthyTimeout         = 2 * time.Second
+	// healthyTimeout bounds how long a client waits for a freshly spawned
+	// daemon to become healthy. Cold starts (first execution of a new build,
+	// task database opening) can exceed a couple of seconds; the retry loop
+	// still connects within one retryInterval once the socket is up.
+	healthyTimeout         = 10 * time.Second
 	socketOperationTimeout = 2 * time.Second
 	retryInterval          = 25 * time.Millisecond
 )

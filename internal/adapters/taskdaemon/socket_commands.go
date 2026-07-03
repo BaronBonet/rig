@@ -59,6 +59,22 @@ var socketUnaryCommands = map[string]socketUnaryCommand{
 		name:   socketCommandPullRequestStatus,
 		handle: handlePullRequestStatusCommand,
 	},
+	socketCommandGetProviderSetup: {
+		name:   socketCommandGetProviderSetup,
+		handle: handleGetProviderSetupCommand,
+	},
+	socketCommandSaveProviderSetup: {
+		name:   socketCommandSaveProviderSetup,
+		handle: handleSaveProviderSetupCommand,
+	},
+	socketCommandDetectProviders: {
+		name:   socketCommandDetectProviders,
+		handle: handleDetectProvidersCommand,
+	},
+	socketCommandSwitchTaskProvider: {
+		name:   socketCommandSwitchTaskProvider,
+		handle: handleSwitchTaskProviderCommand,
+	},
 }
 
 func writeSocketUnaryCommandResponse(
@@ -230,6 +246,69 @@ func handlePullRequestStatusCommand(
 		OK:   true,
 		PR:   status,
 	}, nil
+}
+
+func handleGetProviderSetupCommand(
+	ctx context.Context,
+	backend socketBackend,
+	_ socketRequest,
+) (socketEnvelope, error) {
+	setup, err := backend.GetProviderSetup(ctx)
+	if err != nil {
+		return socketEnvelope{}, err
+	}
+
+	return socketEnvelope{Type: socketEnvelopeProviderSetup, OK: true, ProviderSetup: setup}, nil
+}
+
+func handleSaveProviderSetupCommand(
+	ctx context.Context,
+	backend socketBackend,
+	req socketRequest,
+) (socketEnvelope, error) {
+	if req.ProviderSetup == nil {
+		return socketEnvelope{}, errors.New(socketCommandSaveProviderSetup + " provider_setup required")
+	}
+	if err := backend.SaveProviderSetup(ctx, *req.ProviderSetup); err != nil {
+		return socketEnvelope{}, err
+	}
+
+	return socketEnvelope{Type: socketEnvelopeProviderSetupSaved, OK: true}, nil
+}
+
+func handleDetectProvidersCommand(
+	ctx context.Context,
+	backend socketBackend,
+	_ socketRequest,
+) (socketEnvelope, error) {
+	detections, err := backend.DetectProviders(ctx)
+	if err != nil {
+		return socketEnvelope{}, err
+	}
+
+	return socketEnvelope{Type: socketEnvelopeProviderDetections, OK: true, Detections: detections}, nil
+}
+
+func handleSwitchTaskProviderCommand(
+	ctx context.Context,
+	backend socketBackend,
+	req socketRequest,
+) (socketEnvelope, error) {
+	taskID, err := requiredSocketTaskID(req, socketCommandSwitchTaskProvider)
+	if err != nil {
+		return socketEnvelope{}, err
+	}
+	provider := core.Provider(strings.TrimSpace(string(req.Provider)))
+	if provider == "" {
+		return socketEnvelope{}, errors.New(socketCommandSwitchTaskProvider + " provider required")
+	}
+
+	task, err := backend.SwitchTaskProvider(ctx, taskID, provider)
+	if err != nil {
+		return socketEnvelope{}, err
+	}
+
+	return socketEnvelope{Type: socketEnvelopeTaskProviderSwitched, OK: true, Task: task}, nil
 }
 
 func requiredSocketTaskID(req socketRequest, command string) (string, error) {

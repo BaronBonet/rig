@@ -25,7 +25,7 @@ func TestExecuteSource_UsesCobraCommandRuntime(t *testing.T) {
 	require.NotContains(t, source, `return run(ctx,`)
 }
 
-func TestDaemonHookRoutes_ExposeCodexHooksOnly(t *testing.T) {
+func TestDaemonHookRoutes_ExposeAllSupportedProviderHookRoutes(t *testing.T) {
 	t.Parallel()
 
 	content, err := os.ReadFile(filepath.Join(".", "main.go"))
@@ -34,10 +34,11 @@ func TestDaemonHookRoutes_ExposeCodexHooksOnly(t *testing.T) {
 
 	require.NotContains(t, source, "func daemonHookRoutes(")
 	require.NotContains(t, source, `"/codex-hook"`)
+	require.NotContains(t, source, `"/claude-hook"`)
 	require.NotContains(t, source, `"/hook"`)
 	require.NotContains(t, source, "CollectorURL:")
-	require.Contains(t, source, "codex.NewHookForwardingConfig(")
-	require.Contains(t, source, "codex.NewHookRoutes(")
+	require.Contains(t, source, "registry.NewProviderClients(")
+	require.Contains(t, source, "registry.NewHookRoutes(")
 }
 
 func TestExecuteSource_ConstructsSingleTaskdaemonAdapterForClientPath(t *testing.T) {
@@ -179,6 +180,7 @@ func TestExecuteWithArgsDoctorReportsHealthyEnvironment(t *testing.T) {
 	t.Setenv("HOME", home)
 	t.Setenv("PATH", binDir)
 	t.Setenv("RIG_PROVIDER", "codex")
+	writeUserProviderConfig(t, home)
 	installRigCodexHooksFixture(t, home, "http://127.0.0.1:4124/codex-hook")
 
 	var stdout bytes.Buffer
@@ -191,7 +193,18 @@ func TestExecuteWithArgsDoctorReportsHealthyEnvironment(t *testing.T) {
 	require.Contains(t, stdout.String(), "OK   codex")
 	require.Contains(t, stdout.String(), "OK   sqlite")
 	require.Contains(t, stdout.String(), "WARN gh")
-	require.Contains(t, stdout.String(), "Provider: codex")
+	require.Contains(t, stdout.String(), "Provider override (RIG_PROVIDER): codex")
+}
+
+func writeUserProviderConfig(t *testing.T, home string) {
+	t.Helper()
+	configDir := filepath.Join(home, ".config", "rig")
+	require.NoError(t, os.MkdirAll(configDir, 0o700))
+	require.NoError(t, os.WriteFile(
+		filepath.Join(configDir, "config.json"),
+		[]byte(`{"version":1,"configured_providers":["codex"],"default_provider":"codex"}`),
+		0o600,
+	))
 }
 
 func TestExecuteWithArgsDoctorFailsWhenRequiredCommandMissing(t *testing.T) {

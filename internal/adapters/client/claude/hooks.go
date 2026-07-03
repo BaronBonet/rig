@@ -1,4 +1,4 @@
-package codex
+package claude
 
 import (
 	"bytes"
@@ -24,6 +24,7 @@ type HTTPHandler struct {
 const (
 	// #nosec G101 -- This is the HTTP header name, not credential material.
 	hookSecretHeader        = "X-Rig-Hook-Secret"
+	hookEventHeader         = "X-Claude-Hook-Event"
 	maxHookRequestBodyBytes = 1024 * 1024
 )
 
@@ -44,8 +45,7 @@ func NewHookRoutes(
 ) []core.TaskDaemonHookRoute {
 	handler := NewHookHTTPHandler(service, now, hookSecret)
 	return []core.TaskDaemonHookRoute{
-		{Path: legacyCodexHookPath, Handler: handler},
-		{Path: codexHookPath, Handler: handler},
+		{Path: claudeHookPath, Handler: handler},
 	}
 }
 
@@ -93,7 +93,7 @@ func (h *HTTPHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	input := DecodeHookEventInput(h.now, r.Header.Get("X-Codex-Hook-Event"), body)
+	input := DecodeHookEventInput(h.now, r.Header.Get(hookEventHeader), body)
 	if err := h.handle(r.Context(), input); err != nil && !errors.Is(err, core.ErrUnmanagedHookEvent) {
 		http.Error(w, "handle hook event: "+err.Error(), http.StatusInternalServerError)
 		return
@@ -110,6 +110,9 @@ func (h *HTTPHandler) authorized(r *http.Request) bool {
 	return subtle.ConstantTimeCompare([]byte(r.Header.Get(hookSecretHeader)), []byte(h.hookSecret)) == 1
 }
 
+// DecodeHookEventInput normalizes a Claude Code hook payload into Rig's hook
+// event input. Claude payloads carry no task ID; the task is resolved from the
+// hook's working directory by the task service.
 func DecodeHookEventInput(now func() time.Time, headerEventName string, body []byte) core.HookEventInput {
 	if now == nil {
 		now = time.Now
@@ -118,7 +121,7 @@ func DecodeHookEventInput(now func() time.Time, headerEventName string, body []b
 	input := core.HookEventInput{
 		OccurredAt:     now().UTC(),
 		EventName:      strings.TrimSpace(headerEventName),
-		Provider:       core.ProviderCodex,
+		Provider:       core.ProviderClaude,
 		RawPayloadJSON: string(bytes.TrimSpace(body)),
 	}
 
@@ -137,18 +140,15 @@ func DecodeHookEventInput(now func() time.Time, headerEventName string, body []b
 		input.EventName = "unknown"
 	}
 
-	input.TaskID = strings.TrimSpace(payload.TaskID)
 	input.SessionID = strings.TrimSpace(payload.SessionID)
-	input.TurnID = strings.TrimSpace(payload.TurnID)
-	input.ToolUseID = strings.TrimSpace(payload.ToolUseID)
 	input.Model = strings.TrimSpace(payload.Model)
 	input.Cwd = strings.TrimSpace(payload.Cwd)
 	input.TranscriptPath = strings.TrimSpace(payload.TranscriptPath)
 	input.StartSource = strings.TrimSpace(payload.Source)
-	input.LastAssistantMessage = strings.TrimSpace(payload.LastAssistantMessage)
 	input.PromptText = strings.TrimSpace(payload.Prompt)
 	input.CommandText = strings.TrimSpace(payload.ToolInput.Command)
 	input.CommandResultText = flattenPayloadText(payload.ToolResponse)
+	input.ToolUseID = strings.TrimSpace(payload.ToolUseID)
 	return input
 }
 
@@ -169,7 +169,7 @@ func (r *repository) HookEventToTaskStatus(input core.HookEventInput) (*core.Tas
 		phase = core.TaskStatusPhaseStarting
 	case "UserPromptSubmit", "PreToolUse", "PostToolUse":
 		phase = core.TaskStatusPhaseWorking
-	case "Stop", "PermissionRequest":
+	case "Stop", "Notification":
 		phase = core.TaskStatusPhaseWaitingForInput
 	default:
 		return nil, nil
@@ -177,7 +177,7 @@ func (r *repository) HookEventToTaskStatus(input core.HookEventInput) (*core.Tas
 
 	return &core.TaskStatusUpdate{
 		TaskID:       taskID,
-		Provider:     core.ProviderCodex,
+		Provider:     core.ProviderClaude,
 		Phase:        phase,
 		RawEventName: eventName,
 		ObservedAt:   input.OccurredAt,
@@ -185,19 +185,17 @@ func (r *repository) HookEventToTaskStatus(input core.HookEventInput) (*core.Tas
 }
 
 type hookPayload struct {
-	TaskID               string          `json:"task_id"`
-	SessionID            string          `json:"session_id"`
-	TurnID               string          `json:"turn_id"`
-	HookEventName        string          `json:"hook_event_name"`
-	Prompt               string          `json:"prompt"`
-	ToolUseID            string          `json:"tool_use_id"`
-	Model                string          `json:"model"`
-	Cwd                  string          `json:"cwd"`
-	TranscriptPath       string          `json:"transcript_path"`
-	Source               string          `json:"source"`
-	LastAssistantMessage string          `json:"last_assistant_message"`
-	ToolInput            hookToolInput   `json:"tool_input"`
-	ToolResponse         json.RawMessage `json:"tool_response"`
+	SessionID      string          `json:"session_id"`
+	HookEventName  string          `json:"hook_event_name"`
+	Prompt         string          `json:"prompt"`
+	ToolUseID      string          `json:"tool_use_id"`
+	Model          string          `json:"model"`
+	Cwd            string          `json:"cwd"`
+	TranscriptPath string          `json:"transcript_path"`
+	Source         string          `json:"source"`
+	Message        string          `json:"message"`
+	ToolInput      hookToolInput   `json:"tool_input"`
+	ToolResponse   json.RawMessage `json:"tool_response"`
 }
 
 type hookToolInput struct {

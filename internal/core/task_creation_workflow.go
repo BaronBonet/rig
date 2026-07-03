@@ -86,7 +86,7 @@ func createTaskFromPrompt(
 	input CreateTaskInput,
 	reporter TaskCreateProgressReporter,
 ) (*Task, error) {
-	providerClient, err := service.providerClientFor(input.Provider)
+	provider, providerClient, err := service.resolveCreateProvider(ctx, input.Provider)
 	if err != nil {
 		return nil, err
 	}
@@ -105,8 +105,7 @@ func createTaskFromPrompt(
 	taskSlug := uniqueTaskSlug(repoCtx.Root, suggestion.Name, existingTasks)
 	task := newPromptTaskRecord(
 		repoCtx,
-		input.Provider,
-		service.defaultProvider,
+		provider,
 		suggestion.Name,
 		taskSlug,
 		suggestion.BranchType,
@@ -150,6 +149,11 @@ func createTaskFromPullRequest(
 		return nil, fmt.Errorf("pull request source is required")
 	}
 
+	provider, _, err := service.resolveCreateProvider(ctx, input.Provider)
+	if err != nil {
+		return nil, err
+	}
+
 	existingTasks, err := service.tasks.ListTasks(ctx)
 	if err != nil {
 		return nil, err
@@ -169,8 +173,7 @@ func createTaskFromPullRequest(
 	taskSlug := uniqueTaskSlug(repoCtx.Root, pr.BranchName, existingTasks)
 	task := newPullRequestTaskRecord(
 		repoCtx,
-		input.Provider,
-		service.defaultProvider,
+		provider,
 		prDisplayName(*pr),
 		taskSlug,
 		pr.BranchName,
@@ -198,6 +201,31 @@ func createTaskFromPullRequest(
 		return task, err
 	}
 	return task, nil
+}
+
+// resolveCreateProvider resolves the provider a new task will use, defaulting
+// to the user's default provider, and returns its configured adapter client.
+func (s *taskService) resolveCreateProvider(
+	ctx context.Context,
+	provider Provider,
+) (Provider, ProviderClient, error) {
+	setup, err := s.GetProviderSetup(ctx)
+	if err != nil {
+		return "", nil, err
+	}
+	if setup == nil {
+		return "", nil, ErrProviderSetupRequired
+	}
+
+	if provider == "" {
+		provider = setup.Default
+	}
+	providerClient, err := s.configuredClientFor(ctx, provider)
+	if err != nil {
+		return "", nil, err
+	}
+
+	return provider, providerClient, nil
 }
 
 func taskCreationSteps(
@@ -332,15 +360,10 @@ func markTaskCreationReady(ctx context.Context, service *taskService, task *Task
 func newPromptTaskRecord(
 	repoCtx RepoContext,
 	provider Provider,
-	defaultProvider Provider,
 	displayName string,
 	taskSlug string,
 	branchType string,
 ) *Task {
-	if provider == "" {
-		provider = defaultProvider
-	}
-
 	now := time.Now().UTC()
 	taskID := fmt.Sprintf("%d", now.UnixNano())
 
@@ -363,15 +386,10 @@ func newPromptTaskRecord(
 func newPullRequestTaskRecord(
 	repoCtx RepoContext,
 	provider Provider,
-	defaultProvider Provider,
 	displayName string,
 	taskSlug string,
 	branchName string,
 ) *Task {
-	if provider == "" {
-		provider = defaultProvider
-	}
-
 	now := time.Now().UTC()
 	taskID := fmt.Sprintf("%d", now.UnixNano())
 
