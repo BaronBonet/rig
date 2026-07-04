@@ -82,6 +82,12 @@ type WorkspaceBootstrapFile struct {
 	Path     string
 	Content  []byte
 	FileMode os.FileMode
+	// Merge, when non-nil, integrates this file into an existing destination
+	// instead of overwriting it: the workspace manager calls it with the
+	// current file contents and writes the result, preserving content the
+	// provider does not own. When the destination does not exist, Content is
+	// written as-is.
+	Merge func(existing []byte) ([]byte, error)
 }
 
 // TaskStatusPhase is the small application-facing runtime status model used by
@@ -195,6 +201,20 @@ type Provider string
 const (
 	ProviderCodex  Provider = "codex"
 	ProviderClaude Provider = "claude"
+)
+
+// Canonical provider hook event names. HookEventInput.EventName carries these
+// values across the provider seam: provider adapters declare which of them
+// they observe (and forward them by name), and task observation consumes them
+// for status, activity, and provider adoption.
+const (
+	HookEventSessionStart      = "SessionStart"
+	HookEventUserPromptSubmit  = "UserPromptSubmit"
+	HookEventPreToolUse        = "PreToolUse"
+	HookEventPostToolUse       = "PostToolUse"
+	HookEventStop              = "Stop"
+	HookEventNotification      = "Notification"
+	HookEventPermissionRequest = "PermissionRequest"
 )
 
 // SupportedProviders returns every provider Rig knows how to integrate with,

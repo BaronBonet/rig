@@ -11,11 +11,13 @@ import (
 // enterProviderSetupMode opens the mandatory provider setup screen and kicks
 // off provider detection.
 func (m model) enterProviderSetupMode() (tea.Model, tea.Cmd) {
-	m.mode = modeProviderSetup
-	m.setupRows = nil
-	m.setupSelected = 0
-	m.setupDetecting = true
-	m.setupSaving = false
+	if !m.transition(modeProviderSetup) {
+		return m, nil
+	}
+	m.setupForm.rows = nil
+	m.setupForm.selected = 0
+	m.setupForm.detecting = true
+	m.setupForm.saving = false
 	return m, detectProvidersCmd(m.statusContext, m.frontend)
 }
 
@@ -37,11 +39,11 @@ func (m *model) applyProviderDetections(detections []core.ProviderDetection) {
 			enabled:  enabled && detection.Ready,
 		})
 	}
-	m.setupRows = rows
+	m.setupForm.rows = rows
 
-	m.setupDefault = ""
+	m.setupForm.defaultProvider = ""
 	if m.providerSetup != nil {
-		m.setupDefault = m.providerSetup.Default
+		m.setupForm.defaultProvider = m.providerSetup.Default
 	}
 	m.normalizeSetupDefault()
 }
@@ -50,74 +52,65 @@ func (m *model) applyProviderDetections(detections []core.ProviderDetection) {
 // enabled provider, falling back to the first enabled one.
 func (m *model) normalizeSetupDefault() {
 	var firstEnabled core.Provider
-	for _, row := range m.setupRows {
+	for _, row := range m.setupForm.rows {
 		if !row.enabled {
 			continue
 		}
 		if firstEnabled == "" {
 			firstEnabled = row.provider
 		}
-		if row.provider == m.setupDefault {
+		if row.provider == m.setupForm.defaultProvider {
 			return
 		}
 	}
-	m.setupDefault = firstEnabled
+	m.setupForm.defaultProvider = firstEnabled
 }
 
 func (m model) updateProviderSetup(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
-	if m.setupSaving {
+	if m.setupForm.saving {
 		return m, nil
 	}
 
 	switch msg.String() {
 	case "q", "esc":
-		// Provider setup is mandatory: without a valid setup the only way out
-		// is quitting rig entirely.
-		if m.providerSetup == nil || m.setupOnly {
-			if m.cancelStatus != nil {
-				m.cancelStatus()
-			}
-			return m, tea.Quit
-		}
-		m.mode = modeBrowse
-		return m, nil
+		return m.handleBack()
 	case "j", "down":
-		if m.setupSelected < len(m.setupRows)-1 {
-			m.setupSelected++
+		if m.setupForm.selected < len(m.setupForm.rows)-1 {
+			m.setupForm.selected++
 		}
 		return m, nil
 	case "k", "up":
-		if m.setupSelected > 0 {
-			m.setupSelected--
+		if m.setupForm.selected > 0 {
+			m.setupForm.selected--
 		}
 		return m, nil
 	case " ", "space":
-		if m.setupSelected >= 0 && m.setupSelected < len(m.setupRows) {
-			row := &m.setupRows[m.setupSelected]
+		if m.setupForm.selected >= 0 && m.setupForm.selected < len(m.setupForm.rows) {
+			row := &m.setupForm.rows[m.setupForm.selected]
 			if row.ready {
 				row.enabled = !row.enabled
-				m.setupErr = nil
+				m.setupForm.err = nil
 				m.normalizeSetupDefault()
 			}
 		}
 		return m, nil
 	case "d":
-		if m.setupSelected >= 0 && m.setupSelected < len(m.setupRows) {
-			row := m.setupRows[m.setupSelected]
+		if m.setupForm.selected >= 0 && m.setupForm.selected < len(m.setupForm.rows) {
+			row := m.setupForm.rows[m.setupForm.selected]
 			if row.enabled {
-				m.setupDefault = row.provider
-				m.setupErr = nil
+				m.setupForm.defaultProvider = row.provider
+				m.setupForm.err = nil
 			}
 		}
 		return m, nil
 	case "enter":
 		setup := m.setupSelection()
 		if len(setup.Configured) == 0 {
-			m.setupErr = errors.New("enable at least one provider to use rig")
+			m.setupForm.err = errors.New("enable at least one provider to use rig")
 			return m, nil
 		}
-		m.setupSaving = true
-		m.setupErr = nil
+		m.setupForm.saving = true
+		m.setupForm.err = nil
 		return m, saveProviderSetupCmd(m.statusContext, m.frontend, setup)
 	default:
 		return m, nil
@@ -126,8 +119,8 @@ func (m model) updateProviderSetup(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 
 // setupSelection converts the setup rows into the provider setup to persist.
 func (m model) setupSelection() core.ProviderSetup {
-	setup := core.ProviderSetup{Default: m.setupDefault}
-	for _, row := range m.setupRows {
+	setup := core.ProviderSetup{Default: m.setupForm.defaultProvider}
+	for _, row := range m.setupForm.rows {
 		if row.enabled {
 			setup.Configured = append(setup.Configured, row.provider)
 		}
@@ -141,7 +134,7 @@ func (m model) setupSelection() core.ProviderSetup {
 // enterSwitchProviderMode opens the provider switch picker for the selected
 // task, listing only configured providers other than the active one.
 func (m model) enterSwitchProviderMode() (tea.Model, tea.Cmd) {
-	if m.createPending || m.deletePending || m.switchPending {
+	if m.pending != opNone {
 		return m, nil
 	}
 	row := m.selectedRow()
@@ -160,43 +153,45 @@ func (m model) enterSwitchProviderMode() (tea.Model, tea.Cmd) {
 		return m, nil
 	}
 
+	if !m.transition(modeSwitchProvider) {
+		return m, nil
+	}
 	m.err = nil
-	m.mode = modeSwitchProvider
-	m.switchOptions = options
-	m.switchSelected = 0
+	m.providerSwitch.options = options
+	m.providerSwitch.selected = 0
 	return m, nil
 }
 
 func (m model) updateSwitchProvider(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
-	if m.switchPending {
+	if m.pending != opNone {
 		return m, nil
 	}
 
 	switch msg.String() {
 	case "q", "esc":
-		m.mode = modeBrowse
-		return m, nil
+		return m.handleBack()
 	case "j", "down":
-		if m.switchSelected < len(m.switchOptions)-1 {
-			m.switchSelected++
+		if m.providerSwitch.selected < len(m.providerSwitch.options)-1 {
+			m.providerSwitch.selected++
 		}
 		return m, nil
 	case "k", "up":
-		if m.switchSelected > 0 {
-			m.switchSelected--
+		if m.providerSwitch.selected > 0 {
+			m.providerSwitch.selected--
 		}
 		return m, nil
 	case "enter":
 		row := m.selectedRow()
 		if row == nil || row.task == nil ||
-			m.switchSelected < 0 || m.switchSelected >= len(m.switchOptions) {
-			m.mode = modeBrowse
+			m.providerSwitch.selected < 0 || m.providerSwitch.selected >= len(m.providerSwitch.options) {
+			m.transition(modeBrowse)
 			return m, nil
 		}
-		m.switchPending = true
+		m.pending = opSwitching
 		m.shimmerTick = 0
+		target := m.providerSwitch.options[m.providerSwitch.selected]
 		return m, tea.Batch(
-			switchTaskProviderCmd(m.statusContext, m.frontend, taskID(row.task), m.switchOptions[m.switchSelected]),
+			switchTaskProviderCmd(m.statusContext, m.frontend, taskID(row.task), target),
 			shimmerTickCmd(),
 		)
 	default:

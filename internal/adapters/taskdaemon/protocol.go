@@ -6,60 +6,59 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"io"
 	"net"
 	"strings"
 	"sync"
-
-	"github.com/BaronBonet/rig/internal/core"
 )
 
 var currentFrontendBuildVersion = "dev"
 
-const currentFrontendProtocolVersion = 8
+const currentFrontendProtocolVersion = 9
+
+// socketRequest is one frontend request on the daemon socket. Payload carries
+// the operation's typed request body; its shape per command is declared in
+// operations.go.
+type socketRequest struct {
+	Command string          `json:"command"`
+	Payload json.RawMessage `json:"payload,omitempty"`
+}
+
+// socketEnvelope is one daemon response frame. Payload carries the
+// operation's typed response body; its shape per command is declared in
+// operations.go.
+type socketEnvelope struct {
+	Type    string          `json:"type"`
+	OK      bool            `json:"ok,omitempty"`
+	Error   string          `json:"error,omitempty"`
+	Payload json.RawMessage `json:"payload,omitempty"`
+}
+
+const socketEnvelopeError = "error"
+
+// handshakeEnvelope is the version-negotiation response shape. It must stay
+// wire-compatible across every daemon version: the frontend uses these three
+// probes to detect a mismatched daemon and restart it, so both ends must be
+// able to parse the other's handshake regardless of version. Everything else
+// on the wire may change freely with a protocol version bump. See
+// docs/adr/0002-version-locked-socket-protocol.md.
+type handshakeEnvelope struct {
+	Type            string `json:"type"`
+	Error           string `json:"error,omitempty"`
+	Version         string `json:"version,omitempty"`
+	ProtocolVersion int    `json:"protocol_version,omitempty"`
+	OK              bool   `json:"ok,omitempty"`
+}
 
 const (
-	socketCommandCreateTask           = "create_task"
-	socketCommandDeleteTask           = "delete_task"
-	socketCommandDetectProviders      = "detect_providers"
+	socketCommandHealth               = "health"
+	socketCommandProtocolVersion      = "protocol_version"
 	socketCommandFrontendBuildVersion = "frontend_build_version"
-	socketCommandGetProviderSetup     = "get_provider_setup"
-	socketCommandGetTaskActivity      = "get_task_activity"
-	// #nosec G101 -- socket command name, not a credential.
-	socketCommandGetTaskTokenUsage     = "get_task_token_usage"
-	socketCommandHealth                = "health"
-	socketCommandLatestTaskStatus      = "latest_task_status"
-	socketCommandListRepoPullRequests  = "list_repo_pull_requests"
-	socketCommandListTasks             = "list_tasks"
-	socketCommandProtocolVersion       = "protocol_version"
-	socketCommandPullRequestStatus     = "pull_request_status"
-	socketCommandReconnectTaskSession  = "reconnect_task_session"
-	socketCommandRetryTaskCreation     = "retry_task_creation"
-	socketCommandSaveProviderSetup     = "save_provider_setup"
-	socketCommandStop                  = "stop"
-	socketCommandSubscribeTaskStatus   = "subscribe_task_status"
-	socketCommandSwitchTaskProvider    = "switch_task_provider"
-	socketEnvelopeError                = "error"
-	socketEnvelopeProviderDetections   = "provider_detections"
-	socketEnvelopeProviderSetup        = "provider_setup"
-	socketEnvelopeProviderSetupSaved   = "provider_setup_saved"
-	socketEnvelopeTaskProviderSwitched = "task_provider_switched"
-	socketEnvelopeFrontendBuildVersion = "frontend_build_version"
-	socketEnvelopeHealth               = "health"
-	socketEnvelopeProtocolVersion      = "protocol_version"
-	socketEnvelopeRepoPullRequestsList = "repo_pull_requests_list"
-	socketEnvelopeSubscribed           = "subscribed"
-	socketEnvelopeStopping             = "stopping"
-	socketEnvelopeTaskActivity         = "task_activity"
-	socketEnvelopeTaskCreated          = "task_created"
-	socketEnvelopeTaskCreateProgress   = "task_create_progress"
-	socketEnvelopeTaskDeleted          = "task_deleted"
-	socketEnvelopeTaskSessionReconnect = "task_session_reconnected"
-	socketEnvelopeTaskStatusSnapshot   = "task_status_snapshot"
-	socketEnvelopeTaskStatusUpdate     = "task_status_update"
-	socketEnvelopeTaskTokenUsage       = "task_token_usage"
-	socketEnvelopeTasksList            = "tasks_list"
-	socketEnvelopePullRequestStatus    = "pull_request_status"
+	socketCommandStop                 = "stop"
+
+	handshakeEnvelopeHealth               = "health"
+	handshakeEnvelopeProtocolVersion      = "protocol_version"
+	handshakeEnvelopeFrontendBuildVersion = "frontend_build_version"
+	handshakeEnvelopeStopping             = "stopping"
 )
 
 func SetFrontendBuildVersion(version string) {
@@ -73,35 +72,6 @@ func SetFrontendBuildVersion(version string) {
 // FrontendBuildVersion returns the build version embedded in the current frontend binary.
 func FrontendBuildVersion() string {
 	return currentFrontendBuildVersion
-}
-
-type socketRequest struct {
-	Input         *core.CreateTaskInput `json:"input,omitempty"`
-	ProviderSetup *core.ProviderSetup   `json:"provider_setup,omitempty"`
-	Command       string                `json:"command"`
-	Cwd           string                `json:"cwd,omitempty"`
-	BranchName    string                `json:"branch_name,omitempty"`
-	Provider      core.Provider         `json:"provider,omitempty"`
-	Limit         int                   `json:"limit,omitempty"`
-	TaskID        string                `json:"task_id,omitempty"`
-}
-
-type socketEnvelope struct {
-	Type            string                        `json:"type"`
-	Error           string                        `json:"error,omitempty"`
-	Activity        []core.TaskActivityEvent      `json:"activity,omitempty"`
-	Version         string                        `json:"version,omitempty"`
-	Task            *core.Task                    `json:"task,omitempty"`
-	CreateProgress  *core.TaskCreateProgressEvent `json:"create_progress,omitempty"`
-	Update          *core.TaskStatusUpdate        `json:"update,omitempty"`
-	Usage           *core.TaskTokenUsage          `json:"usage,omitempty"`
-	PR              *core.PRStatus                `json:"pr,omitempty"`
-	ProviderSetup   *core.ProviderSetup           `json:"provider_setup,omitempty"`
-	Detections      []core.ProviderDetection      `json:"detections,omitempty"`
-	Tasks           []*core.Task                  `json:"tasks,omitempty"`
-	PullRequests    []core.RepoPullRequest        `json:"pull_requests,omitempty"`
-	ProtocolVersion int                           `json:"protocol_version,omitempty"`
-	OK              bool                          `json:"ok,omitempty"`
 }
 
 func dialDaemonSocket(ctx context.Context, socketPath string) (net.Conn, error) {
@@ -120,6 +90,28 @@ func dialDaemonSocket(ctx context.Context, socketPath string) (net.Conn, error) 
 	return conn, nil
 }
 
+func sendHandshakeProbe(ctx context.Context, socketPath string, command string) (handshakeEnvelope, error) {
+	operationCtx, cancel := context.WithTimeout(ctx, socketOperationTimeout)
+	defer cancel()
+
+	conn, err := dialDaemonSocket(operationCtx, socketPath)
+	if err != nil {
+		return handshakeEnvelope{}, err
+	}
+	defer conn.Close()
+
+	if err := json.NewEncoder(conn).Encode(socketRequest{Command: command}); err != nil {
+		return handshakeEnvelope{}, err
+	}
+
+	var resp handshakeEnvelope
+	if err := json.NewDecoder(bufio.NewReader(conn)).Decode(&resp); err != nil {
+		return handshakeEnvelope{}, err
+	}
+
+	return resp, nil
+}
+
 func probeSocketHealth(ctx context.Context, socketPath string) error {
 	operationCtx, cancel := context.WithTimeout(ctx, socketOperationTimeout)
 	defer cancel()
@@ -133,7 +125,7 @@ func probeSocketHealth(ctx context.Context, socketPath string) error {
 	var (
 		writeErr error
 		readErr  error
-		resp     socketEnvelope
+		resp     handshakeEnvelope
 	)
 
 	var wg sync.WaitGroup
@@ -154,7 +146,7 @@ func probeSocketHealth(ctx context.Context, socketPath string) error {
 	if readErr != nil {
 		return readErr
 	}
-	if resp.Type != socketEnvelopeHealth || !resp.OK {
+	if resp.Type != handshakeEnvelopeHealth || !resp.OK {
 		if resp.Error != "" {
 			return fmt.Errorf("task daemon unhealthy: %s", resp.Error)
 		}
@@ -165,27 +157,14 @@ func probeSocketHealth(ctx context.Context, socketPath string) error {
 }
 
 func probeFrontendBuildVersion(ctx context.Context, socketPath string) error {
-	operationCtx, cancel := context.WithTimeout(ctx, socketOperationTimeout)
-	defer cancel()
-
-	conn, err := dialDaemonSocket(operationCtx, socketPath)
+	resp, err := sendHandshakeProbe(ctx, socketPath, socketCommandFrontendBuildVersion)
 	if err != nil {
-		return err
-	}
-	defer conn.Close()
-
-	if err := json.NewEncoder(conn).Encode(socketRequest{Command: socketCommandFrontendBuildVersion}); err != nil {
-		return err
-	}
-
-	var resp socketEnvelope
-	if err := json.NewDecoder(bufio.NewReader(conn)).Decode(&resp); err != nil {
 		return err
 	}
 	if resp.Type == socketEnvelopeError && resp.Error != "" {
 		return errors.New(resp.Error)
 	}
-	if resp.Type != socketEnvelopeFrontendBuildVersion || !resp.OK {
+	if resp.Type != handshakeEnvelopeFrontendBuildVersion || !resp.OK {
 		return fmt.Errorf("task daemon build version probe failed")
 	}
 	if resp.Version != currentFrontendBuildVersion {
@@ -200,27 +179,14 @@ func probeFrontendBuildVersion(ctx context.Context, socketPath string) error {
 }
 
 func probeFrontendProtocol(ctx context.Context, socketPath string) error {
-	operationCtx, cancel := context.WithTimeout(ctx, socketOperationTimeout)
-	defer cancel()
-
-	conn, err := dialDaemonSocket(operationCtx, socketPath)
+	resp, err := sendHandshakeProbe(ctx, socketPath, socketCommandProtocolVersion)
 	if err != nil {
-		return err
-	}
-	defer conn.Close()
-
-	if err := json.NewEncoder(conn).Encode(socketRequest{Command: socketCommandProtocolVersion}); err != nil {
-		return err
-	}
-
-	var resp socketEnvelope
-	if err := json.NewDecoder(bufio.NewReader(conn)).Decode(&resp); err != nil {
 		return err
 	}
 	if resp.Type == socketEnvelopeError && resp.Error != "" {
 		return errors.New(resp.Error)
 	}
-	if resp.Type != socketEnvelopeProtocolVersion || !resp.OK {
+	if resp.Type != handshakeEnvelopeProtocolVersion || !resp.OK {
 		return fmt.Errorf("task daemon protocol probe failed")
 	}
 	if resp.ProtocolVersion != currentFrontendProtocolVersion {
@@ -232,43 +198,4 @@ func probeFrontendProtocol(ctx context.Context, socketPath string) error {
 	}
 
 	return nil
-}
-
-func receiveTaskCreateEvent(decoder *json.Decoder) (core.TaskCreateEvent, error) {
-	var msg socketEnvelope
-	if err := decoder.Decode(&msg); err != nil {
-		if errors.Is(err, io.EOF) {
-			return core.TaskCreateEvent{}, err
-		}
-		return core.TaskCreateEvent{}, err
-	}
-
-	switch {
-	case msg.Type == socketEnvelopeTaskCreateProgress && msg.CreateProgress != nil:
-		return core.TaskCreateEvent{Progress: msg.CreateProgress}, nil
-	case msg.Type == socketEnvelopeTaskCreated && msg.Task != nil:
-		return core.TaskCreateEvent{Task: msg.Task}, nil
-	case msg.Type == socketEnvelopeError && msg.Error != "":
-		return core.TaskCreateEvent{Err: errors.New(msg.Error), Task: msg.Task}, nil
-	default:
-		return core.TaskCreateEvent{}, fmt.Errorf("unexpected %s response %q", socketCommandCreateTask, msg.Type)
-	}
-}
-
-func receiveTaskStatusUpdate(decoder *json.Decoder) (*core.TaskStatusUpdate, error) {
-	var msg socketEnvelope
-	if err := decoder.Decode(&msg); err != nil {
-		if errors.Is(err, io.EOF) {
-			return nil, err
-		}
-		return nil, err
-	}
-	if msg.Type == socketEnvelopeError && msg.Error != "" {
-		return nil, errors.New(msg.Error)
-	}
-	if msg.Type != socketEnvelopeTaskStatusUpdate || msg.Update == nil {
-		return nil, fmt.Errorf("unexpected %s stream message %q", socketCommandSubscribeTaskStatus, msg.Type)
-	}
-
-	return msg.Update, nil
 }

@@ -10,6 +10,29 @@ import (
 	slugpkg "github.com/BaronBonet/rig/internal/pkg/slug"
 )
 
+// taskCreation is the Task creation module: it turns a prompt or pull request
+// source into a persisted task record, an isolated worktree, a prepared
+// workspace, and a started provider session, reporting coarse-grained
+// progress along the way. Failed creations persist the failed step and are
+// retryable from that step.
+type taskCreation struct {
+	tasks       TaskRepository
+	gitWorktree GitWorktreeClient
+	launcher    *sessionLauncher
+}
+
+func newTaskCreation(
+	tasks TaskRepository,
+	gitWorktree GitWorktreeClient,
+	launcher *sessionLauncher,
+) *taskCreation {
+	return &taskCreation{
+		tasks:       tasks,
+		gitWorktree: gitWorktree,
+		launcher:    launcher,
+	}
+}
+
 type taskCreationStepAction struct {
 	step TaskCreateProgressStep
 	run  func(context.Context) error
@@ -22,31 +45,63 @@ const (
 	taskCreationStepPersistenceEachStep
 )
 
-func createTaskWithProgress(
+// CreateTaskStream creates a new task and streams progress events followed by
+// exactly one terminal result event. The stream lifetime is owned by ctx.
+func (c *taskCreation) CreateTaskStream(
 	ctx context.Context,
-	service *taskService,
+	input CreateTaskInput,
+) (<-chan TaskCreateEvent, error) {
+	return c.taskCreateEventStream(
+		ctx,
+		func(ctx context.Context, reporter TaskCreateProgressReporter) (*Task, error) {
+			return c.CreateTaskWithProgress(ctx, input, reporter)
+		},
+	)
+}
+
+// RetryTaskCreationStream resumes a failed task creation and streams the same
+// progress milestones as initial creation, followed by exactly one terminal
+// result event.
+func (c *taskCreation) RetryTaskCreationStream(
+	ctx context.Context,
+	taskID string,
+) (<-chan TaskCreateEvent, error) {
+	return c.taskCreateEventStream(
+		ctx,
+		func(ctx context.Context, reporter TaskCreateProgressReporter) (*Task, error) {
+			return c.RetryTaskCreationWithProgress(ctx, taskID, reporter)
+		},
+	)
+}
+
+// CreateTaskWithProgress creates a new task while reporting coarse-grained
+// creation milestones to the provided reporter when non-nil.
+func (c *taskCreation) CreateTaskWithProgress(
+	ctx context.Context,
 	input CreateTaskInput,
 	reporter TaskCreateProgressReporter,
 ) (*Task, error) {
-	repoCtx, err := service.gitWorktree.DetectRepo(ctx, input.Cwd)
+	repoCtx, err := c.gitWorktree.DetectRepo(ctx, input.Cwd)
 	if err != nil {
 		return nil, err
 	}
 
 	if input.Source.PullRequest != nil {
-		return createTaskFromPullRequest(ctx, service, repoCtx, input, reporter)
+		return c.createTaskFromPullRequest(ctx, repoCtx, input, reporter)
 	}
 
-	return createTaskFromPrompt(ctx, service, repoCtx, input, reporter)
+	return c.createTaskFromPrompt(ctx, repoCtx, input, reporter)
 }
 
-func retryTaskCreationWithProgress(
+// RetryTaskCreationWithProgress resumes a failed task creation from its
+// recorded failed step while reporting the same progress milestones as
+// initial creation.
+func (c *taskCreation) RetryTaskCreationWithProgress(
 	ctx context.Context,
-	service *taskService,
 	taskID string,
 	reporter TaskCreateProgressReporter,
 ) (*Task, error) {
-	task, err := service.taskByID(ctx, taskID)
+	task, err := taskByID(ctx, c.tasks, taskID)
 	if err != nil {
 		return nil, err
 	}
@@ -54,39 +109,30 @@ func retryTaskCreationWithProgress(
 		return nil, fmt.Errorf("task creation is not failed")
 	}
 
-	steps, ok := taskCreationStepsFrom(taskCreationSteps(
-		service,
+	steps, ok := taskCreationStepsFrom(c.creationSteps(
 		task,
 		task.RepoRoot,
 		func(ctx context.Context) error {
-			return service.gitWorktree.CreateTaskWorkspace(ctx, task)
+			return c.gitWorktree.CreateTaskWorkspace(ctx, task)
 		},
 	), task.CreationStep)
 	if !ok {
 		return nil, fmt.Errorf("task creation failed step %q is not retryable", task.CreationStep)
 	}
 
-	if err := runTaskCreationSteps(
-		ctx,
-		service,
-		task,
-		reporter,
-		steps,
-		taskCreationStepPersistenceEachStep,
-	); err != nil {
+	if err := c.runSteps(ctx, task, reporter, steps, taskCreationStepPersistenceEachStep); err != nil {
 		return task, err
 	}
 	return task, nil
 }
 
-func createTaskFromPrompt(
+func (c *taskCreation) createTaskFromPrompt(
 	ctx context.Context,
-	service *taskService,
 	repoCtx RepoContext,
 	input CreateTaskInput,
 	reporter TaskCreateProgressReporter,
 ) (*Task, error) {
-	provider, providerClient, err := service.resolveCreateProvider(ctx, input.Provider)
+	provider, providerClient, err := c.launcher.resolveProvider(ctx, input.Provider)
 	if err != nil {
 		return nil, err
 	}
@@ -97,7 +143,7 @@ func createTaskFromPrompt(
 		return nil, err
 	}
 
-	existingTasks, err := service.tasks.ListTasks(ctx)
+	existingTasks, err := c.tasks.ListTasks(ctx)
 	if err != nil {
 		return nil, err
 	}
@@ -112,34 +158,25 @@ func createTaskFromPrompt(
 	)
 	task.Prompt = input.Prompt
 
-	if err := service.tasks.CreateTask(ctx, task); err != nil {
+	if err := c.tasks.CreateTask(ctx, task); err != nil {
 		return nil, err
 	}
 
-	steps := taskCreationSteps(
-		service,
+	steps := c.creationSteps(
 		task,
 		repoCtx.Root,
 		func(ctx context.Context) error {
-			return service.gitWorktree.CreateTaskWorkspace(ctx, task)
+			return c.gitWorktree.CreateTaskWorkspace(ctx, task)
 		},
 	)
-	if err := runTaskCreationSteps(
-		ctx,
-		service,
-		task,
-		reporter,
-		steps,
-		taskCreationStepPersistenceReadyOnly,
-	); err != nil {
+	if err := c.runSteps(ctx, task, reporter, steps, taskCreationStepPersistenceReadyOnly); err != nil {
 		return task, err
 	}
 	return task, nil
 }
 
-func createTaskFromPullRequest(
+func (c *taskCreation) createTaskFromPullRequest(
 	ctx context.Context,
-	service *taskService,
 	repoCtx RepoContext,
 	input CreateTaskInput,
 	reporter TaskCreateProgressReporter,
@@ -149,12 +186,12 @@ func createTaskFromPullRequest(
 		return nil, fmt.Errorf("pull request source is required")
 	}
 
-	provider, _, err := service.resolveCreateProvider(ctx, input.Provider)
+	provider, _, err := c.launcher.resolveProvider(ctx, input.Provider)
 	if err != nil {
 		return nil, err
 	}
 
-	existingTasks, err := service.tasks.ListTasks(ctx)
+	existingTasks, err := c.tasks.ListTasks(ctx)
 	if err != nil {
 		return nil, err
 	}
@@ -162,7 +199,7 @@ func createTaskFromPullRequest(
 		return nil, fmt.Errorf("PR already has workspace")
 	}
 
-	inUseByWorktree, err := service.gitWorktree.IsBranchUsedByWorktree(ctx, repoCtx.Root, pr.BranchName)
+	inUseByWorktree, err := c.gitWorktree.IsBranchUsedByWorktree(ctx, repoCtx.Root, pr.BranchName)
 	if err != nil {
 		return nil, err
 	}
@@ -178,58 +215,24 @@ func createTaskFromPullRequest(
 		taskSlug,
 		pr.BranchName,
 	)
-	if err := service.tasks.CreateTask(ctx, task); err != nil {
+	if err := c.tasks.CreateTask(ctx, task); err != nil {
 		return nil, err
 	}
 
-	steps := taskCreationSteps(
-		service,
+	steps := c.creationSteps(
 		task,
 		repoCtx.Root,
 		func(ctx context.Context) error {
-			return service.gitWorktree.CreateTaskWorkspaceFromPullRequest(ctx, task, pr.Number)
+			return c.gitWorktree.CreateTaskWorkspaceFromPullRequest(ctx, task, pr.Number)
 		},
 	)
-	if err := runTaskCreationSteps(
-		ctx,
-		service,
-		task,
-		reporter,
-		steps,
-		taskCreationStepPersistenceReadyOnly,
-	); err != nil {
+	if err := c.runSteps(ctx, task, reporter, steps, taskCreationStepPersistenceReadyOnly); err != nil {
 		return task, err
 	}
 	return task, nil
 }
 
-// resolveCreateProvider resolves the provider a new task will use, defaulting
-// to the user's default provider, and returns its configured adapter client.
-func (s *taskService) resolveCreateProvider(
-	ctx context.Context,
-	provider Provider,
-) (Provider, ProviderClient, error) {
-	setup, err := s.GetProviderSetup(ctx)
-	if err != nil {
-		return "", nil, err
-	}
-	if setup == nil {
-		return "", nil, ErrProviderSetupRequired
-	}
-
-	if provider == "" {
-		provider = setup.Default
-	}
-	providerClient, err := s.configuredClientFor(ctx, provider)
-	if err != nil {
-		return "", nil, err
-	}
-
-	return provider, providerClient, nil
-}
-
-func taskCreationSteps(
-	service *taskService,
+func (c *taskCreation) creationSteps(
 	task *Task,
 	repoRoot string,
 	createWorktree func(context.Context) error,
@@ -247,13 +250,13 @@ func taskCreationSteps(
 		{
 			step: TaskCreateProgressPreparingWorkspace,
 			run: func(ctx context.Context) error {
-				return service.prepareTaskWorkspace(ctx, task, repoRoot)
+				return c.launcher.prepareWorkspace(ctx, task, repoRoot)
 			},
 		},
 		{
 			step: TaskCreateProgressStartingSession,
 			run: func(ctx context.Context) error {
-				_, err := service.startTaskRuntime(ctx, task)
+				_, err := c.launcher.startSession(ctx, task)
 				return err
 			},
 		},
@@ -272,9 +275,8 @@ func taskCreationStepsFrom(
 	return nil, false
 }
 
-func runTaskCreationSteps(
+func (c *taskCreation) runSteps(
 	ctx context.Context,
-	service *taskService,
 	task *Task,
 	reporter TaskCreateProgressReporter,
 	steps []taskCreationStepAction,
@@ -283,16 +285,16 @@ func runTaskCreationSteps(
 	for _, action := range steps {
 		reportTaskCreateProgress(reporter, action.step)
 		if stepPersistence == taskCreationStepPersistenceEachStep {
-			if err := markTaskCreationStep(ctx, service, task, action.step); err != nil {
+			if err := c.markStep(ctx, task, action.step); err != nil {
 				return err
 			}
 		}
 		if err := action.run(ctx); err != nil {
-			return markTaskCreationFailed(ctx, service, task, action.step, err)
+			return c.markFailed(ctx, task, action.step, err)
 		}
 	}
 
-	return markTaskCreationReady(ctx, service, task)
+	return c.markReady(ctx, task)
 }
 
 func reportTaskCreateProgress(reporter TaskCreateProgressReporter, step TaskCreateProgressStep) {
@@ -301,6 +303,43 @@ func reportTaskCreateProgress(reporter TaskCreateProgressReporter, step TaskCrea
 	}
 
 	reporter.ReportTaskCreateProgress(step)
+}
+
+// taskCreateChanReporter bridges the workflow's progress reporter onto a
+// TaskCreateEvent channel without blocking past ctx cancellation.
+type taskCreateChanReporter struct {
+	ctx    context.Context
+	events chan<- TaskCreateEvent
+}
+
+func (r taskCreateChanReporter) ReportTaskCreateProgress(step TaskCreateProgressStep) {
+	select {
+	case <-r.ctx.Done():
+	case r.events <- TaskCreateEvent{Progress: &TaskCreateProgressEvent{Step: step}}:
+	}
+}
+
+func (c *taskCreation) taskCreateEventStream(
+	ctx context.Context,
+	run func(context.Context, TaskCreateProgressReporter) (*Task, error),
+) (<-chan TaskCreateEvent, error) {
+	events := make(chan TaskCreateEvent, 8)
+
+	go func() {
+		defer close(events)
+
+		task, err := run(ctx, taskCreateChanReporter{ctx: ctx, events: events})
+		terminal := TaskCreateEvent{Task: task}
+		if err != nil {
+			terminal = TaskCreateEvent{Err: err, Task: task}
+		}
+		select {
+		case <-ctx.Done():
+		case events <- terminal:
+		}
+	}()
+
+	return events, nil
 }
 
 func suggestTaskName(ctx context.Context, providerClient ProviderClient, prompt string) (TaskSuggestion, error) {
@@ -317,9 +356,8 @@ func suggestTaskName(ctx context.Context, providerClient ProviderClient, prompt 
 	return suggestion, nil
 }
 
-func markTaskCreationStep(
+func (c *taskCreation) markStep(
 	ctx context.Context,
-	service *taskService,
 	task *Task,
 	step TaskCreateProgressStep,
 ) error {
@@ -327,12 +365,11 @@ func markTaskCreationStep(
 	task.CreationStep = step
 	task.CreationError = ""
 	task.UpdatedAt = time.Now().UTC()
-	return service.tasks.UpdateTask(ctx, task)
+	return c.tasks.UpdateTask(ctx, task)
 }
 
-func markTaskCreationFailed(
+func (c *taskCreation) markFailed(
 	ctx context.Context,
-	service *taskService,
 	task *Task,
 	step TaskCreateProgressStep,
 	cause error,
@@ -343,18 +380,18 @@ func markTaskCreationFailed(
 		task.CreationError = cause.Error()
 	}
 	task.UpdatedAt = time.Now().UTC()
-	if err := service.tasks.UpdateTask(ctx, task); err != nil {
+	if err := c.tasks.UpdateTask(ctx, task); err != nil {
 		return fmt.Errorf("%w; persist task creation failure: %w", cause, err)
 	}
 	return cause
 }
 
-func markTaskCreationReady(ctx context.Context, service *taskService, task *Task) error {
+func (c *taskCreation) markReady(ctx context.Context, task *Task) error {
 	task.CreationStatus = TaskCreationStatusReady
 	task.CreationStep = ""
 	task.CreationError = ""
 	task.UpdatedAt = time.Now().UTC()
-	return service.tasks.UpdateTask(ctx, task)
+	return c.tasks.UpdateTask(ctx, task)
 }
 
 func newPromptTaskRecord(

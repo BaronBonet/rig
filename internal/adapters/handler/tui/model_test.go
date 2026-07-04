@@ -65,9 +65,14 @@ func TestModel_ViewRendersTaskMetadata(t *testing.T) {
 	got, ok := next.(model)
 	require.True(t, ok)
 
+	// Details are hidden by default; expand them with space first.
+	next, _ = got.Update(tea.KeyPressMsg{Code: tea.KeySpace, Text: " "})
+	got, ok = next.(model)
+	require.True(t, ok)
+
 	view := stripANSI(got.View().Content)
 	require.Contains(t, view, "RIG dev")
-	require.Contains(t, view, "n new   p provider   r refresh   x clean   q quit")
+	require.Contains(t, view, "n new   p provider   r refresh   space details   x clean   q quit")
 	require.Contains(t, view, "first task")
 	require.Contains(t, view, "repo-a")
 	require.Contains(t, view, "feat/first-task")
@@ -75,6 +80,36 @@ func TestModel_ViewRendersTaskMetadata(t *testing.T) {
 	require.Contains(t, view, "WORKSPACE")
 	require.Contains(t, view, "SESSION")
 	require.Contains(t, view, "15m")
+}
+
+func TestModel_SpaceTogglesTaskDetailPanel(t *testing.T) {
+	frontend := newFrontendHarness()
+	frontend.listTasks = []*core.Task{
+		{
+			ID:          "task-1",
+			RepoName:    "repo-a",
+			DisplayName: "first task",
+			BranchName:  "feat/first-task",
+			Provider:    core.ProviderCodex,
+		},
+	}
+
+	m := newModel(frontend.mock)
+	m, msg := initModel(t, m)
+	next, _ := m.Update(msg)
+	got, ok := next.(model)
+	require.True(t, ok)
+	require.NotContains(t, stripANSI(got.View().Content), "WORKSPACE")
+
+	next, _ = got.Update(tea.KeyPressMsg{Code: tea.KeySpace, Text: " "})
+	shown, ok := next.(model)
+	require.True(t, ok)
+	require.Contains(t, stripANSI(shown.View().Content), "WORKSPACE")
+
+	next, _ = shown.Update(tea.KeyPressMsg{Code: tea.KeySpace, Text: " "})
+	hidden, ok := next.(model)
+	require.True(t, ok)
+	require.NotContains(t, stripANSI(hidden.View().Content), "WORKSPACE")
 }
 
 func TestModel_ViewRendersConfiguredVersionInHeader(t *testing.T) {
@@ -196,9 +231,9 @@ func TestModel_ViewKeepsCreateStatusVisibleWhenRowsExceedHeight(t *testing.T) {
 	m := newLoadedModel(frontend)
 	m.width = 96
 	m.height = 14
-	m.createPending = true
-	m.createActive = core.TaskCreateProgressStartingSession
-	m.createDone = []core.TaskCreateProgressStep{
+	m.pending = opCreating
+	m.create.active = core.TaskCreateProgressStartingSession
+	m.create.done = []core.TaskCreateProgressStep{
 		core.TaskCreateProgressSuggestingName,
 		core.TaskCreateProgressCreatingWorktree,
 		core.TaskCreateProgressPreparingWorkspace,
@@ -224,9 +259,9 @@ func TestModel_ViewClearsCreateStatusAfterCreatedTaskIsSelected(t *testing.T) {
 	m := newLoadedModel(frontend)
 	m.width = 96
 	m.height = 16
-	m.createPending = true
-	m.createActive = core.TaskCreateProgressStartingSession
-	m.createDone = []core.TaskCreateProgressStep{
+	m.pending = opCreating
+	m.create.active = core.TaskCreateProgressStartingSession
+	m.create.done = []core.TaskCreateProgressStep{
 		core.TaskCreateProgressSuggestingName,
 		core.TaskCreateProgressCreatingWorktree,
 		core.TaskCreateProgressPreparingWorkspace,
@@ -413,6 +448,77 @@ func TestModel_AfterLoadRequestsLatestStatusAndSubscriptionsForEachTask(t *testi
 	require.Equal(t, []string{"task-1", "task-2"}, frontend.subscribeTaskStatusCalls)
 }
 
+func TestModel_StaleStatusProviderMismatchReloadsOnlyOnce(t *testing.T) {
+	frontend := newFrontendHarness()
+	frontend.listTasks = []*core.Task{
+		{ID: "task-1", RepoName: "repo-a", DisplayName: "switched task", Provider: core.ProviderClaude},
+	}
+	frontend.subscribeTaskStatus = map[string]chan core.TaskStatusUpdate{
+		"task-1": make(chan core.TaskStatusUpdate, 1),
+	}
+	m := newLoadedModel(frontend)
+
+	stale := core.TaskStatusUpdate{
+		TaskID:   "task-1",
+		Provider: core.ProviderCodex,
+		Phase:    core.TaskStatusPhaseWaitingForInput,
+	}
+	updates := make(chan core.TaskStatusUpdate)
+	close(updates)
+
+	// First mismatched update: the in-memory record may be stale (daemon-side
+	// adoption), so the task list reloads once.
+	next, cmd := m.Update(taskStatusUpdatedMsg{taskID: "task-1", update: stale, updates: updates})
+	got, ok := next.(model)
+	require.True(t, ok)
+	require.NotNil(t, cmd)
+	msgs := runBatchCmd(t, cmd)
+	loaded := requireMsgType[tasksLoadedMsg](t, msgs)
+	require.Equal(t, 1, frontend.listTasksCalls)
+
+	// The reload returns the same record: the persisted status row is the
+	// stale side of the mismatch, and reloading again cannot fix it.
+	next, _ = got.Update(loaded)
+	got, ok = next.(model)
+	require.True(t, ok)
+
+	next, cmd = got.Update(taskStatusUpdatedMsg{taskID: "task-1", update: stale, updates: updates})
+	_, ok = next.(model)
+	require.True(t, ok)
+	if cmd != nil {
+		runBatchCmd(t, cmd)
+	}
+	require.Equal(t, 1, frontend.listTasksCalls)
+}
+
+func TestModel_ReloadDoesNotDuplicateStatusSubscriptions(t *testing.T) {
+	frontend := newFrontendHarness()
+	frontend.listTasks = []*core.Task{
+		{ID: "task-1", RepoName: "repo-a", DisplayName: "first task", Provider: core.ProviderCodex},
+	}
+	frontend.subscribeTaskStatus = map[string]chan core.TaskStatusUpdate{
+		"task-1": make(chan core.TaskStatusUpdate, 1),
+	}
+
+	m := newModel(frontend.mock)
+	m, loadMsg := initModel(t, m)
+	next, cmd := m.Update(loadMsg)
+	require.NotNil(t, cmd)
+	got, ok := next.(model)
+	require.True(t, ok)
+	runBatchCmd(t, cmd)
+
+	// A second load (refresh or adoption reload) must not open another status
+	// subscription for a task that already has one.
+	next, cmd = got.Update(loadMsg)
+	_, ok = next.(model)
+	require.True(t, ok)
+	require.NotNil(t, cmd)
+	runBatchCmd(t, cmd)
+
+	require.Equal(t, []string{"task-1"}, frontend.subscribeTaskStatusCalls)
+}
+
 func TestModel_AfterLoadRequestsTaskActivityForEachTask(t *testing.T) {
 	frontend := newFrontendHarness()
 	frontend.listTasks = []*core.Task{
@@ -533,6 +639,10 @@ func TestModel_ViewRendersTaskActivity(t *testing.T) {
 		next, _ = got.Update(msg)
 		got = next.(model)
 	}
+
+	// Details are hidden by default; expand them with space first.
+	next, _ = got.Update(tea.KeyPressMsg{Code: tea.KeySpace, Text: " "})
+	got = next.(model)
 
 	view := stripANSI(got.View().Content)
 	require.Contains(t, view, "INITIAL PROMPT")
@@ -799,17 +909,26 @@ func TestModel_TokenUsageLoadedErrorRendersError(t *testing.T) {
 	require.Contains(t, stripANSI(got.View().Content), "token usage unavailable")
 }
 
-func TestModel_TokenUsageLoadedSuccessClearsPreviousError(t *testing.T) {
+func TestModel_ErrorSurvivesBackgroundLoadsAndClearsOnNextKeyPress(t *testing.T) {
 	frontend := newFrontendHarness()
 	m := newLoadedModel(frontend)
-	m.err = errors.New("token usage unavailable")
+	m.err = errors.New("provider switch refused")
 
 	next, _ := m.Update(taskTokenUsageLoadedMsg{
 		taskID: "task-1",
 		usage:  &core.TaskTokenUsage{TotalTokens: 190},
 	})
-
 	got, ok := next.(model)
+	require.True(t, ok)
+	require.ErrorContains(t, got.err, "provider switch refused")
+
+	next, _ = got.Update(tasksLoadedMsg{tasks: frontend.listTasks})
+	got, ok = next.(model)
+	require.True(t, ok)
+	require.ErrorContains(t, got.err, "provider switch refused")
+
+	next, _ = got.Update(tea.KeyPressMsg{Code: 'j', Text: "j"})
+	got, ok = next.(model)
 	require.True(t, ok)
 	require.NoError(t, got.err)
 }
@@ -910,8 +1029,8 @@ func TestModel_KeyAEntersPromptMode(t *testing.T) {
 	got, ok := next.(model)
 	require.True(t, ok)
 	require.Equal(t, modePromptInput, got.mode)
-	require.Empty(t, got.prompt)
-	require.True(t, got.promptInput.Focused())
+	require.Empty(t, got.draft.prompt)
+	require.True(t, got.draft.input.Focused())
 }
 
 func TestModel_KeyNEntersPromptMode(t *testing.T) {
@@ -925,22 +1044,22 @@ func TestModel_KeyNEntersPromptMode(t *testing.T) {
 	got, ok := next.(model)
 	require.True(t, ok)
 	require.Equal(t, modePromptInput, got.mode)
-	require.Empty(t, got.prompt)
-	require.True(t, got.promptInput.Focused())
+	require.Empty(t, got.draft.prompt)
+	require.True(t, got.draft.input.Focused())
 }
 
 func TestModel_PromptInputTreatsQAsText(t *testing.T) {
 	frontend := newFrontendHarness()
 	m := newLoadedModel(frontend)
 	m.mode = modePromptInput
-	_ = m.promptInput.Focus()
+	_ = m.draft.input.Focus()
 
 	next, _ := m.Update(tea.KeyPressMsg{Text: "q"})
 
 	got, ok := next.(model)
 	require.True(t, ok)
 	require.Equal(t, modePromptInput, got.mode)
-	require.Equal(t, "q", got.prompt)
+	require.Equal(t, "q", got.draft.prompt)
 }
 
 func TestModel_EnterOpensSelectedTaskAndKeepsRigRunningOnSuccess(t *testing.T) {
@@ -1065,7 +1184,7 @@ func TestModel_CreateTaskFromPromptAppendsTaskAndStartsStatusTracking(t *testing
 
 	m := newLoadedModel(frontend)
 	m.mode = modePromptInput
-	m.prompt = "fix the retry loop"
+	m.draft.prompt = "fix the retry loop"
 
 	next, cmd := m.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
 	require.NotNil(t, cmd)
@@ -1073,8 +1192,8 @@ func TestModel_CreateTaskFromPromptAppendsTaskAndStartsStatusTracking(t *testing
 	submitted, ok := next.(model)
 	require.True(t, ok)
 	require.Equal(t, modeBrowse, submitted.mode)
-	require.Equal(t, "fix the retry loop", submitted.prompt)
-	require.True(t, submitted.createPending)
+	require.Empty(t, submitted.draft.prompt)
+	require.Equal(t, opCreating, submitted.pending)
 
 	initialMsgs := runBatchCmd(t, cmd)
 	createEvent := requireMsgType[taskCreateEventMsg](t, initialMsgs)
@@ -1087,9 +1206,9 @@ func TestModel_CreateTaskFromPromptAppendsTaskAndStartsStatusTracking(t *testing
 
 	got, ok := next.(model)
 	require.True(t, ok)
-	require.True(t, got.createPending)
+	require.Equal(t, opCreating, got.pending)
 	require.Equal(t, modeBrowse, got.mode)
-	require.Equal(t, core.TaskCreateProgressSuggestingName, got.createActive)
+	require.Equal(t, core.TaskCreateProgressSuggestingName, got.create.active)
 	require.Contains(t, stripANSI(got.View().Content), "Suggesting name")
 	require.NotContains(t, stripANSI(got.View().Content), "Enter task prompt.")
 
@@ -1101,8 +1220,8 @@ func TestModel_CreateTaskFromPromptAppendsTaskAndStartsStatusTracking(t *testing
 	require.True(t, ok)
 	require.Len(t, got.rows, 3)
 	require.Equal(t, modeBrowse, got.mode)
-	require.Empty(t, got.prompt)
-	require.False(t, got.createPending)
+	require.Empty(t, got.draft.prompt)
+	require.Equal(t, opNone, got.pending)
 	require.Equal(t, "task-3", got.rows[len(got.rows)-1].task.ID)
 	require.Equal(t, "fix the retry loop", frontend.createInput.Prompt)
 	require.Equal(t, core.ProviderCodex, frontend.createInput.Provider)
@@ -1148,7 +1267,7 @@ func TestModel_CreateTaskFromPromptUsesLaunchCwdWhenAnotherRepoTaskIsSelected(t 
 	m.launchCwd = "/tmp/repo-b/subdir"
 	m.selected = 0
 	m.mode = modePromptInput
-	m.prompt = "fix the retry loop"
+	m.draft.prompt = "fix the retry loop"
 
 	_, cmd := m.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
 	require.NotNil(t, cmd)
@@ -1183,7 +1302,7 @@ func TestModel_CreateTaskReloadsAuthoritativeTaskSnapshotWhenCreateResponseIsPar
 
 	m := newLoadedModel(frontend)
 	m.mode = modePromptInput
-	m.prompt = "testing if new rig things work"
+	m.draft.prompt = "testing if new rig things work"
 
 	next, cmd := m.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
 	submitted, ok := next.(model)
@@ -1240,7 +1359,7 @@ func TestModel_EnterWithBlankPromptDoesNothing(t *testing.T) {
 	frontend := newFrontendHarness()
 	m := newLoadedModel(frontend)
 	m.mode = modePromptInput
-	m.prompt = "   "
+	m.draft.prompt = "   "
 
 	next, cmd := m.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
 
@@ -1249,8 +1368,8 @@ func TestModel_EnterWithBlankPromptDoesNothing(t *testing.T) {
 	got, ok := next.(model)
 	require.True(t, ok)
 	require.Equal(t, modePromptInput, got.mode)
-	require.Equal(t, "   ", got.prompt)
-	require.False(t, got.createPending)
+	require.Equal(t, "   ", got.draft.prompt)
+	require.Equal(t, opNone, got.pending)
 	require.Zero(t, frontend.createTaskStreamCalls)
 }
 
@@ -1258,8 +1377,8 @@ func TestModel_PasteIntoPromptInputAppendsPastedText(t *testing.T) {
 	frontend := newFrontendHarness()
 	m := newLoadedModel(frontend)
 	m.mode = modePromptInput
-	m.prompt = "existing "
-	_ = m.promptInput.Focus()
+	m.draft.prompt = "existing "
+	_ = m.draft.input.Focus()
 
 	next, cmd := m.Update(tea.PasteMsg{Content: "copied text\nnext line"})
 
@@ -1268,11 +1387,11 @@ func TestModel_PasteIntoPromptInputAppendsPastedText(t *testing.T) {
 	got, ok := next.(model)
 	require.True(t, ok)
 	require.Equal(t, modePromptInput, got.mode)
-	require.Equal(t, "existing copied text\nnext line", got.prompt)
-	require.NoError(t, got.createErr)
+	require.Equal(t, "existing copied text\nnext line", got.draft.prompt)
+	require.NoError(t, got.draft.err)
 }
 
-func TestModel_CreateTaskFailureKeepsPromptRecoverableAndPreservesListView(t *testing.T) {
+func TestModel_CreateTaskFailureDiscardsDraftAndPreservesListView(t *testing.T) {
 	frontend := newFrontendHarness()
 	frontend.listTasks = []*core.Task{
 		{ID: "task-1", DisplayName: "first task", RepoName: "repo-a", Provider: core.ProviderCodex},
@@ -1285,7 +1404,7 @@ func TestModel_CreateTaskFailureKeepsPromptRecoverableAndPreservesListView(t *te
 
 	m := newLoadedModel(frontend)
 	m.mode = modePromptInput
-	m.prompt = "fix the retry loop"
+	m.draft.prompt = "fix the retry loop"
 
 	next, cmd := m.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
 	require.NotNil(t, cmd)
@@ -1293,7 +1412,7 @@ func TestModel_CreateTaskFailureKeepsPromptRecoverableAndPreservesListView(t *te
 	pending, ok := next.(model)
 	require.True(t, ok)
 	require.Equal(t, modeBrowse, pending.mode)
-	require.True(t, pending.createPending)
+	require.Equal(t, opCreating, pending.pending)
 
 	initialMsgs := runBatchCmd(t, cmd)
 	progressMsg := requireMsgType[taskCreateEventMsg](t, initialMsgs)
@@ -1305,7 +1424,7 @@ func TestModel_CreateTaskFailureKeepsPromptRecoverableAndPreservesListView(t *te
 
 	withProgress, ok := next.(model)
 	require.True(t, ok)
-	require.Equal(t, core.TaskCreateProgressCreatingWorktree, withProgress.createActive)
+	require.Equal(t, core.TaskCreateProgressCreatingWorktree, withProgress.create.active)
 	require.Contains(t, stripANSI(withProgress.View().Content), "Creating worktree")
 
 	createFailed := runCmd(t, follow)
@@ -1315,14 +1434,14 @@ func TestModel_CreateTaskFailureKeepsPromptRecoverableAndPreservesListView(t *te
 	got, ok := next.(model)
 	require.True(t, ok)
 	require.Equal(t, modeBrowse, got.mode)
-	require.Equal(t, "fix the retry loop", got.prompt)
-	require.False(t, got.createPending)
-	require.ErrorContains(t, got.createErr, "create failed")
+	require.Empty(t, got.draft.prompt)
+	require.Equal(t, opNone, got.pending)
+	require.ErrorContains(t, got.create.err, "create failed")
 	require.NoError(t, got.err)
 	require.Len(t, got.rows, 2)
 	require.Empty(t, frontend.latestTaskStatusCalls)
 	require.Empty(t, frontend.subscribeTaskStatusCalls)
-	require.Equal(t, core.TaskCreateProgressCreatingWorktree, got.createActive)
+	require.Equal(t, core.TaskCreateProgressCreatingWorktree, got.create.active)
 
 	view := stripANSI(got.View().Content)
 	require.Contains(t, view, "RIG")
@@ -1355,7 +1474,7 @@ func TestModel_CreateTaskFailureWithTaskSnapshotEnablesRetry(t *testing.T) {
 
 	m := newLoadedModel(frontend)
 	m.mode = modePromptInput
-	m.prompt = "live sync for embeddings"
+	m.draft.prompt = "live sync for embeddings"
 
 	next, cmd := m.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
 	require.NotNil(t, cmd)
@@ -1376,8 +1495,8 @@ func TestModel_CreateTaskFailureWithTaskSnapshotEnablesRetry(t *testing.T) {
 
 	got, ok := next.(model)
 	require.True(t, ok)
-	require.False(t, got.createPending)
-	require.ErrorContains(t, got.createErr, "database not setup")
+	require.Equal(t, opNone, got.pending)
+	require.ErrorContains(t, got.create.err, "database not setup")
 	require.Len(t, got.rows, 3)
 	require.NotNil(t, got.selectedRow())
 	require.Equal(t, "task-3", got.selectedRow().task.ID)
@@ -1393,7 +1512,7 @@ func TestModel_CreateTaskFailureWithTaskSnapshotEnablesRetry(t *testing.T) {
 
 	retrying, ok := next.(model)
 	require.True(t, ok)
-	require.True(t, retrying.createPending)
+	require.Equal(t, opCreating, retrying.pending)
 	runBatchCmd(t, retryCmd)
 	require.Equal(t, "task-3", frontend.retryTaskID)
 	require.Equal(t, 1, frontend.retryTaskStreamCalls)
@@ -1430,7 +1549,7 @@ func TestModel_RetryFailedTaskCreationStreamsProgress(t *testing.T) {
 
 	pending, ok := next.(model)
 	require.True(t, ok)
-	require.True(t, pending.createPending)
+	require.Equal(t, opCreating, pending.pending)
 
 	initialMsgs := runBatchCmd(t, cmd)
 	require.Equal(t, "task-1", frontend.retryTaskID)
@@ -1444,13 +1563,13 @@ func TestModel_RetryFailedTaskCreationStreamsProgress(t *testing.T) {
 	require.NotNil(t, follow)
 	withProgress, ok := next.(model)
 	require.True(t, ok)
-	require.Equal(t, core.TaskCreateProgressPreparingWorkspace, withProgress.createActive)
+	require.Equal(t, core.TaskCreateProgressPreparingWorkspace, withProgress.create.active)
 
 	taskRetried := runCmd(t, follow)
 	next, _ = withProgress.Update(taskRetried)
 	got, ok := next.(model)
 	require.True(t, ok)
-	require.False(t, got.createPending)
+	require.Equal(t, opNone, got.pending)
 	require.Equal(t, core.TaskCreationStatusReady, got.rows[0].task.CreationStatus)
 }
 
@@ -1466,7 +1585,7 @@ func TestModel_CreateTaskFromPromptReturnsToBrowseImmediatelyAndKeepsOverviewUsa
 
 	m := newLoadedModel(frontend)
 	m.mode = modePromptInput
-	m.prompt = "fix the retry loop"
+	m.draft.prompt = "fix the retry loop"
 
 	next, cmd := m.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
 	require.NotNil(t, cmd)
@@ -1474,7 +1593,7 @@ func TestModel_CreateTaskFromPromptReturnsToBrowseImmediatelyAndKeepsOverviewUsa
 	submitted, ok := next.(model)
 	require.True(t, ok)
 	require.Equal(t, modeBrowse, submitted.mode)
-	require.True(t, submitted.createPending)
+	require.Equal(t, opCreating, submitted.pending)
 	require.Equal(t, 0, submitted.selected)
 
 	next, navCmd := submitted.Update(tea.KeyPressMsg{Text: "j"})
@@ -1483,7 +1602,7 @@ func TestModel_CreateTaskFromPromptReturnsToBrowseImmediatelyAndKeepsOverviewUsa
 	navigated, ok := next.(model)
 	require.True(t, ok)
 	require.Equal(t, 1, navigated.selected)
-	require.True(t, navigated.createPending)
+	require.Equal(t, opCreating, navigated.pending)
 
 	next, promptCmd := navigated.Update(tea.KeyPressMsg{Text: "n"})
 	require.Nil(t, promptCmd)
@@ -1491,14 +1610,14 @@ func TestModel_CreateTaskFromPromptReturnsToBrowseImmediatelyAndKeepsOverviewUsa
 	stillPending, ok := next.(model)
 	require.True(t, ok)
 	require.Equal(t, modeBrowse, stillPending.mode)
-	require.True(t, stillPending.createPending)
+	require.Equal(t, opCreating, stillPending.pending)
 }
 
 func TestPromptInputView_RendersPromptTextBox(t *testing.T) {
 	frontend := newFrontendHarness()
 	m := newLoadedModel(frontend)
 	m.mode = modePromptInput
-	m.prompt = "fix the retry loop"
+	m.draft.prompt = "fix the retry loop"
 
 	view := stripANSI(m.View().Content)
 	require.Contains(t, view, "╭")
@@ -1511,8 +1630,8 @@ func TestModel_PendingCreateStillAllowsQuitKeys(t *testing.T) {
 	frontend := newFrontendHarness()
 	m := newLoadedModel(frontend)
 	m.mode = modePromptInput
-	m.prompt = "fix the retry loop"
-	m.createPending = true
+	m.draft.prompt = "fix the retry loop"
+	m.pending = opCreating
 
 	for _, msg := range []tea.KeyPressMsg{
 		{Text: "q"},
@@ -1523,7 +1642,7 @@ func TestModel_PendingCreateStillAllowsQuitKeys(t *testing.T) {
 
 		got, ok := next.(model)
 		require.True(t, ok)
-		require.True(t, got.createPending)
+		require.Equal(t, opCreating, got.pending)
 
 		quitMsg := runCmd(t, cmd)
 		_, ok = quitMsg.(tea.QuitMsg)
@@ -1534,7 +1653,7 @@ func TestModel_PendingCreateStillAllowsQuitKeys(t *testing.T) {
 func TestModel_ShimmerTickAdvancesAndReschedulesWhilePending(t *testing.T) {
 	frontend := newFrontendHarness()
 	m := newLoadedModel(frontend)
-	m.createPending = true
+	m.pending = opCreating
 
 	next, cmd := m.Update(shimmerTickMsg{})
 	require.NotNil(t, cmd)
@@ -1548,11 +1667,43 @@ func TestModel_ShimmerTickAdvancesAndReschedulesWhilePending(t *testing.T) {
 	require.True(t, ok)
 }
 
+func TestModel_ShimmerTickAdvancesAndReschedulesWhileSwitching(t *testing.T) {
+	frontend := newFrontendHarness()
+	m := newLoadedModel(frontend)
+	m.pending = opSwitching
+
+	next, cmd := m.Update(shimmerTickMsg{})
+	require.NotNil(t, cmd)
+
+	got, ok := next.(model)
+	require.True(t, ok)
+	require.Equal(t, 1, got.shimmerTick)
+
+	msg := runCmd(t, cmd)
+	_, ok = msg.(shimmerTickMsg)
+	require.True(t, ok)
+}
+
+func TestModel_CleanupRefusedWhileOperationPending(t *testing.T) {
+	frontend := newFrontendHarness()
+	frontend.listTasks = []*core.Task{{ID: "task-1", DisplayName: "Task one"}}
+	m := newLoadedModel(frontend)
+	m.pending = opCreating
+
+	next, cmd := m.Update(tea.KeyPressMsg{Text: "x"})
+
+	require.Nil(t, cmd)
+	got, ok := next.(model)
+	require.True(t, ok)
+	require.Equal(t, modeBrowse, got.mode)
+	require.Equal(t, opCreating, got.pending)
+}
+
 func TestModel_EscCancelsPromptMode(t *testing.T) {
 	frontend := newFrontendHarness()
 	m := newLoadedModel(frontend)
 	m.mode = modePromptInput
-	m.prompt = "fix the retry loop"
+	m.draft.prompt = "fix the retry loop"
 
 	next, cmd := m.Update(tea.KeyPressMsg{Code: tea.KeyEscape})
 
@@ -1561,9 +1712,9 @@ func TestModel_EscCancelsPromptMode(t *testing.T) {
 	got, ok := next.(model)
 	require.True(t, ok)
 	require.Equal(t, modeBrowse, got.mode)
-	require.Empty(t, got.prompt)
-	require.False(t, got.createPending)
-	require.NoError(t, got.createErr)
+	require.Empty(t, got.draft.prompt)
+	require.Equal(t, opNone, got.pending)
+	require.NoError(t, got.create.err)
 	require.Zero(t, frontend.createTaskStreamCalls)
 }
 
@@ -1584,7 +1735,7 @@ func TestModel_CtrlPFromPromptModeLoadsRepoPullRequests(t *testing.T) {
 
 	m := newLoadedModel(frontend)
 	m.mode = modePromptInput
-	m.prompt = "typed already"
+	m.draft.prompt = "typed already"
 
 	next, cmd := m.Update(tea.KeyPressMsg{Code: 'p', Mod: tea.ModCtrl})
 	require.NotNil(t, cmd)
@@ -1592,7 +1743,7 @@ func TestModel_CtrlPFromPromptModeLoadsRepoPullRequests(t *testing.T) {
 	pending, ok := next.(model)
 	require.True(t, ok)
 	require.Equal(t, modePRPicker, pending.mode)
-	require.Equal(t, "typed already", pending.prompt)
+	require.Equal(t, "typed already", pending.draft.prompt)
 
 	msg := runCmd(t, cmd)
 	loaded, ok := msg.(repoPullRequestsLoadedMsg)
@@ -1605,7 +1756,7 @@ func TestModel_CtrlPFromPromptModeLoadsRepoPullRequests(t *testing.T) {
 	require.True(t, ok)
 	require.Equal(t, "/tmp/repo", frontend.listRepoPullRequestsCwd)
 	require.Equal(t, modePRPicker, got.mode)
-	require.Len(t, got.prRows, 1)
+	require.Len(t, got.draft.prs, 1)
 }
 
 func TestModel_CtrlPFromPromptModeUsesLaunchCwdWhenAnotherRepoTaskIsSelected(t *testing.T) {
@@ -1645,8 +1796,8 @@ func TestPRPickerView_ShowsDuplicateRowsAsDisabled(t *testing.T) {
 	frontend := newFrontendHarness()
 	m := newLoadedModel(frontend)
 	m.mode = modePRPicker
-	m.prRepoName = "repo"
-	m.prRows = []core.RepoPullRequest{
+	m.draft.repoName = "repo"
+	m.draft.prs = []core.RepoPullRequest{
 		{Number: 42, Title: "Auth rewrite", BranchName: "feat/auth", State: core.PRStateDraft, HasExistingTask: true},
 	}
 
@@ -1679,10 +1830,10 @@ func TestModel_PRPickerEnterCreatesTaskFromSelectedPR(t *testing.T) {
 
 	m := newLoadedModel(frontend)
 	m.mode = modePRPicker
-	m.prompt = "typed already"
-	m.prRepoRoot = "/tmp/repo"
-	m.prRepoName = "repo"
-	m.prRows = []core.RepoPullRequest{
+	m.draft.prompt = "typed already"
+	m.draft.repoRoot = "/tmp/repo"
+	m.draft.repoName = "repo"
+	m.draft.prs = []core.RepoPullRequest{
 		{Number: 42, Title: "Auth rewrite", BranchName: "feat/auth", State: core.PRStateDraft},
 	}
 
@@ -1692,9 +1843,9 @@ func TestModel_PRPickerEnterCreatesTaskFromSelectedPR(t *testing.T) {
 	pending, ok := next.(model)
 	require.True(t, ok)
 	require.Equal(t, modeBrowse, pending.mode)
-	require.True(t, pending.createPending)
+	require.Equal(t, opCreating, pending.pending)
 	view := stripANSI(pending.View().Content)
-	require.Contains(t, view, "n new   p provider   r refresh   x clean   q quit")
+	require.Contains(t, view, "n new   p provider   r refresh   space details   x clean   q quit")
 	require.Contains(t, view, "Creating task from pull request")
 	require.NotContains(t, view, "Suggesting name")
 	require.Less(t, strings.Index(view, "existing task"), strings.Index(view, "Creating task from pull request"))
@@ -1722,9 +1873,9 @@ func TestModel_PRPickerCreateFailureReturnsToBrowseWithProgressAndError(t *testi
 
 	m := newLoadedModel(frontend)
 	m.mode = modePRPicker
-	m.prRepoRoot = "/tmp/repo"
-	m.prRepoName = "repo"
-	m.prRows = []core.RepoPullRequest{
+	m.draft.repoRoot = "/tmp/repo"
+	m.draft.repoName = "repo"
+	m.draft.prs = []core.RepoPullRequest{
 		{Number: 42, Title: "Auth rewrite", BranchName: "feat/auth", State: core.PRStateDraft},
 	}
 
@@ -1734,7 +1885,7 @@ func TestModel_PRPickerCreateFailureReturnsToBrowseWithProgressAndError(t *testi
 	pending, ok := next.(model)
 	require.True(t, ok)
 	require.Equal(t, modeBrowse, pending.mode)
-	require.True(t, pending.createPending)
+	require.Equal(t, opCreating, pending.pending)
 	view := stripANSI(pending.View().Content)
 	require.Contains(t, view, "Creating task from pull request")
 	require.NotContains(t, view, "Suggesting name")
@@ -1750,7 +1901,7 @@ func TestModel_PRPickerCreateFailureReturnsToBrowseWithProgressAndError(t *testi
 	withProgress, ok := next.(model)
 	require.True(t, ok)
 	require.Equal(t, modeBrowse, withProgress.mode)
-	require.Equal(t, core.TaskCreateProgressCreatingWorktree, withProgress.createActive)
+	require.Equal(t, core.TaskCreateProgressCreatingWorktree, withProgress.create.active)
 	view = stripANSI(withProgress.View().Content)
 	require.Contains(t, view, "Creating task from pull request")
 	require.NotContains(t, view, "Creating worktree")
@@ -1762,11 +1913,11 @@ func TestModel_PRPickerCreateFailureReturnsToBrowseWithProgressAndError(t *testi
 	got, ok := next.(model)
 	require.True(t, ok)
 	require.Equal(t, modeBrowse, got.mode)
-	require.False(t, got.createPending)
-	require.ErrorContains(t, got.createErr, "create failed")
+	require.Equal(t, opNone, got.pending)
+	require.ErrorContains(t, got.create.err, "create failed")
 
 	view = stripANSI(got.View().Content)
-	require.Contains(t, view, "n new   p provider   r refresh   x clean   q quit")
+	require.Contains(t, view, "n new   p provider   r refresh   space details   x clean   q quit")
 	require.Contains(t, view, "Creating task from pull request")
 	require.NotContains(t, view, "Creating worktree")
 	require.Contains(t, view, "create failed")
@@ -1776,7 +1927,7 @@ func TestModel_EscFromPRPickerReturnsToPromptMode(t *testing.T) {
 	frontend := newFrontendHarness()
 	m := newLoadedModel(frontend)
 	m.mode = modePRPicker
-	m.prompt = "typed already"
+	m.draft.prompt = "typed already"
 
 	next, cmd := m.Update(tea.KeyPressMsg{Code: tea.KeyEscape})
 
@@ -1785,8 +1936,8 @@ func TestModel_EscFromPRPickerReturnsToPromptMode(t *testing.T) {
 	got, ok := next.(model)
 	require.True(t, ok)
 	require.Equal(t, modePromptInput, got.mode)
-	require.Equal(t, "typed already", got.prompt)
-	require.True(t, got.promptInput.Focused())
+	require.Equal(t, "typed already", got.draft.prompt)
+	require.True(t, got.draft.input.Focused())
 }
 
 func TestModel_KeyXEntersCleanupConfirmMode(t *testing.T) {
@@ -1819,7 +1970,7 @@ func TestModel_ConfirmCleanupDeletesTaskAndRemovesRow(t *testing.T) {
 
 	pending, ok := next.(model)
 	require.True(t, ok)
-	require.True(t, pending.deletePending)
+	require.Equal(t, opDeleting, pending.pending)
 	require.Equal(t, modeCleanupConfirm, pending.mode)
 
 	initialMsgs := runBatchCmd(t, cmd)
@@ -1831,7 +1982,7 @@ func TestModel_ConfirmCleanupDeletesTaskAndRemovesRow(t *testing.T) {
 
 	got, ok := next.(model)
 	require.True(t, ok)
-	require.False(t, got.deletePending)
+	require.Equal(t, opNone, got.pending)
 	require.Equal(t, modeBrowse, got.mode)
 	require.Len(t, got.rows, 1)
 	require.Equal(t, "task-1", got.rows[0].task.ID)
@@ -1854,7 +2005,7 @@ func TestModel_CleanupFailurePreservesRowsAndShowsError(t *testing.T) {
 
 	pending, ok := next.(model)
 	require.True(t, ok)
-	require.True(t, pending.deletePending)
+	require.Equal(t, opDeleting, pending.pending)
 
 	initialMsgs := runBatchCmd(t, cmd)
 	taskDeleted := requireMsgType[taskDeletedMsg](t, initialMsgs)
@@ -1864,7 +2015,7 @@ func TestModel_CleanupFailurePreservesRowsAndShowsError(t *testing.T) {
 
 	got, ok := next.(model)
 	require.True(t, ok)
-	require.False(t, got.deletePending)
+	require.Equal(t, opNone, got.pending)
 	require.Equal(t, modeBrowse, got.mode)
 	require.Len(t, got.rows, 1)
 	require.ErrorContains(t, got.err, "cleanup failed")
@@ -1881,7 +2032,7 @@ func newLoadedModel(frontend *frontendHarness) model {
 	return model{
 		frontend:      frontend.mock,
 		launchCwd:     "/tmp/repo",
-		promptInput:   newPromptInput(),
+		draft:         taskDraft{input: newPromptInput()},
 		statusContext: context.Background(),
 		rows:          rowsFromTasks(frontend.listTasks),
 		mode:          modeBrowse,

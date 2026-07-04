@@ -15,30 +15,17 @@ import (
 	"github.com/BaronBonet/rig/internal/core"
 )
 
-// socketBackend is the operation set the daemon socket can actually serve.
-// It intentionally excludes core.TaskFrontend.AttachTaskSession: attach needs
-// the foreground rig process and its terminal/stdio/TMUX environment, while the
-// daemon is a background process serving JSON over a Unix socket.
-type socketBackend interface {
-	GetTaskActivity(ctx context.Context, taskID string, limit int) ([]core.TaskActivityEvent, error)
-	GetTaskTokenUsage(ctx context.Context, taskID string) (*core.TaskTokenUsage, error)
-	ListRepoPullRequests(ctx context.Context, cwd string) ([]core.RepoPullRequest, error)
-	PullRequestStatus(ctx context.Context, repoRoot string, branchName string) (*core.PRStatus, error)
-	ReconnectTaskSession(ctx context.Context, taskID string) error
-	GetProviderSetup(ctx context.Context) (*core.ProviderSetup, error)
-	SaveProviderSetup(ctx context.Context, setup core.ProviderSetup) error
-	DetectProviders(ctx context.Context) ([]core.ProviderDetection, error)
-	SwitchTaskProvider(ctx context.Context, taskID string, provider core.Provider) (*core.Task, error)
-	CreateTaskStream(ctx context.Context, input core.CreateTaskInput) (<-chan core.TaskCreateEvent, error)
-	RetryTaskCreationStream(ctx context.Context, taskID string) (<-chan core.TaskCreateEvent, error)
-	DeleteTask(ctx context.Context, taskID string) error
-	ListTasks(ctx context.Context) ([]*core.Task, error)
-	LatestTaskStatus(ctx context.Context, taskID string) (*core.TaskStatusUpdate, error)
-	SubscribeTaskStatus(ctx context.Context, taskID string) (<-chan core.TaskStatusUpdate, error)
-}
-
+// unixSocketServer serves core.TaskService over the daemon's Unix socket.
+// Unary operations dispatch through the descriptor table in operations.go;
+// the handshake probes, the two task-create streams, the status subscription,
+// and stop are the only bespoke handlers.
+//
+// The socket intentionally serves exactly the TaskService port.
+// core.TaskFrontend.AttachTaskSession is client-local (it needs the
+// foreground terminal), and HandleHookEvent/HealthCheck arrive through their
+// own in-process ports, never over this socket.
 type unixSocketServer struct {
-	backend    socketBackend
+	service    core.TaskService
 	stop       func()
 	socketPath string
 }
@@ -52,8 +39,8 @@ func (s *unixSocketServer) Serve(ctx context.Context) error {
 	if s.socketPath == "" {
 		return fmt.Errorf("task daemon socket path not configured")
 	}
-	if s.backend == nil {
-		return fmt.Errorf("task daemon backend not configured")
+	if s.service == nil {
+		return fmt.Errorf("task service not configured")
 	}
 
 	if err := prepareUnixSocketPath(s.socketPath); err != nil {
@@ -120,16 +107,30 @@ func (s *unixSocketServer) handleConn(ctx context.Context, conn net.Conn) {
 
 	var req socketRequest
 	if err := decoder.Decode(&req); err != nil {
-		_ = writeSocketEnvelope(encoder, socketEnvelope{Type: socketEnvelopeError, Error: err.Error()})
+		_ = writeSocketEnvelope(encoder, errorEnvelope(err))
 		return
 	}
 
-	if command, ok := socketUnaryCommands[req.Command]; ok {
-		writeSocketUnaryCommandResponse(connCtx, encoder, s.backend, command, req)
+	if handler, ok := socketUnaryHandlers[req.Command]; ok {
+		_ = writeSocketEnvelope(encoder, handler(connCtx, s.service, req.Payload))
 		return
 	}
 
 	switch req.Command {
+	case socketCommandHealth:
+		_ = writeHandshakeEnvelope(encoder, handshakeEnvelope{Type: handshakeEnvelopeHealth, OK: true})
+	case socketCommandProtocolVersion:
+		_ = writeHandshakeEnvelope(encoder, handshakeEnvelope{
+			Type:            handshakeEnvelopeProtocolVersion,
+			OK:              true,
+			ProtocolVersion: currentFrontendProtocolVersion,
+		})
+	case socketCommandFrontendBuildVersion:
+		_ = writeHandshakeEnvelope(encoder, handshakeEnvelope{
+			Type:    handshakeEnvelopeFrontendBuildVersion,
+			OK:      true,
+			Version: currentFrontendBuildVersion,
+		})
 	case socketCommandCreateTask:
 		s.handleCreateTask(ctx, encoder, req)
 	case socketCommandRetryTaskCreation:
@@ -138,15 +139,12 @@ func (s *unixSocketServer) handleConn(ctx context.Context, conn net.Conn) {
 		go cancelOnConnClose(conn, cancel)
 		s.handleSubscribeTaskStatus(connCtx, encoder, req)
 	case socketCommandStop:
-		_ = writeSocketEnvelope(encoder, socketEnvelope{Type: socketEnvelopeStopping, OK: true})
+		_ = writeHandshakeEnvelope(encoder, handshakeEnvelope{Type: handshakeEnvelopeStopping, OK: true})
 		if s.stop != nil {
 			s.stop()
 		}
 	default:
-		_ = writeSocketEnvelope(
-			encoder,
-			socketEnvelope{Type: socketEnvelopeError, Error: fmt.Sprintf("unsupported command %q", req.Command)},
-		)
+		_ = writeSocketEnvelope(encoder, errorEnvelope(fmt.Errorf("unsupported command %q", req.Command)))
 	}
 }
 
@@ -159,17 +157,20 @@ func authorizeUnixSocketPeerUID(peerUID uint32, allowedUID uint32) error {
 }
 
 func (s *unixSocketServer) handleCreateTask(ctx context.Context, encoder *json.Encoder, req socketRequest) {
-	if req.Input == nil {
-		_ = writeSocketEnvelope(encoder, socketEnvelope{
-			Type:  socketEnvelopeError,
-			Error: socketCommandCreateTask + " input required",
-		})
+	var input core.CreateTaskInput
+	if len(req.Payload) == 0 {
+		_ = writeSocketEnvelope(encoder, errorEnvelope(errors.New(socketCommandCreateTask+" input required")))
+		return
+	}
+	if err := json.Unmarshal(req.Payload, &input); err != nil {
+		decodeErr := fmt.Errorf("%s: decode request: %w", socketCommandCreateTask, err)
+		_ = writeSocketEnvelope(encoder, errorEnvelope(decodeErr))
 		return
 	}
 
-	events, err := s.backend.CreateTaskStream(ctx, *req.Input)
+	events, err := s.service.CreateTaskStream(ctx, input)
 	if err != nil {
-		_ = writeSocketEnvelope(encoder, socketEnvelope{Type: socketEnvelopeError, Error: err.Error()})
+		_ = writeSocketEnvelope(encoder, errorEnvelope(err))
 		return
 	}
 
@@ -177,18 +178,23 @@ func (s *unixSocketServer) handleCreateTask(ctx context.Context, encoder *json.E
 }
 
 func (s *unixSocketServer) handleRetryTaskCreation(ctx context.Context, encoder *json.Encoder, req socketRequest) {
-	taskID := strings.TrimSpace(req.TaskID)
+	var request taskIDRequest
+	if len(req.Payload) > 0 {
+		if err := json.Unmarshal(req.Payload, &request); err != nil {
+			decodeErr := fmt.Errorf("%s: decode request: %w", socketCommandRetryTaskCreation, err)
+			_ = writeSocketEnvelope(encoder, errorEnvelope(decodeErr))
+			return
+		}
+	}
+	taskID := strings.TrimSpace(request.TaskID)
 	if taskID == "" {
-		_ = writeSocketEnvelope(encoder, socketEnvelope{
-			Type:  socketEnvelopeError,
-			Error: socketCommandRetryTaskCreation + " task ID required",
-		})
+		_ = writeSocketEnvelope(encoder, errorEnvelope(errors.New(socketCommandRetryTaskCreation+" task ID required")))
 		return
 	}
 
-	events, err := s.backend.RetryTaskCreationStream(ctx, taskID)
+	events, err := s.service.RetryTaskCreationStream(ctx, taskID)
 	if err != nil {
-		_ = writeSocketEnvelope(encoder, socketEnvelope{Type: socketEnvelopeError, Error: err.Error()})
+		_ = writeSocketEnvelope(encoder, errorEnvelope(err))
 		return
 	}
 
@@ -197,54 +203,45 @@ func (s *unixSocketServer) handleRetryTaskCreation(ctx context.Context, encoder 
 
 func writeTaskCreateStream(encoder *json.Encoder, events <-chan core.TaskCreateEvent) {
 	for event := range events {
-		switch {
-		case event.Progress != nil:
-			if err := writeSocketEnvelope(encoder, socketEnvelope{
-				Type:           socketEnvelopeTaskCreateProgress,
-				OK:             true,
-				CreateProgress: event.Progress,
-			}); err != nil {
-				return
-			}
-		case event.Err != nil:
-			_ = writeSocketEnvelope(encoder, socketEnvelope{
-				Type:  socketEnvelopeError,
-				Error: event.Err.Error(),
-				Task:  event.Task,
-			})
+		envelope, err := encodeTaskCreateEvent(event)
+		if err != nil {
+			_ = writeSocketEnvelope(encoder, errorEnvelope(err))
 			return
-		case event.Task != nil:
-			_ = writeSocketEnvelope(
-				encoder,
-				socketEnvelope{Type: socketEnvelopeTaskCreated, OK: true, Task: event.Task},
-			)
+		}
+		if err := writeSocketEnvelope(encoder, envelope); err != nil {
+			return
+		}
+		if event.Task != nil || event.Err != nil {
 			return
 		}
 	}
 
-	_ = writeSocketEnvelope(
-		encoder,
-		socketEnvelope{Type: socketEnvelopeError, Error: "create task stream closed without terminal result"},
-	)
+	_ = writeSocketEnvelope(encoder, errorEnvelope(errors.New("create task stream closed without terminal result")))
 }
 
 func (s *unixSocketServer) handleSubscribeTaskStatus(ctx context.Context, encoder *json.Encoder, req socketRequest) {
-	taskID := strings.TrimSpace(req.TaskID)
+	var request taskIDRequest
+	if len(req.Payload) > 0 {
+		if err := json.Unmarshal(req.Payload, &request); err != nil {
+			decodeErr := fmt.Errorf("%s: decode request: %w", socketCommandSubscribeTaskStatus, err)
+			_ = writeSocketEnvelope(encoder, errorEnvelope(decodeErr))
+			return
+		}
+	}
+	taskID := strings.TrimSpace(request.TaskID)
 	if taskID == "" {
-		_ = writeSocketEnvelope(encoder, socketEnvelope{
-			Type:  socketEnvelopeError,
-			Error: socketCommandSubscribeTaskStatus + " task_id required",
-		})
+		requiredErr := errors.New(socketCommandSubscribeTaskStatus + " task_id required")
+		_ = writeSocketEnvelope(encoder, errorEnvelope(requiredErr))
 		return
 	}
 
-	updates, err := s.backend.SubscribeTaskStatus(ctx, taskID)
+	updates, err := s.service.SubscribeTaskStatus(ctx, taskID)
 	if err != nil {
-		_ = writeSocketEnvelope(encoder, socketEnvelope{Type: socketEnvelopeError, Error: err.Error()})
+		_ = writeSocketEnvelope(encoder, errorEnvelope(err))
 		return
 	}
 
-	if err := encoder.Encode(socketEnvelope{Type: socketEnvelopeSubscribed, OK: true}); err != nil {
+	if err := writeSocketEnvelope(encoder, socketEnvelope{Type: socketEnvelopeSubscribed, OK: true}); err != nil {
 		return
 	}
 
@@ -256,17 +253,26 @@ func (s *unixSocketServer) handleSubscribeTaskStatus(ctx context.Context, encode
 			if !ok {
 				return
 			}
-			if err := encoder.Encode(socketEnvelope{
-				Type:   socketEnvelopeTaskStatusUpdate,
-				Update: &update,
-			}); err != nil {
+			envelope, err := encodeTaskStatusUpdate(update)
+			if err != nil {
+				_ = writeSocketEnvelope(encoder, errorEnvelope(err))
+				return
+			}
+			if err := writeSocketEnvelope(encoder, envelope); err != nil {
 				return
 			}
 		}
 	}
 }
 
+// writeSocketEnvelope and writeHandshakeEnvelope centralize envelope encoding
+// so call sites may ignore write failures on a disconnecting peer without
+// tripping errchkjson.
 func writeSocketEnvelope(encoder *json.Encoder, envelope socketEnvelope) error {
+	return encoder.Encode(envelope)
+}
+
+func writeHandshakeEnvelope(encoder *json.Encoder, envelope handshakeEnvelope) error {
 	return encoder.Encode(envelope)
 }
 

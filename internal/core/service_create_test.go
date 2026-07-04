@@ -1,19 +1,12 @@
 package core
 
 import (
-	"context"
 	"errors"
 	"testing"
 
 	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
 )
-
-func TestTaskServiceContract_ExposesCreateTaskWithProgress(t *testing.T) {
-	var _ interface {
-		CreateTaskWithProgress(context.Context, CreateTaskInput, TaskCreateProgressReporter) (*Task, error)
-	} = (TaskService)(nil)
-}
 
 func TestCreateTaskInput_SupportsPromptAndPullRequestSources(t *testing.T) {
 	promptCreate := CreateTaskInput{

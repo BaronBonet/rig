@@ -28,10 +28,10 @@ const (
 	maxHookRequestBodyBytes = 1024 * 1024
 )
 
-func NewHookHTTPHandler(service core.TaskService, now func() time.Time, hookSecret string) *HTTPHandler {
+func NewHookHTTPHandler(service core.HookEventHandler, now func() time.Time, hookSecret string) *HTTPHandler {
 	return newHTTPHandler(now, hookSecret, func(ctx context.Context, input core.HookEventInput) error {
 		if service == nil {
-			return fmt.Errorf("task service not configured")
+			return fmt.Errorf("hook event handler not configured")
 		}
 
 		return service.HandleHookEvent(ctx, input)
@@ -39,7 +39,7 @@ func NewHookHTTPHandler(service core.TaskService, now func() time.Time, hookSecr
 }
 
 func NewHookRoutes(
-	service core.TaskService,
+	service core.HookEventHandler,
 	now func() time.Time,
 	hookSecret string,
 ) []core.TaskDaemonHookRoute {
@@ -153,35 +153,7 @@ func DecodeHookEventInput(now func() time.Time, headerEventName string, body []b
 }
 
 func (r *repository) HookEventToTaskStatus(input core.HookEventInput) (*core.TaskStatusUpdate, error) {
-	taskID := strings.TrimSpace(input.TaskID)
-	if taskID == "" {
-		return nil, core.ErrUnmanagedHookEvent
-	}
-
-	eventName := strings.TrimSpace(input.EventName)
-	if eventName == "" {
-		return nil, core.ErrUnmanagedHookEvent
-	}
-
-	var phase core.TaskStatusPhase
-	switch eventName {
-	case "SessionStart":
-		phase = core.TaskStatusPhaseStarting
-	case "UserPromptSubmit", "PreToolUse", "PostToolUse":
-		phase = core.TaskStatusPhaseWorking
-	case "Stop", "Notification":
-		phase = core.TaskStatusPhaseWaitingForInput
-	default:
-		return nil, nil
-	}
-
-	return &core.TaskStatusUpdate{
-		TaskID:       taskID,
-		Provider:     core.ProviderClaude,
-		Phase:        phase,
-		RawEventName: eventName,
-		ObservedAt:   input.OccurredAt,
-	}, nil
+	return hookCatalog.StatusUpdate(core.ProviderClaude, input)
 }
 
 type hookPayload struct {

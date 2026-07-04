@@ -11,6 +11,9 @@ import (
 	"github.com/BaronBonet/rig/internal/core"
 )
 
+// frontend is the daemon-backed core.TaskFrontend client. Every TaskService
+// method is one callUnary against its descriptor in operations.go; the two
+// stream methods and the client-local AttachTaskSession are bespoke.
 type frontend struct {
 	sessions   core.TmuxSessionClient
 	socketPath string
@@ -25,40 +28,15 @@ func (f *frontend) AttachTaskSession(ctx context.Context, task *core.Task) error
 }
 
 func (f *frontend) GetTaskActivity(ctx context.Context, taskID string, limit int) ([]core.TaskActivityEvent, error) {
-	resp, err := f.sendUnary(ctx, socketRequest{
-		Command: socketCommandGetTaskActivity,
-		TaskID:  taskID,
-		Limit:   limit,
-	}, socketEnvelopeTaskActivity)
-	if err != nil {
-		return nil, err
-	}
-
-	return resp.Activity, nil
+	return callUnary(ctx, f, opGetTaskActivity, taskActivityRequest{TaskID: taskID, Limit: limit})
 }
 
 func (f *frontend) GetTaskTokenUsage(ctx context.Context, taskID string) (*core.TaskTokenUsage, error) {
-	resp, err := f.sendUnary(ctx, socketRequest{
-		Command: socketCommandGetTaskTokenUsage,
-		TaskID:  taskID,
-	}, socketEnvelopeTaskTokenUsage)
-	if err != nil {
-		return nil, err
-	}
-
-	return resp.Usage, nil
+	return callUnary(ctx, f, opGetTaskTokenUsage, taskIDRequest{TaskID: taskID})
 }
 
 func (f *frontend) ListRepoPullRequests(ctx context.Context, cwd string) ([]core.RepoPullRequest, error) {
-	resp, err := f.sendUnary(ctx, socketRequest{
-		Command: socketCommandListRepoPullRequests,
-		Cwd:     cwd,
-	}, socketEnvelopeRepoPullRequestsList)
-	if err != nil {
-		return nil, err
-	}
-
-	return resp.PullRequests, nil
+	return callUnary(ctx, f, opListRepoPullRequests, repoPullRequestsRequest{Cwd: cwd})
 }
 
 func (f *frontend) PullRequestStatus(
@@ -66,57 +44,36 @@ func (f *frontend) PullRequestStatus(
 	repoRoot string,
 	branchName string,
 ) (*core.PRStatus, error) {
-	resp, err := f.sendUnary(ctx, socketRequest{
-		Command:    socketCommandPullRequestStatus,
+	status, err := callUnary(ctx, f, opPullRequestStatus, pullRequestStatusRequest{
 		Cwd:        repoRoot,
 		BranchName: branchName,
-	}, socketEnvelopePullRequestStatus)
+	})
 	if err != nil {
 		return nil, err
 	}
-	if resp.PR == nil {
+	if status == nil {
 		return &core.PRStatus{State: core.PRStateNone}, nil
 	}
 
-	return resp.PR, nil
+	return status, nil
 }
 
 func (f *frontend) ReconnectTaskSession(ctx context.Context, taskID string) error {
-	_, err := f.sendUnary(ctx, socketRequest{
-		Command: socketCommandReconnectTaskSession,
-		TaskID:  taskID,
-	}, socketEnvelopeTaskSessionReconnect)
+	_, err := callUnary(ctx, f, opReconnectTaskSession, taskIDRequest{TaskID: taskID})
 	return err
 }
 
 func (f *frontend) GetProviderSetup(ctx context.Context) (*core.ProviderSetup, error) {
-	resp, err := f.sendUnary(ctx, socketRequest{
-		Command: socketCommandGetProviderSetup,
-	}, socketEnvelopeProviderSetup)
-	if err != nil {
-		return nil, err
-	}
-
-	return resp.ProviderSetup, nil
+	return callUnary(ctx, f, opGetProviderSetup, emptyResponse{})
 }
 
 func (f *frontend) SaveProviderSetup(ctx context.Context, setup core.ProviderSetup) error {
-	_, err := f.sendUnary(ctx, socketRequest{
-		Command:       socketCommandSaveProviderSetup,
-		ProviderSetup: &setup,
-	}, socketEnvelopeProviderSetupSaved)
+	_, err := callUnary(ctx, f, opSaveProviderSetup, saveProviderSetupRequest{ProviderSetup: &setup})
 	return err
 }
 
 func (f *frontend) DetectProviders(ctx context.Context) ([]core.ProviderDetection, error) {
-	resp, err := f.sendUnary(ctx, socketRequest{
-		Command: socketCommandDetectProviders,
-	}, socketEnvelopeProviderDetections)
-	if err != nil {
-		return nil, err
-	}
-
-	return resp.Detections, nil
+	return callUnary(ctx, f, opDetectProviders, emptyResponse{})
 }
 
 func (f *frontend) SwitchTaskProvider(
@@ -124,25 +81,34 @@ func (f *frontend) SwitchTaskProvider(
 	taskID string,
 	provider core.Provider,
 ) (*core.Task, error) {
-	resp, err := f.sendUnary(ctx, socketRequest{
-		Command:  socketCommandSwitchTaskProvider,
-		TaskID:   taskID,
-		Provider: provider,
-	}, socketEnvelopeTaskProviderSwitched)
-	if err != nil {
-		return nil, err
-	}
+	return callUnary(ctx, f, opSwitchTaskProvider, switchTaskProviderRequest{TaskID: taskID, Provider: provider})
+}
 
-	return resp.Task, nil
+func (f *frontend) DeleteTask(ctx context.Context, taskID string) error {
+	_, err := callUnary(ctx, f, opDeleteTask, taskIDRequest{TaskID: taskID})
+	return err
+}
+
+func (f *frontend) ListTasks(ctx context.Context) ([]*core.Task, error) {
+	return callUnary(ctx, f, opListTasks, emptyResponse{})
+}
+
+func (f *frontend) LatestTaskStatus(ctx context.Context, taskID string) (*core.TaskStatusUpdate, error) {
+	return callUnary(ctx, f, opLatestTaskStatus, taskIDRequest{TaskID: taskID})
 }
 
 func (f *frontend) CreateTaskStream(
 	ctx context.Context,
 	input core.CreateTaskInput,
 ) (<-chan core.TaskCreateEvent, error) {
+	payload, err := json.Marshal(input)
+	if err != nil {
+		return nil, fmt.Errorf("%s: encode request: %w", socketCommandCreateTask, err)
+	}
+
 	return f.taskCreateEventStream(ctx, socketRequest{
 		Command: socketCommandCreateTask,
-		Input:   &input,
+		Payload: payload,
 	})
 }
 
@@ -150,9 +116,14 @@ func (f *frontend) RetryTaskCreationStream(
 	ctx context.Context,
 	taskID string,
 ) (<-chan core.TaskCreateEvent, error) {
+	payload, err := json.Marshal(taskIDRequest{TaskID: taskID})
+	if err != nil {
+		return nil, fmt.Errorf("%s: encode request: %w", socketCommandRetryTaskCreation, err)
+	}
+
 	return f.taskCreateEventStream(ctx, socketRequest{
 		Command: socketCommandRetryTaskCreation,
-		TaskID:  taskID,
+		Payload: payload,
 	})
 }
 
@@ -209,44 +180,21 @@ func (f *frontend) taskCreateEventStream(
 	return events, nil
 }
 
-func (f *frontend) DeleteTask(ctx context.Context, taskID string) error {
-	_, err := f.sendUnary(ctx, socketRequest{
-		Command: socketCommandDeleteTask,
-		TaskID:  taskID,
-	}, socketEnvelopeTaskDeleted)
-	return err
-}
-
-func (f *frontend) ListTasks(ctx context.Context) ([]*core.Task, error) {
-	resp, err := f.sendUnary(ctx, socketRequest{Command: socketCommandListTasks}, socketEnvelopeTasksList)
-	if err != nil {
-		return nil, err
-	}
-
-	return resp.Tasks, nil
-}
-
-func (f *frontend) LatestTaskStatus(ctx context.Context, taskID string) (*core.TaskStatusUpdate, error) {
-	resp, err := f.sendUnary(ctx, socketRequest{
-		Command: socketCommandLatestTaskStatus,
-		TaskID:  taskID,
-	}, socketEnvelopeTaskStatusSnapshot)
-	if err != nil {
-		return nil, err
-	}
-
-	return resp.Update, nil
-}
-
 func (f *frontend) SubscribeTaskStatus(ctx context.Context, taskID string) (<-chan core.TaskStatusUpdate, error) {
 	conn, err := dialDaemonSocket(ctx, f.socketPath)
 	if err != nil {
 		return nil, err
 	}
 
+	payload, err := json.Marshal(taskIDRequest{TaskID: taskID})
+	if err != nil {
+		_ = conn.Close()
+		return nil, fmt.Errorf("%s: encode request: %w", socketCommandSubscribeTaskStatus, err)
+	}
+
 	if err := json.NewEncoder(conn).Encode(socketRequest{
 		Command: socketCommandSubscribeTaskStatus,
-		TaskID:  taskID,
+		Payload: payload,
 	}); err != nil {
 		_ = conn.Close()
 		return nil, err
@@ -321,24 +269,4 @@ func (f *frontend) send(ctx context.Context, req socketRequest) (*socketEnvelope
 	}
 
 	return &resp, nil
-}
-
-func (f *frontend) sendUnary(ctx context.Context, req socketRequest, expectedType string) (*socketEnvelope, error) {
-	resp, err := f.send(ctx, req)
-	if err != nil {
-		return nil, err
-	}
-	if resp.Type != expectedType || !resp.OK {
-		return nil, unexpectedResponseError(req.Command, *resp)
-	}
-
-	return resp, nil
-}
-
-func unexpectedResponseError(command string, resp socketEnvelope) error {
-	if resp.Error != "" {
-		return errors.New(resp.Error)
-	}
-
-	return fmt.Errorf("unexpected %s response %q", command, resp.Type)
 }

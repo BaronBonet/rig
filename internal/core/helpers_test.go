@@ -11,8 +11,13 @@ import (
 )
 
 type testTaskServiceHarness struct {
-	service TaskService
-	events  []string
+	service *service
+	// creation and launcher are the same instances the service delegates to,
+	// exposed so seam tests can drive the modules through their own interfaces.
+	creation    *taskCreation
+	launcher    *sessionLauncher
+	observation *taskObservation
+	events      []string
 
 	taskRepoMock *MockTaskRepository
 	taskRepo     taskRepositoryState
@@ -224,6 +229,9 @@ func newTestTaskService(t *testing.T) *testTaskServiceHarness {
 		EnableWorkspaceSetup: true,
 		ProviderConfig:       h.providerConfigMock,
 	})
+	h.creation = h.service.creation
+	h.launcher = h.service.launcher
+	h.observation = h.service.observation
 
 	return h
 }

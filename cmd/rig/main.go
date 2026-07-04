@@ -436,7 +436,7 @@ func runDoctor(stdout io.Writer, cfg *infrastructure.ApplicationConfig) error {
 	return err
 }
 
-func newDoctorService(cfg *infrastructure.ApplicationConfig) core.TaskService {
+func newDoctorService(cfg *infrastructure.ApplicationConfig) core.HealthChecker {
 	runner := subprocess.ExecRunner{}
 	providers := registry.NewProviderClients(registry.Dependencies{
 		Runner:         runner,
@@ -533,6 +533,9 @@ func serveTaskDaemon(
 	})
 
 	for _, refreshErr := range registry.RefreshProviderEnvironments(ctx, providers, providerConfig) {
+		fmt.Fprintln(os.Stderr, refreshErr)
+	}
+	for _, refreshErr := range service.RefreshTaskWorkspaceHooks(ctx) {
 		fmt.Fprintln(os.Stderr, refreshErr)
 	}
 

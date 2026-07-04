@@ -52,6 +52,32 @@ func TestTaskServiceSwitchTaskProvider_LaunchesNewProviderAndUpdatesActiveProvid
 	require.Equal(t, ProviderClaude, svc.taskRepo.updatedTask.Provider)
 }
 
+func TestTaskServiceSwitchTaskProvider_ReconcilesStaleStatusProvider(t *testing.T) {
+	svc := newTestTaskService(t)
+	svc.providerConfig.setup = multiProviderSetup()
+	svc.taskRepo.listTasks = []*Task{codexTaskFixture()}
+	svc.taskRepo.latestByTask["task-1"] = TaskStatusUpdate{
+		TaskID:       "task-1",
+		Provider:     ProviderCodex,
+		Phase:        TaskStatusPhaseWaitingForInput,
+		RawEventName: "Stop",
+	}
+	svc.sessionClient.inspectState = TaskSessionRuntimeState{
+		Exists:         true,
+		ActiveCommands: []string{"zsh"},
+	}
+
+	_, err := svc.service.SwitchTaskProvider(t.Context(), "task-1", ProviderClaude)
+
+	require.NoError(t, err)
+	// The persisted status row from the previous provider must be re-stamped:
+	// a durable status/record provider mismatch puts every future TUI session
+	// into a permanent reload loop until the new provider emits a hook event.
+	status := svc.taskRepo.latestByTask["task-1"]
+	require.Equal(t, ProviderClaude, status.Provider)
+	require.Equal(t, TaskStatusPhaseWaitingForInput, status.Phase)
+}
+
 func TestTaskServiceSwitchTaskProvider_RefusesWhileCurrentProviderIsRunning(t *testing.T) {
 	svc := newTestTaskService(t)
 	svc.providerConfig.setup = multiProviderSetup()

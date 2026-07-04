@@ -9,15 +9,98 @@ import (
 	"time"
 )
 
-var taskStatusRecoveryPollInterval = 2 * time.Second
+const defaultTaskStatusRecoveryPollInterval = 2 * time.Second
 
-func getTaskActivity(ctx context.Context, service *taskService, taskID string, limit int) ([]TaskActivityEvent, error) {
+// taskObservation is the Task observation module: everything Rig derives
+// from provider hook events and provider session history lives here — a
+// task's runtime status (including read-time derivation against the live
+// tmux session and provider-side recovery of stale status), adoption of
+// manually launched provider sessions, persisted activity, and token usage.
+type taskObservation struct {
+	tasks          TaskRepository
+	tmuxSession    TmuxSessionClient
+	providers      map[Provider]ProviderClient
+	providerConfig ProviderConfigStore
+	// recoveryPollInterval paces the subscription recovery loop that
+	// re-derives status while a subscriber is attached.
+	recoveryPollInterval time.Duration
+}
+
+func newTaskObservation(
+	tasks TaskRepository,
+	tmuxSession TmuxSessionClient,
+	providers map[Provider]ProviderClient,
+	providerConfig ProviderConfigStore,
+) *taskObservation {
+	return &taskObservation{
+		tasks:                tasks,
+		tmuxSession:          tmuxSession,
+		providers:            providers,
+		providerConfig:       providerConfig,
+		recoveryPollInterval: defaultTaskStatusRecoveryPollInterval,
+	}
+}
+
+// supportedProviderClient returns the adapter client for a supported provider
+// without requiring the provider to be configured. Use it for read-side
+// behavior that must keep working for tasks whose active provider is no
+// longer configured.
+func supportedProviderClient(
+	providers map[Provider]ProviderClient,
+	provider Provider,
+) (ProviderClient, error) {
+	providerClient, ok := providers[provider]
+	if !ok {
+		return nil, fmt.Errorf("provider %q unavailable", provider)
+	}
+
+	return providerClient, nil
+}
+
+// recordActiveProvider persists a new active provider on the task record. It
+// runs only after the new provider is known to own the task session, so a
+// failed switch or adoption never changes the recorded active provider.
+func recordActiveProvider(
+	ctx context.Context,
+	tasks TaskRepository,
+	task *Task,
+	provider Provider,
+) (*Task, error) {
+	task.Provider = provider
+	task.UpdatedAt = time.Now().UTC()
+	if err := tasks.UpdateTask(ctx, task); err != nil {
+		return nil, fmt.Errorf("record active provider: %w", err)
+	}
+
+	// A task's runtime status is driven only by its active provider, so a
+	// persisted status row left behind by the previous provider is re-stamped.
+	// A durable status/record provider mismatch would otherwise put every TUI
+	// session into a permanent reload loop until the new provider's first hook
+	// event happened to overwrite the row.
+	update, err := tasks.LatestTaskStatus(ctx, task.ID)
+	if err != nil {
+		return nil, fmt.Errorf("record active provider: read latest status: %w", err)
+	}
+	if update != nil && update.Provider != provider {
+		update.Provider = provider
+		if err := tasks.UpsertTaskStatus(ctx, *update); err != nil {
+			return nil, fmt.Errorf("record active provider: re-stamp status: %w", err)
+		}
+	}
+	return task, nil
+}
+
+func (o *taskObservation) GetTaskActivity(
+	ctx context.Context,
+	taskID string,
+	limit int,
+) ([]TaskActivityEvent, error) {
 	taskID = strings.TrimSpace(taskID)
-	events, err := service.tasks.GetTaskActivity(ctx, taskID, 0)
+	events, err := o.tasks.GetTaskActivity(ctx, taskID, 0)
 	if err != nil {
 		return nil, err
 	}
-	events = mergeTaskActivity(events, recoveredTaskActivity(ctx, service, taskID, events))
+	events = mergeTaskActivity(events, o.recoveredTaskActivity(ctx, taskID, events))
 
 	if limit <= 0 {
 		return events, nil
@@ -26,8 +109,8 @@ func getTaskActivity(ctx context.Context, service *taskService, taskID string, l
 	return activityWindowWithLastUserPrompt(events, limit), nil
 }
 
-func getTaskTokenUsage(ctx context.Context, service *taskService, taskID string) (*TaskTokenUsage, error) {
-	sessions, err := service.tasks.ListTaskProviderSessions(ctx, strings.TrimSpace(taskID))
+func (o *taskObservation) GetTaskTokenUsage(ctx context.Context, taskID string) (*TaskTokenUsage, error) {
+	sessions, err := o.tasks.ListTaskProviderSessions(ctx, strings.TrimSpace(taskID))
 	if err != nil {
 		return nil, err
 	}
@@ -43,7 +126,7 @@ func getTaskTokenUsage(ctx context.Context, service *taskService, taskID string)
 		if transcriptPath == "" {
 			continue
 		}
-		providerClient, err := service.supportedClientFor(session.Provider)
+		providerClient, err := supportedProviderClient(o.providers, session.Provider)
 		if err != nil {
 			continue
 		}
@@ -71,43 +154,45 @@ func getTaskTokenUsage(ctx context.Context, service *taskService, taskID string)
 	return &total, nil
 }
 
-func latestTaskStatus(ctx context.Context, service *taskService, taskID string) (*TaskStatusUpdate, error) {
-	update, err := service.tasks.LatestTaskStatus(ctx, strings.TrimSpace(taskID))
+func (o *taskObservation) LatestTaskStatus(ctx context.Context, taskID string) (*TaskStatusUpdate, error) {
+	update, err := o.tasks.LatestTaskStatus(ctx, strings.TrimSpace(taskID))
 	if err != nil || update == nil {
 		return update, err
 	}
 
-	return currentTaskStatus(ctx, service, update), nil
+	return o.currentStatus(ctx, update), nil
 }
 
-func subscribeTaskStatus(
+func (o *taskObservation) SubscribeTaskStatus(
 	ctx context.Context,
-	service *taskService,
 	taskID string,
 ) (<-chan TaskStatusUpdate, error) {
 	taskID = strings.TrimSpace(taskID)
-	updates, err := service.tasks.SubscribeTaskStatus(ctx, taskID)
+	updates, err := o.tasks.SubscribeTaskStatus(ctx, taskID)
 	if err != nil {
 		return nil, err
 	}
 
-	return subscribeTaskStatusWithRecovery(ctx, service, taskID, updates, taskStatusRecoveryPollInterval), nil
+	return o.subscribeWithRecovery(ctx, taskID, updates), nil
 }
 
-func handleProviderHookEvent(ctx context.Context, service *taskService, input HookEventInput) error {
+func (o *taskObservation) HandleHookEvent(ctx context.Context, input HookEventInput) error {
 	if input.Provider == "" {
 		return ErrUnmanagedHookEvent
 	}
 
-	providerClient, err := service.supportedClientFor(input.Provider)
+	providerClient, err := supportedProviderClient(o.providers, input.Provider)
 	if err != nil {
 		return err
 	}
 
-	// Hook routes exist for every supported provider, so the service decides
+	// Hook routes exist for every supported provider, so observation decides
 	// here whether an incoming hook is actionable: hooks from providers the
 	// user has not configured are ignored without task changes.
-	setup, err := service.GetProviderSetup(ctx)
+	if o.providerConfig == nil {
+		return fmt.Errorf("provider config store not configured")
+	}
+	setup, err := o.providerConfig.GetProviderSetup(ctx)
 	if err != nil {
 		return err
 	}
@@ -117,7 +202,7 @@ func handleProviderHookEvent(ctx context.Context, service *taskService, input Ho
 
 	input.TaskID = strings.TrimSpace(input.TaskID)
 	if input.TaskID == "" {
-		resolvedTaskID, err := service.resolveTaskIDFromCwd(ctx, input.Cwd)
+		resolvedTaskID, err := o.resolveTaskIDFromCwd(ctx, input.Cwd)
 		if err != nil {
 			return err
 		}
@@ -125,12 +210,12 @@ func handleProviderHookEvent(ctx context.Context, service *taskService, input Ho
 	}
 
 	drivesRuntimeStatus := true
-	if task, taskErr := service.taskByID(ctx, input.TaskID); taskErr == nil && task.Provider != input.Provider {
+	if task, taskErr := taskByID(ctx, o.tasks, input.TaskID); taskErr == nil && task.Provider != input.Provider {
 		if isProviderAdoptionEvent(input) {
 			// Manual provider adoption: a configured provider started a session in
 			// this task's workspace, so it becomes the active provider immediately.
 			// Rig's tmux session reference is intentionally left untouched.
-			if _, adoptErr := service.recordActiveProvider(ctx, task, input.Provider); adoptErr != nil {
+			if _, adoptErr := recordActiveProvider(ctx, o.tasks, task, input.Provider); adoptErr != nil {
 				return adoptErr
 			}
 		} else {
@@ -140,10 +225,10 @@ func handleProviderHookEvent(ctx context.Context, service *taskService, input Ho
 		}
 	}
 
-	if err := recordProviderHookSession(ctx, service, input); err != nil {
+	if err := o.recordHookSession(ctx, input); err != nil {
 		return err
 	}
-	if err := recordProviderHookActivity(ctx, service, input); err != nil {
+	if err := o.recordHookActivity(ctx, input); err != nil {
 		return err
 	}
 	if !drivesRuntimeStatus {
@@ -162,22 +247,40 @@ func handleProviderHookEvent(ctx context.Context, service *taskService, input Ho
 		return fmt.Errorf("task status update task ID is required")
 	}
 
-	return service.tasks.UpsertTaskStatus(ctx, *update)
+	return o.tasks.UpsertTaskStatus(ctx, *update)
 }
 
 // isProviderAdoptionEvent reports whether a hook event may adopt a manually
 // launched provider as the task's active provider. Only session-start events
 // qualify so that late or stray hooks cannot change the active provider.
 func isProviderAdoptionEvent(input HookEventInput) bool {
-	return strings.TrimSpace(input.EventName) == "SessionStart"
+	return strings.TrimSpace(input.EventName) == HookEventSessionStart
 }
 
-func subscribeTaskStatusWithRecovery(
+func (o *taskObservation) resolveTaskIDFromCwd(ctx context.Context, cwd string) (string, error) {
+	cwd = strings.TrimSpace(cwd)
+	if cwd == "" {
+		return "", ErrUnmanagedHookEvent
+	}
+
+	tasks, err := o.tasks.ListTasks(ctx)
+	if err != nil {
+		return "", fmt.Errorf("list tasks for hook resolution: %w", err)
+	}
+
+	for _, task := range tasks {
+		if task != nil && strings.TrimSpace(task.WorktreePath) == cwd {
+			return strings.TrimSpace(task.ID), nil
+		}
+	}
+
+	return "", ErrUnmanagedHookEvent
+}
+
+func (o *taskObservation) subscribeWithRecovery(
 	ctx context.Context,
-	service *taskService,
 	taskID string,
 	updates <-chan TaskStatusUpdate,
-	pollInterval time.Duration,
 ) <-chan TaskStatusUpdate {
 	recovered := make(chan TaskStatusUpdate, 8)
 
@@ -199,11 +302,11 @@ func subscribeTaskStatusWithRecovery(
 			}
 		}
 
-		if !send(latestTaskStatusNoSubscribe(ctx, service, taskID)) {
+		if !send(o.latestStatusNoSubscribe(ctx, taskID)) {
 			return
 		}
 
-		ticker := time.NewTicker(pollInterval)
+		ticker := time.NewTicker(o.recoveryPollInterval)
 		defer ticker.Stop()
 
 		for {
@@ -214,12 +317,12 @@ func subscribeTaskStatusWithRecovery(
 				if !ok {
 					return
 				}
-				current := currentTaskStatus(ctx, service, &update)
+				current := o.currentStatus(ctx, &update)
 				if !send(current) {
 					return
 				}
 			case <-ticker.C:
-				if !send(latestTaskStatusNoSubscribe(ctx, service, taskID)) {
+				if !send(o.latestStatusNoSubscribe(ctx, taskID)) {
 					return
 				}
 			}
@@ -229,51 +332,88 @@ func subscribeTaskStatusWithRecovery(
 	return recovered
 }
 
-func latestTaskStatusNoSubscribe(ctx context.Context, service *taskService, taskID string) *TaskStatusUpdate {
-	update, err := service.tasks.LatestTaskStatus(ctx, taskID)
+func (o *taskObservation) latestStatusNoSubscribe(ctx context.Context, taskID string) *TaskStatusUpdate {
+	update, err := o.tasks.LatestTaskStatus(ctx, taskID)
 	if err != nil || update == nil {
 		return nil
 	}
-	return currentTaskStatus(ctx, service, update)
+	return o.currentStatus(ctx, update)
 }
 
-func currentTaskStatus(ctx context.Context, service *taskService, update *TaskStatusUpdate) *TaskStatusUpdate {
+// statusResolution is the pure outcome of the runtime-status decision: what a
+// persisted status should become given the live session state.
+type statusResolution int
+
+const (
+	// statusKeep: the persisted phase stands.
+	statusKeep statusResolution = iota
+	// statusStopped: the session or provider process is gone; the task reads
+	// as stopped regardless of the persisted phase.
+	statusStopped
+	// statusTryRecover: the provider is running, so provider-side state may
+	// hold a newer observation than the persisted one.
+	statusTryRecover
+)
+
+// resolveStatus is the runtime-status decision table, kept free of I/O so
+// every row is a value-in/value-out test. The persisted status row is not
+// authoritative: it is one input alongside the live tmux runtime state and
+// the active provider's expected session command.
+func resolveStatus(
+	update *TaskStatusUpdate,
+	runtime TaskSessionRuntimeState,
+	providerCommand string,
+) statusResolution {
+	if update == nil || update.Phase == TaskStatusPhaseStopped {
+		return statusKeep
+	}
+	if taskSessionRunningProvider(runtime, providerCommand) {
+		return statusTryRecover
+	}
+	return statusStopped
+}
+
+// currentStatus gathers the live inputs for one persisted status, asks
+// resolveStatus what to do, and executes only that action. Gathering failures
+// keep the persisted status: observation must degrade, never invent state.
+func (o *taskObservation) currentStatus(ctx context.Context, update *TaskStatusUpdate) *TaskStatusUpdate {
 	if update == nil || update.Phase == TaskStatusPhaseStopped {
 		return update
 	}
 
-	task, err := service.taskByID(ctx, update.TaskID)
+	task, err := taskByID(ctx, o.tasks, update.TaskID)
 	if err != nil {
 		return update
 	}
 
-	runtime, err := service.tmuxSession.InspectTaskSession(ctx, task)
+	runtime, err := o.tmuxSession.InspectTaskSession(ctx, task)
 	if err != nil {
 		return update
 	}
 
-	providerClient, err := service.supportedClientFor(task.Provider)
+	providerClient, err := supportedProviderClient(o.providers, task.Provider)
 	if err != nil {
 		return update
 	}
 
-	if taskSessionRunningProvider(runtime, providerClient.TaskSessionCommandName()) {
-		recovered := recoveredTaskStatus(ctx, service, providerClient, update)
-		if recovered != nil {
+	switch resolveStatus(update, runtime, providerClient.TaskSessionCommandName()) {
+	case statusTryRecover:
+		if recovered := o.recoveredStatus(ctx, providerClient, update); recovered != nil {
 			return recovered
 		}
 		return update
+	case statusStopped:
+		stopped := *update
+		stopped.Phase = TaskStatusPhaseStopped
+		stopped.RawEventName = "TaskSessionStopped"
+		return &stopped
+	default:
+		return update
 	}
-
-	stopped := *update
-	stopped.Phase = TaskStatusPhaseStopped
-	stopped.RawEventName = "TaskSessionStopped"
-	return &stopped
 }
 
-func recoveredTaskStatus(
+func (o *taskObservation) recoveredStatus(
 	ctx context.Context,
-	service *taskService,
 	providerClient ProviderClient,
 	update *TaskStatusUpdate,
 ) *TaskStatusUpdate {
@@ -281,7 +421,7 @@ func recoveredTaskStatus(
 		return nil
 	}
 
-	sessions, err := service.tasks.ListTaskProviderSessions(ctx, update.TaskID)
+	sessions, err := o.tasks.ListTaskProviderSessions(ctx, update.TaskID)
 	if err != nil {
 		return nil
 	}
@@ -292,13 +432,12 @@ func recoveredTaskStatus(
 	return recovered
 }
 
-func recoveredTaskActivity(
+func (o *taskObservation) recoveredTaskActivity(
 	ctx context.Context,
-	service *taskService,
 	taskID string,
 	events []TaskActivityEvent,
 ) []TaskActivityEvent {
-	sessions, err := service.tasks.ListTaskProviderSessions(ctx, taskID)
+	sessions, err := o.tasks.ListTaskProviderSessions(ctx, taskID)
 	if err != nil {
 		return nil
 	}
@@ -306,7 +445,7 @@ func recoveredTaskActivity(
 	after := latestTaskActivityObservedAt(events)
 	var recovered []TaskActivityEvent
 	for _, session := range latestProviderSessionsByID(sessions) {
-		providerClient, err := service.supportedClientFor(session.Provider)
+		providerClient, err := supportedProviderClient(o.providers, session.Provider)
 		if err != nil {
 			continue
 		}
@@ -319,7 +458,7 @@ func recoveredTaskActivity(
 	return recovered
 }
 
-func recordProviderHookSession(ctx context.Context, service *taskService, input HookEventInput) error {
+func (o *taskObservation) recordHookSession(ctx context.Context, input HookEventInput) error {
 	input.SessionID = strings.TrimSpace(input.SessionID)
 	if input.SessionID == "" {
 		return nil
@@ -329,7 +468,7 @@ func recordProviderHookSession(ctx context.Context, service *taskService, input 
 	if observedAt.IsZero() {
 		observedAt = time.Now().UTC()
 	}
-	if err := service.tasks.UpsertTaskProviderSession(ctx, TaskProviderSession{
+	if err := o.tasks.UpsertTaskProviderSession(ctx, TaskProviderSession{
 		TaskID:            input.TaskID,
 		Provider:          input.Provider,
 		ProviderSessionID: input.SessionID,
@@ -343,7 +482,7 @@ func recordProviderHookSession(ctx context.Context, service *taskService, input 
 	}); err != nil {
 		return fmt.Errorf("upsert task provider session: %w", err)
 	}
-	if err := service.tasks.UpsertTaskResumeMetadata(ctx, TaskResumeMetadata{
+	if err := o.tasks.UpsertTaskResumeMetadata(ctx, TaskResumeMetadata{
 		TaskID:     input.TaskID,
 		Provider:   input.Provider,
 		SessionID:  input.SessionID,
@@ -354,12 +493,12 @@ func recordProviderHookSession(ctx context.Context, service *taskService, input 
 	return nil
 }
 
-func recordProviderHookActivity(ctx context.Context, service *taskService, input HookEventInput) error {
+func (o *taskObservation) recordHookActivity(ctx context.Context, input HookEventInput) error {
 	activity := taskActivityEventFromHookInput(input)
 	if activity == nil {
 		return nil
 	}
-	if err := service.tasks.RecordTaskActivity(ctx, *activity); err != nil {
+	if err := o.tasks.RecordTaskActivity(ctx, *activity); err != nil {
 		return fmt.Errorf("record task activity: %w", err)
 	}
 	return nil
@@ -421,13 +560,13 @@ func taskActivityEventFromHookInput(input HookEventInput) *TaskActivityEvent {
 	}
 
 	switch event.EventName {
-	case "UserPromptSubmit":
+	case HookEventUserPromptSubmit:
 		event.Role = TaskActivityRoleUser
 		event.Text = compactActivityText(input.PromptText)
-	case "PostToolUse":
+	case HookEventPostToolUse:
 		event.Role = TaskActivityRoleAssistant
 		event.Text = compactActivityText(input.CommandText)
-	case "Stop":
+	case HookEventStop:
 		event.Role = TaskActivityRoleAssistant
 		event.Text = compactActivityText(input.LastAssistantMessage)
 	default:

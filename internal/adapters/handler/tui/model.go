@@ -33,47 +33,96 @@ const (
 
 const defaultBuildVersion = "dev"
 
+// pendingOp is the single in-flight task operation. Create, delete, and
+// switch are mutually exclusive: while one is pending the TUI refuses to
+// start another.
+type pendingOp int
+
+const (
+	opNone pendingOp = iota
+	opCreating
+	opDeleting
+	opSwitching
+)
+
 const taskActivityPreviewLimit = 6
 
 // nolint:recvcheck // bubbletea requires value receivers for tea.Model.
 type model struct {
-	frontend       core.TaskFrontend
-	statusContext  context.Context
-	err            error
-	createErr      error
-	setupErr       error
-	cancelStatus   context.CancelFunc
-	rows           []taskRow
-	prRows         []core.RepoPullRequest
-	providerSetup  *core.ProviderSetup
-	setupRows      []providerSetupRow
-	switchOptions  []core.Provider
-	prompt         string
-	promptInput    textarea.Model
-	createActive   core.TaskCreateProgressStep
-	createDone     []core.TaskCreateProgressStep
-	createProvider core.Provider
-	setupDefault   core.Provider
-	selected       int
-	prSelected     int
-	setupSelected  int
-	switchSelected int
-	width          int
-	height         int
-	shimmerTick    int
-	mode           modelMode
-	launchCwd      string
-	buildVersion   string
-	prRepoRoot     string
-	prRepoName     string
-	loading        bool
-	createPending  bool
-	createFromPR   bool
-	deletePending  bool
-	setupOnly      bool
-	setupDetecting bool
-	setupSaving    bool
-	switchPending  bool
+	frontend      core.TaskFrontend
+	statusContext context.Context
+	err           error
+	cancelStatus  context.CancelFunc
+	rows          []taskRow
+	providerSetup *core.ProviderSetup
+	selected      int
+	width         int
+	height        int
+	shimmerTick   int
+	mode          modelMode
+	pending       pendingOp
+	launchCwd     string
+	buildVersion  string
+	loading       bool
+	detailsHidden bool
+	setupOnly     bool
+
+	// adoptionReloads dampens the reload triggered by a status/record provider
+	// mismatch: one reload per observed mismatch. When the mismatch survives a
+	// reload, the stale side is the daemon's status row, not the task list —
+	// reloading again cannot fix it and would loop forever.
+	adoptionReloads map[string]core.Provider
+	// statusSubscribed tracks tasks with a live status subscription so task
+	// reloads do not open a duplicate subscription per reload.
+	statusSubscribed map[string]bool
+
+	// Per-mode state, cleared by transition() when the mode family changes.
+	draft          taskDraft
+	setupForm      setupFormState
+	providerSwitch switchState
+
+	// In-flight creation progress; outlives the draft and renders in browse.
+	create createFlowState
+}
+
+// taskDraft is the in-progress task the user is assembling before
+// submission: the prompt text, the Tab-cycled provider choice, and the
+// optional pull request source. It spans the prompt-input and PR-picker
+// modes and is discarded when the TUI leaves that mode family.
+type taskDraft struct {
+	prompt     string
+	input      textarea.Model
+	provider   core.Provider // "" means use the configured default
+	prs        []core.RepoPullRequest
+	prSelected int
+	repoRoot   string
+	repoName   string
+	err        error // validation error shown inside the draft views
+}
+
+// createFlowState is the progress of an in-flight or just-failed task
+// creation, rendered in the browse list after the draft is submitted.
+type createFlowState struct {
+	active core.TaskCreateProgressStep
+	done   []core.TaskCreateProgressStep
+	fromPR bool
+	err    error
+}
+
+// setupFormState is the provider setup screen's working state.
+type setupFormState struct {
+	rows            []providerSetupRow
+	selected        int
+	defaultProvider core.Provider
+	detecting       bool
+	saving          bool
+	err             error
+}
+
+// switchState is the provider switch picker's working state.
+type switchState struct {
+	options  []core.Provider
+	selected int
 }
 
 // providerSetupRow is one supported provider in the provider setup UI.
@@ -197,14 +246,17 @@ func newModelWithLaunchCwdAndVersion(frontend core.TaskFrontend, launchCwd strin
 	statusContext, cancelStatus := context.WithCancel(context.Background())
 
 	return model{
-		frontend:      frontend,
-		statusContext: statusContext,
-		cancelStatus:  cancelStatus,
-		launchCwd:     strings.TrimSpace(launchCwd),
-		buildVersion:  normalizeBuildVersion(buildVersion),
-		promptInput:   newPromptInput(),
-		loading:       true,
-		mode:          modeBrowse,
+		frontend:         frontend,
+		statusContext:    statusContext,
+		cancelStatus:     cancelStatus,
+		launchCwd:        strings.TrimSpace(launchCwd),
+		buildVersion:     normalizeBuildVersion(buildVersion),
+		draft:            taskDraft{input: newPromptInput()},
+		loading:          true,
+		mode:             modeBrowse,
+		detailsHidden:    true,
+		adoptionReloads:  make(map[string]core.Provider),
+		statusSubscribed: make(map[string]bool),
 	}
 }
 
@@ -244,10 +296,10 @@ func (m model) configuredProviders() []core.Provider {
 // the user cycled to with Tab, falling back to the configured default.
 func (m model) effectiveCreateProvider() core.Provider {
 	if m.providerSetup == nil {
-		return m.createProvider
+		return m.draft.provider
 	}
-	if m.createProvider != "" && m.providerSetup.IsConfigured(m.createProvider) {
-		return m.createProvider
+	if m.draft.provider != "" && m.providerSetup.IsConfigured(m.draft.provider) {
+		return m.draft.provider
 	}
 	return m.providerSetup.Default
 }
@@ -263,11 +315,11 @@ func (m *model) cycleCreateProvider() {
 	current := m.effectiveCreateProvider()
 	for index, provider := range providers {
 		if provider == current {
-			m.createProvider = providers[(index+1)%len(providers)]
+			m.draft.provider = providers[(index+1)%len(providers)]
 			return
 		}
 	}
-	m.createProvider = providers[0]
+	m.draft.provider = providers[0]
 }
 
 func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
@@ -285,7 +337,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 			return m, tea.Quit
 		}
-		if m.createPending && isQuitKey(msg) {
+		if m.pending == opCreating && isQuitKey(msg) {
 			if m.cancelStatus != nil {
 				m.cancelStatus()
 			}
@@ -315,14 +367,15 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, tea.Quit
 		}
 
+		// A displayed error stays until the user acknowledges it with a key
+		// press; background refreshes must not clear it.
+		m.err = nil
+
 		switch msg.String() {
 		case "esc":
-			if m.cancelStatus != nil {
-				m.cancelStatus()
-			}
-			return m, tea.Quit
+			return m.handleBack()
 		case "a", "n":
-			if m.createPending {
+			if m.pending != opNone {
 				return m, nil
 			}
 			if m.providerSetup == nil {
@@ -335,7 +388,6 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m.enterProviderSetupMode()
 		case "r":
 			m.loading = true
-			m.err = nil
 			return m, loadTasksCmd(m.statusContext, m.frontend)
 		case "R":
 			return m.retrySelectedTaskCreation()
@@ -351,11 +403,13 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.moveSelection(1)
 		case "k", "up":
 			m.moveSelection(-1)
+		case " ", "space":
+			m.detailsHidden = !m.detailsHidden
 		case "x":
 			if len(m.rows) == 0 {
 				return m, nil
 			}
-			m.mode = modeCleanupConfirm
+			m.transition(modeCleanupConfirm)
 			return m, nil
 		case "enter":
 			if len(m.rows) == 0 {
@@ -365,15 +419,16 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			if row == nil || row.task == nil {
 				return m, nil
 			}
-			m.err = nil
 			return m, openTaskSessionCmd(m.statusContext, m.frontend, row.task)
 		}
 		m.clampSelection()
 		return m, nil
 	case tasksLoadedMsg:
 		m.loading = false
-		m.err = msg.err
+		// Only surface a failure; a successful background reload must not
+		// clear an unacknowledged error shown to the user.
 		if msg.err != nil {
+			m.err = msg.err
 			return m, nil
 		}
 
@@ -408,11 +463,11 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.err = msg.err
 			return m, nil
 		}
-		m.err = nil
 		m.setTaskTokenUsage(msg.taskID, msg.usage)
 		return m, nil
 	case taskStatusSubscriptionReadyMsg:
 		if msg.err != nil {
+			delete(m.statusSubscribed, msg.taskID)
 			return m, nil
 		}
 		return m, waitForTaskStatusCmd(msg.taskID, msg.updates)
@@ -426,19 +481,30 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		// A live status from a different provider than the task record means
 		// the daemon adopted a manually launched provider; reload tasks so the
-		// displayed active provider reflects reality.
-		if row := m.taskRowByID(msg.taskID); row != nil && row.task != nil &&
-			update.Provider != "" && row.task.Provider != update.Provider {
-			cmds = append(cmds, loadTasksCmd(m.statusContext, m.frontend))
+		// displayed active provider reflects reality. One reload per observed
+		// mismatch: if it persists after a reload, the daemon's status row is
+		// the stale side and reloading again cannot fix it.
+		if row := m.taskRowByID(msg.taskID); row != nil && row.task != nil && update.Provider != "" {
+			switch {
+			case row.task.Provider == update.Provider:
+				delete(m.adoptionReloads, msg.taskID)
+			case m.adoptionReloads[msg.taskID] != update.Provider:
+				if m.adoptionReloads == nil {
+					m.adoptionReloads = make(map[string]core.Provider)
+				}
+				m.adoptionReloads[msg.taskID] = update.Provider
+				cmds = append(cmds, loadTasksCmd(m.statusContext, m.frontend))
+			}
 		}
 		return m, tea.Batch(cmds...)
 	case taskStatusSubscriptionClosedMsg:
+		delete(m.statusSubscribed, msg.taskID)
 		return m, nil
 	case providerSetupLoadedMsg:
 		if msg.err != nil {
 			// Invalid provider setup gates the TUI the same way missing setup
 			// does; the setup screen shows what went wrong.
-			m.setupErr = msg.err
+			m.setupForm.err = msg.err
 			next, cmd := m.enterProviderSetupMode()
 			return next, cmd
 		}
@@ -449,36 +515,36 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		return m, nil
 	case providerDetectionsMsg:
-		m.setupDetecting = false
+		m.setupForm.detecting = false
 		if msg.err != nil {
-			m.setupErr = msg.err
+			m.setupForm.err = msg.err
 			return m, nil
 		}
 		m.applyProviderDetections(msg.detections)
 		return m, nil
 	case providerSetupSavedMsg:
-		m.setupSaving = false
+		m.setupForm.saving = false
 		if msg.err != nil {
-			m.setupErr = msg.err
+			m.setupForm.err = msg.err
 			return m, nil
 		}
 		saved := msg.setup
 		m.providerSetup = &saved
-		m.setupErr = nil
-		m.createProvider = ""
+		m.setupForm.err = nil
+		m.draft.provider = ""
 		if m.setupOnly {
 			if m.cancelStatus != nil {
 				m.cancelStatus()
 			}
 			return m, tea.Quit
 		}
-		m.mode = modeBrowse
+		m.transition(modeBrowse)
 		m.loading = true
 		return m, loadTasksCmd(m.statusContext, m.frontend)
 	case taskProviderSwitchedMsg:
-		m.switchPending = false
+		m.pending = opNone
 		m.shimmerTick = 0
-		m.mode = modeBrowse
+		m.transition(modeBrowse)
 		if msg.err != nil {
 			// A failed or refused switch keeps the previous active provider.
 			m.err = msg.err
@@ -491,42 +557,38 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.clampSelection()
 		return m, tea.Batch(m.taskStatusTrackingCmds(taskID(msg.task))...)
 	case repoPullRequestsLoadedMsg:
-		m.createErr = msg.err
+		m.draft.err = msg.err
 		if msg.err != nil {
-			m.prRows = nil
+			m.draft.prs = nil
 			return m, nil
 		}
-		m.prRepoRoot = msg.repoRoot
-		m.prRepoName = msg.repoName
-		m.prRows = append([]core.RepoPullRequest(nil), msg.prs...)
+		m.draft.repoRoot = msg.repoRoot
+		m.draft.repoName = msg.repoName
+		m.draft.prs = append([]core.RepoPullRequest(nil), msg.prs...)
 		m.clampPRSelection()
 		return m, nil
 	case taskCreatedMsg:
-		m.createPending = false
+		m.pending = opNone
 		m.shimmerTick = 0
 		if msg.err != nil {
-			m.createErr = msg.err
+			m.create.err = msg.err
 			return m, nil
 		}
 
-		m.mode = modeBrowse
-		m.prompt = ""
-		m.promptInput = newPromptInput()
-		m.createErr = nil
-		m.createFromPR = false
+		m.transition(modeBrowse)
+		m.create = createFlowState{}
 		index := m.upsertTaskRow(msg.task)
 		if index >= 0 {
 			m.selected = index
 		}
-		m.resetCreateProgress()
 		m.clampSelection()
 		cmds := []tea.Cmd{loadTasksCmd(m.statusContext, m.frontend)}
 		cmds = append(cmds, m.taskStatusTrackingCmds(taskID(msg.task))...)
 		return m, tea.Batch(cmds...)
 	case taskCreateStreamStartFailedMsg:
-		m.createPending = false
+		m.pending = opNone
 		m.shimmerTick = 0
-		m.createErr = msg.err
+		m.create.err = msg.err
 		return m, nil
 	case taskCreateEventMsg:
 		switch {
@@ -534,9 +596,9 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.advanceCreateProgress(msg.event.Progress.Step)
 			return m, waitForTaskCreateEventCmd(msg.events)
 		case msg.event.Err != nil:
-			m.createPending = false
+			m.pending = opNone
 			m.shimmerTick = 0
-			m.createErr = msg.event.Err
+			m.create.err = msg.event.Err
 			if msg.event.Task != nil {
 				if index := m.upsertTaskRow(msg.event.Task); index >= 0 {
 					m.selected = index
@@ -550,13 +612,13 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, waitForTaskCreateEventCmd(msg.events)
 		}
 	case taskCreateStreamClosedMsg:
-		if !m.createPending {
+		if m.pending != opCreating {
 			return m, nil
 		}
-		m.createPending = false
+		m.pending = opNone
 		m.shimmerTick = 0
-		if m.createErr == nil {
-			m.createErr = errors.New("create task stream closed unexpectedly")
+		if m.create.err == nil {
+			m.create.err = errors.New("create task stream closed unexpectedly")
 		}
 		return m, nil
 	case taskOpenedMsg:
@@ -567,9 +629,9 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.err = nil
 		return m, nil
 	case taskDeletedMsg:
-		m.deletePending = false
+		m.pending = opNone
 		m.shimmerTick = 0
-		m.mode = modeBrowse
+		m.transition(modeBrowse)
 		if msg.err != nil {
 			m.err = msg.err
 			return m, nil
@@ -577,6 +639,8 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 		m.err = nil
 		m.removeTaskRow(msg.taskID)
+		delete(m.statusSubscribed, msg.taskID)
+		delete(m.adoptionReloads, msg.taskID)
 		m.clampSelection()
 		return m, nil
 	case activityRefreshTickMsg:
@@ -590,7 +654,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		return m, tea.Batch(cmds...)
 	case shimmerTickMsg:
-		if !m.createPending && !m.deletePending {
+		if m.pending == opNone {
 			return m, nil
 		}
 		m.shimmerTick++
@@ -634,7 +698,7 @@ func rowsFromTasks(tasks []*core.Task) []taskRow {
 	return groupRowsByRepo(rows)
 }
 
-func (m model) afterTasksLoadedCmds() []tea.Cmd {
+func (m *model) afterTasksLoadedCmds() []tea.Cmd {
 	cmds := make([]tea.Cmd, 0, len(m.rows)*4)
 	for _, row := range m.rows {
 		taskID := taskID(row.task)
@@ -657,26 +721,26 @@ func (m model) submitPrompt() (model, tea.Cmd) {
 		return m, nil
 	}
 
-	m.mode = modeBrowse
-	m.createPending = true
-	m.createFromPR = false
-	m.createErr = nil
+	// Capture the draft's inputs before the transition discards it.
+	cwd := m.currentCreateCwd()
+	provider := m.effectiveCreateProvider()
+	m.transition(modeBrowse)
+	m.pending = opCreating
+	m.create = createFlowState{}
 	m.shimmerTick = 0
-	m.resetCreateProgress()
-	m.promptInput.Blur()
 
 	return m, tea.Batch(
 		createTaskStreamCmd(m.statusContext, m.frontend, core.CreateTaskInput{
-			Cwd:      m.currentCreateCwd(),
+			Cwd:      cwd,
 			Prompt:   prompt,
-			Provider: m.effectiveCreateProvider(),
+			Provider: provider,
 		}),
 		shimmerTickCmd(),
 	)
 }
 
 func (m model) retrySelectedTaskCreation() (model, tea.Cmd) {
-	if m.createPending {
+	if m.pending != opNone {
 		return m, nil
 	}
 	row := m.selectedRow()
@@ -684,14 +748,11 @@ func (m model) retrySelectedTaskCreation() (model, tea.Cmd) {
 		return m, nil
 	}
 
-	m.mode = modeBrowse
-	m.createPending = true
-	m.createFromPR = false
-	m.createErr = nil
+	m.transition(modeBrowse)
+	m.pending = opCreating
+	m.create = createFlowState{active: row.task.CreationStep}
 	m.err = nil
 	m.shimmerTick = 0
-	m.resetCreateProgress()
-	m.createActive = row.task.CreationStep
 
 	return m, tea.Batch(
 		retryTaskCreationStreamCmd(m.statusContext, m.frontend, row.task.ID),
@@ -700,16 +761,16 @@ func (m model) retrySelectedTaskCreation() (model, tea.Cmd) {
 }
 
 func (m model) updatePromptInput(msg tea.Msg) (tea.Model, tea.Cmd) {
-	if m.createPending {
+	if m.pending != opNone {
 		return m, nil
 	}
 	m.ensurePromptInputInitialized()
-	if m.promptInput.Value() != m.prompt {
-		m.promptInput.SetValue(m.prompt)
+	if m.draft.input.Value() != m.draft.prompt {
+		m.draft.input.SetValue(m.draft.prompt)
 	}
 	var focusCmd tea.Cmd
-	if !m.promptInput.Focused() {
-		focusCmd = m.promptInput.Focus()
+	if !m.draft.input.Focused() {
+		focusCmd = m.draft.input.Focus()
 	}
 
 	switch typed := msg.(type) {
@@ -722,39 +783,36 @@ func (m model) updatePromptInput(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if typed.String() == "ctrl+p" {
 			repoRoot, repoName, ok := m.currentRepoScope()
 			if !ok {
-				m.createErr = errors.New("repo scope unavailable")
+				m.draft.err = errors.New("repo scope unavailable")
 				return m, nil
 			}
 
-			m.mode = modePRPicker
-			m.prRepoRoot = repoRoot
-			m.prRepoName = repoName
-			m.prRows = nil
-			m.prSelected = 0
-			m.createErr = nil
-			m.promptInput.Blur()
+			if !m.transition(modePRPicker) {
+				return m, nil
+			}
+			m.draft.repoRoot = repoRoot
+			m.draft.repoName = repoName
+			m.draft.prs = nil
+			m.draft.prSelected = 0
+			m.draft.err = nil
+			m.draft.input.Blur()
 			return m, listRepoPullRequestsCmd(m.statusContext, m.frontend, repoRoot, repoName)
 		}
 
 		switch typed.Key().Code {
 		case tea.KeyEscape:
-			m.mode = modeBrowse
-			m.prompt = ""
-			m.promptInput = newPromptInput()
-			m.createErr = nil
-			m.resetCreateProgress()
-			return m, nil
+			return m.handleBack()
 		case tea.KeyEnter:
 			return m.submitPrompt()
 		}
 	}
 
-	previousValue := m.promptInput.Value()
-	updatedInput, cmd := m.promptInput.Update(msg)
-	m.promptInput = updatedInput
-	m.prompt = m.promptInput.Value()
-	if m.prompt != previousValue {
-		m.createErr = nil
+	previousValue := m.draft.input.Value()
+	updatedInput, cmd := m.draft.input.Update(msg)
+	m.draft.input = updatedInput
+	m.draft.prompt = m.draft.input.Value()
+	if m.draft.prompt != previousValue {
+		m.draft.err = nil
 	}
 
 	if focusCmd != nil {
@@ -764,27 +822,25 @@ func (m model) updatePromptInput(msg tea.Msg) (tea.Model, tea.Cmd) {
 }
 
 func (m model) updatePromptPaste(msg tea.PasteMsg) (tea.Model, tea.Cmd) {
-	if m.mode != modePromptInput || m.createPending {
+	if m.mode != modePromptInput || m.pending != opNone {
 		return m, nil
 	}
 	return m.updatePromptInput(msg)
 }
 
 func (m model) updatePRPicker(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
-	if m.createPending {
+	if m.pending != opNone {
 		return m, nil
 	}
 
 	switch msg.String() {
-	case "esc":
-		m.mode = modePromptInput
-		m.createErr = nil
-		return m, m.promptInput.Focus()
+	case "esc", "q":
+		return m.handleBack()
 	case "g", "home":
-		m.prSelected = 0
+		m.draft.prSelected = 0
 		return m, nil
 	case "G", "end":
-		m.prSelected = len(m.prRows) - 1
+		m.draft.prSelected = len(m.draft.prs) - 1
 		return m, nil
 	case "j", "down":
 		m.movePRSelection(1)
@@ -798,22 +854,23 @@ func (m model) updatePRPicker(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 		if pr.HasExistingTask {
-			m.createErr = errors.New("PR already has workspace")
+			m.draft.err = errors.New("PR already has workspace")
 			return m, nil
 		}
 
-		m.mode = modeBrowse
-		m.createPending = true
-		m.createFromPR = true
-		m.createErr = nil
-		m.shimmerTick = 0
-		m.resetCreateProgress()
-
+		// Capture the draft's inputs before the transition discards it.
 		selected := *pr
+		repoRoot := m.draft.repoRoot
+		provider := m.effectiveCreateProvider()
+		m.transition(modeBrowse)
+		m.pending = opCreating
+		m.create = createFlowState{fromPR: true}
+		m.shimmerTick = 0
+
 		return m, tea.Batch(
 			createTaskStreamCmd(m.statusContext, m.frontend, core.CreateTaskInput{
-				Cwd:      m.prRepoRoot,
-				Provider: m.effectiveCreateProvider(),
+				Cwd:      repoRoot,
+				Provider: provider,
 				Source: core.CreateTaskSource{
 					PullRequest: &selected,
 				},
@@ -829,47 +886,47 @@ func (m model) updatePRPicker(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 }
 
 func (m model) enterPromptInputMode(initialValue string) (tea.Model, tea.Cmd) {
-	m.mode = modePromptInput
-	m.prompt = initialValue
-	m.promptInput = newPromptInput()
-	m.promptInput.SetValue(initialValue)
-	m.createErr = nil
-	m.createPending = false
-	m.createFromPR = false
-	return m, m.promptInput.Focus()
+	if !m.transition(modePromptInput) {
+		return m, nil
+	}
+	input := newPromptInput()
+	input.SetValue(initialValue)
+	m.draft = taskDraft{prompt: initialValue, input: input}
+	m.create.err = nil
+	m.create.fromPR = false
+	return m, m.draft.input.Focus()
 }
 
 func (m model) promptValue() string {
 	m.ensurePromptInputInitialized()
-	if value := m.promptInput.Value(); value != "" || m.prompt == "" {
+	if value := m.draft.input.Value(); value != "" || m.draft.prompt == "" {
 		return value
 	}
-	return m.prompt
+	return m.draft.prompt
 }
 
 func (m *model) ensurePromptInputInitialized() {
-	if m.promptInput.MaxHeight != 0 {
+	if m.draft.input.MaxHeight != 0 {
 		return
 	}
-	m.promptInput = newPromptInput()
+	m.draft.input = newPromptInput()
 }
 
 func (m model) updateCleanupConfirm(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
-	if m.deletePending {
+	if m.pending != opNone {
 		return m, nil
 	}
 
 	switch msg.String() {
 	case "q", "n", "esc":
-		m.mode = modeBrowse
-		return m, nil
+		return m.handleBack()
 	case "y":
 		row := m.selectedRow()
 		if row == nil || row.task == nil {
-			m.mode = modeBrowse
+			m.transition(modeBrowse)
 			return m, nil
 		}
-		m.deletePending = true
+		m.pending = opDeleting
 		m.err = nil
 		m.shimmerTick = 0
 		return m, tea.Batch(
@@ -881,15 +938,20 @@ func (m model) updateCleanupConfirm(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	}
 }
 
-func (m model) taskStatusTrackingCmds(taskID string) []tea.Cmd {
+func (m *model) taskStatusTrackingCmds(taskID string) []tea.Cmd {
 	if strings.TrimSpace(taskID) == "" {
 		return nil
 	}
 
-	return []tea.Cmd{
-		latestTaskStatusCmd(m.statusContext, m.frontend, taskID),
-		subscribeTaskStatusCmd(m.statusContext, m.frontend, taskID),
+	cmds := []tea.Cmd{latestTaskStatusCmd(m.statusContext, m.frontend, taskID)}
+	if !m.statusSubscribed[taskID] {
+		if m.statusSubscribed == nil {
+			m.statusSubscribed = make(map[string]bool)
+		}
+		m.statusSubscribed[taskID] = true
+		cmds = append(cmds, subscribeTaskStatusCmd(m.statusContext, m.frontend, taskID))
 	}
+	return cmds
 }
 
 func (m model) taskPullRequestStatusCmd(task *core.Task) tea.Cmd {
@@ -948,26 +1010,26 @@ func (m *model) clampSelection() {
 }
 
 func (m *model) movePRSelection(delta int) {
-	if len(m.prRows) == 0 {
-		m.prSelected = 0
+	if len(m.draft.prs) == 0 {
+		m.draft.prSelected = 0
 		return
 	}
 
-	m.prSelected += delta
+	m.draft.prSelected += delta
 	m.clampPRSelection()
 }
 
 func (m *model) clampPRSelection() {
-	if len(m.prRows) == 0 {
-		m.prSelected = 0
+	if len(m.draft.prs) == 0 {
+		m.draft.prSelected = 0
 		return
 	}
-	if m.prSelected < 0 {
-		m.prSelected = 0
+	if m.draft.prSelected < 0 {
+		m.draft.prSelected = 0
 		return
 	}
-	if m.prSelected >= len(m.prRows) {
-		m.prSelected = len(m.prRows) - 1
+	if m.draft.prSelected >= len(m.draft.prs) {
+		m.draft.prSelected = len(m.draft.prs) - 1
 	}
 }
 
@@ -1066,19 +1128,14 @@ func (m *model) upsertTaskRow(task *core.Task) int {
 	return -1
 }
 
-func (m *model) resetCreateProgress() {
-	m.createActive = ""
-	m.createDone = nil
-}
-
 func (m *model) advanceCreateProgress(step core.TaskCreateProgressStep) {
 	if step == "" {
 		return
 	}
-	if m.createActive != "" && m.createActive != step && !containsCreateStep(m.createDone, m.createActive) {
-		m.createDone = append(m.createDone, m.createActive)
+	if m.create.active != "" && m.create.active != step && !containsCreateStep(m.create.done, m.create.active) {
+		m.create.done = append(m.create.done, m.create.active)
 	}
-	m.createActive = step
+	m.create.active = step
 }
 
 func (m *model) removeTaskRow(targetTaskID string) {
@@ -1132,11 +1189,11 @@ func (m model) currentRepoScope() (string, string, bool) {
 }
 
 func (m model) selectedPR() *core.RepoPullRequest {
-	if len(m.prRows) == 0 || m.prSelected < 0 || m.prSelected >= len(m.prRows) {
+	if len(m.draft.prs) == 0 || m.draft.prSelected < 0 || m.draft.prSelected >= len(m.draft.prs) {
 		return nil
 	}
 
-	return &m.prRows[m.prSelected]
+	return &m.draft.prs[m.draft.prSelected]
 }
 
 func (m model) totalWidth() int {

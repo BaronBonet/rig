@@ -14,6 +14,9 @@ Use `rig` for the CLI command and Rig for the product or system.
 - Task: A durable unit of AI-assisted coding work managed by Rig.
 - Task creation: The workflow that turns a prompt or pull request source into a
   prepared task workspace and interactive provider session.
+- Task draft: The in-progress task the TUI user is assembling before
+  submission: the prompt text, the chosen provider, and the optional pull
+  request source. Discarded on cancel; cleared once creation is submitted.
 - Creation status: The durable state of task setup: `creating`, `ready`, or
   `failed`.
 - Creation step: The retryable task setup milestone, such as suggesting a name,
@@ -23,6 +26,12 @@ Use `rig` for the CLI command and Rig for the product or system.
 - Repository context: The repository root, name, and base branch used when Rig
   creates or inspects a task.
 - Session: The tmux-backed interactive environment for a task.
+- Session launcher: The core component that resolves a task's configured
+  provider, prepares its workspace, and starts or bootstraps its session.
+  Shared by task creation, session reconnect, and provider switching.
+- Task observation: The core component that consumes provider hook events and
+  provider session history to maintain a task's runtime status, activity, and
+  token usage — including provider adoption and recovery of stale status.
 - Provider: An AI coding runtime that can back a task, such as Codex.
 - Supported provider: A provider Rig knows how to integrate with.
 - Configured provider: A supported provider the user has enabled for task
@@ -47,6 +56,9 @@ Use `rig` for the CLI command and Rig for the product or system.
 - Hook server: The loopback HTTP endpoint that receives provider hook events.
 - Hook event: A structured provider event, such as session, prompt, tool, or
   stop activity, consumed by the daemon.
+- Hook event catalog: A provider's single declaration of which hook events it
+  observes and the runtime phase each drives. Rig derives hook registration,
+  provider health checks, and status mapping from it.
 - Runtime status: The current live task phase derived from provider hook events,
   separate from the durable task record.
 - Activity event: A compact persisted event used by the detail view to show
@@ -79,6 +91,9 @@ Use `rig` for the CLI command and Rig for the product or system.
   Task.
 - Provider adoption occurs when Rig observes the start of a manually launched
   Provider session in a Task workspace.
+- Every ready Task workspace registers hook forwarding for all Configured
+  providers, so any Configured provider launched there is observable and
+  adoptable.
 - The Active provider reflects the provider expected to own the Task's
   interactive Session.
 

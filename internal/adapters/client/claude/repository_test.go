@@ -7,6 +7,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/BaronBonet/rig/internal/adapters/client/providerkit"
 	"github.com/BaronBonet/rig/internal/core"
 	"github.com/BaronBonet/rig/internal/pkg/subprocess"
 
@@ -110,7 +111,7 @@ func TestRepositoryBuildWorkspaceBootstrapSpec_EmitsWorkspaceScopedHookSettings(
 	require.Equal(t, ".claude/settings.local.json", file.Path)
 	require.Equal(t, os.FileMode(0o600), file.FileMode)
 
-	var settings workspaceSettings
+	var settings providerkit.HookConfig
 	require.NoError(t, json.Unmarshal(file.Content, &settings))
 	for _, event := range []string{
 		"SessionStart", "UserPromptSubmit", "PreToolUse", "PostToolUse", "Notification", "Stop",
@@ -192,4 +193,57 @@ func TestRepositoryActivityAndTokenUsageDegradeGracefully(t *testing.T) {
 	recovered, err := repo.RecoverLatestTaskStatus(t.Context(), core.TaskStatusUpdate{}, nil)
 	require.NoError(t, err)
 	require.Nil(t, recovered)
+}
+
+func TestRepositoryBuildWorkspaceBootstrapSpec_MergePreservesUserSettings(t *testing.T) {
+	repo, dataDir := newTestRepository(t, subprocess.NewMockRunner(t))
+	scriptPath := filepath.Join(dataDir, "claude", "hooks", "forward-to-rig.sh")
+
+	spec, err := repo.BuildWorkspaceBootstrapSpec(&core.Task{})
+	require.NoError(t, err)
+	require.NotNil(t, spec.Files[0].Merge)
+
+	// A workspace where Claude Code stored permissions and a stale Rig hook
+	// registration under a different event set.
+	existing := `{
+		"permissions": {"allow": ["Bash(go test *)"]},
+		"hooks": {
+			"SessionEnd": [
+				{"hooks": [{"type": "command", "command": "/bin/sh '` + scriptPath + `' 'SessionEnd'"}]},
+				{"hooks": [{"type": "command", "command": "/usr/local/bin/my-own-hook"}]}
+			]
+		}
+	}`
+
+	merged, err := spec.Files[0].Merge([]byte(existing))
+	require.NoError(t, err)
+
+	var settings struct {
+		Permissions map[string]any                    `json:"permissions"`
+		Hooks       map[string][]providerkit.HookRule `json:"hooks"`
+	}
+	require.NoError(t, json.Unmarshal(merged, &settings))
+
+	// User content survives.
+	require.Contains(t, settings.Permissions, "allow")
+	// The user's own SessionEnd hook survives; Rig's stale SessionEnd rule is gone.
+	require.Len(t, settings.Hooks["SessionEnd"], 1)
+	require.Contains(t, settings.Hooks["SessionEnd"][0].Hooks[0].Command, "my-own-hook")
+	// Rig's current catalog events are registered.
+	for _, event := range []string{
+		"SessionStart", "UserPromptSubmit", "PreToolUse", "PostToolUse", "Notification", "Stop",
+	} {
+		require.Contains(t, settings.Hooks, event)
+		require.Contains(t, settings.Hooks[event][0].Hooks[0].Command, scriptPath)
+	}
+}
+
+func TestRepositoryBuildWorkspaceBootstrapSpec_MergeRejectsUnreadableSettings(t *testing.T) {
+	repo, _ := newTestRepository(t, subprocess.NewMockRunner(t))
+
+	spec, err := repo.BuildWorkspaceBootstrapSpec(&core.Task{})
+	require.NoError(t, err)
+
+	_, err = spec.Files[0].Merge([]byte("{not json"))
+	require.ErrorContains(t, err, "decode existing claude workspace settings")
 }

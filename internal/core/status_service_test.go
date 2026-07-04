@@ -9,26 +9,6 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func TestTaskServiceContract_ExposesStatusMethods(t *testing.T) {
-	var _ interface {
-		GetTaskActivity(context.Context, string, int) ([]TaskActivityEvent, error)
-		LatestTaskStatus(context.Context, string) (*TaskStatusUpdate, error)
-		SubscribeTaskStatus(context.Context, string) (<-chan TaskStatusUpdate, error)
-		HandleHookEvent(context.Context, HookEventInput) error
-	} = (TaskService)(nil)
-}
-
-func TestTaskFrontendContract_ExposesCreateAndStatusReadMethods(t *testing.T) {
-	var _ interface {
-		AttachTaskSession(context.Context, *Task) error
-		CreateTaskStream(context.Context, CreateTaskInput) (<-chan TaskCreateEvent, error)
-		GetTaskActivity(context.Context, string, int) ([]TaskActivityEvent, error)
-		GetTaskTokenUsage(context.Context, string) (*TaskTokenUsage, error)
-		LatestTaskStatus(context.Context, string) (*TaskStatusUpdate, error)
-		SubscribeTaskStatus(context.Context, string) (<-chan TaskStatusUpdate, error)
-	} = (TaskFrontend)(nil)
-}
-
 func TestTaskStatusService_GetTaskActivityReturnsRepositoryEvents(t *testing.T) {
 	svc := newTestTaskService(t)
 	svc.taskRepo.activityByTask = map[string][]TaskActivityEvent{
@@ -295,11 +275,7 @@ func TestTaskStatusService_SubscribePublishesRecoveredStatusWithoutHookUpdate(t 
 	svc.providerRepo.statusRecoveryUpdate = &recovered
 	require.NoError(t, svc.taskRepoMock.UpsertTaskStatus(t.Context(), latestHookStatus))
 
-	previousInterval := taskStatusRecoveryPollInterval
-	taskStatusRecoveryPollInterval = time.Millisecond
-	t.Cleanup(func() {
-		taskStatusRecoveryPollInterval = previousInterval
-	})
+	svc.observation.recoveryPollInterval = time.Millisecond
 
 	ctx, cancel := context.WithCancel(t.Context())
 	defer cancel()

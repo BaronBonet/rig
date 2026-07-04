@@ -46,7 +46,7 @@ func TestModel_MissingProviderSetupGatesTUIBehindSetup(t *testing.T) {
 	next, _ = got.Update(runCmd(t, cmd))
 	got = asModel(t, next)
 	require.Equal(t, 1, frontend.detectProvidersCalls)
-	require.False(t, got.setupDetecting)
+	require.False(t, got.setupForm.detecting)
 
 	view := stripANSI(got.View().Content)
 	require.Contains(t, view, "Provider setup")
@@ -54,8 +54,8 @@ func TestModel_MissingProviderSetupGatesTUIBehindSetup(t *testing.T) {
 	require.Contains(t, view, "unavailable")
 	require.Contains(t, view, "claude binary not found")
 	// Only the detected provider is preselected.
-	require.True(t, got.setupRows[0].enabled)
-	require.False(t, got.setupRows[1].enabled)
+	require.True(t, got.setupForm.rows[0].enabled)
+	require.False(t, got.setupForm.rows[1].enabled)
 }
 
 func TestModel_ProviderSetupSaveRequiresAtLeastOneProvider(t *testing.T) {
@@ -75,12 +75,12 @@ func TestModel_ProviderSetupSaveRequiresAtLeastOneProvider(t *testing.T) {
 	// Toggle codex off, then try to save.
 	next, _ = got.Update(tea.KeyPressMsg{Code: tea.KeySpace, Text: " "})
 	got = asModel(t, next)
-	require.False(t, got.setupRows[0].enabled)
+	require.False(t, got.setupForm.rows[0].enabled)
 
 	next, saveCmd := got.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
 	got = asModel(t, next)
 	require.Nil(t, saveCmd)
-	require.ErrorContains(t, got.setupErr, "at least one provider")
+	require.ErrorContains(t, got.setupForm.err, "at least one provider")
 	require.Nil(t, frontend.savedProviderSetup)
 }
 
@@ -99,20 +99,20 @@ func TestModel_ProviderSetupSavesSelectionAndDefault(t *testing.T) {
 	got = asModel(t, next)
 
 	// Rerunning setup preserves the existing choices.
-	require.True(t, got.setupRows[0].enabled)
-	require.True(t, got.setupRows[1].enabled)
-	require.Equal(t, core.ProviderCodex, got.setupDefault)
+	require.True(t, got.setupForm.rows[0].enabled)
+	require.True(t, got.setupForm.rows[1].enabled)
+	require.Equal(t, core.ProviderCodex, got.setupForm.defaultProvider)
 
 	// Move to claude and make it the default.
 	next, _ = got.Update(tea.KeyPressMsg{Text: "j"})
 	got = asModel(t, next)
 	next, _ = got.Update(tea.KeyPressMsg{Text: "d"})
 	got = asModel(t, next)
-	require.Equal(t, core.ProviderClaude, got.setupDefault)
+	require.Equal(t, core.ProviderClaude, got.setupForm.defaultProvider)
 
 	next, saveCmd := got.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
 	got = asModel(t, next)
-	require.True(t, got.setupSaving)
+	require.True(t, got.setupForm.saving)
 	require.NotNil(t, saveCmd)
 
 	next, _ = got.Update(runCmd(t, saveCmd))
@@ -145,7 +145,7 @@ func TestModel_ProviderSetupSaveFailureShowsError(t *testing.T) {
 	got = asModel(t, next)
 
 	require.Equal(t, modeProviderSetup, got.mode)
-	require.ErrorContains(t, got.setupErr, "permission denied")
+	require.ErrorContains(t, got.setupForm.err, "permission denied")
 }
 
 func TestModel_TabCyclesConfiguredProvidersWhileComposing(t *testing.T) {
@@ -191,7 +191,7 @@ func TestModel_SubmitPromptUsesSelectedProvider(t *testing.T) {
 	m := newLoadedModel(frontend)
 	m.providerSetup = frontend.providerSetup
 	m.mode = modePromptInput
-	m.prompt = "add billing retry flow"
+	m.draft.prompt = "add billing retry flow"
 
 	next, _ := m.Update(tea.KeyPressMsg{Code: tea.KeyTab})
 	got := asModel(t, next)
@@ -212,8 +212,8 @@ func TestModel_PRPickerUsesSelectedProvider(t *testing.T) {
 	m := newLoadedModel(frontend)
 	m.providerSetup = frontend.providerSetup
 	m.mode = modePRPicker
-	m.prRepoRoot = "/tmp/repo"
-	m.prRows = []core.RepoPullRequest{{Number: 42, Title: "Auth rewrite", BranchName: "feat/auth"}}
+	m.draft.repoRoot = "/tmp/repo"
+	m.draft.prs = []core.RepoPullRequest{{Number: 42, Title: "Auth rewrite", BranchName: "feat/auth"}}
 
 	next, _ := m.Update(tea.KeyPressMsg{Code: tea.KeyTab})
 	got := asModel(t, next)
@@ -239,7 +239,7 @@ func TestModel_SwitchProviderListsOnlyOtherConfiguredProviders(t *testing.T) {
 	got := asModel(t, next)
 
 	require.Equal(t, modeSwitchProvider, got.mode)
-	require.Equal(t, []core.Provider{core.ProviderClaude}, got.switchOptions)
+	require.Equal(t, []core.Provider{core.ProviderClaude}, got.providerSwitch.options)
 
 	view := stripANSI(got.View().Content)
 	require.Contains(t, view, "Switch this task to:")
@@ -280,7 +280,7 @@ func TestModel_SwitchProviderSuccessUpdatesDisplayedActiveProvider(t *testing.T)
 	got := asModel(t, next)
 	next, cmd := got.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
 	got = asModel(t, next)
-	require.True(t, got.switchPending)
+	require.Equal(t, opSwitching, got.pending)
 	require.NotNil(t, cmd)
 
 	msgs := runBatchCmd(t, cmd)

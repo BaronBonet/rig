@@ -18,16 +18,34 @@ type TaskServiceDependencies struct {
 	EnableWorkspaceSetup bool
 }
 
-type taskService struct {
-	tasks                TaskRepository
-	gitWorktree          GitWorktreeClient
-	tmuxSession          TmuxSessionClient
-	pullRequests         PullRequestClient
-	providers            map[Provider]ProviderClient
-	workspace            TaskWorkspaceManager
-	providerConfig       ProviderConfigStore
-	enableWorkspaceSetup bool
+// service is the concrete task application service. Composition code holds
+// this type directly; consumers depend on the narrower ports it satisfies:
+// TaskService (the daemon socket surface), HookEventHandler (the daemon hook
+// server), and HealthChecker (doctor).
+//
+// Task creation lives in the taskCreation module and the workspace/session
+// launching behaviour shared with reconnect and provider switching lives in
+// the sessionLauncher module; the service delegates to both.
+type service struct {
+	tasks          TaskRepository
+	gitWorktree    GitWorktreeClient
+	tmuxSession    TmuxSessionClient
+	pullRequests   PullRequestClient
+	providers      map[Provider]ProviderClient
+	providerConfig ProviderConfigStore
+	launcher       *sessionLauncher
+	creation       *taskCreation
+	observation    *taskObservation
 }
+
+// The concrete service must satisfy every port it is wired into. These
+// compile-time assertions catch signature drift between the service and a
+// port that no other code path in this package would surface.
+var (
+	_ TaskService      = (*service)(nil)
+	_ HookEventHandler = (*service)(nil)
+	_ HealthChecker    = (*service)(nil)
+)
 
 type HealthCheck struct {
 	Err      error
@@ -52,20 +70,34 @@ func healthCheckError(checks []HealthCheck) error {
 	return fmt.Errorf("required health check(s) failed: %s: %w", strings.Join(failed, ", "), errors.Join(errs...))
 }
 
-func NewTaskService(deps TaskServiceDependencies) TaskService {
-	return &taskService{
-		tasks:                deps.Tasks,
-		gitWorktree:          deps.GitWorktree,
-		tmuxSession:          deps.TmuxSession,
-		pullRequests:         deps.PullRequests,
-		providers:            deps.Providers,
-		workspace:            deps.Workspace,
-		enableWorkspaceSetup: deps.EnableWorkspaceSetup,
-		providerConfig:       deps.ProviderConfig,
+func NewTaskService(deps TaskServiceDependencies) *service {
+	launcher := newSessionLauncher(
+		deps.Providers,
+		deps.ProviderConfig,
+		deps.Workspace,
+		deps.TmuxSession,
+		deps.EnableWorkspaceSetup,
+	)
+
+	return &service{
+		tasks:          deps.Tasks,
+		gitWorktree:    deps.GitWorktree,
+		tmuxSession:    deps.TmuxSession,
+		pullRequests:   deps.PullRequests,
+		providers:      deps.Providers,
+		providerConfig: deps.ProviderConfig,
+		launcher:       launcher,
+		creation:       newTaskCreation(deps.Tasks, deps.GitWorktree, launcher),
+		observation: newTaskObservation(
+			deps.Tasks,
+			deps.TmuxSession,
+			deps.Providers,
+			deps.ProviderConfig,
+		),
 	}
 }
 
-func (s *taskService) HealthCheck(ctx context.Context) ([]HealthCheck, error) {
+func (s *service) HealthCheck(ctx context.Context) ([]HealthCheck, error) {
 	var checks []HealthCheck
 	checks = append(checks, runRequiredHealthCheck(ctx, "git", s.gitWorktree))
 	checks = append(checks, runRequiredHealthCheck(ctx, "tmux", s.tmuxSession))
@@ -159,35 +191,80 @@ func configuredProvidersInOrder(setup ProviderSetup) []Provider {
 	return ordered
 }
 
-func (s *taskService) CreateTaskWithProgress(
+// CreateTaskWithProgress creates a new task while reporting coarse-grained
+// creation milestones to the provided reporter when non-nil. It is not part
+// of the TaskService port; port consumers use CreateTaskStream.
+func (s *service) CreateTaskWithProgress(
 	ctx context.Context,
 	input CreateTaskInput,
 	reporter TaskCreateProgressReporter,
 ) (*Task, error) {
-	return createTaskWithProgress(ctx, s, input, reporter)
+	return s.creation.CreateTaskWithProgress(ctx, input, reporter)
 }
 
-func (s *taskService) RetryTaskCreationWithProgress(
+// RetryTaskCreationWithProgress resumes a failed task creation from its
+// recorded failed step while reporting the same progress milestones as
+// initial creation. It is not part of the TaskService port; port consumers
+// use RetryTaskCreationStream.
+func (s *service) RetryTaskCreationWithProgress(
 	ctx context.Context,
 	taskID string,
 	reporter TaskCreateProgressReporter,
 ) (*Task, error) {
-	return retryTaskCreationWithProgress(ctx, s, taskID, reporter)
+	return s.creation.RetryTaskCreationWithProgress(ctx, taskID, reporter)
 }
 
-func (s *taskService) ListTasks(ctx context.Context) ([]*Task, error) {
+func (s *service) CreateTaskStream(
+	ctx context.Context,
+	input CreateTaskInput,
+) (<-chan TaskCreateEvent, error) {
+	return s.creation.CreateTaskStream(ctx, input)
+}
+
+func (s *service) RetryTaskCreationStream(
+	ctx context.Context,
+	taskID string,
+) (<-chan TaskCreateEvent, error) {
+	return s.creation.RetryTaskCreationStream(ctx, taskID)
+}
+
+func (s *service) ListTasks(ctx context.Context) ([]*Task, error) {
 	return s.tasks.ListTasks(ctx)
 }
 
-func (s *taskService) GetTaskActivity(ctx context.Context, taskID string, limit int) ([]TaskActivityEvent, error) {
-	return getTaskActivity(ctx, s, taskID, limit)
+// RefreshTaskWorkspaceHooks rewrites every configured provider's hook
+// registration files into each ready task's workspace, so that manually
+// launched configured providers stay observable (and adoptable) in workspaces
+// prepared before a provider was configured or by an older Rig. It is not
+// part of the TaskService port; the daemon runs it at startup. Failures
+// degrade observability but must not stop the daemon.
+func (s *service) RefreshTaskWorkspaceHooks(ctx context.Context) []error {
+	tasks, err := s.tasks.ListTasks(ctx)
+	if err != nil {
+		return []error{fmt.Errorf("list tasks for workspace hook refresh: %w", err)}
+	}
+
+	var errs []error
+	for _, task := range tasks {
+		if task == nil || task.CreationStatus != TaskCreationStatusReady {
+			continue
+		}
+		for _, refreshErr := range s.launcher.bootstrapConfiguredProviders(ctx, task, "") {
+			errs = append(errs, fmt.Errorf("refresh task %s workspace hooks: %w", task.ID, refreshErr))
+		}
+	}
+	return errs
 }
 
-func (s *taskService) GetTaskTokenUsage(ctx context.Context, taskID string) (*TaskTokenUsage, error) {
-	return getTaskTokenUsage(ctx, s, taskID)
+func (s *service) GetTaskActivity(ctx context.Context, taskID string, limit int) ([]TaskActivityEvent, error) {
+	return s.observation.GetTaskActivity(ctx, taskID, limit)
 }
 
-func (s *taskService) ListRepoPullRequests(ctx context.Context, cwd string) ([]RepoPullRequest, error) {
+func (s *service) GetTaskTokenUsage(ctx context.Context, taskID string) (*TaskTokenUsage, error) {
+	return s.observation.GetTaskTokenUsage(ctx, taskID)
+}
+
+func (s *service) ListRepoPullRequests(ctx context.Context, cwd string) ([]RepoPullRequest, error) {
 	if s.pullRequests == nil {
 		return nil, fmt.Errorf("pull request client not configured")
 	}
@@ -223,7 +300,7 @@ func (s *taskService) ListRepoPullRequests(ctx context.Context, cwd string) ([]R
 	return annotated, nil
 }
 
-func (s *taskService) PullRequestStatus(
+func (s *service) PullRequestStatus(
 	ctx context.Context,
 	repoRoot string,
 	branchName string,
@@ -243,8 +320,8 @@ func (s *taskService) PullRequestStatus(
 	return clonePRStatus(status), nil
 }
 
-func (s *taskService) DeleteTask(ctx context.Context, taskID string) error {
-	task, err := s.taskByID(ctx, taskID)
+func (s *service) DeleteTask(ctx context.Context, taskID string) error {
+	task, err := taskByID(ctx, s.tasks, taskID)
 	if err != nil {
 		return err
 	}
@@ -262,13 +339,13 @@ func (s *taskService) DeleteTask(ctx context.Context, taskID string) error {
 	return nil
 }
 
-func (s *taskService) ReconnectTaskSession(ctx context.Context, taskID string) error {
-	task, err := s.taskByID(ctx, taskID)
+func (s *service) ReconnectTaskSession(ctx context.Context, taskID string) error {
+	task, err := taskByID(ctx, s.tasks, taskID)
 	if err != nil {
 		return err
 	}
 
-	providerClient, err := s.configuredClientFor(ctx, task.Provider)
+	_, providerClient, err := s.launcher.resolveProvider(ctx, task.Provider)
 	if err != nil {
 		return err
 	}
@@ -283,7 +360,7 @@ func (s *taskService) ReconnectTaskSession(ctx context.Context, taskID string) e
 		resumeMetadata = nil
 	}
 
-	if err := s.prepareTaskWorkspace(ctx, task, task.RepoRoot); err != nil {
+	if err := s.launcher.prepareWorkspace(ctx, task, task.RepoRoot); err != nil {
 		return err
 	}
 	if err := providerClient.EnsureTaskSessionEnvironment(ctx); err != nil {
@@ -318,141 +395,35 @@ func promptlessTaskSessionLaunchSpec(providerClient ProviderClient, task *Task) 
 	return providerClient.BuildTaskSessionLaunchSpec(&launchTask)
 }
 
-func (s *taskService) LatestTaskStatus(ctx context.Context, taskID string) (*TaskStatusUpdate, error) {
-	return latestTaskStatus(ctx, s, taskID)
+func (s *service) LatestTaskStatus(ctx context.Context, taskID string) (*TaskStatusUpdate, error) {
+	return s.observation.LatestTaskStatus(ctx, taskID)
 }
 
-func (s *taskService) SubscribeTaskStatus(
+func (s *service) SubscribeTaskStatus(
 	ctx context.Context,
 	taskID string,
 ) (<-chan TaskStatusUpdate, error) {
-	return subscribeTaskStatus(ctx, s, taskID)
+	return s.observation.SubscribeTaskStatus(ctx, taskID)
 }
 
-func (s *taskService) HandleHookEvent(ctx context.Context, input HookEventInput) error {
-	return handleProviderHookEvent(ctx, s, input)
+func (s *service) HandleHookEvent(ctx context.Context, input HookEventInput) error {
+	return s.observation.HandleHookEvent(ctx, input)
 }
 
-// supportedClientFor returns the adapter client for a supported provider
-// without requiring the provider to be configured. Use it for read-side
-// behavior that must keep working for tasks whose active provider is no
-// longer configured.
-func (s *taskService) supportedClientFor(provider Provider) (ProviderClient, error) {
-	providerClient, ok := s.providers[provider]
-	if !ok {
-		return nil, fmt.Errorf("provider %q unavailable", provider)
-	}
-
-	return providerClient, nil
-}
-
-// configuredClientFor returns the adapter client for a provider the user has
-// configured through provider setup. An empty provider resolves to the user's
-// default provider. Provider-dependent task actions must use this so that
-// unconfigured providers fail with a clear error instead of misbehaving.
-func (s *taskService) configuredClientFor(ctx context.Context, provider Provider) (ProviderClient, error) {
-	setup, err := s.GetProviderSetup(ctx)
-	if err != nil {
-		return nil, err
-	}
-	if setup == nil {
-		return nil, ErrProviderSetupRequired
-	}
-
-	if provider == "" {
-		provider = setup.Default
-	}
-	if !setup.IsConfigured(provider) {
-		return nil, fmt.Errorf("provider %q is not configured: run rig setup to enable it", provider)
-	}
-
-	return s.supportedClientFor(provider)
-}
-
-func (s *taskService) startTaskRuntime(ctx context.Context, task *Task) (*Task, error) {
-	providerClient, err := s.configuredClientFor(ctx, task.Provider)
-	if err != nil {
-		return task, err
-	}
-	if err := providerClient.EnsureTaskSessionEnvironment(ctx); err != nil {
-		return task, fmt.Errorf("ensure task session environment: %w", err)
-	}
-
-	launch, err := providerClient.BuildTaskSessionLaunchSpec(task)
-	if err != nil {
-		return task, fmt.Errorf("build task session launch spec: %w", err)
-	}
-	if err := s.tmuxSession.StartTaskSession(ctx, task, launch); err != nil {
-		return task, fmt.Errorf("start task session: %w", err)
-	}
-
-	return task, nil
-}
-
-func (s *taskService) prepareTaskWorkspace(ctx context.Context, task *Task, repoRoot string) error {
-	bootstrapSpec, err := s.buildWorkspaceBootstrapSpec(ctx, task)
-	if err != nil {
-		return fmt.Errorf("build workspace bootstrap spec: %w", err)
-	}
-
-	if s.workspace == nil {
-		return nil
-	}
-
-	if s.enableWorkspaceSetup {
-		if err := s.workspace.SetupTaskWorkspace(ctx, task, repoRoot); err != nil {
-			return fmt.Errorf("setup workspace: %w", err)
-		}
-	}
-
-	if err := s.workspace.BootstrapTaskWorkspace(ctx, task, bootstrapSpec); err != nil {
-		return fmt.Errorf("bootstrap workspace: %w", err)
-	}
-
-	return nil
-}
-
-func (s *taskService) buildWorkspaceBootstrapSpec(ctx context.Context, task *Task) (WorkspaceBootstrapSpec, error) {
-	providerClient, err := s.configuredClientFor(ctx, task.Provider)
-	if err != nil {
-		return WorkspaceBootstrapSpec{}, err
-	}
-
-	return providerClient.BuildWorkspaceBootstrapSpec(task)
-}
-
-func (s *taskService) resolveTaskIDFromCwd(ctx context.Context, cwd string) (string, error) {
-	cwd = strings.TrimSpace(cwd)
-	if cwd == "" {
-		return "", ErrUnmanagedHookEvent
-	}
-
-	tasks, err := s.tasks.ListTasks(ctx)
-	if err != nil {
-		return "", fmt.Errorf("list tasks for hook resolution: %w", err)
-	}
-
-	for _, task := range tasks {
-		if task != nil && strings.TrimSpace(task.WorktreePath) == cwd {
-			return strings.TrimSpace(task.ID), nil
-		}
-	}
-
-	return "", ErrUnmanagedHookEvent
-}
-
-func (s *taskService) taskByID(ctx context.Context, taskID string) (*Task, error) {
+// taskByID resolves a task record by ID from the repository. Shared by the
+// service operations and the task creation module.
+func taskByID(ctx context.Context, tasks TaskRepository, taskID string) (*Task, error) {
 	taskID = strings.TrimSpace(taskID)
 	if taskID == "" {
 		return nil, ErrTaskNotFound
 	}
 
-	tasks, err := s.tasks.ListTasks(ctx)
+	taskList, err := tasks.ListTasks(ctx)
 	if err != nil {
-		return nil, fmt.Errorf("list tasks for delete: %w", err)
+		return nil, fmt.Errorf("list tasks: %w", err)
 	}
 
-	for _, task := range tasks {
+	for _, task := range taskList {
 		if task != nil && strings.TrimSpace(task.ID) == taskID {
 			return task, nil
 		}

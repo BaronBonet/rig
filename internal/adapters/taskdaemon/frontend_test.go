@@ -1,829 +1,209 @@
 package taskdaemon
 
 import (
-	"bufio"
 	"context"
 	"encoding/json"
-	"io"
 	"net"
-	"os"
-	"reflect"
 	"testing"
 	"time"
 
-	"github.com/BaronBonet/rig/internal/core"
-
-	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
+
+	"github.com/BaronBonet/rig/internal/core"
 )
+
+// These tests cover the client's handling of misbehaving or interrupted
+// daemons — responses a correct server never produces. The happy paths are
+// covered end to end by the round-trip suite in server_test.go.
 
 func TestFrontend_ImplementsTaskFrontend(t *testing.T) {
 	t.Parallel()
 
-	require.NotNil(t, New(Config{}).Frontend())
+	var _ core.TaskFrontend = &frontend{}
 }
 
-func TestFrontend_SendUnaryRejectsUnexpectedResponseType(t *testing.T) {
-	t.Parallel()
-
-	socketPath := frontendTestSocketPath(t)
-	serverErrCh := serveOneShotFrontendSocket(t, socketPath, func(req socketRequest, encoder *json.Encoder) error {
-		return encoder.Encode(socketEnvelope{Type: socketEnvelopeTaskCreated, OK: true})
-	})
-
-	frontend := &frontend{socketPath: socketPath}
-
-	resp, err := frontend.sendUnary(
-		t.Context(),
-		socketRequest{Command: socketCommandLatestTaskStatus},
-		socketEnvelopeTaskStatusSnapshot,
-	)
-	require.Nil(t, resp)
-	require.EqualError(t, err, `unexpected latest_task_status response "task_created"`)
-	require.NoError(t, <-serverErrCh)
-}
-
-func TestFrontend_ListTasksSendsListTasksAndReturnsTasks(t *testing.T) {
-	t.Parallel()
-
-	socketPath := frontendTestSocketPath(t)
-	expectedTasks := []*core.Task{
-		{ID: "task-1", DisplayName: "First task"},
-		{ID: "task-2", DisplayName: "Second task"},
-	}
-	requestCh := make(chan socketRequest, 1)
-	serverErrCh := serveOneShotFrontendSocket(t, socketPath, func(req socketRequest, encoder *json.Encoder) error {
-		requestCh <- req
-		return encoder.Encode(socketEnvelope{
-			Type:  "tasks_list",
-			OK:    true,
-			Tasks: expectedTasks,
-		})
-	})
-
-	frontend := New(Config{SocketPath: socketPath}).Frontend()
-
-	tasks, err := frontend.ListTasks(t.Context())
-	require.NoError(t, err)
-	require.Equal(t, socketRequest{Command: "list_tasks"}, <-requestCh)
-	require.True(t, reflect.DeepEqual(expectedTasks, tasks))
-	require.NoError(t, <-serverErrCh)
-}
-
-func TestFrontend_ListRepoPullRequestsSendsRequestAndReturnsPullRequests(t *testing.T) {
-	t.Parallel()
-
-	socketPath := frontendTestSocketPath(t)
-	expectedPRs := []core.RepoPullRequest{
-		{Number: 41, Title: "Billing", BranchName: "feat/billing", State: core.PRStateOpen},
-		{Number: 42, Title: "Auth", BranchName: "feat/auth", State: core.PRStateDraft, HasExistingTask: true},
-	}
-	requestCh := make(chan socketRequest, 1)
-	serverErrCh := serveOneShotFrontendSocket(t, socketPath, func(req socketRequest, encoder *json.Encoder) error {
-		requestCh <- req
-		return encoder.Encode(socketEnvelope{
-			Type:         "repo_pull_requests_list",
-			OK:           true,
-			PullRequests: expectedPRs,
-		})
-	})
-
-	frontend := New(Config{SocketPath: socketPath}).Frontend()
-
-	prs, err := frontend.ListRepoPullRequests(t.Context(), "/tmp/repo")
-	require.NoError(t, err)
-	require.Equal(t, socketRequest{Command: "list_repo_pull_requests", Cwd: "/tmp/repo"}, <-requestCh)
-	require.Equal(t, expectedPRs, prs)
-	require.NoError(t, <-serverErrCh)
-}
-
-func TestFrontend_PullRequestStatusSendsRequestAndReturnsStatus(t *testing.T) {
-	t.Parallel()
-
-	socketPath := frontendTestSocketPath(t)
-	expectedStatus := &core.PRStatus{State: core.PRStateOpen, Number: 42}
-	requestCh := make(chan socketRequest, 1)
-	serverErrCh := serveOneShotFrontendSocket(t, socketPath, func(req socketRequest, encoder *json.Encoder) error {
-		requestCh <- req
-		return encoder.Encode(socketEnvelope{
-			Type: "pull_request_status",
-			OK:   true,
-			PR:   expectedStatus,
-		})
-	})
-
-	frontend := New(Config{SocketPath: socketPath}).Frontend()
-
-	status, err := frontend.PullRequestStatus(t.Context(), "/tmp/repo", "feat/auth")
-	require.NoError(t, err)
-	require.Equal(
-		t,
-		socketRequest{Command: "pull_request_status", Cwd: "/tmp/repo", BranchName: "feat/auth"},
-		<-requestCh,
-	)
-	require.Equal(t, expectedStatus, status)
-	require.NoError(t, <-serverErrCh)
-}
-
-func TestFrontend_CreateTaskStreamLatestTaskStatusAndSubscribeTaskStatus(t *testing.T) {
-	t.Parallel()
-
-	t.Run("create task stream", func(t *testing.T) {
-		t.Parallel()
-
-		socketPath := frontendTestSocketPath(t)
-		input := core.CreateTaskInput{
-			Cwd:      "/repo",
-			Prompt:   "ship it",
-			Provider: core.ProviderCodex,
-		}
-		expectedTask := &core.Task{ID: "task-123", DisplayName: "Ship it"}
-		requestCh := make(chan socketRequest, 1)
-		serverErrCh := serveStreamingFrontendSocket(
-			t,
-			socketPath,
-			func(req socketRequest, encoder *json.Encoder) error {
-				requestCh <- req
-				if err := encoder.Encode(socketEnvelope{
-					Type: "task_create_progress",
-					OK:   true,
-					CreateProgress: &core.TaskCreateProgressEvent{
-						Step: core.TaskCreateProgressSuggestingName,
-					},
-				}); err != nil {
-					return err
-				}
-				return encoder.Encode(socketEnvelope{
-					Type: "task_created",
-					OK:   true,
-					Task: expectedTask,
-				})
-			},
-		)
-
-		frontend := New(Config{SocketPath: socketPath}).Frontend()
-
-		events, err := frontend.CreateTaskStream(t.Context(), input)
-		require.NoError(t, err)
-		require.Equal(t, socketRequest{Command: "create_task", Input: &input}, <-requestCh)
-
-		select {
-		case event, ok := <-events:
-			require.True(t, ok)
-			require.NotNil(t, event.Progress)
-			require.Equal(t, core.TaskCreateProgressSuggestingName, event.Progress.Step)
-			require.Nil(t, event.Task)
-			require.NoError(t, event.Err)
-		case <-time.After(2 * time.Second):
-			t.Fatal("timed out waiting for create progress event")
-		}
-
-		select {
-		case event, ok := <-events:
-			require.True(t, ok)
-			require.Nil(t, event.Progress)
-			require.Equal(t, expectedTask, event.Task)
-			require.NoError(t, event.Err)
-		case <-time.After(2 * time.Second):
-			t.Fatal("timed out waiting for create task result")
-		}
-
-		select {
-		case _, ok := <-events:
-			require.False(t, ok)
-		case <-time.After(2 * time.Second):
-			t.Fatal("timed out waiting for create stream close")
-		}
-
-		require.NoError(t, <-serverErrCh)
-	})
-
-	t.Run("delete task", func(t *testing.T) {
-		t.Parallel()
-
-		socketPath := frontendTestSocketPath(t)
-		requestCh := make(chan socketRequest, 1)
-		serverErrCh := serveOneShotFrontendSocket(t, socketPath, func(req socketRequest, encoder *json.Encoder) error {
-			requestCh <- req
-			return encoder.Encode(socketEnvelope{
-				Type: "task_deleted",
-				OK:   true,
-			})
-		})
-
-		frontend := New(Config{SocketPath: socketPath}).Frontend()
-
-		err := frontend.DeleteTask(t.Context(), "task-123")
-		require.NoError(t, err)
-		require.Equal(t, socketRequest{Command: "delete_task", TaskID: "task-123"}, <-requestCh)
-		require.NoError(t, <-serverErrCh)
-	})
-
-	t.Run("reconnect task session", func(t *testing.T) {
-		t.Parallel()
-
-		socketPath := frontendTestSocketPath(t)
-		requestCh := make(chan socketRequest, 1)
-		serverErrCh := serveOneShotFrontendSocket(t, socketPath, func(req socketRequest, encoder *json.Encoder) error {
-			requestCh <- req
-			return encoder.Encode(socketEnvelope{
-				Type: "task_session_reconnected",
-				OK:   true,
-			})
-		})
-
-		frontend := New(Config{SocketPath: socketPath}).Frontend()
-
-		err := frontend.ReconnectTaskSession(t.Context(), "task-123")
-		require.NoError(t, err)
-		require.Equal(t, socketRequest{Command: "reconnect_task_session", TaskID: "task-123"}, <-requestCh)
-		require.NoError(t, <-serverErrCh)
-	})
-
-	t.Run("attach task session", func(t *testing.T) {
-		t.Parallel()
-
-		task := &core.Task{ID: "task-123", TmuxSession: "repo_task"}
-		sessions := core.NewMockTmuxSessionClient(t)
-		sessions.EXPECT().AttachTaskSession(mock.Anything, task).RunAndReturn(
-			func(_ context.Context, got *core.Task) error {
-				require.Same(t, task, got)
-				return nil
-			},
-		)
-
-		frontend := &frontend{sessions: sessions}
-
-		err := frontend.AttachTaskSession(t.Context(), task)
-		require.NoError(t, err)
-	})
-
-	t.Run("latest task status", func(t *testing.T) {
-		t.Parallel()
-
-		socketPath := frontendTestSocketPath(t)
-		expectedUpdate := &core.TaskStatusUpdate{
-			TaskID:       "task-123",
-			Provider:     core.ProviderCodex,
-			Phase:        core.TaskStatusPhaseWorking,
-			RawEventName: "turn.completed",
-			ObservedAt:   time.Unix(1710000000, 0).UTC(),
-		}
-		requestCh := make(chan socketRequest, 1)
-		serverErrCh := serveOneShotFrontendSocket(t, socketPath, func(req socketRequest, encoder *json.Encoder) error {
-			requestCh <- req
-			return encoder.Encode(socketEnvelope{
-				Type:   "task_status_snapshot",
-				OK:     true,
-				Update: expectedUpdate,
-			})
-		})
-
-		frontend := New(Config{SocketPath: socketPath}).Frontend()
-
-		update, err := frontend.LatestTaskStatus(t.Context(), "task-123")
-		require.NoError(t, err)
-		require.Equal(t, socketRequest{Command: "latest_task_status", TaskID: "task-123"}, <-requestCh)
-		require.Equal(t, expectedUpdate, update)
-		require.NoError(t, <-serverErrCh)
-	})
-
-	t.Run("get task activity", func(t *testing.T) {
-		t.Parallel()
-
-		socketPath := frontendTestSocketPath(t)
-		expectedEvents := []core.TaskActivityEvent{
-			{
-				TaskID:     "task-123",
-				TurnID:     "turn-1",
-				EventName:  "UserPromptSubmit",
-				Role:       core.TaskActivityRoleUser,
-				Text:       "restore the preview",
-				ObservedAt: time.Unix(1710000000, 0).UTC(),
-			},
-			{
-				TaskID:     "task-123",
-				TurnID:     "turn-1",
-				EventName:  "Stop",
-				Role:       core.TaskActivityRoleAssistant,
-				Text:       "Re-added the task detail preview.",
-				ObservedAt: time.Unix(1710000060, 0).UTC(),
-			},
-		}
-		requestCh := make(chan socketRequest, 1)
-		serverErrCh := serveOneShotFrontendSocket(t, socketPath, func(req socketRequest, encoder *json.Encoder) error {
-			requestCh <- req
-			return encoder.Encode(socketEnvelope{
-				Type:     "task_activity",
-				OK:       true,
-				Activity: expectedEvents,
-			})
-		})
-
-		frontend := New(Config{SocketPath: socketPath}).Frontend()
-
-		events, err := frontend.GetTaskActivity(t.Context(), "task-123", 5)
-		require.NoError(t, err)
-		require.Equal(t, socketRequest{Command: "get_task_activity", TaskID: "task-123", Limit: 5}, <-requestCh)
-		require.Equal(t, expectedEvents, events)
-		require.NoError(t, <-serverErrCh)
-	})
-
-	t.Run("get task token usage", func(t *testing.T) {
-		t.Parallel()
-
-		socketPath := frontendTestSocketPath(t)
-		expectedUsage := &core.TaskTokenUsage{
-			SessionCount: 2,
-			InputTokens:  130,
-			OutputTokens: 60,
-			TotalTokens:  190,
-		}
-		requestCh := make(chan socketRequest, 1)
-		serverErrCh := serveOneShotFrontendSocket(t, socketPath, func(req socketRequest, encoder *json.Encoder) error {
-			requestCh <- req
-			return encoder.Encode(socketEnvelope{
-				Type:  "task_token_usage",
-				OK:    true,
-				Usage: expectedUsage,
-			})
-		})
-
-		frontend := New(Config{SocketPath: socketPath}).Frontend()
-
-		usage, err := frontend.GetTaskTokenUsage(t.Context(), "task-123")
-		require.NoError(t, err)
-		require.Equal(t, socketRequest{Command: "get_task_token_usage", TaskID: "task-123"}, <-requestCh)
-		require.Equal(t, expectedUsage, usage)
-		require.NoError(t, <-serverErrCh)
-	})
-
-	t.Run("subscribe task status", func(t *testing.T) {
-		t.Parallel()
-
-		socketPath := frontendTestSocketPath(t)
-		expectedUpdate := core.TaskStatusUpdate{
-			TaskID:       "task-123",
-			Provider:     core.ProviderCodex,
-			Phase:        core.TaskStatusPhaseWaitingForInput,
-			RawEventName: "turn.waiting",
-			ObservedAt:   time.Unix(1710000100, 0).UTC(),
-		}
-		requestCh := make(chan socketRequest, 1)
-		serverErrCh := serveStreamingFrontendSocket(
-			t,
-			socketPath,
-			func(req socketRequest, encoder *json.Encoder) error {
-				requestCh <- req
-				if err := encoder.Encode(socketEnvelope{Type: "subscribed", OK: true}); err != nil {
-					return err
-				}
-				return encoder.Encode(socketEnvelope{Type: "task_status_update", Update: &expectedUpdate})
-			},
-		)
-
-		frontend := New(Config{SocketPath: socketPath}).Frontend()
-		ctx, cancel := context.WithCancel(t.Context())
-		defer cancel()
-
-		updates, err := frontend.SubscribeTaskStatus(ctx, "task-123")
-		require.NoError(t, err)
-		require.Equal(t, socketRequest{Command: "subscribe_task_status", TaskID: "task-123"}, <-requestCh)
-
-		select {
-		case update, ok := <-updates:
-			require.True(t, ok)
-			require.Equal(t, expectedUpdate, update)
-		case <-time.After(2 * time.Second):
-			t.Fatal("timed out waiting for status update")
-		}
-
-		cancel()
-
-		require.NoError(t, <-serverErrCh)
-	})
-
-	t.Run("subscribe task status closes promptly on caller cancellation", func(t *testing.T) {
-		t.Parallel()
-
-		socketPath := frontendTestSocketPath(t)
-		requestCh := make(chan socketRequest, 1)
-		serverReady := make(chan struct{})
-		serverErrCh := serveStreamingFrontendSocketWithConn(
-			t,
-			socketPath,
-			func(req socketRequest, encoder *json.Encoder, conn net.Conn) error {
-				requestCh <- req
-				if err := encoder.Encode(socketEnvelope{Type: "subscribed", OK: true}); err != nil {
-					return err
-				}
-				close(serverReady)
-				var buf [1]byte
-				_, err := conn.Read(buf[:])
-				return err
-			},
-		)
-
-		frontend := New(Config{SocketPath: socketPath}).Frontend()
-		ctx, cancel := context.WithCancel(context.Background())
-		updates, err := frontend.SubscribeTaskStatus(ctx, "task-123")
-		require.NoError(t, err)
-		require.Equal(t, socketRequest{Command: "subscribe_task_status", TaskID: "task-123"}, <-requestCh)
-		<-serverReady
-
-		cancel()
-
-		select {
-		case _, ok := <-updates:
-			require.False(t, ok)
-		case <-time.After(250 * time.Millisecond):
-			t.Fatal("timed out waiting for canceled subscription to close")
-		}
-
-		require.ErrorIs(t, <-serverErrCh, io.EOF)
-	})
-
-	t.Run("subscribe task status returns promptly when canceled before ack", func(t *testing.T) {
-		t.Parallel()
-
-		socketPath := frontendTestSocketPath(t)
-		requestCh := make(chan socketRequest, 1)
-		serverReady := make(chan struct{})
-		serverErrCh := serveStreamingFrontendSocketWithConn(
-			t,
-			socketPath,
-			func(req socketRequest, encoder *json.Encoder, conn net.Conn) error {
-				requestCh <- req
-				close(serverReady)
-				var buf [1]byte
-				_, err := conn.Read(buf[:])
-				return err
-			},
-		)
-
-		frontend := New(Config{SocketPath: socketPath}).Frontend()
-		ctx, cancel := context.WithCancel(context.Background())
-
-		resultCh := make(chan error, 1)
-		go func() {
-			_, err := frontend.SubscribeTaskStatus(ctx, "task-123")
-			resultCh <- err
-		}()
-
-		require.Equal(t, socketRequest{Command: "subscribe_task_status", TaskID: "task-123"}, <-requestCh)
-		<-serverReady
-		cancel()
-
-		select {
-		case err := <-resultCh:
-			require.Error(t, err)
-		case <-time.After(250 * time.Millisecond):
-			t.Fatal("timed out waiting for canceled subscribe handshake to return")
-		}
-
-		require.ErrorIs(t, <-serverErrCh, io.EOF)
-	})
-
-	t.Run("create task stream yields terminal error", func(t *testing.T) {
-		t.Parallel()
-
-		socketPath := frontendTestSocketPath(t)
-		requestCh := make(chan socketRequest, 1)
-		serverErrCh := serveStreamingFrontendSocket(
-			t,
-			socketPath,
-			func(req socketRequest, encoder *json.Encoder) error {
-				requestCh <- req
-				if err := encoder.Encode(socketEnvelope{
-					Type: "task_create_progress",
-					OK:   true,
-					CreateProgress: &core.TaskCreateProgressEvent{
-						Step: core.TaskCreateProgressCreatingWorktree,
-					},
-				}); err != nil {
-					return err
-				}
-				return encoder.Encode(socketEnvelope{Type: "error", Error: "create failed"})
-			},
-		)
-
-		frontend := New(Config{SocketPath: socketPath}).Frontend()
-
-		events, err := frontend.CreateTaskStream(t.Context(), core.CreateTaskInput{Prompt: "ship it"})
-		require.NoError(t, err)
-		require.Equal(
-			t,
-			socketRequest{Command: "create_task", Input: &core.CreateTaskInput{Prompt: "ship it"}},
-			<-requestCh,
-		)
-
-		select {
-		case event, ok := <-events:
-			require.True(t, ok)
-			require.NotNil(t, event.Progress)
-			require.Equal(t, core.TaskCreateProgressCreatingWorktree, event.Progress.Step)
-		case <-time.After(2 * time.Second):
-			t.Fatal("timed out waiting for streamed create progress")
-		}
-
-		select {
-		case event, ok := <-events:
-			require.True(t, ok)
-			require.Nil(t, event.Progress)
-			require.Nil(t, event.Task)
-			require.EqualError(t, event.Err, "create failed")
-		case <-time.After(2 * time.Second):
-			t.Fatal("timed out waiting for terminal create error")
-		}
-
-		select {
-		case _, ok := <-events:
-			require.False(t, ok)
-		case <-time.After(2 * time.Second):
-			t.Fatal("timed out waiting for errored create stream close")
-		}
-
-		require.NoError(t, <-serverErrCh)
-	})
-
-	t.Run("create task stream yields error when socket closes before terminal result", func(t *testing.T) {
-		t.Parallel()
-
-		socketPath := frontendTestSocketPath(t)
-		requestCh := make(chan socketRequest, 1)
-		serverErrCh := serveStreamingFrontendSocket(
-			t,
-			socketPath,
-			func(req socketRequest, encoder *json.Encoder) error {
-				requestCh <- req
-				return encoder.Encode(socketEnvelope{
-					Type: "task_create_progress",
-					OK:   true,
-					CreateProgress: &core.TaskCreateProgressEvent{
-						Step: core.TaskCreateProgressSuggestingName,
-					},
-				})
-			},
-		)
-
-		frontend := New(Config{SocketPath: socketPath}).Frontend()
-
-		events, err := frontend.CreateTaskStream(t.Context(), core.CreateTaskInput{Prompt: "ship it"})
-		require.NoError(t, err)
-		require.Equal(
-			t,
-			socketRequest{Command: "create_task", Input: &core.CreateTaskInput{Prompt: "ship it"}},
-			<-requestCh,
-		)
-
-		select {
-		case event, ok := <-events:
-			require.True(t, ok)
-			require.NotNil(t, event.Progress)
-			require.Equal(t, core.TaskCreateProgressSuggestingName, event.Progress.Step)
-		case <-time.After(2 * time.Second):
-			t.Fatal("timed out waiting for streamed create progress")
-		}
-
-		select {
-		case event, ok := <-events:
-			require.True(t, ok)
-			require.Nil(t, event.Progress)
-			require.Nil(t, event.Task)
-			require.EqualError(t, event.Err, "create task stream closed before terminal result")
-		case <-time.After(2 * time.Second):
-			t.Fatal("timed out waiting for premature close error")
-		}
-
-		select {
-		case _, ok := <-events:
-			require.False(t, ok)
-		case <-time.After(2 * time.Second):
-			t.Fatal("timed out waiting for premature close stream close")
-		}
-
-		require.NoError(t, <-serverErrCh)
-	})
-}
-
-func TestFrontend_ReturnsExplicitErrorsOnErrorEnvelopesAndUnexpectedTypes(t *testing.T) {
-	t.Parallel()
-
-	t.Run("list tasks returns error envelope", func(t *testing.T) {
-		t.Parallel()
-
-		socketPath := frontendTestSocketPath(t)
-		serverErrCh := serveOneShotFrontendSocket(t, socketPath, func(req socketRequest, encoder *json.Encoder) error {
-			return encoder.Encode(socketEnvelope{Type: "error", Error: "boom"})
-		})
-
-		frontend := New(Config{SocketPath: socketPath}).Frontend()
-
-		tasks, err := frontend.ListTasks(t.Context())
-		require.Nil(t, tasks)
-		require.EqualError(t, err, "boom")
-		require.NoError(t, <-serverErrCh)
-	})
-
-	t.Run("create task stream returns unexpected response type", func(t *testing.T) {
-		t.Parallel()
-
-		socketPath := frontendTestSocketPath(t)
-		serverErrCh := serveStreamingFrontendSocket(
-			t,
-			socketPath,
-			func(req socketRequest, encoder *json.Encoder) error {
-				return encoder.Encode(socketEnvelope{Type: "tasks_list", OK: true})
-			},
-		)
-
-		frontend := New(Config{SocketPath: socketPath}).Frontend()
-
-		events, err := frontend.CreateTaskStream(t.Context(), core.CreateTaskInput{Prompt: "hello"})
-		require.NoError(t, err)
-
-		select {
-		case event, ok := <-events:
-			require.True(t, ok)
-			require.Nil(t, event.Task)
-			require.Error(t, event.Err)
-			require.EqualError(t, event.Err, `unexpected create_task response "tasks_list"`)
-		case <-time.After(2 * time.Second):
-			t.Fatal("timed out waiting for create stream error")
-		}
-
-		select {
-		case _, ok := <-events:
-			require.False(t, ok)
-		case <-time.After(2 * time.Second):
-			t.Fatal("timed out waiting for create stream close")
-		}
-		require.NoError(t, <-serverErrCh)
-	})
-
-	t.Run("subscribe task status returns error envelope", func(t *testing.T) {
-		t.Parallel()
-
-		socketPath := frontendTestSocketPath(t)
-		serverErrCh := serveStreamingFrontendSocket(
-			t,
-			socketPath,
-			func(req socketRequest, encoder *json.Encoder) error {
-				return encoder.Encode(socketEnvelope{Type: "error", Error: "subscribe failed"})
-			},
-		)
-
-		frontend := New(Config{SocketPath: socketPath}).Frontend()
-
-		updates, err := frontend.SubscribeTaskStatus(t.Context(), "task-123")
-		require.Nil(t, updates)
-		require.EqualError(t, err, "subscribe failed")
-		require.NoError(t, <-serverErrCh)
-	})
-
-	t.Run("subscribe task status closes stream on malformed update frame", func(t *testing.T) {
-		t.Parallel()
-
-		socketPath := frontendTestSocketPath(t)
-		requestCh := make(chan socketRequest, 1)
-		serverErrCh := serveStreamingFrontendSocket(
-			t,
-			socketPath,
-			func(req socketRequest, encoder *json.Encoder) error {
-				requestCh <- req
-				if err := encoder.Encode(socketEnvelope{Type: "subscribed", OK: true}); err != nil {
-					return err
-				}
-				return encoder.Encode(socketEnvelope{Type: "tasks_list", OK: true})
-			},
-		)
-
-		frontend := New(Config{SocketPath: socketPath}).Frontend()
-
-		updates, err := frontend.SubscribeTaskStatus(t.Context(), "task-123")
-		require.NoError(t, err)
-		require.Equal(t, socketRequest{Command: "subscribe_task_status", TaskID: "task-123"}, <-requestCh)
-
-		select {
-		case _, ok := <-updates:
-			require.False(t, ok)
-		case <-time.After(2 * time.Second):
-			t.Fatal("timed out waiting for malformed stream to close")
-		}
-
-		require.NoError(t, <-serverErrCh)
-	})
-
-	t.Run("latest task status returns unexpected response type", func(t *testing.T) {
-		t.Parallel()
-
-		socketPath := frontendTestSocketPath(t)
-		serverErrCh := serveOneShotFrontendSocket(t, socketPath, func(req socketRequest, encoder *json.Encoder) error {
-			return encoder.Encode(socketEnvelope{Type: "task_created", OK: true})
-		})
-
-		frontend := New(Config{SocketPath: socketPath}).Frontend()
-
-		update, err := frontend.LatestTaskStatus(t.Context(), "task-123")
-		require.Nil(t, update)
-		require.EqualError(t, err, `unexpected latest_task_status response "task_created"`)
-		require.NoError(t, <-serverErrCh)
-	})
-}
-
-func frontendTestSocketPath(t *testing.T) string {
+// fakeDaemonSocket accepts connections and answers each request with the
+// scripted raw JSON frames, then closes the connection.
+func fakeDaemonSocket(t *testing.T, frames ...string) string {
 	t.Helper()
 
-	file, err := os.CreateTemp(os.TempDir(), "tdf-*.sock")
+	socketPath := serverTestSocketPath(t)
+	listener, err := listenUnixSocket(context.Background(), socketPath)
 	require.NoError(t, err)
-	path := file.Name()
-	require.NoError(t, file.Close())
-	require.NoError(t, os.Remove(path))
 	t.Cleanup(func() {
-		_ = os.Remove(path)
+		_ = listener.Close()
 	})
 
-	return path
-}
-
-func serveOneShotFrontendSocket(
-	t *testing.T,
-	socketPath string,
-	handler func(req socketRequest, encoder *json.Encoder) error,
-) <-chan error {
-	t.Helper()
-
-	listener, err := listenUnixSocket(t.Context(), socketPath)
-	require.NoError(t, err)
-
-	errCh := make(chan error, 1)
 	go func() {
-		defer listener.Close()
-
-		conn, acceptErr := listener.Accept()
-		if acceptErr != nil {
-			errCh <- acceptErr
-			return
+		for {
+			conn, acceptErr := listener.Accept()
+			if acceptErr != nil {
+				return
+			}
+			go func(conn net.Conn) {
+				defer conn.Close()
+				var req socketRequest
+				if decodeErr := json.NewDecoder(conn).Decode(&req); decodeErr != nil {
+					return
+				}
+				for _, frame := range frames {
+					if _, writeErr := conn.Write([]byte(frame + "\n")); writeErr != nil {
+						return
+					}
+				}
+			}(conn)
 		}
-		defer conn.Close()
-
-		var req socketRequest
-		if err := json.NewDecoder(bufio.NewReader(conn)).Decode(&req); err != nil {
-			errCh <- err
-			return
-		}
-
-		errCh <- handler(req, json.NewEncoder(conn))
 	}()
 
-	return errCh
+	return socketPath
 }
 
-func serveStreamingFrontendSocket(
-	t *testing.T,
-	socketPath string,
-	handler func(req socketRequest, encoder *json.Encoder) error,
-) <-chan error {
-	t.Helper()
+func TestFrontend_RejectsUnexpectedResponseType(t *testing.T) {
+	t.Parallel()
 
-	return serveStreamingFrontendSocketWithConn(
-		t,
-		socketPath,
-		func(req socketRequest, encoder *json.Encoder, _ net.Conn) error {
-			return handler(req, encoder)
-		},
+	client := &frontend{socketPath: fakeDaemonSocket(t, `{"type":"not_tasks_list","ok":true}`)}
+
+	_, err := client.ListTasks(context.Background())
+	require.ErrorContains(t, err, `unexpected list_tasks response "not_tasks_list"`)
+}
+
+func TestFrontend_SurfacesErrorEnvelope(t *testing.T) {
+	t.Parallel()
+
+	client := &frontend{socketPath: fakeDaemonSocket(t, `{"type":"error","error":"task repository offline"}`)}
+
+	_, err := client.ListTasks(context.Background())
+	require.ErrorContains(t, err, "task repository offline")
+}
+
+func TestFrontend_CreateTaskStreamYieldsErrorWhenSocketClosesBeforeTerminalResult(t *testing.T) {
+	t.Parallel()
+
+	client := &frontend{socketPath: fakeDaemonSocket(t,
+		`{"type":"task_create_progress","ok":true,"payload":{"step":"suggesting_name"}}`,
+	)}
+
+	events, err := client.CreateTaskStream(context.Background(), core.CreateTaskInput{
+		Cwd:      "/tmp/repo",
+		Prompt:   "add retries",
+		Provider: core.ProviderCodex,
+	})
+	require.NoError(t, err)
+
+	var got []core.TaskCreateEvent
+	for event := range events {
+		got = append(got, event)
+	}
+	require.Len(t, got, 2)
+	require.Equal(t, core.TaskCreateProgressSuggestingName, got[0].Progress.Step)
+	require.ErrorContains(t, got[1].Err, "create task stream closed before terminal result")
+}
+
+func TestFrontend_CreateTaskStreamRejectsUnexpectedFrame(t *testing.T) {
+	t.Parallel()
+
+	client := &frontend{socketPath: fakeDaemonSocket(t, `{"type":"tasks_list","ok":true}`)}
+
+	events, err := client.CreateTaskStream(context.Background(), core.CreateTaskInput{
+		Cwd:      "/tmp/repo",
+		Prompt:   "add retries",
+		Provider: core.ProviderCodex,
+	})
+	require.NoError(t, err)
+
+	var got []core.TaskCreateEvent
+	for event := range events {
+		got = append(got, event)
+	}
+	require.Len(t, got, 1)
+	require.ErrorContains(t, got[0].Err, `unexpected task create stream message "tasks_list"`)
+}
+
+func TestFrontend_SubscribeTaskStatusRejectsBadAck(t *testing.T) {
+	t.Parallel()
+
+	t.Run("error envelope ack", func(t *testing.T) {
+		client := &frontend{socketPath: fakeDaemonSocket(t, `{"type":"error","error":"subscribe failed"}`)}
+
+		_, err := client.SubscribeTaskStatus(context.Background(), "task-1")
+		require.ErrorContains(t, err, "subscribe failed")
+	})
+
+	t.Run("unexpected ack type", func(t *testing.T) {
+		client := &frontend{socketPath: fakeDaemonSocket(t, `{"type":"tasks_list","ok":true}`)}
+
+		_, err := client.SubscribeTaskStatus(context.Background(), "task-1")
+		require.ErrorContains(t, err, `unexpected subscribe_task_status response "tasks_list"`)
+	})
+}
+
+func TestFrontend_SubscribeTaskStatusClosesStreamOnMalformedUpdateFrame(t *testing.T) {
+	t.Parallel()
+
+	client := &frontend{socketPath: fakeDaemonSocket(t,
+		`{"type":"subscribed","ok":true}`,
+		`{"type":"task_status_update","ok":true}`,
+	)}
+
+	updates, err := client.SubscribeTaskStatus(context.Background(), "task-1")
+	require.NoError(t, err)
+
+	select {
+	case _, open := <-updates:
+		require.False(t, open, "malformed frame must close the stream, not deliver an update")
+	case <-time.After(2 * time.Second):
+		t.Fatal("timed out waiting for stream close")
+	}
+}
+
+func TestFrontend_SubscribeTaskStatusReturnsPromptlyWhenCanceledBeforeAck(t *testing.T) {
+	t.Parallel()
+
+	// A daemon that accepts the request and then never answers.
+	socketPath := serverTestSocketPath(t)
+	listener, err := listenUnixSocket(context.Background(), socketPath)
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		_ = listener.Close()
+	})
+	go func() {
+		for {
+			conn, acceptErr := listener.Accept()
+			if acceptErr != nil {
+				return
+			}
+			go func(conn net.Conn) {
+				var req socketRequest
+				_ = json.NewDecoder(conn).Decode(&req)
+				// Hold the connection open without responding.
+			}(conn)
+		}
+	}()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() {
+		_, subscribeErr := (&frontend{socketPath: socketPath}).SubscribeTaskStatus(ctx, "task-1")
+		done <- subscribeErr
+	}()
+
+	time.Sleep(50 * time.Millisecond)
+	cancel()
+
+	select {
+	case subscribeErr := <-done:
+		require.Error(t, subscribeErr)
+	case <-time.After(2 * time.Second):
+		t.Fatal("timed out waiting for canceled subscribe to return")
+	}
+}
+
+func TestFrontend_AttachTaskSessionRequiresSessionClient(t *testing.T) {
+	t.Parallel()
+
+	client := &frontend{}
+	require.ErrorContains(t,
+		client.AttachTaskSession(context.Background(), &core.Task{ID: "task-1"}),
+		"task session client not configured",
 	)
-}
-
-func serveStreamingFrontendSocketWithConn(
-	t *testing.T,
-	socketPath string,
-	handler func(req socketRequest, encoder *json.Encoder, conn net.Conn) error,
-) <-chan error {
-	t.Helper()
-
-	listener, err := listenUnixSocket(t.Context(), socketPath)
-	require.NoError(t, err)
-
-	errCh := make(chan error, 1)
-	go func() {
-		defer listener.Close()
-
-		conn, acceptErr := listener.Accept()
-		if acceptErr != nil {
-			errCh <- acceptErr
-			return
-		}
-		defer conn.Close()
-
-		var req socketRequest
-		if err := json.NewDecoder(bufio.NewReader(conn)).Decode(&req); err != nil {
-			errCh <- err
-			return
-		}
-
-		errCh <- handler(req, json.NewEncoder(conn), conn)
-	}()
-
-	return errCh
 }
