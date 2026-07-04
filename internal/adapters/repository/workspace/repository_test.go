@@ -93,3 +93,62 @@ func TestRepositorySetupAndBootstrapTaskWorkspace(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, os.FileMode(0o640), hooksInfo.Mode().Perm())
 }
+
+func TestBootstrapTaskWorkspace_MergesIntoExistingFile(t *testing.T) {
+	worktree := t.TempDir()
+	manager := New()
+
+	existingPath := filepath.Join(worktree, ".claude", "settings.local.json")
+	require.NoError(t, os.MkdirAll(filepath.Dir(existingPath), 0o755))
+	require.NoError(t, os.WriteFile(existingPath, []byte(`{"permissions":{}}`), 0o600))
+
+	err := manager.BootstrapTaskWorkspace(context.Background(), &core.Task{WorktreePath: worktree},
+		core.WorkspaceBootstrapSpec{Files: []core.WorkspaceBootstrapFile{{
+			Path:     ".claude/settings.local.json",
+			Content:  []byte(`{"hooks":{}}`),
+			FileMode: 0o600,
+			Merge: func(existing []byte) ([]byte, error) {
+				require.JSONEq(t, `{"permissions":{}}`, string(existing))
+				return []byte(`{"permissions":{},"hooks":{}}`), nil
+			},
+		}}})
+
+	require.NoError(t, err)
+	written, err := os.ReadFile(existingPath)
+	require.NoError(t, err)
+	require.JSONEq(t, `{"permissions":{},"hooks":{}}`, string(written))
+}
+
+func TestBootstrapTaskWorkspace_MergeSkippedForNewFile(t *testing.T) {
+	worktree := t.TempDir()
+	manager := New()
+
+	err := manager.BootstrapTaskWorkspace(context.Background(), &core.Task{WorktreePath: worktree},
+		core.WorkspaceBootstrapSpec{Files: []core.WorkspaceBootstrapFile{{
+			Path:     ".claude/settings.local.json",
+			Content:  []byte(`{"hooks":{}}`),
+			FileMode: 0o600,
+			Merge: func([]byte) ([]byte, error) {
+				t.Fatal("merge must not run when the destination does not exist")
+				return nil, nil
+			},
+		}}})
+
+	require.NoError(t, err)
+	written, err := os.ReadFile(filepath.Join(worktree, ".claude", "settings.local.json"))
+	require.NoError(t, err)
+	require.JSONEq(t, `{"hooks":{}}`, string(written))
+}
+
+func TestBootstrapTaskWorkspace_RejectsMissingWorktree(t *testing.T) {
+	manager := New()
+
+	err := manager.BootstrapTaskWorkspace(context.Background(),
+		&core.Task{WorktreePath: filepath.Join(t.TempDir(), "gone")},
+		core.WorkspaceBootstrapSpec{Files: []core.WorkspaceBootstrapFile{{
+			Path:    "file.txt",
+			Content: []byte("x"),
+		}}})
+
+	require.ErrorContains(t, err, "task worktree unavailable")
+}

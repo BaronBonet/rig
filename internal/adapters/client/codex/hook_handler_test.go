@@ -18,7 +18,7 @@ import (
 func TestNewHookHTTPHandler_DecodesCodexHookAndDelegatesToTaskService(t *testing.T) {
 	now := time.Date(2026, time.April, 20, 11, 0, 0, 0, time.UTC)
 	payload := `{"cwd":"/tmp/repo-task","hook_event_name":"SessionStart","model":"gpt-5.4-codex","prompt":"fix the retry flow","session_id":"sess-1","source":"startup","transcript_path":"/tmp/codex-session.jsonl"}`
-	service := core.NewMockTaskService(t)
+	service := core.NewMockHookEventHandler(t)
 	service.EXPECT().HandleHookEvent(mock.Anything, core.HookEventInput{
 		OccurredAt:     now,
 		EventName:      "SessionStart",
@@ -49,7 +49,7 @@ func TestNewHookHTTPHandler_DecodesCodexHookAndDelegatesToTaskService(t *testing
 }
 
 func TestNewHookHTTPHandler_RejectsMissingSecret(t *testing.T) {
-	handler := NewHookHTTPHandler(core.NewMockTaskService(t), time.Now, "secret-token")
+	handler := NewHookHTTPHandler(core.NewMockHookEventHandler(t), time.Now, "secret-token")
 
 	req := httptest.NewRequestWithContext(
 		t.Context(),

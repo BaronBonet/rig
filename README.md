@@ -131,7 +131,11 @@ Claude hook registration is workspace-scoped. Provider setup installs only a
 shared forward-to-rig script under `~/.local/share/rig/claude/`; that script
 does nothing by itself. When Rig prepares a task workspace it writes an
 untracked `.claude/settings.local.json` into the task worktree that registers
-Rig's hooks for that workspace only. Rig never modifies your user-level
+Rig's hooks for that workspace only. The file is written into every Rig task
+workspace — not just tasks whose active provider is Claude — so manually
+launching Claude in any Rig task is observed and adopted. If the file already
+exists (Claude Code stores permission decisions in it), Rig merges its hook
+entries in and preserves everything else. Rig never modifies your user-level
 `~/.claude/settings.json`, so Claude sessions outside Rig workspaces are never
 observed by or reported to Rig. The workspace settings file is untracked, so it
 never shows up in diffs or pull requests.
@@ -243,6 +247,57 @@ seed:
   copying completes.
 - Paths in `.rig.yaml` must be repo-relative. Absolute paths, `..`, and glob
   patterns are rejected.
+
+## Troubleshooting
+
+### `task daemon did not become healthy` on startup
+
+```
+task daemon did not become healthy: context deadline exceeded
+dial unix ~/.local/share/rig/daemon.sock: connect: no such file or directory
+```
+
+The foreground `rig` process spawns the background daemon and waits a few
+seconds for it to answer a health probe; this error means the daemon was not
+ready before that wait expired.
+
+The most common trigger is starting `rig` right after upgrading or rebuilding
+it while a daemon from the previous binary is still running. The TUI and
+daemon must be the same build (see
+[ADR 0002](docs/adr/0002-version-locked-socket-protocol.md)), so `rig` detects
+the version mismatch, stops the old daemon, and spawns a new one — and on a
+slow transition the fresh daemon can become healthy just after `rig` stops
+waiting.
+
+To resolve:
+
+1. **Run `rig` again.** The spawned daemon usually finishes starting on its
+   own, so the retry connects immediately. Verify with:
+
+   ```bash
+   rig daemon status
+   ```
+
+2. **Force a clean restart** if the daemon still is not healthy:
+
+   ```bash
+   rig daemon restart
+   ```
+
+3. **Check the startup log** if restarts keep failing — a daemon that crashes
+   during startup writes the reason here:
+
+   ```bash
+   cat ~/.local/share/rig/daemon-startup.log
+   ```
+
+   Common startup failures are another process holding the hook port
+   (`127.0.0.1:4124`) and a locked or corrupted task database
+   (`~/.local/share/rig/tasks.db`).
+
+A stale socket file is not a problem on its own: the daemon removes and
+recreates `daemon.sock` when it starts, and `rig` replaces daemons whose
+protocol or build version no longer matches automatically.
 
 ## Architecture
 

@@ -64,64 +64,21 @@ type TaskCreateEvent struct {
 }
 
 // TaskFrontend is the frontend-facing task application port used by the TUI.
-// In the active runtime, `rig` gets a composed implementation from the
-// taskdaemon adapter:
-//   - most methods are backed by daemon RPC over the local socket
+// It is TaskService plus the one operation that must run in the foreground
+// process. In the active runtime, `rig` gets a composed implementation from
+// the taskdaemon adapter:
+//   - the TaskService methods are backed by daemon RPC over the local socket
 //   - AttachTaskSession is local-only because it attaches this foreground
 //     terminal to tmux and cannot be truthfully served by the background daemon
 //
 // The TUI only knows about this port; it does not know about sockets, daemon
 // startup, tmux client mechanics, or in-process service wiring.
 type TaskFrontend interface {
+	TaskService
 	// AttachTaskSession attaches the current terminal to an existing task tmux
 	// session for interactive use. This is intentionally client-local behavior,
 	// not part of the daemon socket protocol.
 	AttachTaskSession(ctx context.Context, task *Task) error
-	// GetTaskActivity returns recent persisted activity events for the selected
-	// task detail view, ordered oldest-to-newest within the requested window.
-	GetTaskActivity(ctx context.Context, taskID string, limit int) ([]TaskActivityEvent, error)
-	// GetTaskTokenUsage returns the summed token usage across provider sessions
-	// observed for the selected task.
-	GetTaskTokenUsage(ctx context.Context, taskID string) (*TaskTokenUsage, error)
-	// ListRepoPullRequests lists pull requests for the repository that contains
-	// cwd and annotates whether each PR branch already has a local Rig
-	// workspace.
-	ListRepoPullRequests(ctx context.Context, cwd string) ([]RepoPullRequest, error)
-	// PullRequestStatus returns the pull request state for a repository branch,
-	// or PRStateNone when no pull request is open or known for that branch.
-	PullRequestStatus(ctx context.Context, repoRoot string, branchName string) (*PRStatus, error)
-	// ReconnectTaskSession recreates a missing task runtime session from
-	// persisted provider resume metadata.
-	ReconnectTaskSession(ctx context.Context, taskID string) error
-	// GetProviderSetup returns the user's provider setup, or nil when provider
-	// setup has never completed.
-	GetProviderSetup(ctx context.Context) (*ProviderSetup, error)
-	// SaveProviderSetup validates and persists the user's provider setup.
-	SaveProviderSetup(ctx context.Context, setup ProviderSetup) error
-	// DetectProviders reports which supported providers pass provider setup
-	// checks on this machine.
-	DetectProviders(ctx context.Context) ([]ProviderDetection, error)
-	// SwitchTaskProvider makes another configured provider the task's active
-	// provider by launching it in the existing task workspace.
-	SwitchTaskProvider(ctx context.Context, taskID string, provider Provider) (*Task, error)
-	// CreateTaskStream creates a new task and streams progress events followed by
-	// one terminal result event.
-	CreateTaskStream(ctx context.Context, input CreateTaskInput) (<-chan TaskCreateEvent, error)
-	// RetryTaskCreationStream resumes a failed task creation and streams progress
-	// events followed by one terminal result event.
-	RetryTaskCreationStream(ctx context.Context, taskID string) (<-chan TaskCreateEvent, error)
-	// DeleteTask deletes the task and its local runtime resources while keeping
-	// the Git branch.
-	DeleteTask(ctx context.Context, taskID string) error
-	// ListTasks returns all known tasks for the frontend to render.
-	ListTasks(ctx context.Context) ([]*Task, error)
-	// LatestTaskStatus returns the latest published live status for a task, or
-	// nil when no status has been published yet.
-	LatestTaskStatus(ctx context.Context, taskID string) (*TaskStatusUpdate, error)
-	// SubscribeTaskStatus subscribes to live status updates for a task. The
-	// subscription lifetime is owned by ctx; cancelling it removes the
-	// subscription and closes the update channel.
-	SubscribeTaskStatus(ctx context.Context, taskID string) (<-chan TaskStatusUpdate, error)
 }
 
 // TaskDaemonHookRoute describes one provider hook endpoint the local task
@@ -179,24 +136,24 @@ type TaskDaemon interface {
 	Serve(ctx context.Context, service TaskService, hookRoutes []TaskDaemonHookRoute, stop func()) error
 }
 
+// TaskService is the task application port. It is the exact operation set the
+// daemon socket can serve, so both real adapters implement every method
+// honestly: the in-process core service and the daemon socket client used by
+// the TUI (via TaskFrontend).
+//
+// Operations that only one process can perform live elsewhere:
+// AttachTaskSession on TaskFrontend (foreground terminal only),
+// HandleHookEvent on HookEventHandler and HealthCheck on HealthChecker
+// (in-process only, never served over the socket).
 type TaskService interface {
-	// HealthCheck runs environment diagnostics across task-service dependencies.
-	HealthCheck(ctx context.Context) ([]HealthCheck, error)
-	// CreateTaskWithProgress creates a new task while reporting coarse-grained
-	// creation milestones to the provided reporter when non-nil.
-	CreateTaskWithProgress(
-		ctx context.Context,
-		input CreateTaskInput,
-		reporter TaskCreateProgressReporter,
-	) (*Task, error)
-	// RetryTaskCreationWithProgress resumes a failed task creation from its
-	// recorded failed step while reporting the same progress milestones as
-	// initial creation.
-	RetryTaskCreationWithProgress(
-		ctx context.Context,
-		taskID string,
-		reporter TaskCreateProgressReporter,
-	) (*Task, error)
+	// CreateTaskStream creates a new task and streams progress events followed by
+	// exactly one terminal result event (Task or Err). The stream lifetime is
+	// owned by ctx; cancelling it stops the stream.
+	CreateTaskStream(ctx context.Context, input CreateTaskInput) (<-chan TaskCreateEvent, error)
+	// RetryTaskCreationStream resumes a failed task creation from its recorded
+	// failed step and streams the same progress milestones as initial creation,
+	// followed by exactly one terminal result event.
+	RetryTaskCreationStream(ctx context.Context, taskID string) (<-chan TaskCreateEvent, error)
 	// ListRepoPullRequests lists pull requests for the repository that contains
 	// cwd and annotates whether each PR branch already has a local Rig
 	// workspace.
@@ -219,9 +176,6 @@ type TaskService interface {
 	// subscription lifetime is owned by ctx; cancelling it removes the
 	// subscription and closes the update channel.
 	SubscribeTaskStatus(ctx context.Context, taskID string) (<-chan TaskStatusUpdate, error)
-	// HandleHookEvent resolves and publishes any task status update implied by a
-	// provider hook event.
-	HandleHookEvent(ctx context.Context, input HookEventInput) error
 	// DeleteTask deletes the task and its local runtime resources while keeping
 	// the Git branch.
 	DeleteTask(ctx context.Context, taskID string) error
@@ -242,6 +196,23 @@ type TaskService interface {
 	// the current provider process is still running and only records the new
 	// active provider after the new provider launches successfully.
 	SwitchTaskProvider(ctx context.Context, taskID string, provider Provider) (*Task, error)
+}
+
+// HookEventHandler consumes provider hook events inside the daemon process.
+// It is deliberately not part of TaskService: hook events arrive over the
+// daemon's loopback hook server, never over the frontend socket.
+type HookEventHandler interface {
+	// HandleHookEvent resolves and publishes any task status update implied by a
+	// provider hook event.
+	HandleHookEvent(ctx context.Context, input HookEventInput) error
+}
+
+// HealthChecker runs environment diagnostics across task-service
+// dependencies. It is deliberately not part of TaskService: doctor runs
+// in-process against locally constructed dependencies, never over the
+// frontend socket.
+type HealthChecker interface {
+	HealthCheck(ctx context.Context) ([]HealthCheck, error)
 }
 
 // ProviderConfigStore reads and writes the user-level provider setup that

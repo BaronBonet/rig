@@ -1,32 +1,10 @@
 package core
 
 import (
-	"context"
 	"testing"
 
 	"github.com/stretchr/testify/require"
 )
-
-func TestTaskFrontendContract_ExposesCreateListAndStatusMethods(t *testing.T) {
-	var _ interface {
-		AttachTaskSession(context.Context, *Task) error
-		CreateTaskStream(context.Context, CreateTaskInput) (<-chan TaskCreateEvent, error)
-		DeleteTask(context.Context, string) error
-		ListRepoPullRequests(context.Context, string) ([]RepoPullRequest, error)
-		ListTasks(context.Context) ([]*Task, error)
-		LatestTaskStatus(context.Context, string) (*TaskStatusUpdate, error)
-		SubscribeTaskStatus(context.Context, string) (<-chan TaskStatusUpdate, error)
-	} = (TaskFrontend)(nil)
-}
-
-func TestTaskServiceContract_ExposesListTasks(t *testing.T) {
-	var _ interface {
-		CreateTaskWithProgress(context.Context, CreateTaskInput, TaskCreateProgressReporter) (*Task, error)
-		DeleteTask(context.Context, string) error
-		ListRepoPullRequests(context.Context, string) ([]RepoPullRequest, error)
-		ListTasks(context.Context) ([]*Task, error)
-	} = (TaskService)(nil)
-}
 
 func TestTmuxSessionClientContract_OnlyRequiresTaskLifecycleMethods(t *testing.T) {
 	var _ TmuxSessionClient = (*MockTmuxSessionClient)(nil)

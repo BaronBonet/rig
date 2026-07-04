@@ -67,6 +67,13 @@ func (p *preparer) BootstrapTaskWorkspace(
 		return nil
 	}
 
+	// Bootstrap targets an existing worktree; refusing a missing one keeps
+	// best-effort re-bootstrap passes from creating stray directories for
+	// tasks whose worktree is gone.
+	if _, err := os.Stat(task.WorktreePath); err != nil {
+		return fmt.Errorf("task worktree unavailable: %w", err)
+	}
+
 	for _, file := range bootstrapSpec.Files {
 		if err := writeBootstrapFile(task.WorktreePath, file); err != nil {
 			return fmt.Errorf("write bootstrap file %s: %w", file.Path, err)
@@ -102,5 +109,20 @@ func writeBootstrapFile(worktreePath string, file core.WorkspaceBootstrapFile) e
 		mode = 0o644
 	}
 
-	return os.WriteFile(absPath, file.Content, mode)
+	content := file.Content
+	if file.Merge != nil {
+		existing, err := os.ReadFile(absPath)
+		switch {
+		case err == nil:
+			merged, mergeErr := file.Merge(existing)
+			if mergeErr != nil {
+				return fmt.Errorf("merge existing file: %w", mergeErr)
+			}
+			content = merged
+		case !os.IsNotExist(err):
+			return err
+		}
+	}
+
+	return os.WriteFile(absPath, content, mode)
 }

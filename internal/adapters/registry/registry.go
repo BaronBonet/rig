@@ -28,23 +28,45 @@ type Dependencies struct {
 	HookSecret     string
 }
 
+// providerModule is one supported provider's composition entry: its client
+// constructor and its daemon hook routes. providerModules is the registry's
+// single provider list; adding a provider means adding one entry here (and to
+// core.SupportedProviders, which a registry test keeps in agreement).
+type providerModule struct {
+	provider core.Provider
+	client   func(Dependencies) core.ProviderClient
+	routes   func(core.HookEventHandler, func() time.Time, string) []core.TaskDaemonHookRoute
+}
+
+var providerModules = []providerModule{
+	{
+		provider: core.ProviderCodex,
+		client: func(deps Dependencies) core.ProviderClient {
+			hooks := codex.NewHookForwardingConfig(deps.HookListenAddr, deps.HookSecret)
+			return codex.New(deps.Runner, deps.Codex, hooks)
+		},
+		routes: codex.NewHookRoutes,
+	},
+	{
+		provider: core.ProviderClaude,
+		client: func(deps Dependencies) core.ProviderClient {
+			hooks := claude.NewHookForwardingConfig(deps.HookListenAddr, deps.HookSecret)
+			return claude.New(deps.Runner, deps.Claude, hooks)
+		},
+		routes: claude.NewHookRoutes,
+	},
+}
+
 // NewProviderClients builds the adapter client for every supported provider.
 // Hook routes and clients exist for all supported providers so the daemon
 // never needs a restart when provider setup changes; service-level checks
 // decide whether a provider is actually usable.
 func NewProviderClients(deps Dependencies) map[core.Provider]core.ProviderClient {
-	return map[core.Provider]core.ProviderClient{
-		core.ProviderCodex: codex.New(
-			deps.Runner,
-			deps.Codex,
-			codex.NewHookForwardingConfig(deps.HookListenAddr, deps.HookSecret),
-		),
-		core.ProviderClaude: claude.New(
-			deps.Runner,
-			deps.Claude,
-			claude.NewHookForwardingConfig(deps.HookListenAddr, deps.HookSecret),
-		),
+	clients := make(map[core.Provider]core.ProviderClient, len(providerModules))
+	for _, module := range providerModules {
+		clients[module.provider] = module.client(deps)
 	}
+	return clients
 }
 
 // LoadOrCreateHookSecret returns the persistent secret provider hook
@@ -109,12 +131,13 @@ func RefreshProviderEnvironments(
 
 // NewHookRoutes returns the daemon hook routes for every supported provider.
 func NewHookRoutes(
-	service core.TaskService,
+	service core.HookEventHandler,
 	now func() time.Time,
 	hookSecret string,
 ) []core.TaskDaemonHookRoute {
 	var routes []core.TaskDaemonHookRoute
-	routes = append(routes, codex.NewHookRoutes(service, now, hookSecret)...)
-	routes = append(routes, claude.NewHookRoutes(service, now, hookSecret)...)
+	for _, module := range providerModules {
+		routes = append(routes, module.routes(service, now, hookSecret)...)
+	}
 	return routes
 }

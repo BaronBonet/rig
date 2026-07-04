@@ -1,26 +1,18 @@
 package codex
 
 import (
-	"bytes"
 	"context"
-	_ "embed"
 	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
-	"text/template"
-	"unicode"
 
+	"github.com/BaronBonet/rig/internal/adapters/client/providerkit"
 	"github.com/BaronBonet/rig/internal/core"
 	"github.com/BaronBonet/rig/internal/pkg/prompts"
 	"github.com/BaronBonet/rig/internal/pkg/subprocess"
 )
-
-//go:embed forward-to-rig.sh.tmpl
-var forwarderScriptTemplateText string
-
-var forwarderScriptTemplate = template.Must(template.New("forward-to-rig.sh").Parse(forwarderScriptTemplateText))
 
 const (
 	readyMarker          = "›"
@@ -29,14 +21,25 @@ const (
 	defaultCodexHooksURL = "http://127.0.0.1:4124" + codexHookPath
 )
 
-var requiredRigHookEvents = []string{
-	"SessionStart",
-	"UserPromptSubmit",
-	"Stop",
-	"PreToolUse",
-	"PermissionRequest",
-	"PostToolUse",
+// hookCatalog is Codex's hook event catalog: the one declaration of which
+// hook events Rig observes from Codex, how each is matched, and which
+// runtime phase it drives. Registration rules, the required-events health
+// check, and the hook-to-status mapping are derived from it.
+//
+// Tool hooks match Bash only: Codex reports shell commands through Bash tool
+// events, and those are the tool signals Rig ingests for activity and status.
+var hookCatalog = providerkit.Catalog{
+	{Event: core.HookEventSessionStart, Matcher: "startup|resume", Phase: core.TaskStatusPhaseStarting},
+	{Event: core.HookEventUserPromptSubmit, Phase: core.TaskStatusPhaseWorking},
+	{Event: core.HookEventPreToolUse, Matcher: "Bash", Phase: core.TaskStatusPhaseWorking},
+	{Event: core.HookEventPostToolUse, Matcher: "Bash", Phase: core.TaskStatusPhaseWorking},
+	{Event: core.HookEventPermissionRequest, Phase: core.TaskStatusPhaseWaitingForInput},
+	{Event: core.HookEventStop, Phase: core.TaskStatusPhaseWaitingForInput},
 }
+
+// titleSkipPrefixes rejects Codex-specific CLI noise when parsing task title
+// suggestions (common CLI noise is rejected by providerkit).
+var titleSkipPrefixes = []string{"tokens used", "openai codex"}
 
 type repository struct {
 	runner       subprocess.Runner
@@ -127,19 +130,8 @@ func (r *repository) EnsureTaskSessionEnvironment(context.Context) error {
 	}
 
 	scriptPath := filepath.Join(codexHome, "hooks", "forward-to-rig.sh")
-	if err := os.MkdirAll(filepath.Dir(scriptPath), 0o700); err != nil {
-		return fmt.Errorf("create codex hooks dir: %w", err)
-	}
-	if err := os.Chmod(filepath.Dir(scriptPath), 0o700); err != nil {
-		return fmt.Errorf("secure codex hooks dir: %w", err)
-	}
-
-	scriptBytes, err := r.renderForwarderScript()
-	if err != nil {
+	if err := r.forwarder().WriteScript(scriptPath); err != nil {
 		return err
-	}
-	if err := os.WriteFile(scriptPath, scriptBytes, 0o700); err != nil {
-		return fmt.Errorf("write codex forwarder script: %w", err)
 	}
 
 	hooksPath := filepath.Join(codexHome, "hooks.json")
@@ -239,10 +231,10 @@ func readOutputFile(path string) string {
 
 func parsePreferredSuggestion(fileOutput, stdout string) (core.TaskSuggestion, bool) {
 	for _, candidate := range []string{fileOutput, stdout} {
-		if suggestion, ok := parseCodexSuggestion(candidate); ok {
+		if suggestion, ok := providerkit.ParseSuggestion(candidate, titleSkipPrefixes); ok {
 			return suggestion, true
 		}
-		if title := extractCodexTitle(candidate); title != "" {
+		if title := providerkit.ExtractTitle(candidate, titleSkipPrefixes); title != "" {
 			return core.TaskSuggestion{Name: title, BranchType: "feat"}, true
 		}
 	}
@@ -250,97 +242,34 @@ func parsePreferredSuggestion(fileOutput, stdout string) (core.TaskSuggestion, b
 	return core.TaskSuggestion{}, false
 }
 
-func parseCodexSuggestion(raw string) (core.TaskSuggestion, bool) {
-	lines := strings.Split(raw, "\n")
-	for i := len(lines) - 1; i >= 0; i-- {
-		line := strings.TrimSpace(lines[i])
-		if line == "" {
-			continue
-		}
-		var suggestion core.TaskSuggestion
-		if err := json.Unmarshal([]byte(line), &suggestion); err == nil && suggestion.Name != "" {
-			suggestion.Name = normalizeCodexTitle(suggestion.Name)
-			if suggestion.Name != "" {
-				if suggestion.BranchType == "" {
-					suggestion.BranchType = "feat"
-				}
-				return suggestion, true
-			}
-		}
-	}
-
-	return core.TaskSuggestion{}, false
-}
-
-// renderHooksJSON writes the Codex hook config file that tells Codex which
-// events should call back into rig's observer ingestion flow.
-func (r *repository) renderHooksJSON(scriptPath string) ([]byte, error) {
-	config := hookConfig{
-		Hooks: map[string][]hookRule{
-			"SessionStart": {
-				{
-					Matcher: "startup|resume",
-					Hooks:   []hookCommand{{Type: "command", Command: r.commandForEvent(scriptPath, "SessionStart")}},
-				},
-			},
-			"PreToolUse": {
-				{
-					Matcher: "Bash",
-					Hooks:   []hookCommand{{Type: "command", Command: r.commandForEvent(scriptPath, "PreToolUse")}},
-				},
-			},
-			"PermissionRequest": {
-				{
-					Hooks: []hookCommand{
-						{Type: "command", Command: r.commandForEvent(scriptPath, "PermissionRequest")},
-					},
-				},
-			},
-			"PostToolUse": {
-				{
-					Matcher: "Bash",
-					Hooks:   []hookCommand{{Type: "command", Command: r.commandForEvent(scriptPath, "PostToolUse")}},
-				},
-			},
-			"UserPromptSubmit": {
-				{Hooks: []hookCommand{{Type: "command", Command: r.commandForEvent(scriptPath, "UserPromptSubmit")}}},
-			},
-			"Stop": {
-				{Hooks: []hookCommand{{Type: "command", Command: r.commandForEvent(scriptPath, "Stop")}}},
-			},
-		},
-	}
-
-	var buf bytes.Buffer
-	encoder := json.NewEncoder(&buf)
-	encoder.SetEscapeHTML(false)
-	encoder.SetIndent("", "  ")
-	if err := encoder.Encode(config); err != nil {
-		return nil, err
-	}
-
-	return buf.Bytes(), nil
-}
-
 func (r *repository) commandForEvent(scriptPath string, eventName string) string {
-	return "/bin/sh " + shellQuote(scriptPath) + " " + shellQuote(strings.TrimSpace(eventName))
+	return "/bin/sh " + providerkit.ShellQuote(scriptPath) + " " + providerkit.ShellQuote(strings.TrimSpace(eventName))
 }
 
-func (r *repository) loadHookConfig(path string) (hookConfig, error) {
+func (r *repository) forwarder() providerkit.Forwarder {
+	return providerkit.Forwarder{
+		ProviderLabel: "codex",
+		EventHeader:   "X-Codex-Hook-Event",
+		CollectorURL:  r.collectorURL,
+		HookSecret:    r.hookSecret,
+	}
+}
+
+func (r *repository) loadHookConfig(path string) (providerkit.HookConfig, error) {
 	raw, err := os.ReadFile(path)
 	if err != nil {
 		if os.IsNotExist(err) {
-			return hookConfig{Hooks: map[string][]hookRule{}}, nil
+			return providerkit.HookConfig{Hooks: map[string][]providerkit.HookRule{}}, nil
 		}
-		return hookConfig{}, fmt.Errorf("read codex hooks config: %w", err)
+		return providerkit.HookConfig{}, fmt.Errorf("read codex hooks config: %w", err)
 	}
 
-	var cfg hookConfig
+	var cfg providerkit.HookConfig
 	if err := json.Unmarshal(raw, &cfg); err != nil {
-		return hookConfig{}, fmt.Errorf("decode codex hooks config: %w", err)
+		return providerkit.HookConfig{}, fmt.Errorf("decode codex hooks config: %w", err)
 	}
 	if cfg.Hooks == nil {
-		cfg.Hooks = map[string][]hookRule{}
+		cfg.Hooks = map[string][]providerkit.HookRule{}
 	}
 
 	return cfg, nil
@@ -357,29 +286,15 @@ func (r *repository) healthCheckHookForwarding() error {
 	}
 
 	scriptPath := filepath.Join(codexHome, "hooks", "forward-to-rig.sh")
-	scriptInfo, err := os.Stat(scriptPath)
-	if err != nil {
-		return fmt.Errorf("stat %s: %w", scriptPath, err)
-	}
-	if scriptInfo.IsDir() {
-		return fmt.Errorf("%s must be a file", scriptPath)
-	}
-	if scriptInfo.Mode().Perm()&0o111 == 0 {
-		return fmt.Errorf("%s must be executable", scriptPath)
-	}
-	scriptBytes, err := os.ReadFile(scriptPath)
-	if err != nil {
-		return fmt.Errorf("read %s: %w", scriptPath, err)
-	}
-	if !strings.Contains(string(scriptBytes), r.collectorURL) {
-		return fmt.Errorf("%s collector URL must include %s", scriptPath, r.collectorURL)
+	if err := providerkit.HealthCheckScript(scriptPath, r.collectorURL); err != nil {
+		return err
 	}
 
 	cfg, err := r.loadHookConfig(filepath.Join(codexHome, "hooks.json"))
 	if err != nil {
 		return err
 	}
-	for _, eventName := range requiredRigHookEvents {
+	for _, eventName := range hookCatalog.EventNames() {
 		if !hookConfigHasScriptCommand(cfg, eventName, scriptPath) {
 			return fmt.Errorf("missing %s hook for %s", eventName, scriptPath)
 		}
@@ -388,83 +303,25 @@ func (r *repository) healthCheckHookForwarding() error {
 	return nil
 }
 
-func hookConfigHasScriptCommand(cfg hookConfig, eventName string, scriptPath string) bool {
+func hookConfigHasScriptCommand(cfg providerkit.HookConfig, eventName string, scriptPath string) bool {
 	for _, rule := range cfg.Hooks[eventName] {
-		for _, hook := range rule.Hooks {
-			if hook.Type == "command" && strings.Contains(hook.Command, scriptPath) {
-				return true
-			}
+		if providerkit.HookRuleHasScriptCommand(rule, scriptPath) {
+			return true
 		}
 	}
 	return false
 }
 
-func (r *repository) ensureRigHookRules(cfg *hookConfig, scriptPath string) error {
+func (r *repository) ensureRigHookRules(cfg *providerkit.HookConfig, scriptPath string) error {
 	if cfg == nil {
 		return nil
 	}
 
-	rigJSON, err := r.renderHooksJSON(scriptPath)
-	if err != nil {
-		return fmt.Errorf("render rig codex hooks config: %w", err)
-	}
-
-	var rigCfg hookConfig
-	if err := json.Unmarshal(rigJSON, &rigCfg); err != nil {
-		return fmt.Errorf("decode rig codex hooks config: %w", err)
-	}
-
-	for eventName, rules := range rigCfg.Hooks {
-		cfg.Hooks[eventName] = hookRulesWithoutScriptCommand(cfg.Hooks[eventName], scriptPath)
-		for _, rule := range rules {
-			if !containsHookRule(cfg.Hooks[eventName], rule) {
-				cfg.Hooks[eventName] = append(cfg.Hooks[eventName], rule)
-			}
-		}
-	}
+	cfg.Hooks = providerkit.MergeRigHookRules(cfg.Hooks, hookCatalog.HookRules(func(eventName string) string {
+		return r.commandForEvent(scriptPath, eventName)
+	}), scriptPath)
 
 	return nil
-}
-
-func hookRulesWithoutScriptCommand(rules []hookRule, scriptPath string) []hookRule {
-	filtered := rules[:0]
-	for _, rule := range rules {
-		if hookRuleHasScriptCommand(rule, scriptPath) {
-			continue
-		}
-		filtered = append(filtered, rule)
-	}
-	return filtered
-}
-
-func hookRuleHasScriptCommand(rule hookRule, scriptPath string) bool {
-	for _, hook := range rule.Hooks {
-		if hook.Type == "command" && strings.Contains(hook.Command, scriptPath) {
-			return true
-		}
-	}
-	return false
-}
-
-func containsHookRule(existing []hookRule, candidate hookRule) bool {
-	for _, rule := range existing {
-		if rule.Matcher != candidate.Matcher || len(rule.Hooks) != len(candidate.Hooks) {
-			continue
-		}
-
-		matches := true
-		for idx := range rule.Hooks {
-			if rule.Hooks[idx] != candidate.Hooks[idx] {
-				matches = false
-				break
-			}
-		}
-		if matches {
-			return true
-		}
-	}
-
-	return false
 }
 
 func (r *repository) resolveCodexHomeDir() (string, error) {
@@ -485,97 +342,4 @@ func defaultCodexHomeDir() (string, error) {
 	}
 
 	return filepath.Join(home, ".codex"), nil
-}
-
-func (r *repository) renderForwarderScript() ([]byte, error) {
-	var buf bytes.Buffer
-	if err := forwarderScriptTemplate.Execute(&buf, struct {
-		CollectorURLQuoted string
-		HookSecretQuoted   string
-	}{
-		CollectorURLQuoted: shellQuote(r.collectorURL),
-		HookSecretQuoted:   shellQuote(r.hookSecret),
-	}); err != nil {
-		return nil, fmt.Errorf("render codex forwarder script: %w", err)
-	}
-
-	return buf.Bytes(), nil
-}
-
-type hookConfig struct {
-	Hooks map[string][]hookRule `json:"hooks"`
-}
-
-type hookRule struct {
-	Matcher string        `json:"matcher,omitempty"`
-	Hooks   []hookCommand `json:"hooks"`
-}
-
-type hookCommand struct {
-	Type    string `json:"type"`
-	Command string `json:"command"`
-}
-
-func extractCodexTitle(raw string) string {
-	lines := strings.Split(raw, "\n")
-	for i := len(lines) - 1; i >= 0; i-- {
-		if title := normalizeCodexTitle(lines[i]); title != "" {
-			return title
-		}
-	}
-
-	return ""
-}
-
-func normalizeCodexTitle(raw string) string {
-	line := strings.TrimSpace(raw)
-	line = strings.ReplaceAll(line, "`", "")
-	line = strings.Trim(line, "[]")
-	line = strings.Trim(line, ":")
-	line = strings.Trim(line, `"'`)
-	line = strings.TrimSpace(line)
-
-	if line == "" {
-		return ""
-	}
-
-	lower := strings.ToLower(line)
-	if strings.HasPrefix(lower, "tokens used") {
-		return ""
-	}
-	if strings.HasPrefix(lower, "openai codex") {
-		return ""
-	}
-	if strings.HasPrefix(lower, "usage:") {
-		return ""
-	}
-	if strings.HasPrefix(lower, "error:") {
-		return ""
-	}
-	if strings.HasPrefix(lower, "exit status") {
-		return ""
-	}
-	if !containsLetter(line) {
-		return ""
-	}
-
-	return line
-}
-
-func containsLetter(s string) bool {
-	for _, r := range s {
-		if unicode.IsLetter(r) {
-			return true
-		}
-	}
-
-	return false
-}
-
-func shellQuote(value string) string {
-	if value == "" {
-		return "''"
-	}
-
-	return "'" + strings.ReplaceAll(value, "'", `'\''`) + "'"
 }

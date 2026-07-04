@@ -16,6 +16,7 @@ packages:
       TaskFrontend:
       TaskCreateProgressReporter:
       TaskService:
+      HookEventHandler:
       GitWorktreeClient:
       PullRequestClient:
       TaskWorkspaceManager:

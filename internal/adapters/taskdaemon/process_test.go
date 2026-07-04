@@ -65,7 +65,7 @@ func TestStopTaskDaemon_SendsStopRequestAndAcceptsStoppingResponse(t *testing.T)
 		}
 		requestCh <- req
 
-		if err := json.NewEncoder(conn).Encode(socketEnvelope{Type: "stopping", OK: true}); err != nil {
+		if err := json.NewEncoder(conn).Encode(handshakeEnvelope{Type: "stopping", OK: true}); err != nil {
 			errCh <- err
 			return
 		}
@@ -139,7 +139,12 @@ func TestAdapterEnsureRunning_IncludesDaemonStartupLogOnTimeout(t *testing.T) {
 		},
 	})
 
-	err := adapter.EnsureRunning(context.Background())
+	// The helper daemon fails immediately, so a short parent deadline reaches
+	// the same timeout path without waiting out the full healthyTimeout.
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+
+	err := adapter.EnsureRunning(ctx)
 
 	require.Error(t, err)
 	require.ErrorContains(t, err, "task daemon did not become healthy")
@@ -304,7 +309,7 @@ func TestFrontendBuildVersion_DefaultsToDev(t *testing.T) {
 func TestFrontendProtocolVersion_DefaultsToCurrentValue(t *testing.T) {
 	t.Parallel()
 
-	require.Equal(t, 8, currentFrontendProtocolVersion)
+	require.Equal(t, 9, currentFrontendProtocolVersion)
 }
 
 func TestAdapterEnsureRunning_RestartsStaleHealthyDaemonMissingFrontendProtocol(t *testing.T) {
@@ -381,11 +386,11 @@ func TestAdapterRestart_ReturnsStopErrorWithoutRemovingSocket(t *testing.T) {
 			return
 		}
 
-		if req != (socketRequest{Command: "stop"}) {
+		if req.Command != "stop" || len(req.Payload) != 0 {
 			errCh <- fmt.Errorf("unexpected request: %#v", req)
 			return
 		}
-		if err := json.NewEncoder(conn).Encode(socketEnvelope{
+		if err := json.NewEncoder(conn).Encode(handshakeEnvelope{
 			Type:  "stopping",
 			OK:    false,
 			Error: "stop failed",
@@ -462,7 +467,7 @@ func TestWaitForHealthyTaskDaemon_IncludesLastHealthErrorOnTimeout(t *testing.T)
 				_ = conn.Close()
 				return
 			}
-			if err := json.NewEncoder(conn).Encode(socketEnvelope{
+			if err := json.NewEncoder(conn).Encode(handshakeEnvelope{
 				Type:  "health",
 				OK:    false,
 				Error: "daemon unhealthy for test",
@@ -595,7 +600,7 @@ func handleTestDaemonConnection(conn net.Conn, stopSeen *atomic.Bool) error {
 		return err
 	}
 
-	resp := socketEnvelope{OK: true}
+	resp := handshakeEnvelope{OK: true}
 	switch req.Command {
 	case "health":
 		resp.Type = "health"
@@ -623,7 +628,7 @@ func handleLegacyTestDaemonConnection(conn net.Conn, stopSeen *atomic.Bool) erro
 		return err
 	}
 
-	resp := socketEnvelope{OK: true}
+	resp := handshakeEnvelope{OK: true}
 	switch req.Command {
 	case "health":
 		resp.Type = "health"

@@ -33,7 +33,7 @@ func (m model) unboundedListView() string {
 	var builder strings.Builder
 	builder.WriteString(renderHeader(
 		m.renderHeaderLabel(),
-		mutedStyle.Render(m.listKeybindText()),
+		m.listKeybindText(),
 		totalWidth,
 	) + "\n")
 	builder.WriteString(dividerStyle.Render(strings.Repeat("─", totalWidth)) + "\n")
@@ -102,7 +102,7 @@ func (m model) constrainedListView() string {
 	lines := []string{
 		renderHeader(
 			m.renderHeaderLabel(),
-			mutedStyle.Render(m.listKeybindText()),
+			m.listKeybindText(),
 			totalWidth,
 		),
 		dividerStyle.Render(strings.Repeat("─", totalWidth)),
@@ -420,6 +420,9 @@ func (m model) renderRow(index int, row taskRow, totalWidth int) (string, string
 }
 
 func (m model) selectedTaskDetailView() string {
+	if m.detailsHidden {
+		return ""
+	}
 	row := m.selectedRow()
 	if row == nil || row.task == nil {
 		return ""
@@ -641,8 +644,8 @@ func (m model) promptInputView() string {
 	) + "\n")
 	builder.WriteString(dividerStyle.Render(strings.Repeat("─", totalWidth)) + "\n")
 
-	if m.createErr != nil {
-		builder.WriteString(errorStyle.Render("Error: "+m.createErr.Error()) + "\n\n")
+	if m.draft.err != nil {
+		builder.WriteString(errorStyle.Render("Error: "+m.draft.err.Error()) + "\n\n")
 	}
 
 	builder.WriteString(dimStyle.Render("Enter task prompt.") + "\n\n")
@@ -658,9 +661,9 @@ func (m model) promptInputView() string {
 		promptBoxWidth = 20
 	}
 	m.ensurePromptInputInitialized()
-	input := m.promptInput
-	if input.Value() != m.prompt {
-		input.SetValue(m.prompt)
+	input := m.draft.input
+	if input.Value() != m.draft.prompt {
+		input.SetValue(m.draft.prompt)
 	}
 	contentWidth := promptBoxWidth - promptBoxStyle.GetHorizontalFrameSize()
 	if contentWidth < 1 {
@@ -684,12 +687,18 @@ func (m model) promptInputView() string {
 }
 
 func (m model) listKeybindText() string {
-	keybinds := "n new   p provider   r refresh   x clean   q quit"
-	row := m.selectedRow()
-	if row == nil || row.task == nil || row.task.CreationStatus != core.TaskCreationStatusFailed {
-		return keybinds
+	binds := [][2]string{{"n", "new"}, {"p", "provider"}, {"r", "refresh"}}
+	if row := m.selectedRow(); row != nil && row.task != nil &&
+		row.task.CreationStatus == core.TaskCreationStatusFailed {
+		binds = append(binds, [2]string{"R", "retry"})
 	}
-	return "n new   p provider   r refresh   R retry   x clean   q quit"
+	binds = append(binds, [2]string{"space", "details"}, [2]string{"x", "clean"}, [2]string{"q", "quit"})
+
+	parts := make([]string, 0, len(binds))
+	for _, bind := range binds {
+		parts = append(parts, keybindStyle.Render(bind[0])+" "+mutedStyle.Render(bind[1]))
+	}
+	return strings.Join(parts, "   ")
 }
 
 func (m model) providerSetupView() string {
@@ -708,18 +717,18 @@ func (m model) providerSetupView() string {
 		dimStyle.Render("Enable the AI coding providers rig may launch. At least one is required.") + "\n\n",
 	)
 
-	if m.setupErr != nil {
-		builder.WriteString(errorStyle.Render("Error: "+m.setupErr.Error()) + "\n\n")
+	if m.setupForm.err != nil {
+		builder.WriteString(errorStyle.Render("Error: "+m.setupForm.err.Error()) + "\n\n")
 	}
 
-	if m.setupDetecting {
+	if m.setupForm.detecting {
 		builder.WriteString(renderShimmer("Checking provider availability...", m.shimmerTick) + "\n")
 		return builder.String()
 	}
 
-	for index, row := range m.setupRows {
+	for index, row := range m.setupForm.rows {
 		cursor := "  "
-		if index == m.setupSelected {
+		if index == m.setupForm.selected {
 			cursor = "> "
 		}
 
@@ -736,7 +745,7 @@ func (m model) providerSetupView() string {
 		}
 
 		line := cursor + checkbox + " " + name + " " + state
-		if row.provider == m.setupDefault && row.enabled {
+		if row.provider == m.setupForm.defaultProvider && row.enabled {
 			line += mutedStyle.Render("  (default)")
 		}
 		builder.WriteString(line + "\n")
@@ -747,7 +756,7 @@ func (m model) providerSetupView() string {
 		}
 	}
 
-	if m.setupSaving {
+	if m.setupForm.saving {
 		builder.WriteString("\n" + renderShimmer("Installing provider hooks...", m.shimmerTick) + "\n")
 	}
 
@@ -782,15 +791,15 @@ func (m model) switchProviderView() string {
 		)
 	}
 
-	if m.switchPending {
+	if m.pending == opSwitching {
 		builder.WriteString(renderShimmer("Switching provider...", m.shimmerTick) + "\n")
 		return builder.String()
 	}
 
 	builder.WriteString(dimStyle.Render("Switch this task to:") + "\n\n")
-	for index, provider := range m.switchOptions {
+	for index, provider := range m.providerSwitch.options {
 		cursor := "  "
-		if index == m.switchSelected {
+		if index == m.providerSwitch.selected {
 			cursor = "> "
 		}
 		builder.WriteString(cursor + providerStyle(string(provider)).Render(string(provider)) + "\n")
@@ -809,8 +818,8 @@ func (m model) prPickerView() string {
 	totalWidth := m.totalWidth()
 
 	headerSuffix := "PRs"
-	if strings.TrimSpace(m.prRepoName) != "" {
-		headerSuffix = "PRs: " + m.prRepoName
+	if strings.TrimSpace(m.draft.repoName) != "" {
+		headerSuffix = "PRs: " + m.draft.repoName
 	}
 
 	var builder strings.Builder
@@ -821,17 +830,17 @@ func (m model) prPickerView() string {
 	) + "\n")
 	builder.WriteString(dividerStyle.Render(strings.Repeat("─", totalWidth)) + "\n")
 
-	if m.createErr != nil {
-		builder.WriteString(errorStyle.Render("Error: "+m.createErr.Error()) + "\n\n")
+	if m.draft.err != nil {
+		builder.WriteString(errorStyle.Render("Error: "+m.draft.err.Error()) + "\n\n")
 	}
 
-	if len(m.prRows) == 0 {
+	if len(m.draft.prs) == 0 {
 		builder.WriteString(dimStyle.Render("No pull requests found.") + "\n\n")
 		builder.WriteString(keybindStyle.Render("esc") + mutedStyle.Render(" back"))
 		return builder.String()
 	}
 
-	for i, pr := range m.prRows {
+	for i, pr := range m.draft.prs {
 		title := strings.TrimSpace(pr.Title)
 		if title == "" {
 			title = pr.BranchName
@@ -854,12 +863,12 @@ func (m model) prPickerView() string {
 		}
 
 		block := titleLine + "\n" + metaLine
-		if i == m.prSelected {
+		if i == m.draft.prSelected {
 			builder.WriteString(selectedRowStyle.Render(block))
 		} else {
 			builder.WriteString(normalRowStyle.Render(block))
 		}
-		if i < len(m.prRows)-1 {
+		if i < len(m.draft.prs)-1 {
 			builder.WriteString("\n\n")
 		}
 	}
@@ -874,22 +883,22 @@ func (m model) prPickerView() string {
 }
 
 func (m model) renderCreateProgress() string {
-	if m.createFromPR {
-		if !m.createPending && m.createErr == nil {
+	if m.create.fromPR {
+		if m.pending != opCreating && m.create.err == nil {
 			return ""
 		}
 		label := "Creating task from pull request"
 		switch {
-		case m.createPending:
+		case m.pending == opCreating:
 			return warningStyle.Render("●") + " " + renderShimmer(label, m.shimmerTick)
-		case m.createErr != nil:
+		case m.create.err != nil:
 			return errorStyle.Render("●") + " " + errorStyle.Render(label)
 		default:
 			return ""
 		}
 	}
 
-	if !m.createPending && len(m.createDone) == 0 && m.createActive == "" {
+	if m.pending != opCreating && len(m.create.done) == 0 && m.create.active == "" {
 		return ""
 	}
 
@@ -904,11 +913,11 @@ func (m model) renderCreateProgress() string {
 	for _, step := range steps {
 		label := taskCreateProgressLabel(step)
 		switch {
-		case containsCreateStep(m.createDone, step):
+		case containsCreateStep(m.create.done, step):
 			lines = append(lines, healthyStyle.Render("●")+" "+primaryStyle.Render(label))
-		case step == m.createActive && m.createPending:
+		case step == m.create.active && m.pending == opCreating:
 			lines = append(lines, warningStyle.Render("●")+" "+renderShimmer(label, m.shimmerTick))
-		case step == m.createActive && m.createErr != nil:
+		case step == m.create.active && m.create.err != nil:
 			lines = append(lines, errorStyle.Render("●")+" "+errorStyle.Render(label))
 		default:
 			lines = append(lines, dimStyle.Render("○ "+label))
@@ -920,8 +929,8 @@ func (m model) renderCreateProgress() string {
 
 func (m model) listCreateStatusView() string {
 	var lines []string
-	if m.createErr != nil {
-		lines = append(lines, errorStyle.Render("Error: "+m.createErr.Error()))
+	if m.create.err != nil {
+		lines = append(lines, errorStyle.Render("Error: "+m.create.err.Error()))
 	}
 	if progress := m.renderCreateProgress(); progress != "" {
 		lines = append(lines, progress)
@@ -961,7 +970,7 @@ func (m model) confirmationView() string {
 
 	builder.WriteString(dimStyle.Render("The tmux session and worktree will be deleted.") + "\n")
 	builder.WriteString(dimStyle.Render("The branch will be kept.") + "\n\n")
-	if m.deletePending {
+	if m.pending == opDeleting {
 		builder.WriteString(
 			warningStyle.Render("●") + " " + renderShimmer("Cleaning up task...", m.shimmerTick) + "\n\n",
 		)

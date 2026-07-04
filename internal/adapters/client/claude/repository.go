@@ -2,9 +2,14 @@
 //
 // Hook registration is workspace-scoped: BuildWorkspaceBootstrapSpec writes an
 // untracked .claude/settings.local.json into the task worktree, so Rig hooks
-// fire only inside Rig task workspaces. Rig never modifies user-level Claude
-// settings (~/.claude/settings.json); only the shared forward-to-rig script,
-// which does not trigger by itself, is installed at user level.
+// fire only inside Rig task workspaces. The file is written into every Rig
+// task workspace regardless of the task's active provider, so a manually
+// launched Claude session in any Rig task is observable and adoptable; when
+// the file already exists (Claude Code stores permission decisions there) Rig
+// merges its hook rules in and preserves the rest. Rig never modifies
+// user-level Claude settings (~/.claude/settings.json); only the shared
+// forward-to-rig script, which does not trigger by itself, is installed at
+// user level.
 //
 // Running/idle detection was verified against a real Claude CLI (v2.1.200) in
 // tmux: pane_current_command reports the Claude process title, which is the
@@ -16,24 +21,17 @@ package claude
 import (
 	"bytes"
 	"context"
-	_ "embed"
 	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
-	"text/template"
-	"unicode"
 
+	"github.com/BaronBonet/rig/internal/adapters/client/providerkit"
 	"github.com/BaronBonet/rig/internal/core"
 	"github.com/BaronBonet/rig/internal/pkg/prompts"
 	"github.com/BaronBonet/rig/internal/pkg/subprocess"
 )
-
-//go:embed forward-to-rig.sh.tmpl
-var forwarderScriptTemplateText string
-
-var forwarderScriptTemplate = template.Must(template.New("forward-to-rig.sh").Parse(forwarderScriptTemplateText))
 
 const (
 	readyMarker           = "❯"
@@ -41,6 +39,27 @@ const (
 	defaultClaudeHooksURL = "http://127.0.0.1:4124" + claudeHookPath
 	workspaceSettingsPath = ".claude/settings.local.json"
 )
+
+// hookCatalog is Claude's hook event catalog: the one declaration of which
+// hook events Rig observes from Claude, how each is matched, and which
+// runtime phase it drives. Registration rules and the hook-to-status mapping
+// are derived from it.
+//
+// Tool hooks are unmatched on purpose: most of Claude's work uses non-Bash
+// tools (Read, Edit, Grep, ...), and every tool event must drive the task's
+// working status.
+var hookCatalog = providerkit.Catalog{
+	{Event: core.HookEventSessionStart, Matcher: "startup|resume", Phase: core.TaskStatusPhaseStarting},
+	{Event: core.HookEventUserPromptSubmit, Phase: core.TaskStatusPhaseWorking},
+	{Event: core.HookEventPreToolUse, Phase: core.TaskStatusPhaseWorking},
+	{Event: core.HookEventPostToolUse, Phase: core.TaskStatusPhaseWorking},
+	{Event: core.HookEventNotification, Phase: core.TaskStatusPhaseWaitingForInput},
+	{Event: core.HookEventStop, Phase: core.TaskStatusPhaseWaitingForInput},
+}
+
+// titleSkipPrefixes rejects Claude-specific CLI noise when parsing task
+// title suggestions (common CLI noise is rejected by providerkit).
+var titleSkipPrefixes = []string(nil)
 
 type repository struct {
 	runner       subprocess.Runner
@@ -103,13 +122,13 @@ func (r *repository) SuggestTaskName(ctx context.Context, prompt string) (core.T
 		"text",
 		fullPrompt,
 	)
-	if suggestion, ok := parseClaudeSuggestion(result.Stdout); ok {
+	if suggestion, ok := providerkit.ParseSuggestion(result.Stdout, titleSkipPrefixes); ok {
 		return suggestion, nil
 	}
 	if err != nil {
 		return core.TaskSuggestion{}, fmt.Errorf("claude print mode failed: %w", err)
 	}
-	if title := extractClaudeTitle(result.Stdout); title != "" {
+	if title := providerkit.ExtractTitle(result.Stdout, titleSkipPrefixes); title != "" {
 		return core.TaskSuggestion{Name: title, BranchType: "feat"}, nil
 	}
 
@@ -125,27 +144,24 @@ func (r *repository) EnsureTaskSessionEnvironment(context.Context) error {
 	if err != nil {
 		return err
 	}
-	if err := os.MkdirAll(filepath.Dir(scriptPath), 0o700); err != nil {
-		return fmt.Errorf("create rig claude hooks dir: %w", err)
-	}
-	if err := os.Chmod(filepath.Dir(scriptPath), 0o700); err != nil {
-		return fmt.Errorf("secure rig claude hooks dir: %w", err)
-	}
 
-	scriptBytes, err := r.renderForwarderScript()
-	if err != nil {
-		return err
-	}
-	if err := os.WriteFile(scriptPath, scriptBytes, 0o700); err != nil {
-		return fmt.Errorf("write claude forwarder script: %w", err)
-	}
+	return r.forwarder().WriteScript(scriptPath)
+}
 
-	return nil
+func (r *repository) forwarder() providerkit.Forwarder {
+	return providerkit.Forwarder{
+		ProviderLabel: "claude",
+		EventHeader:   hookEventHeader,
+		CollectorURL:  r.collectorURL,
+		HookSecret:    r.hookSecret,
+	}
 }
 
 // BuildWorkspaceBootstrapSpec emits the workspace-scoped Claude settings that
 // register Rig's hooks inside the task worktree. The file is untracked, so it
-// never dirties the task branch or appears in diffs and PRs.
+// never dirties the task branch or appears in diffs and PRs. When the
+// workspace already has settings — Claude Code stores permission decisions in
+// the same file — Rig merges its hook rules in and preserves everything else.
 func (r *repository) BuildWorkspaceBootstrapSpec(_ *core.Task) (core.WorkspaceBootstrapSpec, error) {
 	scriptPath, err := r.forwarderScriptPath()
 	if err != nil {
@@ -163,6 +179,9 @@ func (r *repository) BuildWorkspaceBootstrapSpec(_ *core.Task) (core.WorkspaceBo
 				Path:     workspaceSettingsPath,
 				Content:  settings,
 				FileMode: 0o600,
+				Merge: func(existing []byte) ([]byte, error) {
+					return mergeWorkspaceHookSettings(existing, scriptPath)
+				},
 			},
 		},
 	}, nil
@@ -220,25 +239,7 @@ func (r *repository) healthCheckHookForwarding() error {
 		return err
 	}
 
-	scriptInfo, err := os.Stat(scriptPath)
-	if err != nil {
-		return fmt.Errorf("stat %s: %w", scriptPath, err)
-	}
-	if scriptInfo.IsDir() {
-		return fmt.Errorf("%s must be a file", scriptPath)
-	}
-	if scriptInfo.Mode().Perm()&0o111 == 0 {
-		return fmt.Errorf("%s must be executable", scriptPath)
-	}
-	scriptBytes, err := os.ReadFile(scriptPath)
-	if err != nil {
-		return fmt.Errorf("read %s: %w", scriptPath, err)
-	}
-	if !strings.Contains(string(scriptBytes), r.collectorURL) {
-		return fmt.Errorf("%s collector URL must include %s", scriptPath, r.collectorURL)
-	}
-
-	return nil
+	return providerkit.HealthCheckScript(scriptPath, r.collectorURL)
 }
 
 func (r *repository) forwarderScriptPath() (string, error) {
@@ -270,158 +271,57 @@ func defaultRigDataDir() (string, error) {
 	return filepath.Join(home, ".local", "share", "rig"), nil
 }
 
-func (r *repository) renderForwarderScript() ([]byte, error) {
-	var buf bytes.Buffer
-	if err := forwarderScriptTemplate.Execute(&buf, struct {
-		CollectorURLQuoted string
-		HookSecretQuoted   string
-	}{
-		CollectorURLQuoted: shellQuote(r.collectorURL),
-		HookSecretQuoted:   shellQuote(r.hookSecret),
-	}); err != nil {
-		return nil, fmt.Errorf("render claude forwarder script: %w", err)
+// renderWorkspaceHookSettings renders the workspace-level Claude settings
+// that register Rig's hook forwarding for the events in the hook catalog.
+func renderWorkspaceHookSettings(scriptPath string) ([]byte, error) {
+	settings, err := hookCatalog.RenderHookConfig(hookCommandRenderer(scriptPath))
+	if err != nil {
+		return nil, fmt.Errorf("encode claude workspace hook settings: %w", err)
 	}
 
-	return buf.Bytes(), nil
+	return settings, nil
 }
 
-// renderWorkspaceHookSettings renders the workspace-level Claude settings
-// that register Rig's hook forwarding for the events Rig observes.
-func renderWorkspaceHookSettings(scriptPath string) ([]byte, error) {
-	command := func(eventName string) string {
-		return "/bin/sh " + shellQuote(scriptPath) + " " + shellQuote(eventName)
+func hookCommandRenderer(scriptPath string) func(eventName string) string {
+	return func(eventName string) string {
+		return "/bin/sh " + providerkit.ShellQuote(scriptPath) + " " + providerkit.ShellQuote(eventName)
+	}
+}
+
+// mergeWorkspaceHookSettings integrates Rig's hook rules into an existing
+// workspace settings file, replacing only rules that invoke Rig's forwarder
+// script and preserving every other key Claude Code stores there, such as
+// permission decisions.
+func mergeWorkspaceHookSettings(existing []byte, scriptPath string) ([]byte, error) {
+	var doc map[string]json.RawMessage
+	if err := json.Unmarshal(existing, &doc); err != nil {
+		return nil, fmt.Errorf("decode existing claude workspace settings: %w", err)
+	}
+	if doc == nil {
+		doc = map[string]json.RawMessage{}
 	}
 
-	settings := workspaceSettings{
-		Hooks: map[string][]hookRule{
-			"SessionStart": {
-				{
-					Matcher: "startup|resume",
-					Hooks:   []hookCommand{{Type: "command", Command: command("SessionStart")}},
-				},
-			},
-			"UserPromptSubmit": {
-				{Hooks: []hookCommand{{Type: "command", Command: command("UserPromptSubmit")}}},
-			},
-			// Tool hooks are unmatched on purpose: most of Claude's work uses
-			// non-Bash tools (Read, Edit, Grep, ...), and every tool event must
-			// drive the task's working status.
-			"PreToolUse": {
-				{Hooks: []hookCommand{{Type: "command", Command: command("PreToolUse")}}},
-			},
-			"PostToolUse": {
-				{Hooks: []hookCommand{{Type: "command", Command: command("PostToolUse")}}},
-			},
-			"Notification": {
-				{Hooks: []hookCommand{{Type: "command", Command: command("Notification")}}},
-			},
-			"Stop": {
-				{Hooks: []hookCommand{{Type: "command", Command: command("Stop")}}},
-			},
-		},
+	var hooks map[string][]providerkit.HookRule
+	if rawHooks, ok := doc["hooks"]; ok {
+		if err := json.Unmarshal(rawHooks, &hooks); err != nil {
+			return nil, fmt.Errorf("decode existing claude workspace hooks: %w", err)
+		}
 	}
+
+	merged := providerkit.MergeRigHookRules(hooks, hookCatalog.HookRules(hookCommandRenderer(scriptPath)), scriptPath)
+	encodedHooks, err := json.Marshal(merged)
+	if err != nil {
+		return nil, fmt.Errorf("encode merged claude workspace hooks: %w", err)
+	}
+	doc["hooks"] = encodedHooks
 
 	var buf bytes.Buffer
 	encoder := json.NewEncoder(&buf)
 	encoder.SetEscapeHTML(false)
 	encoder.SetIndent("", "  ")
-	if err := encoder.Encode(settings); err != nil {
-		return nil, fmt.Errorf("encode claude workspace hook settings: %w", err)
+	if err := encoder.Encode(doc); err != nil {
+		return nil, fmt.Errorf("encode claude workspace settings: %w", err)
 	}
 
 	return buf.Bytes(), nil
-}
-
-type workspaceSettings struct {
-	Hooks map[string][]hookRule `json:"hooks"`
-}
-
-type hookRule struct {
-	Matcher string        `json:"matcher,omitempty"`
-	Hooks   []hookCommand `json:"hooks"`
-}
-
-type hookCommand struct {
-	Type    string `json:"type"`
-	Command string `json:"command"`
-}
-
-func parseClaudeSuggestion(raw string) (core.TaskSuggestion, bool) {
-	lines := strings.Split(raw, "\n")
-	for i := len(lines) - 1; i >= 0; i-- {
-		line := strings.TrimSpace(lines[i])
-		if line == "" {
-			continue
-		}
-		var suggestion core.TaskSuggestion
-		if err := json.Unmarshal([]byte(line), &suggestion); err == nil && suggestion.Name != "" {
-			suggestion.Name = normalizeClaudeTitle(suggestion.Name)
-			if suggestion.Name != "" {
-				if suggestion.BranchType == "" {
-					suggestion.BranchType = "feat"
-				}
-				return suggestion, true
-			}
-		}
-	}
-
-	return core.TaskSuggestion{}, false
-}
-
-func extractClaudeTitle(raw string) string {
-	lines := strings.Split(raw, "\n")
-	for i := len(lines) - 1; i >= 0; i-- {
-		if title := normalizeClaudeTitle(lines[i]); title != "" {
-			return title
-		}
-	}
-
-	return ""
-}
-
-func normalizeClaudeTitle(raw string) string {
-	line := strings.TrimSpace(raw)
-	line = strings.ReplaceAll(line, "`", "")
-	line = strings.Trim(line, "[]")
-	line = strings.Trim(line, ":")
-	line = strings.Trim(line, `"'`)
-	line = strings.TrimSpace(line)
-
-	if line == "" {
-		return ""
-	}
-
-	lower := strings.ToLower(line)
-	if strings.HasPrefix(lower, "usage:") {
-		return ""
-	}
-	if strings.HasPrefix(lower, "error:") {
-		return ""
-	}
-	if strings.HasPrefix(lower, "exit status") {
-		return ""
-	}
-	if !containsLetter(line) {
-		return ""
-	}
-
-	return line
-}
-
-func containsLetter(s string) bool {
-	for _, r := range s {
-		if unicode.IsLetter(r) {
-			return true
-		}
-	}
-
-	return false
-}
-
-func shellQuote(value string) string {
-	if value == "" {
-		return "''"
-	}
-
-	return "'" + strings.ReplaceAll(value, "'", `'\''`) + "'"
 }

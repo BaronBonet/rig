@@ -8,6 +8,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/BaronBonet/rig/internal/adapters/client/providerkit"
 	"github.com/BaronBonet/rig/internal/core"
 	"github.com/BaronBonet/rig/internal/pkg/subprocess"
 
@@ -75,7 +76,7 @@ func TestRepositoryEnsureTaskSessionEnvironment_InstallsRigHooksIntoCodexHome(t 
 	hooksJSON, err := os.ReadFile(filepath.Join(tempDir, "hooks.json"))
 	require.NoError(t, err)
 
-	var cfg hookConfig
+	var cfg providerkit.HookConfig
 	require.NoError(t, json.Unmarshal(hooksJSON, &cfg))
 	require.Contains(t, cfg.Hooks, "SessionStart")
 	require.Contains(t, cfg.Hooks, "UserPromptSubmit")
@@ -208,7 +209,7 @@ func TestRepositoryEnsureTaskSessionEnvironment_MergesExistingHooks(t *testing.T
 	hooksJSON, err := os.ReadFile(filepath.Join(tempDir, "hooks.json"))
 	require.NoError(t, err)
 
-	var cfg hookConfig
+	var cfg providerkit.HookConfig
 	require.NoError(t, json.Unmarshal(hooksJSON, &cfg))
 	require.Len(t, cfg.Hooks["SessionStart"], 2)
 	require.Contains(t, string(hooksJSON), "/tmp/existing-hook")
@@ -255,7 +256,7 @@ func TestRepositoryEnsureTaskSessionEnvironment_ReplacesStaleRigHookRules(t *tes
 	hooksJSON, err := os.ReadFile(filepath.Join(tempDir, "hooks.json"))
 	require.NoError(t, err)
 
-	var cfg hookConfig
+	var cfg providerkit.HookConfig
 	require.NoError(t, json.Unmarshal(hooksJSON, &cfg))
 	require.Len(t, cfg.Hooks["PermissionRequest"], 2)
 	require.Equal(t, "mcp__server__tool", cfg.Hooks["PermissionRequest"][0].Matcher)

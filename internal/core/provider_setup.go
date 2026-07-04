@@ -4,10 +4,9 @@ import (
 	"context"
 	"fmt"
 	"strings"
-	"time"
 )
 
-func (s *taskService) GetProviderSetup(ctx context.Context) (*ProviderSetup, error) {
+func (s *service) GetProviderSetup(ctx context.Context) (*ProviderSetup, error) {
 	if s.providerConfig == nil {
 		return nil, fmt.Errorf("provider config store not configured")
 	}
@@ -15,7 +14,7 @@ func (s *taskService) GetProviderSetup(ctx context.Context) (*ProviderSetup, err
 	return s.providerConfig.GetProviderSetup(ctx)
 }
 
-func (s *taskService) SaveProviderSetup(ctx context.Context, setup ProviderSetup) error {
+func (s *service) SaveProviderSetup(ctx context.Context, setup ProviderSetup) error {
 	if s.providerConfig == nil {
 		return fmt.Errorf("provider config store not configured")
 	}
@@ -27,7 +26,7 @@ func (s *taskService) SaveProviderSetup(ctx context.Context, setup ProviderSetup
 	// prerequisites are installed or repaired first, then the provider doctor
 	// must pass before the provider can be recorded as configured.
 	for _, provider := range setup.Configured {
-		providerClient, err := s.supportedClientFor(provider)
+		providerClient, err := supportedProviderClient(s.providers, provider)
 		if err != nil {
 			return err
 		}
@@ -42,7 +41,7 @@ func (s *taskService) SaveProviderSetup(ctx context.Context, setup ProviderSetup
 	return s.providerConfig.SaveProviderSetup(ctx, setup)
 }
 
-func (s *taskService) DetectProviders(ctx context.Context) ([]ProviderDetection, error) {
+func (s *service) DetectProviders(ctx context.Context) ([]ProviderDetection, error) {
 	detections := make([]ProviderDetection, 0, len(SupportedProviders()))
 	for _, provider := range SupportedProviders() {
 		detections = append(detections, s.detectProvider(ctx, provider))
@@ -50,10 +49,10 @@ func (s *taskService) DetectProviders(ctx context.Context) ([]ProviderDetection,
 	return detections, nil
 }
 
-func (s *taskService) detectProvider(ctx context.Context, provider Provider) ProviderDetection {
+func (s *service) detectProvider(ctx context.Context, provider Provider) ProviderDetection {
 	detection := ProviderDetection{Provider: provider}
 
-	providerClient, err := s.supportedClientFor(provider)
+	providerClient, err := supportedProviderClient(s.providers, provider)
 	if err != nil {
 		detection.Detail = err.Error()
 		return detection
@@ -73,14 +72,14 @@ func (s *taskService) detectProvider(ctx context.Context, provider Provider) Pro
 	return detection
 }
 
-func (s *taskService) SwitchTaskProvider(ctx context.Context, taskID string, provider Provider) (*Task, error) {
-	task, err := s.taskByID(ctx, taskID)
+func (s *service) SwitchTaskProvider(ctx context.Context, taskID string, provider Provider) (*Task, error) {
+	task, err := taskByID(ctx, s.tasks, taskID)
 	if err != nil {
 		return nil, err
 	}
 
 	provider = Provider(strings.TrimSpace(string(provider)))
-	providerClient, err := s.configuredClientFor(ctx, provider)
+	provider, providerClient, err := s.launcher.resolveProvider(ctx, provider)
 	if err != nil {
 		return nil, err
 	}
@@ -95,7 +94,7 @@ func (s *taskService) SwitchTaskProvider(ctx context.Context, taskID string, pro
 	if runtime.Exists {
 		// Never kill or corrupt an interactive session: switching refuses unless
 		// the pane is idle or already running the requested provider.
-		if currentClient, currentErr := s.supportedClientFor(task.Provider); currentErr == nil &&
+		if currentClient, currentErr := supportedProviderClient(s.providers, task.Provider); currentErr == nil &&
 			taskSessionRunningProvider(runtime, currentClient.TaskSessionCommandName()) {
 			return nil, fmt.Errorf(
 				"%w: exit %s in the task session before switching",
@@ -104,7 +103,7 @@ func (s *taskService) SwitchTaskProvider(ctx context.Context, taskID string, pro
 			)
 		}
 		if taskSessionRunningProvider(runtime, providerClient.TaskSessionCommandName()) {
-			return s.recordActiveProvider(ctx, task, provider)
+			return recordActiveProvider(ctx, s.tasks, task, provider)
 		}
 	}
 
@@ -113,15 +112,10 @@ func (s *taskService) SwitchTaskProvider(ctx context.Context, taskID string, pro
 	}
 
 	// Switching bootstraps the existing workspace for the new provider but
-	// never reruns repo seeding or setup scripts.
-	bootstrapSpec, err := providerClient.BuildWorkspaceBootstrapSpec(task)
-	if err != nil {
-		return nil, fmt.Errorf("build workspace bootstrap spec: %w", err)
-	}
-	if s.workspace != nil {
-		if err := s.workspace.BootstrapTaskWorkspace(ctx, task, bootstrapSpec); err != nil {
-			return nil, fmt.Errorf("bootstrap workspace: %w", err)
-		}
+	// never reruns repo seeding or setup scripts. The client is passed
+	// explicitly because the task record still names the old active provider.
+	if err := s.launcher.bootstrapWorkspace(ctx, providerClient, task); err != nil {
+		return nil, err
 	}
 
 	launch, err := promptlessTaskSessionLaunchSpec(providerClient, task)
@@ -132,17 +126,5 @@ func (s *taskService) SwitchTaskProvider(ctx context.Context, taskID string, pro
 		return nil, fmt.Errorf("start task session: %w", err)
 	}
 
-	return s.recordActiveProvider(ctx, task, provider)
-}
-
-// recordActiveProvider persists a new active provider on the task record. It
-// runs only after the new provider is known to own the task session, so a
-// failed switch never changes the recorded active provider.
-func (s *taskService) recordActiveProvider(ctx context.Context, task *Task, provider Provider) (*Task, error) {
-	task.Provider = provider
-	task.UpdatedAt = time.Now().UTC()
-	if err := s.tasks.UpdateTask(ctx, task); err != nil {
-		return nil, fmt.Errorf("record active provider: %w", err)
-	}
-	return task, nil
+	return recordActiveProvider(ctx, s.tasks, task, provider)
 }

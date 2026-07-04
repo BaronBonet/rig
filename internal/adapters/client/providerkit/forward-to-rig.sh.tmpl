@@ -1,0 +1,15 @@
+#!/bin/sh
+set -eu
+
+collector_url=${{"{"}}{{ .EnvVarPrefix }}_HOOK_COLLECTOR_URL:-{{ .CollectorURLQuoted }}}
+hook_secret={{ .HookSecretQuoted }}
+event_name=$1
+payload_file=$(mktemp "${TMPDIR:-/tmp}/{{ .TmpPrefix }}-hook.XXXXXX")
+trap 'rm -f "$payload_file"' EXIT INT TERM
+
+cat >"$payload_file"
+
+if command -v curl >/dev/null 2>&1 && curl -fsS --max-time 2 -X POST -H "Content-Type: application/json" -H "{{ .EventHeader }}: $event_name" -H "X-Rig-Hook-Secret: $hook_secret" --data-binary @"$payload_file" "$collector_url"; then
+  exit 0
+fi
+exit 0

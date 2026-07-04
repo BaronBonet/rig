@@ -19,10 +19,13 @@ import (
 
 const (
 	// healthyTimeout bounds how long a client waits for a freshly spawned
-	// daemon to become healthy. Cold starts (first execution of a new build,
-	// task database opening) can exceed a couple of seconds; the retry loop
-	// still connects within one retryInterval once the socket is up.
-	healthyTimeout         = 10 * time.Second
+	// daemon to become healthy. It must absorb the slowest legitimate startup,
+	// not the typical one: replacing a daemon after a rig upgrade stacks the
+	// old daemon's shutdown, first execution of the new binary, and task
+	// database opening. Giving up early strands a daemon that becomes healthy
+	// moments later; the retry loop still connects within one retryInterval
+	// once the socket is up, so a generous bound costs nothing on success.
+	healthyTimeout         = 30 * time.Second
 	socketOperationTimeout = 2 * time.Second
 	retryInterval          = 25 * time.Millisecond
 )
@@ -167,11 +170,11 @@ func stopTaskDaemon(ctx context.Context, socketPath string) error {
 		return err
 	}
 
-	var resp socketEnvelope
+	var resp handshakeEnvelope
 	if err := json.NewDecoder(bufio.NewReader(conn)).Decode(&resp); err != nil {
 		return err
 	}
-	if resp.Type != socketEnvelopeStopping || !resp.OK {
+	if resp.Type != handshakeEnvelopeStopping || !resp.OK {
 		if resp.Error != "" {
 			return errors.New(resp.Error)
 		}
