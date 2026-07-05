@@ -234,23 +234,20 @@ type shimmerTickMsg struct{}
 
 type activityRefreshTickMsg struct{}
 
-func newModel(frontend core.TaskFrontend) model {
-	return newModelWithLaunchCwd(frontend, "")
-}
-
-func newModelWithLaunchCwd(frontend core.TaskFrontend, launchCwd string) model {
-	return newModelWithLaunchCwdAndVersion(frontend, launchCwd, defaultBuildVersion)
-}
-
-func newModelWithLaunchCwdAndVersion(frontend core.TaskFrontend, launchCwd string, buildVersion string) model {
+func newModel(frontend core.TaskFrontend, launchCwd string, buildVersion string) model {
 	statusContext, cancelStatus := context.WithCancel(context.Background())
+
+	buildVersion = strings.TrimSpace(buildVersion)
+	if buildVersion == "" {
+		buildVersion = defaultBuildVersion
+	}
 
 	return model{
 		frontend:         frontend,
 		statusContext:    statusContext,
 		cancelStatus:     cancelStatus,
 		launchCwd:        strings.TrimSpace(launchCwd),
-		buildVersion:     normalizeBuildVersion(buildVersion),
+		buildVersion:     buildVersion,
 		draft:            taskDraft{input: newPromptInput()},
 		loading:          true,
 		mode:             modeBrowse,
@@ -258,14 +255,6 @@ func newModelWithLaunchCwdAndVersion(frontend core.TaskFrontend, launchCwd strin
 		adoptionReloads:  make(map[string]core.Provider),
 		statusSubscribed: make(map[string]bool),
 	}
-}
-
-func normalizeBuildVersion(buildVersion string) string {
-	buildVersion = strings.TrimSpace(buildVersion)
-	if buildVersion == "" {
-		return defaultBuildVersion
-	}
-	return buildVersion
 }
 
 func (m model) Init() tea.Cmd {
@@ -322,6 +311,26 @@ func (m *model) cycleCreateProvider() {
 	m.draft.provider = providers[0]
 }
 
+// quit cancels the background status context before exiting the program.
+func (m model) quit() (tea.Model, tea.Cmd) {
+	if m.cancelStatus != nil {
+		m.cancelStatus()
+	}
+	return m, tea.Quit
+}
+
+// beginOp marks a task operation in flight and restarts the shimmer.
+func (m *model) beginOp(op pendingOp) {
+	m.pending = op
+	m.shimmerTick = 0
+}
+
+// endOp clears the in-flight operation and stops the shimmer.
+func (m *model) endOp() {
+	m.pending = opNone
+	m.shimmerTick = 0
+}
+
 func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
 	case tea.WindowSizeMsg:
@@ -332,16 +341,10 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m.updatePromptPaste(msg)
 	case tea.KeyPressMsg:
 		if isForceQuitKey(msg) {
-			if m.cancelStatus != nil {
-				m.cancelStatus()
-			}
-			return m, tea.Quit
+			return m.quit()
 		}
 		if m.pending == opCreating && isQuitKey(msg) {
-			if m.cancelStatus != nil {
-				m.cancelStatus()
-			}
-			return m, tea.Quit
+			return m.quit()
 		}
 
 		if m.mode == modePromptInput {
@@ -361,10 +364,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 
 		if isQuitKey(msg) {
-			if m.cancelStatus != nil {
-				m.cancelStatus()
-			}
-			return m, tea.Quit
+			return m.quit()
 		}
 
 		// A displayed error stays until the user acknowledges it with a key
@@ -489,9 +489,6 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			case row.task.Provider == update.Provider:
 				delete(m.adoptionReloads, msg.taskID)
 			case m.adoptionReloads[msg.taskID] != update.Provider:
-				if m.adoptionReloads == nil {
-					m.adoptionReloads = make(map[string]core.Provider)
-				}
 				m.adoptionReloads[msg.taskID] = update.Provider
 				cmds = append(cmds, loadTasksCmd(m.statusContext, m.frontend))
 			}
@@ -533,17 +530,13 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.setupForm.err = nil
 		m.draft.provider = ""
 		if m.setupOnly {
-			if m.cancelStatus != nil {
-				m.cancelStatus()
-			}
-			return m, tea.Quit
+			return m.quit()
 		}
 		m.transition(modeBrowse)
 		m.loading = true
 		return m, loadTasksCmd(m.statusContext, m.frontend)
 	case taskProviderSwitchedMsg:
-		m.pending = opNone
-		m.shimmerTick = 0
+		m.endOp()
 		m.transition(modeBrowse)
 		if msg.err != nil {
 			// A failed or refused switch keeps the previous active provider.
@@ -568,8 +561,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.clampPRSelection()
 		return m, nil
 	case taskCreatedMsg:
-		m.pending = opNone
-		m.shimmerTick = 0
+		m.endOp()
 		if msg.err != nil {
 			m.create.err = msg.err
 			return m, nil
@@ -586,8 +578,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		cmds = append(cmds, m.taskStatusTrackingCmds(taskID(msg.task))...)
 		return m, tea.Batch(cmds...)
 	case taskCreateStreamStartFailedMsg:
-		m.pending = opNone
-		m.shimmerTick = 0
+		m.endOp()
 		m.create.err = msg.err
 		return m, nil
 	case taskCreateEventMsg:
@@ -596,8 +587,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.advanceCreateProgress(msg.event.Progress.Step)
 			return m, waitForTaskCreateEventCmd(msg.events)
 		case msg.event.Err != nil:
-			m.pending = opNone
-			m.shimmerTick = 0
+			m.endOp()
 			m.create.err = msg.event.Err
 			if msg.event.Task != nil {
 				if index := m.upsertTaskRow(msg.event.Task); index >= 0 {
@@ -615,8 +605,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if m.pending != opCreating {
 			return m, nil
 		}
-		m.pending = opNone
-		m.shimmerTick = 0
+		m.endOp()
 		if m.create.err == nil {
 			m.create.err = errors.New("create task stream closed unexpectedly")
 		}
@@ -629,8 +618,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.err = nil
 		return m, nil
 	case taskDeletedMsg:
-		m.pending = opNone
-		m.shimmerTick = 0
+		m.endOp()
 		m.transition(modeBrowse)
 		if msg.err != nil {
 			m.err = msg.err
@@ -668,7 +656,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 }
 
 func (m model) View() tea.View {
-	body := m.listView()
+	var body string
 	switch m.mode {
 	case modePromptInput:
 		body = m.promptInputView()
@@ -680,6 +668,8 @@ func (m model) View() tea.View {
 		body = m.providerSetupView()
 	case modeSwitchProvider:
 		body = m.switchProviderView()
+	default:
+		body = m.listView()
 	}
 
 	view := tea.NewView(body)
@@ -725,9 +715,8 @@ func (m model) submitPrompt() (model, tea.Cmd) {
 	cwd := m.currentCreateCwd()
 	provider := m.effectiveCreateProvider()
 	m.transition(modeBrowse)
-	m.pending = opCreating
+	m.beginOp(opCreating)
 	m.create = createFlowState{}
-	m.shimmerTick = 0
 
 	return m, tea.Batch(
 		createTaskStreamCmd(m.statusContext, m.frontend, core.CreateTaskInput{
@@ -749,10 +738,9 @@ func (m model) retrySelectedTaskCreation() (model, tea.Cmd) {
 	}
 
 	m.transition(modeBrowse)
-	m.pending = opCreating
+	m.beginOp(opCreating)
 	m.create = createFlowState{active: row.task.CreationStep}
 	m.err = nil
-	m.shimmerTick = 0
 
 	return m, tea.Batch(
 		retryTaskCreationStreamCmd(m.statusContext, m.frontend, row.task.ID),
@@ -863,9 +851,8 @@ func (m model) updatePRPicker(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		repoRoot := m.draft.repoRoot
 		provider := m.effectiveCreateProvider()
 		m.transition(modeBrowse)
-		m.pending = opCreating
+		m.beginOp(opCreating)
 		m.create = createFlowState{fromPR: true}
-		m.shimmerTick = 0
 
 		return m, tea.Batch(
 			createTaskStreamCmd(m.statusContext, m.frontend, core.CreateTaskInput{
@@ -926,9 +913,8 @@ func (m model) updateCleanupConfirm(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 			m.transition(modeBrowse)
 			return m, nil
 		}
-		m.pending = opDeleting
+		m.beginOp(opDeleting)
 		m.err = nil
-		m.shimmerTick = 0
 		return m, tea.Batch(
 			deleteTaskCmd(m.statusContext, m.frontend, taskID(row.task)),
 			shimmerTickCmd(),
@@ -945,9 +931,6 @@ func (m *model) taskStatusTrackingCmds(taskID string) []tea.Cmd {
 
 	cmds := []tea.Cmd{latestTaskStatusCmd(m.statusContext, m.frontend, taskID)}
 	if !m.statusSubscribed[taskID] {
-		if m.statusSubscribed == nil {
-			m.statusSubscribed = make(map[string]bool)
-		}
 		m.statusSubscribed[taskID] = true
 		cmds = append(cmds, subscribeTaskStatusCmd(m.statusContext, m.frontend, taskID))
 	}
@@ -967,14 +950,19 @@ func (m model) taskPullRequestStatusCmd(task *core.Task) tea.Cmd {
 	return pullRequestStatusCmd(m.statusContext, m.frontend, taskID, repoRoot, branchName)
 }
 
-func (m *model) moveSelection(delta int) {
-	if len(m.rows) == 0 {
-		m.selected = 0
-		return
+// clampIndex clamps index into [0, length-1], or 0 for an empty list.
+func clampIndex(index int, length int) int {
+	if length <= 0 || index < 0 {
+		return 0
 	}
+	if index >= length {
+		return length - 1
+	}
+	return index
+}
 
-	m.selected += delta
-	m.clampSelection()
+func (m *model) moveSelection(delta int) {
+	m.selected = clampIndex(m.selected+delta, len(m.rows))
 }
 
 func (m model) taskListPageSize() int {
@@ -996,41 +984,15 @@ func (m model) taskListPageSize() int {
 }
 
 func (m *model) clampSelection() {
-	if len(m.rows) == 0 {
-		m.selected = 0
-		return
-	}
-	if m.selected < 0 {
-		m.selected = 0
-		return
-	}
-	if m.selected >= len(m.rows) {
-		m.selected = len(m.rows) - 1
-	}
+	m.selected = clampIndex(m.selected, len(m.rows))
 }
 
 func (m *model) movePRSelection(delta int) {
-	if len(m.draft.prs) == 0 {
-		m.draft.prSelected = 0
-		return
-	}
-
-	m.draft.prSelected += delta
-	m.clampPRSelection()
+	m.draft.prSelected = clampIndex(m.draft.prSelected+delta, len(m.draft.prs))
 }
 
 func (m *model) clampPRSelection() {
-	if len(m.draft.prs) == 0 {
-		m.draft.prSelected = 0
-		return
-	}
-	if m.draft.prSelected < 0 {
-		m.draft.prSelected = 0
-		return
-	}
-	if m.draft.prSelected >= len(m.draft.prs) {
-		m.draft.prSelected = len(m.draft.prs) - 1
-	}
+	m.draft.prSelected = clampIndex(m.draft.prSelected, len(m.draft.prs))
 }
 
 func (m *model) selectTask(targetTaskID string) bool {
@@ -1060,48 +1022,34 @@ func (m *model) taskRowByID(taskID string) *taskRow {
 }
 
 func (m *model) setTaskStatus(taskID string, status *core.TaskStatusUpdate) {
-	for i := range m.rows {
-		if m.rows[i].task == nil || m.rows[i].task.ID != taskID {
-			continue
-		}
-		m.rows[i].status = status
-		return
+	if row := m.taskRowByID(taskID); row != nil {
+		row.status = status
 	}
 }
 
 func (m *model) setTaskPullRequestStatus(taskID string, status *core.PRStatus) {
-	for i := range m.rows {
-		if m.rows[i].task == nil || m.rows[i].task.ID != taskID {
-			continue
-		}
-		m.rows[i].pullRequest = status
-		return
+	if row := m.taskRowByID(taskID); row != nil {
+		row.pullRequest = status
 	}
 }
 
 func (m *model) setTaskActivity(taskID string, activity []core.TaskActivityEvent) {
-	for i := range m.rows {
-		if m.rows[i].task == nil || m.rows[i].task.ID != taskID {
-			continue
-		}
-		m.rows[i].activity = append([]core.TaskActivityEvent(nil), activity...)
-		return
+	if row := m.taskRowByID(taskID); row != nil {
+		row.activity = append([]core.TaskActivityEvent(nil), activity...)
 	}
 }
 
 func (m *model) setTaskTokenUsage(taskID string, usage *core.TaskTokenUsage) {
-	for i := range m.rows {
-		if m.rows[i].task == nil || m.rows[i].task.ID != taskID {
-			continue
-		}
-		if usage == nil {
-			m.rows[i].tokenUsage = nil
-			return
-		}
-		copy := *usage
-		m.rows[i].tokenUsage = &copy
+	row := m.taskRowByID(taskID)
+	if row == nil {
 		return
 	}
+	if usage == nil {
+		row.tokenUsage = nil
+		return
+	}
+	copied := *usage
+	row.tokenUsage = &copied
 }
 
 func (m *model) upsertTaskRow(task *core.Task) int {

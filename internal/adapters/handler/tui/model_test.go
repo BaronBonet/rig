@@ -34,7 +34,7 @@ func TestModel_InitLoadsAllTasksAcrossRepos(t *testing.T) {
 		},
 	}
 
-	m := newModel(frontend.mock)
+	m := newTestModel(frontend.mock)
 	m, msg := initModel(t, m)
 	next, _ := m.Update(msg)
 
@@ -58,7 +58,7 @@ func TestModel_ViewRendersTaskMetadata(t *testing.T) {
 		},
 	}
 
-	m := newModel(frontend.mock)
+	m := newTestModel(frontend.mock)
 	m, msg := initModel(t, m)
 	next, _ := m.Update(msg)
 
@@ -94,7 +94,7 @@ func TestModel_SpaceTogglesTaskDetailPanel(t *testing.T) {
 		},
 	}
 
-	m := newModel(frontend.mock)
+	m := newTestModel(frontend.mock)
 	m, msg := initModel(t, m)
 	next, _ := m.Update(msg)
 	got, ok := next.(model)
@@ -115,7 +115,7 @@ func TestModel_SpaceTogglesTaskDetailPanel(t *testing.T) {
 func TestModel_ViewRendersConfiguredVersionInHeader(t *testing.T) {
 	frontend := newFrontendHarness()
 
-	m := newModelWithLaunchCwdAndVersion(frontend.mock, "/tmp/repo", "1.2.3")
+	m := newModel(frontend.mock, "/tmp/repo", "1.2.3")
 	m, msg := initModel(t, m)
 	next, _ := m.Update(msg)
 
@@ -201,7 +201,7 @@ func TestModel_ViewSplitsTaskOverviewByRepo(t *testing.T) {
 		},
 	}
 
-	m := newModel(frontend.mock)
+	m := newTestModel(frontend.mock)
 	m, msg := initModel(t, m)
 	next, _ := m.Update(msg)
 
@@ -399,7 +399,7 @@ func TestModel_PRStatusShownInOverviewRowsAndDetailPanel(t *testing.T) {
 		"/tmp/repo:feat/auth": {State: core.PRStateOpen, Number: 42},
 	}
 
-	m := newModel(frontend.mock)
+	m := newTestModel(frontend.mock)
 	m, loadMsg := initModel(t, m)
 	next, cmd := m.Update(loadMsg)
 	require.NotNil(t, cmd)
@@ -432,7 +432,7 @@ func TestModel_AfterLoadRequestsLatestStatusAndSubscriptionsForEachTask(t *testi
 		"task-2": make(chan core.TaskStatusUpdate, 1),
 	}
 
-	m := newModel(frontend.mock)
+	m := newTestModel(frontend.mock)
 	m, loadMsg := initModel(t, m)
 	next, cmd := m.Update(loadMsg)
 	require.NotNil(t, cmd)
@@ -500,7 +500,7 @@ func TestModel_ReloadDoesNotDuplicateStatusSubscriptions(t *testing.T) {
 		"task-1": make(chan core.TaskStatusUpdate, 1),
 	}
 
-	m := newModel(frontend.mock)
+	m := newTestModel(frontend.mock)
 	m, loadMsg := initModel(t, m)
 	next, cmd := m.Update(loadMsg)
 	require.NotNil(t, cmd)
@@ -530,7 +530,7 @@ func TestModel_AfterLoadRequestsTaskActivityForEachTask(t *testing.T) {
 		"task-2": make(chan core.TaskStatusUpdate),
 	}
 
-	m := newModel(frontend.mock)
+	m := newTestModel(frontend.mock)
 	m, loadMsg := initModel(t, m)
 	next, cmd := m.Update(loadMsg)
 	require.NotNil(t, cmd)
@@ -557,7 +557,7 @@ func TestModel_LatestStatusSeedUpdatesRenderedPhase(t *testing.T) {
 		"task-1": make(chan core.TaskStatusUpdate, 1),
 	}
 
-	m := newModel(frontend.mock)
+	m := newTestModel(frontend.mock)
 	m, loadMsg := initModel(t, m)
 	next, cmd := m.Update(loadMsg)
 	require.NotNil(t, cmd)
@@ -627,7 +627,7 @@ func TestModel_ViewRendersTaskActivity(t *testing.T) {
 		"task-1": make(chan core.TaskStatusUpdate),
 	}
 
-	m := newModel(frontend.mock)
+	m := newTestModel(frontend.mock)
 	m, loadMsg := initModel(t, m)
 	next, cmd := m.Update(loadMsg)
 	require.NotNil(t, cmd)
@@ -747,7 +747,7 @@ func TestModel_TaskRowUpdatesWhenSubscriptionUpdateArrives(t *testing.T) {
 		"task-1": updates,
 	}
 
-	m := newModel(frontend.mock)
+	m := newTestModel(frontend.mock)
 	m, loadMsg := initModel(t, m)
 	next, cmd := m.Update(loadMsg)
 	require.NotNil(t, cmd)
@@ -800,7 +800,7 @@ func TestModel_TaskStatusUpdateReloadsTaskActivity(t *testing.T) {
 		},
 	}
 
-	m := newModel(frontend.mock)
+	m := newTestModel(frontend.mock)
 	m, loadMsg := initModel(t, m)
 	next, cmd := m.Update(loadMsg)
 	require.NotNil(t, cmd)
@@ -976,7 +976,7 @@ func TestModel_StatusEnrichmentFailuresDoNotCollapseListView(t *testing.T) {
 		"task-2": errors.New("subscription unavailable"),
 	}
 
-	m := newModel(frontend.mock)
+	m := newTestModel(frontend.mock)
 	m, loadMsg := initModel(t, m)
 	next, cmd := m.Update(loadMsg)
 	require.NotNil(t, cmd)
@@ -1006,7 +1006,7 @@ func TestModel_StatusEnrichmentFailuresDoNotCollapseListView(t *testing.T) {
 
 func TestModel_InitUsesLifecycleContextForInitialLoad(t *testing.T) {
 	frontend := newFrontendHarness()
-	m := newModel(frontend.mock)
+	m := newTestModel(frontend.mock)
 
 	cmd := m.Init()
 	require.NotNil(t, cmd)
@@ -2021,6 +2021,11 @@ func TestModel_CleanupFailurePreservesRowsAndShowsError(t *testing.T) {
 	require.ErrorContains(t, got.err, "cleanup failed")
 }
 
+// newTestModel builds a model with no launch cwd and the default build version.
+func newTestModel(frontend core.TaskFrontend) model {
+	return newModel(frontend, "", "")
+}
+
 func newLoadedModel(frontend *frontendHarness) model {
 	setup := frontend.providerSetup
 	if setup == nil {
@@ -2029,15 +2034,12 @@ func newLoadedModel(frontend *frontendHarness) model {
 			Default:    core.ProviderCodex,
 		}
 	}
-	return model{
-		frontend:      frontend.mock,
-		launchCwd:     "/tmp/repo",
-		draft:         taskDraft{input: newPromptInput()},
-		statusContext: context.Background(),
-		rows:          rowsFromTasks(frontend.listTasks),
-		mode:          modeBrowse,
-		providerSetup: setup,
-	}
+	m := newModel(frontend.mock, "/tmp/repo", "")
+	m.loading = false
+	m.detailsHidden = false
+	m.rows = rowsFromTasks(frontend.listTasks)
+	m.providerSetup = setup
+	return m
 }
 
 // initModel runs Init, applies the provider setup message, and returns the

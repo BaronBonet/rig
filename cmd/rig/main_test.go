@@ -21,7 +21,7 @@ func TestExecuteSource_UsesCobraCommandRuntime(t *testing.T) {
 	require.Contains(t, source, `os.Getenv(daemonModeEnvKey) == daemonModeEnvValue`)
 	require.Contains(t, source, `if err := adapter.EnsureRunning(ctx); err != nil`)
 	require.Contains(t, source, `displayVersion := taskdaemon.FrontendBuildVersion()`)
-	require.Contains(t, source, `program := tui.NewProgramWithVersion(`)
+	require.Contains(t, source, `program := tui.NewProgram(`)
 	require.NotContains(t, source, `return run(ctx,`)
 }
 

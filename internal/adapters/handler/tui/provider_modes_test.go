@@ -34,7 +34,7 @@ func TestModel_MissingProviderSetupGatesTUIBehindSetup(t *testing.T) {
 		{Provider: core.ProviderClaude, Ready: false, Detail: "claude binary not found"},
 	}
 
-	m := newModel(frontend.mock)
+	m := newTestModel(frontend.mock)
 	msgs := runBatchCmd(t, m.Init())
 	setupMsg := requireMsgType[providerSetupLoadedMsg](t, msgs)
 
@@ -327,7 +327,7 @@ func TestModel_SetupOnlyModeQuitsAfterSaving(t *testing.T) {
 	frontend := newFrontendHarness()
 	frontend.detections = []core.ProviderDetection{{Provider: core.ProviderCodex, Ready: true}}
 
-	m := newModel(frontend.mock)
+	m := newTestModel(frontend.mock)
 	m.setupOnly = true
 
 	msgs := runBatchCmd(t, m.Init())

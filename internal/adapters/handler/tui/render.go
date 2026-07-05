@@ -2,6 +2,7 @@ package tui
 
 import (
 	"fmt"
+	"math"
 	"strconv"
 	"strings"
 	"time"
@@ -20,118 +21,43 @@ const (
 	taskListScrollbarThumb = "█"
 )
 
+// listView renders the browse screen. A totalHeight of zero or less (no
+// window size seen yet) means an unbounded viewport: full detail and every
+// task row.
 func (m model) listView() string {
-	if m.totalHeight() > 0 {
-		return m.constrainedListView()
-	}
-	return m.unboundedListView()
-}
-
-func (m model) unboundedListView() string {
-	totalWidth := m.totalWidth()
-
-	var builder strings.Builder
-	builder.WriteString(renderHeader(
-		m.renderHeaderLabel(),
-		m.listKeybindText(),
-		totalWidth,
-	) + "\n")
-	builder.WriteString(dividerStyle.Render(strings.Repeat("─", totalWidth)) + "\n")
-
-	if m.err != nil {
-		builder.WriteString(errorStyle.Render("Error: "+m.err.Error()) + "\n\n")
-	}
-
-	switch {
-	case m.loading:
-		builder.WriteString(dimStyle.Render("Loading tasks..."))
-		if status := m.listCreateStatusView(); status != "" {
-			builder.WriteString("\n\n" + status)
-		}
-		return builder.String()
-	case len(m.rows) == 0:
-		builder.WriteString(dimStyle.Render("No tasks found.") + "\n")
-		builder.WriteString(dimStyle.Render("Press n to create one."))
-		if status := m.listCreateStatusView(); status != "" {
-			builder.WriteString("\n\n" + status)
-		}
-		return builder.String()
-	}
-
-	previousRepoKey := ""
-	for index, row := range m.rows {
-		repoKey := repoGroupKey(row.task)
-		if index == 0 || repoKey != previousRepoKey {
-			if index > 0 {
-				builder.WriteString("\n")
-			}
-			builder.WriteString(m.renderRepoHeader(row.task, totalWidth) + "\n")
-			previousRepoKey = repoKey
-		}
-
-		line1, line2 := m.renderRow(index, row, totalWidth)
-		if line1 == "" {
-			continue
-		}
-		builder.WriteString(line1 + "\n")
-		builder.WriteString(line2 + "\n")
-		if index < len(m.rows)-1 && repoGroupKey(m.rows[index+1].task) == repoKey {
-			builder.WriteString("\n")
-		}
-	}
-
-	if detail := m.selectedTaskDetailView(); detail != "" {
-		builder.WriteString(dividerStyle.Render(strings.Repeat("─", totalWidth)) + "\n")
-		builder.WriteString(detail)
-	}
-	if status := m.listCreateStatusView(); status != "" {
-		builder.WriteString("\n" + dividerStyle.Render(strings.Repeat("─", totalWidth)) + "\n")
-		builder.WriteString(status)
-	}
-
-	return strings.TrimRight(builder.String(), "\n")
-}
-
-func (m model) constrainedListView() string {
 	totalWidth := m.totalWidth()
 	totalHeight := m.totalHeight()
-	if totalHeight <= 0 {
-		return m.unboundedListView()
-	}
 
 	lines := []string{
-		renderHeader(
-			m.renderHeaderLabel(),
-			m.listKeybindText(),
-			totalWidth,
-		),
-		dividerStyle.Render(strings.Repeat("─", totalWidth)),
+		renderHeader(m.renderHeaderLabel(), m.listKeybindText(), totalWidth),
+		divider(totalWidth),
 	}
 
 	if m.err != nil {
 		lines = append(lines, errorStyle.Render("Error: "+m.err.Error()), "")
 	}
 
-	if m.loading {
+	switch {
+	case m.loading:
 		lines = append(lines, dimStyle.Render("Loading tasks..."))
-		lines = append(lines, sectionLines("", m.listCreateStatusView(), totalWidth)...)
-		return joinConstrainedLines(lines, totalHeight)
-	}
-
-	if len(m.rows) == 0 {
+		lines = append(lines, sectionLines(m.listCreateStatusView(), totalWidth)...)
+	case len(m.rows) == 0:
 		lines = append(lines, dimStyle.Render("No tasks found."), dimStyle.Render("Press n to create one."))
-		lines = append(lines, sectionLines("", m.listCreateStatusView(), totalWidth)...)
-		return joinConstrainedLines(lines, totalHeight)
+		lines = append(lines, sectionLines(m.listCreateStatusView(), totalWidth)...)
+	default:
+		createSection := sectionLines(m.listCreateStatusView(), totalWidth)
+		detailSection := sectionLines(m.selectedTaskDetailView(), totalWidth)
+		rowBudget := math.MaxInt
+		if totalHeight > 0 {
+			createSection, detailSection, rowBudget = m.constrainedListSections(totalWidth, totalHeight, len(lines))
+			if rowBudget < 0 {
+				rowBudget = 0
+			}
+		}
+		lines = append(lines, m.visibleTaskList(totalWidth, rowBudget).lines...)
+		lines = append(lines, detailSection...)
+		lines = append(lines, createSection...)
 	}
-
-	createSection, detailSection, rowBudget := m.constrainedListSections(totalWidth, totalHeight, len(lines))
-	if rowBudget < 0 {
-		rowBudget = 0
-	}
-	taskList := m.visibleTaskList(totalWidth, rowBudget)
-	lines = append(lines, taskList.lines...)
-	lines = append(lines, detailSection...)
-	lines = append(lines, createSection...)
 
 	return joinConstrainedLines(lines, totalHeight)
 }
@@ -148,8 +74,8 @@ type taskListBlock struct {
 }
 
 func (m model) constrainedListSections(totalWidth int, totalHeight int, baseLineCount int) ([]string, []string, int) {
-	createSection := sectionLines("", m.listCreateStatusView(), totalWidth)
-	detailSection := sectionLines("", m.selectedTaskDetailView(), totalWidth)
+	createSection := sectionLines(m.listCreateStatusView(), totalWidth)
+	detailSection := sectionLines(m.selectedTaskDetailView(), totalWidth)
 
 	availableForDetail := totalHeight - baseLineCount - len(createSection)
 	if availableForDetail < 0 {
@@ -334,18 +260,13 @@ func lineWithRightMarker(line string, totalWidth int, marker string) string {
 	return padRightVisible(line, targetWidth) + marker
 }
 
-func sectionLines(prefix string, content string, totalWidth int) []string {
+func sectionLines(content string, totalWidth int) []string {
 	content = strings.TrimRight(content, "\n")
 	if content == "" {
 		return nil
 	}
 
-	lines := []string{dividerStyle.Render(strings.Repeat("─", totalWidth))}
-	if prefix != "" {
-		lines = append(lines, prefix)
-	}
-	lines = append(lines, strings.Split(content, "\n")...)
-	return lines
+	return append([]string{divider(totalWidth)}, strings.Split(content, "\n")...)
 }
 
 func joinConstrainedLines(lines []string, totalHeight int) string {
@@ -396,10 +317,10 @@ func (m model) renderRow(index int, row taskRow, totalWidth int) (string, string
 	if strings.TrimSpace(name) == "" {
 		name = row.task.ID
 	}
-	nameCell := padRight(truncateStr(name, nameWidth), nameWidth)
+	nameCell := padRightVisible(truncateStr(name, nameWidth), nameWidth)
 
 	provider := emptyFallback(string(row.task.Provider), "-")
-	agentCell := padRight(provider, colWidthAgent)
+	agentCell := padRightVisible(provider, colWidthAgent)
 	prText := prStatusText(row.pullRequest)
 	tokenText := taskTokenUsageRowText(row.tokenUsage)
 	if tokenText != "" {
@@ -491,25 +412,9 @@ func (m model) selectedTaskDetailView() string {
 		)
 	}
 
-	left := padLines(workspaceLines, detailColWidth)
-	right := sessionLines
-
-	maxLines := len(left)
-	if len(right) > maxLines {
-		maxLines = len(right)
-	}
-
 	var builder strings.Builder
-	for i := range maxLines {
-		leftLine := ""
-		rightLine := ""
-		if i < len(left) {
-			leftLine = left[i]
-		}
-		if i < len(right) {
-			rightLine = right[i]
-		}
-		builder.WriteString("   " + padRightVisible(leftLine, detailColWidth) + "   " + rightLine + "\n")
+	for _, line := range zipColumns(workspaceLines, sessionLines, detailColWidth) {
+		builder.WriteString(line + "\n")
 	}
 
 	if tokenLines := taskTokenUsageDetailLines(row.tokenUsage); len(tokenLines) > 0 {
@@ -560,11 +465,7 @@ func (m model) selectedTaskDetailView() string {
 				if idx == 0 {
 					textStyle = primaryStyle
 				}
-				for lineIndex, line := range wrapAndTruncate(item, rightWidth, 3) {
-					if lineIndex == 0 {
-						rightLines = append(rightLines, textStyle.Render(line))
-						continue
-					}
+				for _, line := range wrapAndTruncate(item, rightWidth, 3) {
 					rightLines = append(rightLines, textStyle.Render(line))
 				}
 				if idx < len(assistantItems)-1 {
@@ -573,21 +474,8 @@ func (m model) selectedTaskDetailView() string {
 			}
 		}
 
-		maxActivityLines := len(leftLines)
-		if len(rightLines) > maxActivityLines {
-			maxActivityLines = len(rightLines)
-		}
-
-		for i := range maxActivityLines {
-			leftLine := ""
-			rightLine := ""
-			if i < len(leftLines) {
-				leftLine = leftLines[i]
-			}
-			if i < len(rightLines) {
-				rightLine = rightLines[i]
-			}
-			builder.WriteString("   " + padRightVisible(leftLine, leftWidth) + "   " + rightLine + "\n")
+		for _, line := range zipColumns(leftLines, rightLines, leftWidth) {
+			builder.WriteString(line + "\n")
 		}
 	}
 
@@ -637,17 +525,8 @@ func (m model) promptInputView() string {
 	totalWidth := m.totalWidth()
 
 	var builder strings.Builder
-	builder.WriteString(renderHeader(
-		m.renderHeaderLabel(),
-		mutedStyle.Render("new task"),
-		totalWidth,
-	) + "\n")
-	builder.WriteString(dividerStyle.Render(strings.Repeat("─", totalWidth)) + "\n")
-
-	if m.draft.err != nil {
-		builder.WriteString(errorStyle.Render("Error: "+m.draft.err.Error()) + "\n\n")
-	}
-
+	builder.WriteString(m.screenHeader(mutedStyle.Render("new task")))
+	builder.WriteString(errorBlock(m.draft.err))
 	builder.WriteString(dimStyle.Render("Enter task prompt.") + "\n\n")
 	createProvider := string(m.effectiveCreateProvider())
 	providerLine := mutedStyle.Render("provider  ") + providerStyle(createProvider).Render(createProvider)
@@ -677,11 +556,11 @@ func (m model) promptInputView() string {
 	}
 
 	builder.WriteString("\n\n")
-	builder.WriteString(
-		keybindStyle.Render("enter") + mutedStyle.Render(" submit · ") +
-			keybindStyle.Render("ctrl+p") + mutedStyle.Render(" pull requests · ") +
-			keybindStyle.Render("esc") + mutedStyle.Render(" cancel"),
-	)
+	builder.WriteString(footerKeybinds(
+		[2]string{"enter", "submit"},
+		[2]string{"ctrl+p", "pull requests"},
+		[2]string{"esc", "cancel"},
+	))
 
 	return builder.String()
 }
@@ -694,32 +573,21 @@ func (m model) listKeybindText() string {
 	}
 	binds = append(binds, [2]string{"space", "details"}, [2]string{"x", "clean"}, [2]string{"q", "quit"})
 
-	parts := make([]string, 0, len(binds))
-	for _, bind := range binds {
-		parts = append(parts, keybindStyle.Render(bind[0])+" "+mutedStyle.Render(bind[1]))
-	}
-	return strings.Join(parts, "   ")
+	return keybindBar("   ", binds...)
 }
 
 func (m model) providerSetupView() string {
 	totalWidth := m.totalWidth()
 
 	var builder strings.Builder
-	builder.WriteString(renderHeader(
-		m.renderHeaderLabel(),
-		mutedStyle.Render("provider setup"),
-		totalWidth,
-	) + "\n")
-	builder.WriteString(dividerStyle.Render(strings.Repeat("─", totalWidth)) + "\n\n")
+	builder.WriteString(m.screenHeader(mutedStyle.Render("provider setup")) + "\n")
 
 	builder.WriteString(primaryStyle.Bold(true).Render("Provider setup") + "\n")
 	builder.WriteString(
 		dimStyle.Render("Enable the AI coding providers rig may launch. At least one is required.") + "\n\n",
 	)
 
-	if m.setupForm.err != nil {
-		builder.WriteString(errorStyle.Render("Error: "+m.setupForm.err.Error()) + "\n\n")
-	}
+	builder.WriteString(errorBlock(m.setupForm.err))
 
 	if m.setupForm.detecting {
 		builder.WriteString(renderShimmer("Checking provider availability...", m.shimmerTick) + "\n")
@@ -737,7 +605,7 @@ func (m model) providerSetupView() string {
 			checkbox = "[x]"
 		}
 
-		name := providerStyle(string(row.provider)).Render(padRight(string(row.provider), 8))
+		name := providerStyle(string(row.provider)).Render(padRightVisible(string(row.provider), 8))
 		state := healthyStyle.Render("ready")
 		if !row.ready {
 			checkbox = "[-]"
@@ -761,26 +629,19 @@ func (m model) providerSetupView() string {
 	}
 
 	builder.WriteString("\n")
-	builder.WriteString(
-		keybindStyle.Render("space") + mutedStyle.Render(" toggle · ") +
-			keybindStyle.Render("d") + mutedStyle.Render(" default · ") +
-			keybindStyle.Render("enter") + mutedStyle.Render(" save · ") +
-			keybindStyle.Render("q") + mutedStyle.Render(" quit"),
-	)
+	builder.WriteString(footerKeybinds(
+		[2]string{"space", "toggle"},
+		[2]string{"d", "default"},
+		[2]string{"enter", "save"},
+		[2]string{"q", "quit"},
+	))
 
 	return builder.String()
 }
 
 func (m model) switchProviderView() string {
-	totalWidth := m.totalWidth()
-
 	var builder strings.Builder
-	builder.WriteString(renderHeader(
-		m.renderHeaderLabel(),
-		mutedStyle.Render("switch provider"),
-		totalWidth,
-	) + "\n")
-	builder.WriteString(dividerStyle.Render(strings.Repeat("─", totalWidth)) + "\n\n")
+	builder.WriteString(m.screenHeader(mutedStyle.Render("switch provider")) + "\n")
 
 	row := m.selectedRow()
 	if row != nil && row.task != nil {
@@ -806,10 +667,10 @@ func (m model) switchProviderView() string {
 	}
 
 	builder.WriteString("\n")
-	builder.WriteString(
-		keybindStyle.Render("enter") + mutedStyle.Render(" switch · ") +
-			keybindStyle.Render("esc") + mutedStyle.Render(" cancel"),
-	)
+	builder.WriteString(footerKeybinds(
+		[2]string{"enter", "switch"},
+		[2]string{"esc", "cancel"},
+	))
 
 	return builder.String()
 }
@@ -823,20 +684,12 @@ func (m model) prPickerView() string {
 	}
 
 	var builder strings.Builder
-	builder.WriteString(renderHeader(
-		m.renderHeaderLabel(),
-		mutedStyle.Render(headerSuffix),
-		totalWidth,
-	) + "\n")
-	builder.WriteString(dividerStyle.Render(strings.Repeat("─", totalWidth)) + "\n")
-
-	if m.draft.err != nil {
-		builder.WriteString(errorStyle.Render("Error: "+m.draft.err.Error()) + "\n\n")
-	}
+	builder.WriteString(m.screenHeader(mutedStyle.Render(headerSuffix)))
+	builder.WriteString(errorBlock(m.draft.err))
 
 	if len(m.draft.prs) == 0 {
 		builder.WriteString(dimStyle.Render("No pull requests found.") + "\n\n")
-		builder.WriteString(keybindStyle.Render("esc") + mutedStyle.Render(" back"))
+		builder.WriteString(footerKeybinds([2]string{"esc", "back"}))
 		return builder.String()
 	}
 
@@ -874,10 +727,10 @@ func (m model) prPickerView() string {
 	}
 
 	builder.WriteString("\n\n")
-	builder.WriteString(
-		keybindStyle.Render("enter") + mutedStyle.Render(" create · ") +
-			keybindStyle.Render("esc") + mutedStyle.Render(" back"),
-	)
+	builder.WriteString(footerKeybinds(
+		[2]string{"enter", "create"},
+		[2]string{"esc", "back"},
+	))
 
 	return builder.String()
 }
@@ -890,9 +743,9 @@ func (m model) renderCreateProgress() string {
 		label := "Creating task from pull request"
 		switch {
 		case m.pending == opCreating:
-			return warningStyle.Render("●") + " " + renderShimmer(label, m.shimmerTick)
+			return stepActiveLine(label, m.shimmerTick)
 		case m.create.err != nil:
-			return errorStyle.Render("●") + " " + errorStyle.Render(label)
+			return stepFailedLine(label)
 		default:
 			return ""
 		}
@@ -914,13 +767,13 @@ func (m model) renderCreateProgress() string {
 		label := taskCreateProgressLabel(step)
 		switch {
 		case containsCreateStep(m.create.done, step):
-			lines = append(lines, healthyStyle.Render("●")+" "+primaryStyle.Render(label))
+			lines = append(lines, stepDoneLine(label))
 		case step == m.create.active && m.pending == opCreating:
-			lines = append(lines, warningStyle.Render("●")+" "+renderShimmer(label, m.shimmerTick))
+			lines = append(lines, stepActiveLine(label, m.shimmerTick))
 		case step == m.create.active && m.create.err != nil:
-			lines = append(lines, errorStyle.Render("●")+" "+errorStyle.Render(label))
+			lines = append(lines, stepFailedLine(label))
 		default:
-			lines = append(lines, dimStyle.Render("○ "+label))
+			lines = append(lines, stepPendingLine(label))
 		}
 	}
 
@@ -954,15 +807,8 @@ func taskCreateProgressLabel(step core.TaskCreateProgressStep) string {
 }
 
 func (m model) confirmationView() string {
-	totalWidth := m.totalWidth()
-
 	var builder strings.Builder
-	builder.WriteString(renderHeader(
-		m.renderHeaderLabel(),
-		errorStyle.Render("cleanup"),
-		totalWidth,
-	) + "\n")
-	builder.WriteString(dividerStyle.Render(strings.Repeat("─", totalWidth)) + "\n")
+	builder.WriteString(m.screenHeader(errorStyle.Render("cleanup")))
 
 	if row := m.selectedRow(); row != nil && row.task != nil {
 		builder.WriteString(primaryStyle.Render(emptyFallback(row.task.DisplayName, row.task.ID)) + "\n\n")
@@ -971,14 +817,12 @@ func (m model) confirmationView() string {
 	builder.WriteString(dimStyle.Render("The tmux session and worktree will be deleted.") + "\n")
 	builder.WriteString(dimStyle.Render("The branch will be kept.") + "\n\n")
 	if m.pending == opDeleting {
-		builder.WriteString(
-			warningStyle.Render("●") + " " + renderShimmer("Cleaning up task...", m.shimmerTick) + "\n\n",
-		)
+		builder.WriteString(stepActiveLine("Cleaning up task...", m.shimmerTick) + "\n\n")
 	}
-	builder.WriteString(
-		keybindStyle.Render("y") + mutedStyle.Render(" confirm · ") +
-			keybindStyle.Render("n") + mutedStyle.Render(" cancel"),
-	)
+	builder.WriteString(footerKeybinds(
+		[2]string{"y", "confirm"},
+		[2]string{"n", "cancel"},
+	))
 
 	return builder.String()
 }
@@ -1012,13 +856,13 @@ func taskCreationFailureStatusText(task *core.Task) (string, lipgloss.Style) {
 
 	switch task.CreationStep {
 	case core.TaskCreateProgressCreatingWorktree:
-		return "× worktree failed", errorStyle
+		return iconFailed + " worktree failed", errorStyle
 	case core.TaskCreateProgressPreparingWorkspace:
-		return "× setup failed", errorStyle
+		return iconFailed + " setup failed", errorStyle
 	case core.TaskCreateProgressStartingSession:
-		return "× session failed", errorStyle
+		return iconFailed + " session failed", errorStyle
 	default:
-		return "× creation failed", errorStyle
+		return iconFailed + " creation failed", errorStyle
 	}
 }
 
@@ -1102,13 +946,13 @@ func formatTokenCount(tokens int) string {
 func prStateIconStyle(state core.PRState) (string, lipgloss.Style) {
 	switch state {
 	case core.PRStateOpen:
-		return "●", healthyStyle
+		return iconStatusActive, healthyStyle
 	case core.PRStateDraft:
-		return "◐", warningStyle
+		return iconStatusProgress, warningStyle
 	case core.PRStateMerged:
-		return "✓", prMergedStyle
+		return iconDone, prMergedStyle
 	case core.PRStateClosed:
-		return "×", errorStyle
+		return iconFailed, errorStyle
 	default:
 		return iconPRNone, mutedStyle
 	}
@@ -1150,24 +994,90 @@ func renderHeader(left string, right string, totalWidth int) string {
 	return left + strings.Repeat(" ", gap) + right
 }
 
+// screenHeader is the top of every screen: the RIG header with a
+// right-aligned label, over a divider.
+func (m model) screenHeader(right string) string {
+	totalWidth := m.totalWidth()
+	return renderHeader(m.renderHeaderLabel(), right, totalWidth) + "\n" + divider(totalWidth) + "\n"
+}
+
+func divider(totalWidth int) string {
+	return dividerStyle.Render(strings.Repeat("─", totalWidth))
+}
+
+// errorBlock renders a user-facing error line followed by a blank line, or
+// nothing when err is nil.
+func errorBlock(err error) string {
+	if err == nil {
+		return ""
+	}
+	return errorStyle.Render("Error: "+err.Error()) + "\n\n"
+}
+
+// keybindBar renders key/action pairs in the shared keybind style, joined by
+// sep.
+func keybindBar(sep string, binds ...[2]string) string {
+	parts := make([]string, 0, len(binds))
+	for _, bind := range binds {
+		parts = append(parts, keybindStyle.Render(bind[0])+" "+mutedStyle.Render(bind[1]))
+	}
+	return strings.Join(parts, mutedStyle.Render(sep))
+}
+
+// footerKeybinds is the keybind bar at the bottom of the modal screens.
+func footerKeybinds(binds ...[2]string) string {
+	return keybindBar(" · ", binds...)
+}
+
+// zipColumns lays two line columns side by side: a three-space indent, the
+// left column padded to leftWidth, a three-space gutter, then the right.
+func zipColumns(left []string, right []string, leftWidth int) []string {
+	lines := make([]string, 0, max(len(left), len(right)))
+	for i := range max(len(left), len(right)) {
+		leftLine, rightLine := "", ""
+		if i < len(left) {
+			leftLine = left[i]
+		}
+		if i < len(right) {
+			rightLine = right[i]
+		}
+		lines = append(lines, "   "+padRightVisible(leftLine, leftWidth)+"   "+rightLine)
+	}
+	return lines
+}
+
+// Status-dot lines: a colored dot followed by a styled label, the shared
+// shape for progress steps and long-running-operation status rows.
+func stepDoneLine(label string) string {
+	return healthyStyle.Render(iconStatusActive) + " " + primaryStyle.Render(label)
+}
+
+func stepActiveLine(label string, tick int) string {
+	return warningStyle.Render(iconStatusActive) + " " + renderShimmer(label, tick)
+}
+
+func stepFailedLine(label string) string {
+	return errorStyle.Render(iconStatusActive) + " " + errorStyle.Render(label)
+}
+
+func stepPendingLine(label string) string {
+	return dimStyle.Render(iconStatusIdle + " " + label)
+}
+
 func (m model) renderHeaderLabel() string {
-	return headerLabelStyle.Render("RIG") + " " + mutedStyle.Render(normalizeBuildVersion(m.buildVersion))
+	return headerLabelStyle.Render("RIG") + " " + mutedStyle.Render(m.buildVersion)
 }
 
+// truncateStr caps value at max visible columns, ending with a one-column
+// ellipsis when it truncates.
 func truncateStr(value string, max int) string {
-	runes := []rune(value)
-	if len(runes) <= max {
+	if max <= 0 {
+		return ""
+	}
+	if lipgloss.Width(value) <= max {
 		return value
 	}
-	return string(runes[:max-1]) + "…"
-}
-
-func padRight(value string, width int) string {
-	runes := []rune(value)
-	if len(runes) >= width {
-		return value
-	}
-	return value + strings.Repeat(" ", width-len(runes))
+	return clipVisible(value, max-1) + "…"
 }
 
 func padRightVisible(value string, width int) string {
@@ -1184,14 +1094,6 @@ func padLeftVisible(value string, width int) string {
 		return value
 	}
 	return strings.Repeat(" ", width-visible) + value
-}
-
-func padLines(lines []string, width int) []string {
-	padded := make([]string, 0, len(lines))
-	for _, line := range lines {
-		padded = append(padded, padRightVisible(line, width))
-	}
-	return padded
 }
 
 func wrapAndTruncate(text string, width int, maxLines int) []string {
@@ -1225,6 +1127,8 @@ func wrapAndTruncate(text string, width int, maxLines int) []string {
 	return lines
 }
 
+// truncateVisible caps value at max visible columns, ending with "..." when
+// it truncates.
 func truncateVisible(value string, max int) string {
 	if max <= 0 {
 		return ""
@@ -1235,21 +1139,22 @@ func truncateVisible(value string, max int) string {
 	if max <= 3 {
 		return strings.Repeat(".", max)
 	}
+	return clipVisible(value, max-3) + "..."
+}
 
-	suffix := "..."
-	suffixWidth := lipgloss.Width(suffix)
+// clipVisible cuts value to at most max visible columns.
+func clipVisible(value string, max int) string {
 	currentWidth := 0
 	var builder strings.Builder
 	for _, r := range value {
 		runeWidth := lipgloss.Width(string(r))
-		if currentWidth+runeWidth+suffixWidth > max {
+		if currentWidth+runeWidth > max {
 			break
 		}
 		builder.WriteRune(r)
 		currentWidth += runeWidth
 	}
-
-	return builder.String() + suffix
+	return builder.String()
 }
 
 func emptyFallback(value string, fallback string) string {

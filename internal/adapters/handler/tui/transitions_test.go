@@ -4,8 +4,9 @@ import (
 	"testing"
 
 	tea "charm.land/bubbletea/v2"
-	"github.com/BaronBonet/rig/internal/core"
 	"github.com/stretchr/testify/require"
+
+	"github.com/BaronBonet/rig/internal/core"
 )
 
 func TestCanEnterMatrix(t *testing.T) {
@@ -90,12 +91,43 @@ func TestBackTargetMatrix(t *testing.T) {
 	}{
 		{name: "browse quits", mode: modeBrowse, hasSetup: true, want: backDest{quit: true}},
 		{name: "prompt input returns to browse", mode: modePromptInput, hasSetup: true, want: backDest{to: modeBrowse}},
-		{name: "pr picker returns to the prompt", mode: modePRPicker, hasSetup: true, want: backDest{to: modePromptInput}},
-		{name: "cleanup confirm returns to browse", mode: modeCleanupConfirm, hasSetup: true, want: backDest{to: modeBrowse}},
-		{name: "switch provider returns to browse", mode: modeSwitchProvider, hasSetup: true, want: backDest{to: modeBrowse}},
-		{name: "provider setup returns to browse once configured", mode: modeProviderSetup, hasSetup: true, want: backDest{to: modeBrowse}},
-		{name: "provider setup quits without a valid setup", mode: modeProviderSetup, hasSetup: false, want: backDest{quit: true}},
-		{name: "provider setup quits in a setup-only session", mode: modeProviderSetup, hasSetup: true, setupOnly: true, want: backDest{quit: true}},
+		{
+			name:     "pr picker returns to the prompt",
+			mode:     modePRPicker,
+			hasSetup: true,
+			want:     backDest{to: modePromptInput},
+		},
+		{
+			name:     "cleanup confirm returns to browse",
+			mode:     modeCleanupConfirm,
+			hasSetup: true,
+			want:     backDest{to: modeBrowse},
+		},
+		{
+			name:     "switch provider returns to browse",
+			mode:     modeSwitchProvider,
+			hasSetup: true,
+			want:     backDest{to: modeBrowse},
+		},
+		{
+			name:     "provider setup returns to browse once configured",
+			mode:     modeProviderSetup,
+			hasSetup: true,
+			want:     backDest{to: modeBrowse},
+		},
+		{
+			name:     "provider setup quits without a valid setup",
+			mode:     modeProviderSetup,
+			hasSetup: false,
+			want:     backDest{quit: true},
+		},
+		{
+			name:      "provider setup quits in a setup-only session",
+			mode:      modeProviderSetup,
+			hasSetup:  true,
+			setupOnly: true,
+			want:      backDest{quit: true},
+		},
 	}
 
 	for _, tc := range cases {
