@@ -75,14 +75,10 @@ func (m model) updateProviderSetup(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	case "q", "esc":
 		return m.handleBack()
 	case "j", "down":
-		if m.setupForm.selected < len(m.setupForm.rows)-1 {
-			m.setupForm.selected++
-		}
+		m.setupForm.selected = clampIndex(m.setupForm.selected+1, len(m.setupForm.rows))
 		return m, nil
 	case "k", "up":
-		if m.setupForm.selected > 0 {
-			m.setupForm.selected--
-		}
+		m.setupForm.selected = clampIndex(m.setupForm.selected-1, len(m.setupForm.rows))
 		return m, nil
 	case " ", "space":
 		if m.setupForm.selected >= 0 && m.setupForm.selected < len(m.setupForm.rows) {
@@ -171,14 +167,10 @@ func (m model) updateSwitchProvider(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	case "q", "esc":
 		return m.handleBack()
 	case "j", "down":
-		if m.providerSwitch.selected < len(m.providerSwitch.options)-1 {
-			m.providerSwitch.selected++
-		}
+		m.providerSwitch.selected = clampIndex(m.providerSwitch.selected+1, len(m.providerSwitch.options))
 		return m, nil
 	case "k", "up":
-		if m.providerSwitch.selected > 0 {
-			m.providerSwitch.selected--
-		}
+		m.providerSwitch.selected = clampIndex(m.providerSwitch.selected-1, len(m.providerSwitch.options))
 		return m, nil
 	case "enter":
 		row := m.selectedRow()
@@ -187,8 +179,7 @@ func (m model) updateSwitchProvider(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 			m.transition(modeBrowse)
 			return m, nil
 		}
-		m.pending = opSwitching
-		m.shimmerTick = 0
+		m.beginOp(opSwitching)
 		target := m.providerSwitch.options[m.providerSwitch.selected]
 		return m, tea.Batch(
 			switchTaskProviderCmd(m.statusContext, m.frontend, taskID(row.task), target),

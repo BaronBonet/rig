@@ -313,7 +313,7 @@ func runTUI(stdout io.Writer) error {
 	if stdout == nil {
 		stdout = os.Stdout
 	}
-	program := tui.NewProgramWithVersion(
+	program := tui.NewProgram(
 		frontend,
 		sourceRoot,
 		displayVersion,

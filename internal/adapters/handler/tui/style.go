@@ -26,6 +26,8 @@ const (
 	iconStatusActive   = "●"
 	iconStatusIdle     = "○"
 	iconStatusProgress = "◐"
+	iconDone           = "✓"
+	iconFailed         = "×"
 	iconPRNone         = "—"
 )
 

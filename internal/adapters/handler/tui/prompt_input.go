@@ -32,13 +32,7 @@ func newPromptInput() textarea.Model {
 	styles.Focused.CursorLineNumber = lipgloss.NewStyle()
 	styles.Focused.EndOfBuffer = lipgloss.NewStyle()
 
-	styles.Blurred.Base = lipgloss.NewStyle()
-	styles.Blurred.Text = lipgloss.NewStyle().Foreground(colorPrimary)
-	styles.Blurred.Placeholder = lipgloss.NewStyle().Foreground(colorDimmed)
-	styles.Blurred.Prompt = lipgloss.NewStyle().Foreground(colorAccent)
-	styles.Blurred.CursorLine = lipgloss.NewStyle()
-	styles.Blurred.CursorLineNumber = lipgloss.NewStyle()
-	styles.Blurred.EndOfBuffer = lipgloss.NewStyle()
+	styles.Blurred = styles.Focused
 
 	styles.Cursor.Color = colorAccent
 	styles.Cursor.Shape = tea.CursorBar

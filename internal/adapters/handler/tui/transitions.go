@@ -111,10 +111,7 @@ func (m *model) clearFamilyState(family modeFamily) {
 func (m model) handleBack() (tea.Model, tea.Cmd) {
 	dest := backTarget(m.mode, m.providerSetup != nil, m.setupOnly)
 	if dest.quit {
-		if m.cancelStatus != nil {
-			m.cancelStatus()
-		}
-		return m, tea.Quit
+		return m.quit()
 	}
 
 	from := m.mode
