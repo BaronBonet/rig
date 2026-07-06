@@ -1,8 +1,9 @@
-// Package registry composes the provider adapter clients and hook routes for
-// every supported provider. It is the single place where composition code
-// learns which providers Rig supports; whether a provider is configured is a
-// user-config concern handled by the provider config store and task service.
-package registry
+// Package providerregistry composes the provider adapter clients and hook
+// routes for every supported provider. It is the single place where
+// composition code learns which providers Rig supports; whether a provider is
+// configured is a user-config concern handled by the provider config store and
+// task service.
+package providerregistry
 
 import (
 	"context"

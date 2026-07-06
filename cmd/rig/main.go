@@ -13,10 +13,10 @@ import (
 	"github.com/BaronBonet/rig/internal/adapters/client/github"
 	"github.com/BaronBonet/rig/internal/adapters/client/tmux"
 	"github.com/BaronBonet/rig/internal/adapters/handler/tui"
-	"github.com/BaronBonet/rig/internal/adapters/registry"
 	"github.com/BaronBonet/rig/internal/adapters/repository/sqlite"
 	"github.com/BaronBonet/rig/internal/adapters/repository/userconfig"
 	"github.com/BaronBonet/rig/internal/adapters/taskdaemon"
+	"github.com/BaronBonet/rig/internal/composition/providerregistry"
 	"github.com/BaronBonet/rig/internal/core"
 	"github.com/BaronBonet/rig/internal/infrastructure"
 	"github.com/BaronBonet/rig/internal/pkg/subprocess"
@@ -438,7 +438,7 @@ func runDoctor(stdout io.Writer, cfg *infrastructure.ApplicationConfig) error {
 
 func newDoctorService(cfg *infrastructure.ApplicationConfig) core.HealthChecker {
 	runner := subprocess.ExecRunner{}
-	providers := registry.NewProviderClients(registry.Dependencies{
+	providers := providerregistry.NewProviderClients(providerregistry.Dependencies{
 		Runner:         runner,
 		Codex:          cfg.Codex,
 		Claude:         cfg.Claude,
@@ -505,14 +505,14 @@ func serveTaskDaemon(
 	runner := subprocess.ExecRunner{}
 	// The hook secret persists across daemon restarts so forwarder scripts
 	// written by earlier daemons keep authenticating.
-	hookSecret, err := registry.LoadOrCreateHookSecret(
+	hookSecret, err := providerregistry.LoadOrCreateHookSecret(
 		filepath.Join(filepath.Dir(cfg.Daemon.SocketPath), "hook-secret"),
 	)
 	if err != nil {
 		return err
 	}
 
-	providers := registry.NewProviderClients(registry.Dependencies{
+	providers := providerregistry.NewProviderClients(providerregistry.Dependencies{
 		Runner:         runner,
 		Codex:          cfg.Codex,
 		Claude:         cfg.Claude,
@@ -532,7 +532,7 @@ func serveTaskDaemon(
 		ProviderConfig:       providerConfig,
 	})
 
-	for _, refreshErr := range registry.RefreshProviderEnvironments(ctx, providers, providerConfig) {
+	for _, refreshErr := range providerregistry.RefreshProviderEnvironments(ctx, providers, providerConfig) {
 		fmt.Fprintln(os.Stderr, refreshErr)
 	}
 	for _, refreshErr := range service.RefreshTaskWorkspaceHooks(ctx) {
@@ -541,5 +541,5 @@ func serveTaskDaemon(
 
 	adapter := taskdaemon.New(cfg.Daemon)
 
-	return adapter.Serve(ctx, service, registry.NewHookRoutes(service, nil, hookSecret), stop)
+	return adapter.Serve(ctx, service, providerregistry.NewHookRoutes(service, nil, hookSecret), stop)
 }
