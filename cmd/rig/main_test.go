@@ -37,8 +37,8 @@ func TestDaemonHookRoutes_ExposeAllSupportedProviderHookRoutes(t *testing.T) {
 	require.NotContains(t, source, `"/claude-hook"`)
 	require.NotContains(t, source, `"/hook"`)
 	require.NotContains(t, source, "CollectorURL:")
-	require.Contains(t, source, "registry.NewProviderClients(")
-	require.Contains(t, source, "registry.NewHookRoutes(")
+	require.Contains(t, source, "providerregistry.NewProviderClients(")
+	require.Contains(t, source, "providerregistry.NewHookRoutes(")
 }
 
 func TestExecuteSource_ConstructsSingleTaskdaemonAdapterForClientPath(t *testing.T) {
