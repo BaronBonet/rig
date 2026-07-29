@@ -1,13 +1,8 @@
 package codex
 
 import (
-	"bufio"
 	"context"
 	"encoding/json"
-	"errors"
-	"fmt"
-	"io"
-	"os"
 	"strings"
 	"time"
 
@@ -18,38 +13,8 @@ func (r *repository) ReadSessionTokenUsage(
 	ctx context.Context,
 	transcriptPath string,
 ) (*core.SessionTokenUsage, error) {
-	return readCodexTokenUsage(ctx, transcriptPath)
-}
-
-func scanTranscriptLines(ctx context.Context, path string, fn func(line []byte)) error {
-	path = strings.TrimSpace(path)
-	f, err := os.Open(path)
-	if err != nil {
-		if os.IsNotExist(err) {
-			return nil
-		}
-		return fmt.Errorf("open transcript %q: %w", path, err)
-	}
-	defer f.Close()
-
-	reader := bufio.NewReader(f)
-	for {
-		if err := ctx.Err(); err != nil {
-			return err
-		}
-
-		line, readErr := reader.ReadBytes('\n')
-		if len(line) > 0 {
-			fn(line)
-		}
-		if readErr == nil {
-			continue
-		}
-		if errors.Is(readErr, io.EOF) {
-			return nil
-		}
-		return readErr
-	}
+	snapshot, err := r.getTranscriptIndex().read(ctx, transcriptPath)
+	return snapshot.usage, err
 }
 
 type codexTranscriptEnvelope struct {
@@ -103,10 +68,11 @@ func (r *repository) RecoverLatestTaskStatus(
 		return nil, nil
 	}
 
-	status, err := readLatestCodexTranscriptStatus(ctx, session.TranscriptPath)
+	snapshot, err := r.getTranscriptIndex().read(ctx, session.TranscriptPath)
 	if err != nil {
 		return nil, err
 	}
+	status := snapshot.status
 	if status == nil || !status.observedAt.After(current.ObservedAt) {
 		return nil, nil
 	}
@@ -128,7 +94,23 @@ func (r *repository) ReadSessionActivity(
 	session core.TaskProviderSession,
 	after time.Time,
 ) ([]core.TaskActivityEvent, error) {
-	return readCodexSessionActivity(ctx, session, after)
+	taskID := strings.TrimSpace(session.TaskID)
+	if taskID == "" {
+		return nil, nil
+	}
+	snapshot, err := r.getTranscriptIndex().read(ctx, session.TranscriptPath)
+	if err != nil {
+		return nil, err
+	}
+	events := make([]core.TaskActivityEvent, 0, len(snapshot.activities))
+	for _, activity := range snapshot.activities {
+		if !activity.ObservedAt.After(after) {
+			continue
+		}
+		activity.TaskID = taskID
+		events = append(events, activity)
+	}
+	return events, nil
 }
 
 func newestCodexTranscriptSession(sessions []core.TaskProviderSession) *core.TaskProviderSession {
@@ -146,38 +128,6 @@ func newestCodexTranscriptSession(sessions []core.TaskProviderSession) *core.Tas
 		}
 	}
 	return latest
-}
-
-func readLatestCodexTranscriptStatus(ctx context.Context, transcriptPath string) (*codexTranscriptStatus, error) {
-	var latest *codexTranscriptStatus
-
-	err := scanTranscriptLines(ctx, transcriptPath, func(line []byte) {
-		var envelope codexTranscriptEnvelope
-		if err := json.Unmarshal(line, &envelope); err != nil {
-			return
-		}
-		if envelope.Type != "event_msg" || envelope.Timestamp.IsZero() || len(envelope.Payload) == 0 {
-			if status := codexResponseItemStatus(envelope); status != nil &&
-				(latest == nil || status.observedAt.After(latest.observedAt)) {
-				latest = status
-			}
-			return
-		}
-
-		var payload codexTaskCompletePayload
-		if err := json.Unmarshal(envelope.Payload, &payload); err != nil {
-			return
-		}
-		status := codexEventMessageStatus(envelope.Timestamp, payload.Type)
-		if status == nil {
-			return
-		}
-		if latest == nil || status.observedAt.After(latest.observedAt) {
-			latest = status
-		}
-	})
-
-	return latest, err
 }
 
 func codexResponseItemStatus(envelope codexTranscriptEnvelope) *codexTranscriptStatus {
@@ -218,35 +168,6 @@ func codexEventMessageStatus(observedAt time.Time, eventType string) *codexTrans
 			phase:        core.TaskStatusPhaseWorking,
 		}
 	}
-}
-
-func readCodexSessionActivity(
-	ctx context.Context,
-	session core.TaskProviderSession,
-	after time.Time,
-) ([]core.TaskActivityEvent, error) {
-	taskID := strings.TrimSpace(session.TaskID)
-	if taskID == "" {
-		return nil, nil
-	}
-
-	var events []core.TaskActivityEvent
-	err := scanTranscriptLines(ctx, session.TranscriptPath, func(line []byte) {
-		var envelope codexTranscriptEnvelope
-		if err := json.Unmarshal(line, &envelope); err != nil {
-			return
-		}
-		if envelope.Timestamp.IsZero() || !envelope.Timestamp.After(after) || len(envelope.Payload) == 0 {
-			return
-		}
-
-		activity := codexTranscriptActivityEvent(taskID, envelope)
-		if activity == nil {
-			return
-		}
-		events = append(events, *activity)
-	})
-	return events, err
 }
 
 func codexTranscriptActivityEvent(taskID string, envelope codexTranscriptEnvelope) *core.TaskActivityEvent {
@@ -303,42 +224,4 @@ func codexFunctionCallCommand(arguments string) string {
 
 func compactTranscriptActivityText(value string) string {
 	return strings.Join(strings.Fields(strings.TrimSpace(value)), " ")
-}
-
-func readCodexTokenUsage(ctx context.Context, transcriptPath string) (*core.SessionTokenUsage, error) {
-	var latest *core.SessionTokenUsage
-
-	err := scanTranscriptLines(ctx, transcriptPath, func(line []byte) {
-		var envelope codexTranscriptEnvelope
-		if err := json.Unmarshal(line, &envelope); err != nil {
-			return
-		}
-		if envelope.Type != "event_msg" || len(envelope.Payload) == 0 {
-			return
-		}
-
-		var payload codexEventPayload
-		if err := json.Unmarshal(envelope.Payload, &payload); err != nil {
-			return
-		}
-		if payload.Type != "token_count" {
-			return
-		}
-
-		usage := payload.Info.TotalTokenUsage
-		if usage.TotalTokens == 0 && usage.InputTokens == 0 && usage.OutputTokens == 0 {
-			return
-		}
-
-		latest = &core.SessionTokenUsage{
-			InputTokens:              usage.InputTokens,
-			OutputTokens:             usage.OutputTokens,
-			CachedInputTokens:        usage.CachedInputTokens,
-			CacheCreationInputTokens: usage.CacheCreationInputTokens,
-			ReasoningOutputTokens:    usage.ReasoningOutputTokens,
-			TotalTokens:              usage.TotalTokens,
-		}
-	})
-
-	return latest, err
 }

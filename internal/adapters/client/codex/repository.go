@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 
 	"github.com/BaronBonet/rig/internal/adapters/client/providerkit"
 	"github.com/BaronBonet/rig/internal/core"
@@ -42,11 +43,13 @@ var hookCatalog = providerkit.Catalog{
 var titleSkipPrefixes = []string{"tokens used", "openai codex"}
 
 type repository struct {
-	runner       subprocess.Runner
-	codexHomeDir func() (string, error)
-	binary       string
-	collectorURL string
-	hookSecret   string
+	runner              subprocess.Runner
+	codexHomeDir        func() (string, error)
+	binary              string
+	collectorURL        string
+	hookSecret          string
+	transcriptIndexOnce sync.Once
+	transcripts         *codexTranscriptIndex
 }
 
 func New(runner subprocess.Runner, cfg Config, hooks HookForwardingConfig) core.ProviderClient {
@@ -61,6 +64,7 @@ func New(runner subprocess.Runner, cfg Config, hooks HookForwardingConfig) core.
 		collectorURL: collectorURL,
 		hookSecret:   strings.TrimSpace(hooks.HookSecret),
 		codexHomeDir: defaultCodexHomeDir,
+		transcripts:  newCodexTranscriptIndex(defaultCodexTranscriptIndexBudget),
 	}
 }
 

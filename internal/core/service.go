@@ -335,6 +335,7 @@ func (s *service) DeleteTask(ctx context.Context, taskID string) error {
 	if err := s.tasks.DeleteTask(ctx, task.ID); err != nil {
 		return fmt.Errorf("delete task record: %w", err)
 	}
+	s.observation.statusObserver.ForgetTask(task.ID)
 
 	return nil
 }

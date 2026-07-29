@@ -144,24 +144,132 @@ func (r *repository) InspectTaskSession(ctx context.Context, task *core.Task) (c
 	// pane_current_command reports the foreground process title, which some
 	// provider CLIs rewrite (Claude Code sets it to its version string), so the
 	// comm names of each pane's child processes are reported as well.
-	commands = append(commands, r.paneChildCommands(ctx, panePIDs)...)
+	childCommands, childEvidenceAvailable := r.paneChildCommands(ctx, panePIDs)
+	commands = append(commands, childCommands...)
 
 	return core.TaskSessionRuntimeState{
-		Exists:         true,
-		ActiveCommands: commands,
+		Exists:                          true,
+		ActiveCommands:                  commands,
+		ChildProcessEvidenceUnavailable: !childEvidenceAvailable,
 	}, nil
+}
+
+func (r *repository) InspectTaskSessions(
+	ctx context.Context,
+	tasks []*core.Task,
+) (map[string]core.TaskSessionRuntimeState, error) {
+	states := make(map[string]core.TaskSessionRuntimeState, len(tasks))
+	taskIDsBySession := make(map[string][]string, len(tasks))
+	for _, task := range tasks {
+		if task == nil {
+			continue
+		}
+		taskID := strings.TrimSpace(task.ID)
+		if taskID == "" {
+			continue
+		}
+		states[taskID] = core.TaskSessionRuntimeState{}
+		session := normalizedSessionName(strings.TrimSpace(task.TmuxSession))
+		if session != "" {
+			taskIDsBySession[session] = append(taskIDsBySession[session], taskID)
+		}
+	}
+
+	result, err := r.runner.Run(
+		ctx,
+		"",
+		"tmux",
+		"list-panes",
+		"-a",
+		"-F",
+		"#{session_name}\t#{window_name}\t#{pane_current_command}\t#{pane_pid}",
+	)
+	if isMissingSessionError(err, result) || isNoTmuxServerError(err, result) {
+		return states, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+
+	inventory, complete := parsePaneInventory(result.Stdout)
+	if !complete {
+		return nil, fmt.Errorf("parse tmux pane inventory: incomplete output")
+	}
+	commandsBySession := make(map[string][]string)
+	panePIDsBySession := make(map[string][]string)
+	seenSessions := make(map[string]bool)
+	allPanePIDsPresent := true
+	for _, pane := range inventory {
+		if pane.window != taskWindowName {
+			continue
+		}
+		if _, tracked := taskIDsBySession[pane.session]; !tracked {
+			continue
+		}
+		seenSessions[pane.session] = true
+		if pane.command != "" {
+			commandsBySession[pane.session] = append(commandsBySession[pane.session], pane.command)
+		}
+		if pane.pid != "" {
+			panePIDsBySession[pane.session] = append(panePIDsBySession[pane.session], pane.pid)
+		} else {
+			allPanePIDsPresent = false
+		}
+	}
+
+	allPanePIDs := make([]string, 0)
+	for _, panePIDs := range panePIDsBySession {
+		allPanePIDs = append(allPanePIDs, panePIDs...)
+	}
+	childCommandsByPID, processInventoryAvailable := r.childCommandsByParentPID(ctx, allPanePIDs)
+	childEvidenceAvailable := allPanePIDsPresent && processInventoryAvailable
+
+	for session, taskIDs := range taskIDsBySession {
+		commands := commandsBySession[session]
+		exists := seenSessions[session]
+		if !exists {
+			continue
+		}
+
+		activeCommands := append([]string(nil), commands...)
+		for _, panePID := range panePIDsBySession[session] {
+			activeCommands = append(activeCommands, childCommandsByPID[panePID]...)
+		}
+		for _, taskID := range taskIDs {
+			states[taskID] = core.TaskSessionRuntimeState{
+				Exists:                          true,
+				ActiveCommands:                  append([]string(nil), activeCommands...),
+				ChildProcessEvidenceUnavailable: !childEvidenceAvailable,
+			}
+		}
+	}
+
+	return states, nil
 }
 
 // paneChildCommands returns the process comm names of the direct children of
 // each pane's root process, typically the CLI the pane shell is running.
-func (r *repository) paneChildCommands(ctx context.Context, panePIDs []string) []string {
+func (r *repository) paneChildCommands(ctx context.Context, panePIDs []string) ([]string, bool) {
+	commandsByPID, available := r.childCommandsByParentPID(ctx, panePIDs)
+	var commands []string
+	for _, panePID := range panePIDs {
+		commands = append(commands, commandsByPID[panePID]...)
+	}
+	return commands, available
+}
+
+func (r *repository) childCommandsByParentPID(
+	ctx context.Context,
+	panePIDs []string,
+) (map[string][]string, bool) {
+	commandsByPID := make(map[string][]string)
 	if len(panePIDs) == 0 {
-		return nil
+		return commandsByPID, true
 	}
 
 	result, err := r.runner.Run(ctx, "", "ps", "-axo", "ppid=,comm=")
 	if err != nil {
-		return nil
+		return commandsByPID, false
 	}
 
 	wanted := make(map[string]bool, len(panePIDs))
@@ -169,17 +277,16 @@ func (r *repository) paneChildCommands(ctx context.Context, panePIDs []string) [
 		wanted[pid] = true
 	}
 
-	var commands []string
 	for _, line := range strings.Split(result.Stdout, "\n") {
 		fields := strings.Fields(line)
 		if len(fields) < 2 {
 			continue
 		}
 		if wanted[fields[0]] {
-			commands = append(commands, strings.Join(fields[1:], " "))
+			commandsByPID[fields[0]] = append(commandsByPID[fields[0]], strings.Join(fields[1:], " "))
 		}
 	}
-	return commands
+	return commandsByPID, true
 }
 
 func (r *repository) DeleteTaskSession(ctx context.Context, task *core.Task) error {
@@ -395,6 +502,38 @@ func panesFromTmuxOutput(output string) ([]string, []string) {
 	return commands, pids
 }
 
+type paneInventoryEntry struct {
+	session string
+	window  string
+	command string
+	pid     string
+}
+
+func parsePaneInventory(output string) ([]paneInventoryEntry, bool) {
+	var inventory []paneInventoryEntry
+	for _, line := range strings.Split(output, "\n") {
+		if strings.TrimSpace(line) == "" {
+			continue
+		}
+		fields := strings.Split(line, "\t")
+		if len(fields) != 4 {
+			return nil, false
+		}
+		session := normalizedSessionName(strings.TrimSpace(fields[0]))
+		window := strings.TrimSpace(fields[1])
+		if session == "" || window == "" {
+			return nil, false
+		}
+		inventory = append(inventory, paneInventoryEntry{
+			session: session,
+			window:  window,
+			command: strings.TrimSpace(fields[2]),
+			pid:     strings.TrimSpace(fields[3]),
+		})
+	}
+	return inventory, true
+}
+
 func isMissingSessionError(err error, result subprocess.Result) bool {
 	if err == nil {
 		return false
@@ -412,4 +551,18 @@ func isMissingSessionError(err error, result subprocess.Result) bool {
 	return strings.Contains(lower, "can't find session") ||
 		strings.Contains(lower, "can't find window") ||
 		strings.Contains(lower, "can't find pane")
+}
+
+func isNoTmuxServerError(err error, result subprocess.Result) bool {
+	if err == nil {
+		return false
+	}
+	stderr := strings.ToLower(strings.TrimSpace(result.Stderr))
+	if stderr == "" {
+		var commandErr subprocess.CommandError
+		if errors.As(err, &commandErr) {
+			stderr = strings.ToLower(strings.TrimSpace(commandErr.Stderr))
+		}
+	}
+	return strings.Contains(stderr, "no server running")
 }
