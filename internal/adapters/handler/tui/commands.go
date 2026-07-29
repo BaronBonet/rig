@@ -146,17 +146,6 @@ func shimmerTickCmd() tea.Cmd {
 	})
 }
 
-func latestTaskStatusCmd(ctx context.Context, frontend core.TaskFrontend, taskID string) tea.Cmd {
-	return func() tea.Msg {
-		status, err := frontend.LatestTaskStatus(ctx, taskID)
-		return latestTaskStatusLoadedMsg{
-			taskID: taskID,
-			status: status,
-			err:    err,
-		}
-	}
-}
-
 func taskActivityCmd(ctx context.Context, frontend core.TaskFrontend, taskID string, limit int) tea.Cmd {
 	return func() tea.Msg {
 		activity, err := frontend.GetTaskActivity(ctx, taskID, limit)

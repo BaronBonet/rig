@@ -298,6 +298,120 @@ func TestRepositoryInspectTaskSession_ReturnsActiveTaskWindowCommands(t *testing
 	require.Equal(t, []string{"zsh", "codex", "codex"}, state.ActiveCommands)
 }
 
+func TestRepositoryInspectTaskSessions_SixTasksUseOneTmuxAndOneProcessInventory(t *testing.T) {
+	runner := subprocess.NewMockRunner(t)
+	repo := New(runner).(*repository)
+
+	expectTmuxRun(
+		runner,
+		subprocess.Result{Stdout: "repo_one\ttask\tzsh\t100\nrepo_two\ttask\tcodex\t200\n"},
+		nil,
+		"list-panes",
+		"-a",
+		"-F",
+		"#{session_name}\t#{window_name}\t#{pane_current_command}\t#{pane_pid}",
+	)
+	runner.On("Run", mock.Anything, "", "ps", "-axo", "ppid=,comm=").
+		Return(subprocess.Result{Stdout: "  100 codex\n  999 vim\n"}, nil).Once()
+
+	states, err := repo.InspectTaskSessions(context.Background(), []*core.Task{
+		{ID: "task-1", TmuxSession: "repo_one"},
+		{ID: "task-2", TmuxSession: "repo_two"},
+		{ID: "task-3", TmuxSession: "repo_missing"},
+		{ID: "task-4", TmuxSession: "repo_missing_four"},
+		{ID: "task-5", TmuxSession: "repo_missing_five"},
+		{ID: "task-6", TmuxSession: "repo_missing_six"},
+	})
+
+	require.NoError(t, err)
+	require.Equal(t, map[string]core.TaskSessionRuntimeState{
+		"task-1": {Exists: true, ActiveCommands: []string{"zsh", "codex"}},
+		"task-2": {Exists: true, ActiveCommands: []string{"codex"}},
+		"task-3": {},
+		"task-4": {},
+		"task-5": {},
+		"task-6": {},
+	}, states)
+}
+
+func TestRepositoryInspectTaskSessions_PreservesDirectCommandsWhenProcessInventoryFails(t *testing.T) {
+	runner := subprocess.NewMockRunner(t)
+	repo := New(runner).(*repository)
+
+	expectTmuxRun(
+		runner,
+		subprocess.Result{Stdout: "repo_one\ttask\tcodex\t100\nrepo_two\ttask\tzsh\t200\n"},
+		nil,
+		"list-panes",
+		"-a",
+		"-F",
+		"#{session_name}\t#{window_name}\t#{pane_current_command}\t#{pane_pid}",
+	)
+	runner.On("Run", mock.Anything, "", "ps", "-axo", "ppid=,comm=").
+		Return(subprocess.Result{}, errors.New("ps unavailable")).Once()
+
+	states, err := repo.InspectTaskSessions(context.Background(), []*core.Task{
+		{ID: "task-1", TmuxSession: "repo_one"},
+		{ID: "task-2", TmuxSession: "repo_two"},
+	})
+
+	require.NoError(t, err)
+	require.Equal(t, core.TaskSessionRuntimeState{
+		Exists:                          true,
+		ActiveCommands:                  []string{"codex"},
+		ChildProcessEvidenceUnavailable: true,
+	}, states["task-1"])
+	require.Equal(t, core.TaskSessionRuntimeState{
+		Exists:                          true,
+		ActiveCommands:                  []string{"zsh"},
+		ChildProcessEvidenceUnavailable: true,
+	}, states["task-2"])
+}
+
+func TestRepositoryInspectTaskSessions_UnexpectedTmuxFailureMakesSnapshotUnknown(t *testing.T) {
+	runner := subprocess.NewMockRunner(t)
+	repo := New(runner).(*repository)
+
+	expectTmuxRun(
+		runner,
+		subprocess.Result{},
+		errors.New("tmux protocol failure"),
+		"list-panes",
+		"-a",
+		"-F",
+		"#{session_name}\t#{window_name}\t#{pane_current_command}\t#{pane_pid}",
+	)
+
+	states, err := repo.InspectTaskSessions(context.Background(), []*core.Task{
+		{ID: "task-1", TmuxSession: "repo_one"},
+	})
+
+	require.Error(t, err)
+	require.Nil(t, states)
+}
+
+func TestRepositoryInspectTaskSessions_MalformedTmuxOutputMakesSnapshotUnknown(t *testing.T) {
+	runner := subprocess.NewMockRunner(t)
+	repo := New(runner).(*repository)
+
+	expectTmuxRun(
+		runner,
+		subprocess.Result{Stdout: "repo_one\ttask\tzsh\n"},
+		nil,
+		"list-panes",
+		"-a",
+		"-F",
+		"#{session_name}\t#{window_name}\t#{pane_current_command}\t#{pane_pid}",
+	)
+
+	states, err := repo.InspectTaskSessions(context.Background(), []*core.Task{
+		{ID: "task-1", TmuxSession: "repo_one"},
+	})
+
+	require.EqualError(t, err, "parse tmux pane inventory: incomplete output")
+	require.Nil(t, states)
+}
+
 func TestRepositoryInspectTaskSession_ReportsPaneChildCommandsWhenProviderRewritesItsTitle(t *testing.T) {
 	runner := subprocess.NewMockRunner(t)
 	repo := New(runner).(*repository)

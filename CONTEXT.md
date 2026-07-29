@@ -46,6 +46,8 @@ Use `rig` for the CLI command and Rig for the product or system.
 - Provider session: A provider runtime session observed for a task, including
   its provider session ID, transcript path, model, working directory, and latest
   event name.
+- Provider transcript: An append-oriented record emitted by a Provider session
+  from which Rig can recover Runtime status, Activity events, and Token usage.
 - Daemon: The long-lived background Rig process that coordinates task creation,
   task state, provider hook handling, and frontend updates.
 - TUI: The foreground terminal interface for creating tasks, browsing task
@@ -59,8 +61,10 @@ Use `rig` for the CLI command and Rig for the product or system.
 - Hook event catalog: A provider's single declaration of which hook events it
   observes and the runtime phase each drives. Rig derives hook registration,
   provider health checks, and status mapping from it.
-- Runtime status: The current live task phase derived from provider hook events,
-  separate from the durable task record.
+- Runtime status: The current live task phase derived from persisted provider
+  evidence, the task's live session state, and recoverable provider session
+  history. It is a live view rather than an event history, separate from the
+  durable task record.
 - Activity event: A compact persisted event used by the detail view to show
   recent user prompts and assistant actions.
 - Resume metadata: The minimal provider state needed to reconnect a task session

@@ -278,10 +278,8 @@ func (r *repository) UpsertTaskStatus(ctx context.Context, update core.TaskStatu
 	}
 
 	r.mu.Lock()
-	subscribers := append([]chan core.TaskStatusUpdate(nil), r.subs[update.TaskID]...)
-	r.mu.Unlock()
-
-	for _, subscriber := range subscribers {
+	defer r.mu.Unlock()
+	for _, subscriber := range r.subs[update.TaskID] {
 		select {
 		case subscriber <- update:
 		default:

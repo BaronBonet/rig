@@ -113,8 +113,9 @@ type TaskStatusUpdate struct {
 
 // TaskSessionRuntimeState is the current tmux-side state of a task session.
 type TaskSessionRuntimeState struct {
-	ActiveCommands []string
-	Exists         bool
+	ActiveCommands                  []string
+	Exists                          bool
+	ChildProcessEvidenceUnavailable bool
 }
 
 type TaskActivityRole string

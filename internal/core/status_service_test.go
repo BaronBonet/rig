@@ -193,6 +193,11 @@ func TestTaskStatusService_LatestReturnsNilWhenTaskHasNoStatus(t *testing.T) {
 
 func TestTaskStatusService_SubscribePublishesMatchingTaskUpdates(t *testing.T) {
 	svc := newTestTaskService(t)
+	svc.taskRepo.listTasks = []*Task{{
+		ID:          "task-123",
+		Provider:    ProviderCodex,
+		TmuxSession: "repo_task",
+	}}
 
 	updates, err := svc.service.SubscribeTaskStatus(t.Context(), "task-123")
 	require.NoError(t, err)
@@ -293,6 +298,11 @@ func TestTaskStatusService_SubscribePublishesRecoveredStatusWithoutHookUpdate(t 
 
 func TestTaskStatusService_LatestReturnsMostRecentTaskUpdate(t *testing.T) {
 	svc := newTestTaskService(t)
+	svc.taskRepo.listTasks = []*Task{{
+		ID:          "task-123",
+		Provider:    ProviderCodex,
+		TmuxSession: "repo_task",
+	}}
 
 	first := TaskStatusUpdate{
 		TaskID:       "task-123",

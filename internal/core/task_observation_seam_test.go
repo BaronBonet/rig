@@ -50,6 +50,28 @@ func TestResolveStatus_DecisionTable(t *testing.T) {
 			want:            statusStopped,
 		},
 		{
+			name:   "missing child process evidence cannot invent stopped",
+			update: working,
+			runtime: TaskSessionRuntimeState{
+				Exists:                          true,
+				ActiveCommands:                  []string{"zsh"},
+				ChildProcessEvidenceUnavailable: true,
+			},
+			providerCommand: "codex",
+			want:            statusKeep,
+		},
+		{
+			name:   "direct pane command proves provider despite missing child process evidence",
+			update: working,
+			runtime: TaskSessionRuntimeState{
+				Exists:                          true,
+				ActiveCommands:                  []string{"codex"},
+				ChildProcessEvidenceUnavailable: true,
+			},
+			providerCommand: "codex",
+			want:            statusTryRecover,
+		},
+		{
 			name:            "provider running invites recovery of stale status",
 			update:          working,
 			runtime:         TaskSessionRuntimeState{Exists: true, ActiveCommands: []string{"codex"}},

@@ -10,6 +10,7 @@ import (
 )
 
 const defaultTaskStatusRecoveryPollInterval = 2 * time.Second
+const defaultTaskStatusRecoveryWorkerLimit = 2
 
 // taskObservation is the Task observation module: everything Rig derives
 // from provider hook events and provider session history lives here — a
@@ -22,8 +23,17 @@ type taskObservation struct {
 	providers      map[Provider]ProviderClient
 	providerConfig ProviderConfigStore
 	// recoveryPollInterval paces the subscription recovery loop that
-	// re-derives status while a subscriber is attached.
+	// re-derives status while at least one task has live interest.
 	recoveryPollInterval time.Duration
+	recoveryWorkerLimit  int
+	statusCacheMaxAge    time.Duration
+	statusObserver       *taskStatusObserver
+}
+
+type taskObservationOptions struct {
+	recoveryPollInterval time.Duration
+	recoveryWorkerLimit  int
+	statusCacheMaxAge    time.Duration
 }
 
 func newTaskObservation(
@@ -32,13 +42,42 @@ func newTaskObservation(
 	providers map[Provider]ProviderClient,
 	providerConfig ProviderConfigStore,
 ) *taskObservation {
-	return &taskObservation{
+	return newTaskObservationWithOptions(
+		tasks,
+		tmuxSession,
+		providers,
+		providerConfig,
+		taskObservationOptions{},
+	)
+}
+
+func newTaskObservationWithOptions(
+	tasks TaskRepository,
+	tmuxSession TmuxSessionClient,
+	providers map[Provider]ProviderClient,
+	providerConfig ProviderConfigStore,
+	options taskObservationOptions,
+) *taskObservation {
+	if options.recoveryPollInterval <= 0 {
+		options.recoveryPollInterval = defaultTaskStatusRecoveryPollInterval
+	}
+	if options.recoveryWorkerLimit <= 0 {
+		options.recoveryWorkerLimit = defaultTaskStatusRecoveryWorkerLimit
+	}
+	if options.statusCacheMaxAge <= 0 {
+		options.statusCacheMaxAge = options.recoveryPollInterval
+	}
+	observation := &taskObservation{
 		tasks:                tasks,
 		tmuxSession:          tmuxSession,
 		providers:            providers,
 		providerConfig:       providerConfig,
-		recoveryPollInterval: defaultTaskStatusRecoveryPollInterval,
+		recoveryPollInterval: options.recoveryPollInterval,
+		recoveryWorkerLimit:  options.recoveryWorkerLimit,
+		statusCacheMaxAge:    options.statusCacheMaxAge,
 	}
+	observation.statusObserver = newTaskStatusObserver(observation)
+	return observation
 }
 
 // supportedProviderClient returns the adapter client for a supported provider
@@ -155,25 +194,14 @@ func (o *taskObservation) GetTaskTokenUsage(ctx context.Context, taskID string) 
 }
 
 func (o *taskObservation) LatestTaskStatus(ctx context.Context, taskID string) (*TaskStatusUpdate, error) {
-	update, err := o.tasks.LatestTaskStatus(ctx, strings.TrimSpace(taskID))
-	if err != nil || update == nil {
-		return update, err
-	}
-
-	return o.currentStatus(ctx, update), nil
+	return o.statusObserver.LatestTaskStatus(ctx, strings.TrimSpace(taskID))
 }
 
 func (o *taskObservation) SubscribeTaskStatus(
 	ctx context.Context,
 	taskID string,
 ) (<-chan TaskStatusUpdate, error) {
-	taskID = strings.TrimSpace(taskID)
-	updates, err := o.tasks.SubscribeTaskStatus(ctx, taskID)
-	if err != nil {
-		return nil, err
-	}
-
-	return o.subscribeWithRecovery(ctx, taskID, updates), nil
+	return o.statusObserver.SubscribeTaskStatus(ctx, strings.TrimSpace(taskID))
 }
 
 func (o *taskObservation) HandleHookEvent(ctx context.Context, input HookEventInput) error {
@@ -277,69 +305,6 @@ func (o *taskObservation) resolveTaskIDFromCwd(ctx context.Context, cwd string) 
 	return "", ErrUnmanagedHookEvent
 }
 
-func (o *taskObservation) subscribeWithRecovery(
-	ctx context.Context,
-	taskID string,
-	updates <-chan TaskStatusUpdate,
-) <-chan TaskStatusUpdate {
-	recovered := make(chan TaskStatusUpdate, 8)
-
-	go func() {
-		defer close(recovered)
-
-		var lastSent *TaskStatusUpdate
-		send := func(update *TaskStatusUpdate) bool {
-			if update == nil || taskStatusUpdatesEqual(lastSent, update) {
-				return true
-			}
-			copy := *update
-			select {
-			case recovered <- copy:
-				lastSent = &copy
-				return true
-			case <-ctx.Done():
-				return false
-			}
-		}
-
-		if !send(o.latestStatusNoSubscribe(ctx, taskID)) {
-			return
-		}
-
-		ticker := time.NewTicker(o.recoveryPollInterval)
-		defer ticker.Stop()
-
-		for {
-			select {
-			case <-ctx.Done():
-				return
-			case update, ok := <-updates:
-				if !ok {
-					return
-				}
-				current := o.currentStatus(ctx, &update)
-				if !send(current) {
-					return
-				}
-			case <-ticker.C:
-				if !send(o.latestStatusNoSubscribe(ctx, taskID)) {
-					return
-				}
-			}
-		}
-	}()
-
-	return recovered
-}
-
-func (o *taskObservation) latestStatusNoSubscribe(ctx context.Context, taskID string) *TaskStatusUpdate {
-	update, err := o.tasks.LatestTaskStatus(ctx, taskID)
-	if err != nil || update == nil {
-		return nil
-	}
-	return o.currentStatus(ctx, update)
-}
-
 // statusResolution is the pure outcome of the runtime-status decision: what a
 // persisted status should become given the live session state.
 type statusResolution int
@@ -370,66 +335,10 @@ func resolveStatus(
 	if taskSessionRunningProvider(runtime, providerCommand) {
 		return statusTryRecover
 	}
+	if runtime.Exists && runtime.ChildProcessEvidenceUnavailable {
+		return statusKeep
+	}
 	return statusStopped
-}
-
-// currentStatus gathers the live inputs for one persisted status, asks
-// resolveStatus what to do, and executes only that action. Gathering failures
-// keep the persisted status: observation must degrade, never invent state.
-func (o *taskObservation) currentStatus(ctx context.Context, update *TaskStatusUpdate) *TaskStatusUpdate {
-	if update == nil || update.Phase == TaskStatusPhaseStopped {
-		return update
-	}
-
-	task, err := taskByID(ctx, o.tasks, update.TaskID)
-	if err != nil {
-		return update
-	}
-
-	runtime, err := o.tmuxSession.InspectTaskSession(ctx, task)
-	if err != nil {
-		return update
-	}
-
-	providerClient, err := supportedProviderClient(o.providers, task.Provider)
-	if err != nil {
-		return update
-	}
-
-	switch resolveStatus(update, runtime, providerClient.TaskSessionCommandName()) {
-	case statusTryRecover:
-		if recovered := o.recoveredStatus(ctx, providerClient, update); recovered != nil {
-			return recovered
-		}
-		return update
-	case statusStopped:
-		stopped := *update
-		stopped.Phase = TaskStatusPhaseStopped
-		stopped.RawEventName = "TaskSessionStopped"
-		return &stopped
-	default:
-		return update
-	}
-}
-
-func (o *taskObservation) recoveredStatus(
-	ctx context.Context,
-	providerClient ProviderClient,
-	update *TaskStatusUpdate,
-) *TaskStatusUpdate {
-	if update.Phase == TaskStatusPhaseStopped {
-		return nil
-	}
-
-	sessions, err := o.tasks.ListTaskProviderSessions(ctx, update.TaskID)
-	if err != nil {
-		return nil
-	}
-	recovered, err := providerClient.RecoverLatestTaskStatus(ctx, *update, sessions)
-	if err != nil {
-		return nil
-	}
-	return recovered
 }
 
 func (o *taskObservation) recoveredTaskActivity(

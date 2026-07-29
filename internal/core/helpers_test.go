@@ -49,6 +49,7 @@ type providerConfigState struct {
 
 type taskRepositoryState struct {
 	healthErr              error
+	listErr                error
 	createErr              error
 	updateErr              error
 	deleteErr              error
@@ -67,6 +68,7 @@ type taskRepositoryState struct {
 	mu                     sync.Mutex
 	latestByTask           map[string]TaskStatusUpdate
 	subscribers            map[string][]chan TaskStatusUpdate
+	subscribeCalls         map[string]int
 }
 
 type repoClientState struct {
@@ -83,18 +85,26 @@ type repoClientState struct {
 }
 
 type sessionClientState struct {
-	healthErr     error
-	startErr      error
-	deleteErr     error
-	inspectErr    error
-	events        *[]string
-	startedTask   *Task
-	deletedTask   *Task
-	startedLaunch TaskSessionLaunchSpec
-	inspectState  TaskSessionRuntimeState
+	mu                  sync.Mutex
+	healthErr           error
+	startErr            error
+	deleteErr           error
+	inspectErr          error
+	batchInspectErr     error
+	events              *[]string
+	startedTask         *Task
+	deletedTask         *Task
+	startedLaunch       TaskSessionLaunchSpec
+	inspectState        TaskSessionRuntimeState
+	batchInspectCalls   int
+	batchInspectActive  int
+	batchInspectMax     int
+	batchInspectStarted chan struct{}
+	batchInspectRelease chan struct{}
 }
 
 type providerClientState struct {
+	mu                      sync.Mutex
 	commandName             string
 	healthErr               error
 	suggestErr              error
@@ -117,6 +127,11 @@ type providerClientState struct {
 	statusRecoveryUpdate    *TaskStatusUpdate
 	statusRecoveryCurrent   *TaskStatusUpdate
 	statusRecoverySessions  []TaskProviderSession
+	statusRecoveryCalls     map[string]int
+	statusRecoveryActive    int
+	statusRecoveryMax       int
+	statusRecoveryStarted   chan struct{}
+	statusRecoveryRelease   chan struct{}
 	activityErrByTranscript map[string]error
 	activityByTranscript    map[string][]TaskActivityEvent
 	activityCalls           []providerActivityCall
@@ -199,6 +214,7 @@ func newTestTaskService(t *testing.T) *testTaskServiceHarness {
 	h.taskRepo.providerSessionsByTask = make(map[string][]TaskProviderSession)
 	h.taskRepo.activityByTask = make(map[string][]TaskActivityEvent)
 	h.taskRepo.subscribers = make(map[string][]chan TaskStatusUpdate)
+	h.taskRepo.subscribeCalls = make(map[string]int)
 	h.taskRepoMock = NewMockTaskRepository(t)
 	h.repoClientMock = NewMockGitWorktreeClient(t)
 	h.sessionClientMock = NewMockTmuxSessionClient(t)
@@ -207,6 +223,8 @@ func newTestTaskService(t *testing.T) *testTaskServiceHarness {
 	h.claudeClientMock = NewMockProviderClient(t)
 	h.workspaceMock = NewMockTaskWorkspaceManager(t)
 	h.providerConfigMock = NewMockProviderConfigStore(t)
+	h.providerRepo.statusRecoveryCalls = make(map[string]int)
+	h.claudeRepo.statusRecoveryCalls = make(map[string]int)
 	configureTaskRepositoryMock(h.taskRepoMock, &h.taskRepo)
 	configureGitWorktreeMock(h.repoClientMock, &h.repoClient)
 	configureTmuxSessionMock(h.sessionClientMock, &h.sessionClient)
@@ -368,6 +386,43 @@ func configureTmuxSessionMock(client *MockTmuxSessionClient, state *sessionClien
 			return state.inspectState, state.inspectErr
 		},
 	).Maybe()
+	client.EXPECT().InspectTaskSessions(mock.Anything, mock.Anything).RunAndReturn(
+		func(_ context.Context, tasks []*Task) (map[string]TaskSessionRuntimeState, error) {
+			state.mu.Lock()
+			state.batchInspectCalls++
+			state.batchInspectActive++
+			if state.batchInspectActive > state.batchInspectMax {
+				state.batchInspectMax = state.batchInspectActive
+			}
+			started := state.batchInspectStarted
+			release := state.batchInspectRelease
+			inspectErr := state.batchInspectErr
+			inspectState := state.inspectState
+			state.mu.Unlock()
+			if started != nil {
+				select {
+				case started <- struct{}{}:
+				default:
+				}
+			}
+			if release != nil {
+				<-release
+			}
+			state.mu.Lock()
+			state.batchInspectActive--
+			state.mu.Unlock()
+			if inspectErr != nil {
+				return nil, inspectErr
+			}
+			runtimeByTask := make(map[string]TaskSessionRuntimeState, len(tasks))
+			for _, task := range tasks {
+				if task != nil {
+					runtimeByTask[task.ID] = inspectState
+				}
+			}
+			return runtimeByTask, nil
+		},
+	).Maybe()
 	client.EXPECT().DeleteTaskSession(mock.Anything, mock.Anything).RunAndReturn(
 		func(_ context.Context, task *Task) error {
 			if state.deleteErr != nil {
@@ -463,16 +518,40 @@ func configureProviderClientMock(client *MockProviderClient, state *providerClie
 	).Maybe()
 	client.EXPECT().RecoverLatestTaskStatus(mock.Anything, mock.Anything, mock.Anything).RunAndReturn(
 		func(_ context.Context, current TaskStatusUpdate, sessions []TaskProviderSession) (*TaskStatusUpdate, error) {
+			state.mu.Lock()
 			copyCurrent := current
 			state.statusRecoveryCurrent = &copyCurrent
 			state.statusRecoverySessions = append([]TaskProviderSession(nil), sessions...)
-			if state.statusRecoveryErr != nil {
-				return nil, state.statusRecoveryErr
+			state.statusRecoveryCalls[current.TaskID]++
+			state.statusRecoveryActive++
+			if state.statusRecoveryActive > state.statusRecoveryMax {
+				state.statusRecoveryMax = state.statusRecoveryActive
 			}
-			if state.statusRecoveryUpdate == nil {
+			started := state.statusRecoveryStarted
+			release := state.statusRecoveryRelease
+			recoveryErr := state.statusRecoveryErr
+			recoveryUpdate := cloneTaskStatusUpdate(state.statusRecoveryUpdate)
+			state.mu.Unlock()
+			if started != nil {
+				select {
+				case started <- struct{}{}:
+				default:
+				}
+			}
+			if release != nil {
+				<-release
+			}
+			state.mu.Lock()
+			state.statusRecoveryActive--
+			state.mu.Unlock()
+			if recoveryErr != nil {
+				return nil, recoveryErr
+			}
+			if recoveryUpdate == nil {
 				return nil, nil
 			}
-			update := *state.statusRecoveryUpdate
+			update := *recoveryUpdate
+			update.TaskID = current.TaskID
 			return &update, nil
 		},
 	).Maybe()
@@ -595,6 +674,9 @@ func configureTaskRepositoryMock(repo *MockTaskRepository, state *taskRepository
 	).Maybe()
 	repo.EXPECT().ListTasks(mock.Anything).RunAndReturn(
 		func(context.Context) ([]*Task, error) {
+			if state.listErr != nil {
+				return nil, state.listErr
+			}
 			tasks := make([]*Task, 0, len(state.listTasks))
 			for _, task := range state.listTasks {
 				tasks = append(tasks, cloneTask(task))
@@ -689,6 +771,7 @@ func configureTaskRepositoryMock(repo *MockTaskRepository, state *taskRepository
 		func(ctx context.Context, taskID string) (<-chan TaskStatusUpdate, error) {
 			updates := make(chan TaskStatusUpdate, 8)
 			state.mu.Lock()
+			state.subscribeCalls[taskID]++
 			state.subscribers[taskID] = append(state.subscribers[taskID], updates)
 			state.mu.Unlock()
 			var once sync.Once

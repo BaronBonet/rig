@@ -1,9 +1,12 @@
 package codex
 
 import (
+	"context"
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -217,6 +220,179 @@ func TestRepositoryRecoverLatestTaskStatus_DoesNotUseTaskCompleteWhenNewerActivi
 	}, update)
 }
 
+func TestTranscriptIndex_UnchangedReadsNoOldBytesAndAppendReadsOnlyNewBytes(t *testing.T) {
+	repo := &repository{}
+	path := writeJSONL(t, []string{
+		`{"timestamp":"2026-04-19T11:00:00Z","type":"event_msg","payload":{"type":"token_count","info":{"total_token_usage":{"input_tokens":10,"output_tokens":2,"total_tokens":12}}}}`,
+	})
+
+	usage, err := repo.ReadSessionTokenUsage(t.Context(), path)
+	require.NoError(t, err)
+	require.Equal(t, 12, usage.TotalTokens)
+	first := repo.transcriptStats()
+	require.Equal(t, uint64(1), first.Rebuilds)
+	require.Positive(t, first.BytesRead)
+
+	usage, err = repo.ReadSessionTokenUsage(t.Context(), path)
+	require.NoError(t, err)
+	require.Equal(t, 12, usage.TotalTokens)
+	unchanged := repo.transcriptStats()
+	require.Equal(t, first.BytesRead, unchanged.BytesRead)
+
+	appended := `{"timestamp":"2026-04-19T11:01:00Z","type":"event_msg","payload":{"type":"token_count","info":{"total_token_usage":{"input_tokens":20,"output_tokens":5,"total_tokens":25}}}}` + "\n"
+	appendTranscript(t, path, appended)
+
+	usage, err = repo.ReadSessionTokenUsage(t.Context(), path)
+	require.NoError(t, err)
+	require.Equal(t, 25, usage.TotalTokens)
+	afterAppend := repo.transcriptStats()
+	require.Equal(t, uint64(len(appended)), afterAppend.BytesRead-unchanged.BytesRead)
+}
+
+func TestTranscriptIndex_IncompleteLineCommitsOnlyAfterNewline(t *testing.T) {
+	repo := &repository{}
+	path := filepath.Join(t.TempDir(), "transcript.jsonl")
+	record := `{"timestamp":"2026-04-19T11:00:00Z","type":"event_msg","payload":{"type":"token_count","info":{"total_token_usage":{"input_tokens":10,"output_tokens":2,"total_tokens":12}}}}`
+	require.NoError(t, os.WriteFile(path, []byte(record), 0o644))
+
+	usage, err := repo.ReadSessionTokenUsage(t.Context(), path)
+	require.NoError(t, err)
+	require.Nil(t, usage)
+	beforeNewline := repo.transcriptStats()
+
+	appendTranscript(t, path, "\n")
+	usage, err = repo.ReadSessionTokenUsage(t.Context(), path)
+	require.NoError(t, err)
+	require.Equal(t, 12, usage.TotalTokens)
+	afterNewline := repo.transcriptStats()
+	require.Equal(t, uint64(1), afterNewline.BytesRead-beforeNewline.BytesRead)
+}
+
+func TestTranscriptIndex_RebuildsAfterTruncationAndReplacement(t *testing.T) {
+	repo := &repository{}
+	path := writeJSONL(t, []string{
+		`{"type":"event_msg","payload":{"type":"token_count","info":{"total_token_usage":{"input_tokens":100,"output_tokens":20,"total_tokens":120}}}}`,
+		`{"timestamp":"2026-04-19T11:00:00Z","type":"event_msg","payload":{"type":"user_message","message":"make this file longer before truncation"}}`,
+	})
+	usage, err := repo.ReadSessionTokenUsage(t.Context(), path)
+	require.NoError(t, err)
+	require.Equal(t, 120, usage.TotalTokens)
+
+	truncated := `{"type":"event_msg","payload":{"type":"token_count","info":{"total_token_usage":{"input_tokens":3,"output_tokens":1,"total_tokens":4}}}}` + "\n"
+	require.NoError(t, os.WriteFile(path, []byte(truncated), 0o644))
+	usage, err = repo.ReadSessionTokenUsage(t.Context(), path)
+	require.NoError(t, err)
+	require.Equal(t, 4, usage.TotalTokens)
+
+	replacement := filepath.Join(t.TempDir(), "replacement.jsonl")
+	replaced := `{"type":"event_msg","payload":{"type":"token_count","info":{"total_token_usage":{"input_tokens":8,"output_tokens":2,"total_tokens":10}}}}` + "\n"
+	require.NoError(t, os.WriteFile(replacement, []byte(replaced), 0o644))
+	require.NoError(t, os.Rename(replacement, path))
+	usage, err = repo.ReadSessionTokenUsage(t.Context(), path)
+	require.NoError(t, err)
+	require.Equal(t, 10, usage.TotalTokens)
+	require.Equal(t, uint64(3), repo.transcriptStats().Rebuilds)
+}
+
+func TestTranscriptIndex_RebuildsAfterSameInodeEqualSizeRewrite(t *testing.T) {
+	repo := &repository{}
+	path := writeJSONL(t, []string{
+		`{"type":"event_msg","payload":{"type":"token_count","info":{"total_token_usage":{"input_tokens":10,"output_tokens":2,"total_tokens":12}}}}`,
+	})
+	usage, err := repo.ReadSessionTokenUsage(t.Context(), path)
+	require.NoError(t, err)
+	require.Equal(t, 12, usage.TotalTokens)
+
+	rewritten := `{"type":"event_msg","payload":{"type":"token_count","info":{"total_token_usage":{"input_tokens":30,"output_tokens":4,"total_tokens":34}}}}` + "\n"
+	fileInfo, err := os.Stat(path)
+	require.NoError(t, err)
+	require.Equal(t, fileInfo.Size(), int64(len(rewritten)))
+	require.NoError(t, os.WriteFile(path, []byte(rewritten), 0o644))
+	modifiedAt := fileInfo.ModTime().Add(time.Second)
+	require.NoError(t, os.Chtimes(path, modifiedAt, modifiedAt))
+
+	usage, err = repo.ReadSessionTokenUsage(t.Context(), path)
+	require.NoError(t, err)
+	require.Equal(t, 34, usage.TotalTokens)
+	require.Equal(t, uint64(2), repo.transcriptStats().Rebuilds)
+}
+
+func TestTranscriptIndex_ConcurrentReadersParseTranscriptOnce(t *testing.T) {
+	repo := &repository{}
+	path := writeJSONL(t, []string{
+		`{"type":"event_msg","payload":{"type":"token_count","info":{"total_token_usage":{"input_tokens":10,"output_tokens":2,"total_tokens":12}}}}`,
+	})
+	fileInfo, err := os.Stat(path)
+	require.NoError(t, err)
+
+	const readerCount = 24
+	var wait sync.WaitGroup
+	wait.Add(readerCount)
+	errs := make(chan error, readerCount)
+	for range readerCount {
+		go func() {
+			defer wait.Done()
+			usage, readErr := repo.ReadSessionTokenUsage(t.Context(), path)
+			if readErr == nil && (usage == nil || usage.TotalTokens != 12) {
+				readErr = errors.New("unexpected token projection")
+			}
+			errs <- readErr
+		}()
+	}
+	wait.Wait()
+	close(errs)
+	for readErr := range errs {
+		require.NoError(t, readErr)
+	}
+
+	stats := repo.transcriptStats()
+	require.Equal(t, uint64(fileInfo.Size()), stats.BytesRead)
+	require.Equal(t, uint64(1), stats.Rebuilds)
+	require.Equal(t, uint64(readerCount-1), stats.CacheHits)
+}
+
+func TestTranscriptIndex_CancellationPreservesLastValidProjectionForRetry(t *testing.T) {
+	repo := &repository{}
+	path := writeJSONL(t, []string{
+		`{"type":"event_msg","payload":{"type":"token_count","info":{"total_token_usage":{"input_tokens":10,"output_tokens":2,"total_tokens":12}}}}`,
+	})
+	usage, err := repo.ReadSessionTokenUsage(t.Context(), path)
+	require.NoError(t, err)
+	require.Equal(t, 12, usage.TotalTokens)
+
+	appended := `{"type":"event_msg","payload":{"type":"token_count","info":{"total_token_usage":{"input_tokens":20,"output_tokens":5,"total_tokens":25}}}}` + "\n"
+	appendTranscript(t, path, appended)
+	cancelled, cancel := context.WithCancel(t.Context())
+	cancel()
+	usage, err = repo.ReadSessionTokenUsage(cancelled, path)
+	require.ErrorIs(t, err, context.Canceled)
+	require.Nil(t, usage)
+
+	usage, err = repo.ReadSessionTokenUsage(t.Context(), path)
+	require.NoError(t, err)
+	require.Equal(t, 25, usage.TotalTokens)
+}
+
+func TestTranscriptIndex_LRUEvictionRebuildsOnNextRead(t *testing.T) {
+	repo := &repository{transcripts: newCodexTranscriptIndex(1)}
+	path := writeJSONL(t, []string{
+		`{"type":"event_msg","payload":{"type":"token_count","info":{"total_token_usage":{"input_tokens":10,"output_tokens":2,"total_tokens":12}}}}`,
+	})
+	fileInfo, err := os.Stat(path)
+	require.NoError(t, err)
+
+	for range 2 {
+		usage, readErr := repo.ReadSessionTokenUsage(t.Context(), path)
+		require.NoError(t, readErr)
+		require.Equal(t, 12, usage.TotalTokens)
+	}
+
+	stats := repo.transcriptStats()
+	require.Equal(t, uint64(2), stats.Rebuilds)
+	require.Equal(t, uint64(2*fileInfo.Size()), stats.BytesRead)
+	require.Equal(t, uint64(2), stats.Evictions)
+}
+
 func writeJSONL(t *testing.T, lines []string) string {
 	t.Helper()
 
@@ -224,4 +400,13 @@ func writeJSONL(t *testing.T, lines []string) string {
 	content := strings.Join(lines, "\n") + "\n"
 	require.NoError(t, os.WriteFile(path, []byte(content), 0o644))
 	return path
+}
+
+func appendTranscript(t *testing.T, path string, content string) {
+	t.Helper()
+	file, err := os.OpenFile(path, os.O_APPEND|os.O_WRONLY, 0)
+	require.NoError(t, err)
+	_, err = file.WriteString(content)
+	require.NoError(t, err)
+	require.NoError(t, file.Close())
 }

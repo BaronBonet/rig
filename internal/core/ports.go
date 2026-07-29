@@ -362,6 +362,10 @@ type TmuxSessionClient interface {
 	// InspectTaskSession returns the current tmux-side runtime state for the
 	// task session. Missing sessions are reported as Exists=false.
 	InspectTaskSession(ctx context.Context, task *Task) (TaskSessionRuntimeState, error)
+	// InspectTaskSessions returns one shared runtime snapshot for the supplied
+	// tasks. The result is keyed by task ID; missing sessions are included with
+	// Exists=false.
+	InspectTaskSessions(ctx context.Context, tasks []*Task) (map[string]TaskSessionRuntimeState, error)
 	// DeleteTaskSession tears down the task session during task deletion.
 	DeleteTaskSession(ctx context.Context, task *Task) error
 }

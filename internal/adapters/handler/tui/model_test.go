@@ -421,7 +421,7 @@ func TestModel_PRStatusShownInOverviewRowsAndDetailPanel(t *testing.T) {
 	require.Contains(t, view, "#42 open")
 }
 
-func TestModel_AfterLoadRequestsLatestStatusAndSubscriptionsForEachTask(t *testing.T) {
+func TestModel_AfterLoadUsesSubscriptionsAsInitialStatusSource(t *testing.T) {
 	frontend := newFrontendHarness()
 	frontend.listTasks = []*core.Task{
 		{ID: "task-1", RepoName: "repo-a", DisplayName: "first task", Provider: core.ProviderCodex},
@@ -441,8 +441,8 @@ func TestModel_AfterLoadRequestsLatestStatusAndSubscriptionsForEachTask(t *testi
 	require.True(t, ok)
 
 	msgs := runBatchCmd(t, cmd)
-	require.Len(t, msgs, 8)
-	require.Equal(t, []string{"task-1", "task-2"}, frontend.latestTaskStatusCalls)
+	require.Len(t, msgs, 6)
+	require.Empty(t, frontend.latestTaskStatusCalls)
 	require.Equal(t, []string{"task-1:6", "task-2:6"}, frontend.getTaskActivityCalls)
 	require.Equal(t, []string{"task-1", "task-2"}, frontend.getTaskTokenUsageCalls)
 	require.Equal(t, []string{"task-1", "task-2"}, frontend.subscribeTaskStatusCalls)
@@ -519,6 +519,71 @@ func TestModel_ReloadDoesNotDuplicateStatusSubscriptions(t *testing.T) {
 	require.Equal(t, []string{"task-1"}, frontend.subscribeTaskStatusCalls)
 }
 
+func TestModel_ReloadCancelsStatusSubscriptionForRemovedTask(t *testing.T) {
+	frontend := newFrontendHarness()
+	frontend.listTasks = []*core.Task{
+		{ID: "task-1", RepoName: "repo-a", DisplayName: "first task", Provider: core.ProviderCodex},
+	}
+	frontend.subscribeTaskStatus = map[string]chan core.TaskStatusUpdate{
+		"task-1": make(chan core.TaskStatusUpdate),
+	}
+
+	m := newTestModel(frontend.mock)
+	m, loadMsg := initModel(t, m)
+	next, cmd := m.Update(loadMsg)
+	require.NotNil(t, cmd)
+	got, ok := next.(model)
+	require.True(t, ok)
+	msgs := runBatchCmd(t, cmd)
+	ready := requireMsgType[taskStatusSubscriptionReadyMsg](t, msgs)
+	next, _ = got.Update(ready)
+	got, ok = next.(model)
+	require.True(t, ok)
+
+	subscriptionCtx := frontend.subscribeTaskStatusContexts["task-1"]
+	require.NotNil(t, subscriptionCtx)
+	next, _ = got.Update(tasksLoadedMsg{tasks: nil})
+	got, ok = next.(model)
+	require.True(t, ok)
+	require.Empty(t, got.rows)
+
+	select {
+	case <-subscriptionCtx.Done():
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for removed task subscription cancellation")
+	}
+}
+
+func TestModel_ClosedStatusStreamResubscribesOnlyWhileTaskRemainsTracked(t *testing.T) {
+	frontend := newFrontendHarness()
+	frontend.listTasks = []*core.Task{
+		{ID: "task-1", RepoName: "repo-a", DisplayName: "first task", Provider: core.ProviderCodex},
+	}
+	frontend.subscribeTaskStatus = map[string]chan core.TaskStatusUpdate{
+		"task-1": make(chan core.TaskStatusUpdate),
+	}
+	m := newLoadedModel(frontend)
+	m.statusSubscribed["task-1"] = true
+	_, cancel := context.WithCancel(m.statusContext)
+	m.statusCancels["task-1"] = cancel
+
+	next, cmd := m.Update(taskStatusSubscriptionClosedMsg{taskID: "task-1"})
+	got, ok := next.(model)
+	require.True(t, ok)
+	require.NotNil(t, cmd)
+	require.IsType(t, taskStatusSubscriptionReadyMsg{}, runCmd(t, cmd))
+	require.Equal(t, []string{"task-1"}, frontend.subscribeTaskStatusCalls)
+	require.True(t, got.statusSubscribed["task-1"])
+
+	got.removeTaskRow("task-1")
+	next, cmd = got.Update(taskStatusSubscriptionClosedMsg{taskID: "task-1"})
+	got, ok = next.(model)
+	require.True(t, ok)
+	require.Nil(t, cmd)
+	require.False(t, got.statusSubscribed["task-1"])
+	require.Equal(t, []string{"task-1"}, frontend.subscribeTaskStatusCalls)
+}
+
 func TestModel_AfterLoadRequestsTaskActivityForEachTask(t *testing.T) {
 	frontend := newFrontendHarness()
 	frontend.listTasks = []*core.Task{
@@ -542,19 +607,17 @@ func TestModel_AfterLoadRequestsTaskActivityForEachTask(t *testing.T) {
 	require.Equal(t, []string{"task-1:6", "task-2:6"}, frontend.getTaskActivityCalls)
 }
 
-func TestModel_LatestStatusSeedUpdatesRenderedPhase(t *testing.T) {
+func TestModel_InitialSubscriptionUpdateRendersPhase(t *testing.T) {
 	frontend := newFrontendHarness()
 	frontend.listTasks = []*core.Task{
 		{ID: "task-1", RepoName: "repo-a", DisplayName: "first task", Provider: core.ProviderCodex},
 	}
-	frontend.latestTaskStatus = map[string]*core.TaskStatusUpdate{
-		"task-1": {
-			TaskID: "task-1",
-			Phase:  core.TaskStatusPhaseWorking,
-		},
-	}
 	frontend.subscribeTaskStatus = map[string]chan core.TaskStatusUpdate{
 		"task-1": make(chan core.TaskStatusUpdate, 1),
+	}
+	frontend.subscribeTaskStatus["task-1"] <- core.TaskStatusUpdate{
+		TaskID: "task-1",
+		Phase:  core.TaskStatusPhaseWorking,
 	}
 
 	m := newTestModel(frontend.mock)
@@ -566,9 +629,14 @@ func TestModel_LatestStatusSeedUpdatesRenderedPhase(t *testing.T) {
 	require.True(t, ok)
 
 	msgs := runBatchCmd(t, cmd)
-	latestMsg := requireMsgType[latestTaskStatusLoadedMsg](t, msgs)
+	ready := requireMsgType[taskStatusSubscriptionReadyMsg](t, msgs)
+	next, wait := got.Update(ready)
+	got, ok = next.(model)
+	require.True(t, ok)
+	require.NotNil(t, wait)
+	statusMsg := runCmd(t, wait)
 
-	next, _ = got.Update(latestMsg)
+	next, _ = got.Update(statusMsg)
 	got, ok = next.(model)
 	require.True(t, ok)
 	require.NotNil(t, got.rows[0].status)
@@ -960,15 +1028,6 @@ func TestModel_StatusEnrichmentFailuresDoNotCollapseListView(t *testing.T) {
 		{ID: "task-1", RepoName: "repo-a", DisplayName: "first task", Provider: core.ProviderCodex},
 		{ID: "task-2", RepoName: "repo-b", DisplayName: "second task", Provider: core.ProviderCodex},
 	}
-	frontend.latestTaskStatus = map[string]*core.TaskStatusUpdate{
-		"task-2": {
-			TaskID: "task-2",
-			Phase:  core.TaskStatusPhaseWorking,
-		},
-	}
-	frontend.latestTaskStatusErr = map[string]error{
-		"task-1": errors.New("latest status unavailable"),
-	}
 	frontend.subscribeTaskStatus = map[string]chan core.TaskStatusUpdate{
 		"task-1": make(chan core.TaskStatusUpdate, 1),
 	}
@@ -993,14 +1052,11 @@ func TestModel_StatusEnrichmentFailuresDoNotCollapseListView(t *testing.T) {
 	require.NoError(t, got.err)
 	require.Len(t, got.rows, 2)
 	require.Nil(t, got.rows[0].status)
-	require.NotNil(t, got.rows[1].status)
-	require.Equal(t, core.TaskStatusPhaseWorking, got.rows[1].status.Phase)
+	require.Nil(t, got.rows[1].status)
 
 	view := stripANSI(got.View().Content)
 	require.Contains(t, view, "first task")
 	require.Contains(t, view, "second task")
-	require.Contains(t, view, "working")
-	require.NotContains(t, view, "latest status unavailable")
 	require.NotContains(t, view, "subscription unavailable")
 }
 
@@ -1181,6 +1237,10 @@ func TestModel_CreateTaskFromPromptAppendsTaskAndStartsStatusTracking(t *testing
 		"task-2": make(chan core.TaskStatusUpdate, 1),
 		"task-3": make(chan core.TaskStatusUpdate, 1),
 	}
+	frontend.subscribeTaskStatus["task-3"] <- core.TaskStatusUpdate{
+		TaskID: "task-3",
+		Phase:  core.TaskStatusPhaseWorking,
+	}
 
 	m := newLoadedModel(frontend)
 	m.mode = modePromptInput
@@ -1230,18 +1290,22 @@ func TestModel_CreateTaskFromPromptAppendsTaskAndStartsStatusTracking(t *testing
 
 	frontend.listTasks = append(frontend.listTasks, createdTask)
 	msgs := runBatchCmd(t, follow)
-	require.Len(t, msgs, 3)
+	require.Len(t, msgs, 2)
 	tasksLoaded := requireMsgType[tasksLoadedMsg](t, msgs)
 	next, _ = got.Update(tasksLoaded)
 	got, ok = next.(model)
 	require.True(t, ok)
 	require.Len(t, got.rows, 3)
-	require.Equal(t, []string{"task-3"}, frontend.latestTaskStatusCalls)
+	require.Empty(t, frontend.latestTaskStatusCalls)
 	require.Equal(t, []string{"task-3"}, frontend.subscribeTaskStatusCalls)
 	require.Equal(t, 1, frontend.listTasksCalls)
 
-	latestMsg := requireMsgType[latestTaskStatusLoadedMsg](t, msgs)
-	next, _ = got.Update(latestMsg)
+	ready := requireMsgType[taskStatusSubscriptionReadyMsg](t, msgs)
+	next, wait := got.Update(ready)
+	got, ok = next.(model)
+	require.True(t, ok)
+	statusMsg := runCmd(t, wait)
+	next, _ = got.Update(statusMsg)
 	got, ok = next.(model)
 	require.True(t, ok)
 	require.NotNil(t, got.rows[2].status)
@@ -2097,63 +2161,65 @@ func stripANSI(s string) string {
 type frontendHarness struct {
 	mock *core.MockTaskFrontend
 
-	listTasks                 []*core.Task
-	listTasksContext          context.Context
-	listTasksErr              error
-	listTasksCalls            int
-	listRepoPullRequests      []core.RepoPullRequest
-	listRepoPullRequestsErr   error
-	listRepoPullRequestsCwd   string
-	pullRequestStatus         map[string]*core.PRStatus
-	pullRequestStatusErr      map[string]error
-	pullRequestStatusCalls    []string
-	attachedTask              *core.Task
-	attachTaskSessionErr      error
-	attachTaskSessionCalls    int
-	attachTaskSessionFn       func(context.Context, *core.Task) error
-	reconnectTaskSessionErr   error
-	reconnectTaskSessionFn    func(context.Context, string) error
-	reconnectTaskSessionCalls int
-	createInput               core.CreateTaskInput
-	createTaskEvents          []core.TaskCreateEvent
-	createTaskStreamErr       error
-	createTaskStreamCalls     int
-	retryTaskID               string
-	retryTaskEvents           []core.TaskCreateEvent
-	retryTaskStreamErr        error
-	retryTaskStreamCalls      int
-	deleteTaskErr             error
-	deleteTaskIDs             []string
-	latestTaskStatus          map[string]*core.TaskStatusUpdate
-	latestTaskStatusErr       map[string]error
-	latestTaskStatusCalls     []string
-	getTaskTokenUsage         map[string]*core.TaskTokenUsage
-	getTaskTokenUsageErr      map[string]error
-	getTaskTokenUsageCalls    []string
-	getTaskActivity           map[string][]core.TaskActivityEvent
-	getTaskActivityErr        map[string]error
-	getTaskActivityCalls      []string
-	subscribeTaskStatus       map[string]chan core.TaskStatusUpdate
-	subscribeTaskStatusErr    map[string]error
-	subscribeTaskStatusCalls  []string
-	providerSetup             *core.ProviderSetup
-	providerSetupErr          error
-	getProviderSetupCalls     int
-	savedProviderSetup        *core.ProviderSetup
-	saveProviderSetupErr      error
-	detections                []core.ProviderDetection
-	detectProvidersErr        error
-	detectProvidersCalls      int
-	switchedTaskID            string
-	switchedProvider          core.Provider
-	switchTaskResult          *core.Task
-	switchTaskErr             error
-	switchTaskCalls           int
+	listTasks                   []*core.Task
+	listTasksContext            context.Context
+	listTasksErr                error
+	listTasksCalls              int
+	listRepoPullRequests        []core.RepoPullRequest
+	listRepoPullRequestsErr     error
+	listRepoPullRequestsCwd     string
+	pullRequestStatus           map[string]*core.PRStatus
+	pullRequestStatusErr        map[string]error
+	pullRequestStatusCalls      []string
+	attachedTask                *core.Task
+	attachTaskSessionErr        error
+	attachTaskSessionCalls      int
+	attachTaskSessionFn         func(context.Context, *core.Task) error
+	reconnectTaskSessionErr     error
+	reconnectTaskSessionFn      func(context.Context, string) error
+	reconnectTaskSessionCalls   int
+	createInput                 core.CreateTaskInput
+	createTaskEvents            []core.TaskCreateEvent
+	createTaskStreamErr         error
+	createTaskStreamCalls       int
+	retryTaskID                 string
+	retryTaskEvents             []core.TaskCreateEvent
+	retryTaskStreamErr          error
+	retryTaskStreamCalls        int
+	deleteTaskErr               error
+	deleteTaskIDs               []string
+	latestTaskStatus            map[string]*core.TaskStatusUpdate
+	latestTaskStatusErr         map[string]error
+	latestTaskStatusCalls       []string
+	getTaskTokenUsage           map[string]*core.TaskTokenUsage
+	getTaskTokenUsageErr        map[string]error
+	getTaskTokenUsageCalls      []string
+	getTaskActivity             map[string][]core.TaskActivityEvent
+	getTaskActivityErr          map[string]error
+	getTaskActivityCalls        []string
+	subscribeTaskStatus         map[string]chan core.TaskStatusUpdate
+	subscribeTaskStatusErr      map[string]error
+	subscribeTaskStatusCalls    []string
+	subscribeTaskStatusContexts map[string]context.Context
+	providerSetup               *core.ProviderSetup
+	providerSetupErr            error
+	getProviderSetupCalls       int
+	savedProviderSetup          *core.ProviderSetup
+	saveProviderSetupErr        error
+	detections                  []core.ProviderDetection
+	detectProvidersErr          error
+	detectProvidersCalls        int
+	switchedTaskID              string
+	switchedProvider            core.Provider
+	switchTaskResult            *core.Task
+	switchTaskErr               error
+	switchTaskCalls             int
 }
 
 func newFrontendHarness() *frontendHarness {
 	frontend := &frontendHarness{
-		mock: &core.MockTaskFrontend{},
+		mock:                        &core.MockTaskFrontend{},
+		subscribeTaskStatusContexts: make(map[string]context.Context),
 		providerSetup: &core.ProviderSetup{
 			Configured: []core.Provider{core.ProviderCodex},
 			Default:    core.ProviderCodex,
@@ -2319,8 +2385,9 @@ func newFrontendHarness() *frontendHarness {
 		},
 	).Maybe()
 	frontend.mock.EXPECT().SubscribeTaskStatus(mock.Anything, mock.Anything).RunAndReturn(
-		func(_ context.Context, taskID string) (<-chan core.TaskStatusUpdate, error) {
+		func(ctx context.Context, taskID string) (<-chan core.TaskStatusUpdate, error) {
 			frontend.subscribeTaskStatusCalls = append(frontend.subscribeTaskStatusCalls, taskID)
+			frontend.subscribeTaskStatusContexts[taskID] = ctx
 			if frontend.subscribeTaskStatusErr != nil && frontend.subscribeTaskStatusErr[taskID] != nil {
 				return nil, frontend.subscribeTaskStatusErr[taskID]
 			}

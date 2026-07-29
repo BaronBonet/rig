@@ -75,6 +75,9 @@ type model struct {
 	// statusSubscribed tracks tasks with a live status subscription so task
 	// reloads do not open a duplicate subscription per reload.
 	statusSubscribed map[string]bool
+	// statusCancels owns each task's subscription lifetime independently so
+	// task-list reconciliation can release daemon observation interest.
+	statusCancels map[string]context.CancelFunc
 
 	// Per-mode state, cleared by transition() when the mode family changes.
 	draft          taskDraft
@@ -136,12 +139,6 @@ type providerSetupRow struct {
 type tasksLoadedMsg struct {
 	err   error
 	tasks []*core.Task
-}
-
-type latestTaskStatusLoadedMsg struct {
-	status *core.TaskStatusUpdate
-	err    error
-	taskID string
 }
 
 type pullRequestStatusLoadedMsg struct {
@@ -254,6 +251,7 @@ func newModel(frontend core.TaskFrontend, launchCwd string, buildVersion string)
 		detailsHidden:    true,
 		adoptionReloads:  make(map[string]core.Provider),
 		statusSubscribed: make(map[string]bool),
+		statusCancels:    make(map[string]context.CancelFunc),
 	}
 }
 
@@ -436,16 +434,12 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if row := m.selectedRow(); row != nil {
 			selectedTaskID = taskID(row.task)
 		}
-		m.rows = rowsFromTasks(msg.tasks)
+		nextRows := rowsFromTasks(msg.tasks)
+		m.reconcileTaskStatusTracking(nextRows)
+		m.rows = nextRows
 		m.clampSelection()
 		m.selectTask(selectedTaskID)
 		return m, tea.Batch(m.afterTasksLoadedCmds()...)
-	case latestTaskStatusLoadedMsg:
-		if msg.err != nil {
-			return m, nil
-		}
-		m.setTaskStatus(msg.taskID, msg.status)
-		return m, nil
 	case pullRequestStatusLoadedMsg:
 		if msg.err != nil {
 			return m, nil
@@ -467,7 +461,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 	case taskStatusSubscriptionReadyMsg:
 		if msg.err != nil {
-			delete(m.statusSubscribed, msg.taskID)
+			m.cancelTaskStatusTracking(msg.taskID)
 			return m, nil
 		}
 		return m, waitForTaskStatusCmd(msg.taskID, msg.updates)
@@ -495,8 +489,11 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		return m, tea.Batch(cmds...)
 	case taskStatusSubscriptionClosedMsg:
-		delete(m.statusSubscribed, msg.taskID)
-		return m, nil
+		m.cancelTaskStatusTracking(msg.taskID)
+		if m.taskRowByID(msg.taskID) == nil {
+			return m, nil
+		}
+		return m, tea.Batch(m.taskStatusTrackingCmds(msg.taskID)...)
 	case providerSetupLoadedMsg:
 		if msg.err != nil {
 			// Invalid provider setup gates the TUI the same way missing setup
@@ -627,7 +624,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 		m.err = nil
 		m.removeTaskRow(msg.taskID)
-		delete(m.statusSubscribed, msg.taskID)
+		m.cancelTaskStatusTracking(msg.taskID)
 		delete(m.adoptionReloads, msg.taskID)
 		m.clampSelection()
 		return m, nil
@@ -929,12 +926,35 @@ func (m *model) taskStatusTrackingCmds(taskID string) []tea.Cmd {
 		return nil
 	}
 
-	cmds := []tea.Cmd{latestTaskStatusCmd(m.statusContext, m.frontend, taskID)}
-	if !m.statusSubscribed[taskID] {
-		m.statusSubscribed[taskID] = true
-		cmds = append(cmds, subscribeTaskStatusCmd(m.statusContext, m.frontend, taskID))
+	if m.statusSubscribed[taskID] {
+		return nil
 	}
-	return cmds
+	subscriptionCtx, cancel := context.WithCancel(m.statusContext)
+	m.statusSubscribed[taskID] = true
+	m.statusCancels[taskID] = cancel
+	return []tea.Cmd{subscribeTaskStatusCmd(subscriptionCtx, m.frontend, taskID)}
+}
+
+func (m *model) reconcileTaskStatusTracking(rows []taskRow) {
+	tracked := make(map[string]bool, len(rows))
+	for _, row := range rows {
+		if taskID := taskID(row.task); taskID != "" {
+			tracked[taskID] = true
+		}
+	}
+	for taskID := range m.statusSubscribed {
+		if !tracked[taskID] {
+			m.cancelTaskStatusTracking(taskID)
+		}
+	}
+}
+
+func (m *model) cancelTaskStatusTracking(taskID string) {
+	if cancel := m.statusCancels[taskID]; cancel != nil {
+		cancel()
+	}
+	delete(m.statusCancels, taskID)
+	delete(m.statusSubscribed, taskID)
 }
 
 func (m model) taskPullRequestStatusCmd(task *core.Task) tea.Cmd {
