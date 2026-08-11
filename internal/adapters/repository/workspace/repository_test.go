@@ -4,12 +4,23 @@ import (
 	"context"
 	"os"
 	"path/filepath"
+	"syscall"
 	"testing"
 
 	"github.com/BaronBonet/rig/internal/core"
 
 	"github.com/stretchr/testify/require"
 )
+
+func TestSeedDestinationRemovalError_ExplainsConcurrentMutation(t *testing.T) {
+	pathErr := &os.PathError{Op: "unlinkat", Path: "local/node_modules/@nodelib", Err: syscall.ENOTEMPTY}
+
+	err := seedDestinationRemovalError("/tmp/task/local/node_modules", pathErr)
+
+	require.ErrorIs(t, err, syscall.ENOTEMPTY)
+	require.ErrorContains(t, err, "directory changed while Rig was preparing the workspace")
+	require.ErrorContains(t, err, "wait for other task operations or stop processes using it, then retry")
+}
 
 func TestRepositorySeedWorkspaceCopiesFilesAndDirectories(t *testing.T) {
 	repoRoot := t.TempDir()

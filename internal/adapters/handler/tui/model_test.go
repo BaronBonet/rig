@@ -1134,7 +1134,7 @@ func TestModel_EnterOpensSelectedTaskAndKeepsRigRunningOnSuccess(t *testing.T) {
 	pending, ok := next.(model)
 	require.True(t, ok)
 
-	msg := runCmd(t, cmd)
+	msg := requireMsgType[taskOpenedMsg](t, runBatchCmd(t, cmd))
 	next, follow := pending.Update(msg)
 	require.Nil(t, follow)
 
@@ -1162,7 +1162,7 @@ func TestModel_OpenTaskFailureShowsErrorAndStaysInList(t *testing.T) {
 	pending, ok := next.(model)
 	require.True(t, ok)
 
-	msg := runCmd(t, cmd)
+	msg := requireMsgType[taskOpenedMsg](t, runBatchCmd(t, cmd))
 	next, follow := pending.Update(msg)
 	require.Nil(t, follow)
 
@@ -1198,16 +1198,39 @@ func TestModel_EnterReconnectsWhenSessionIsMissing(t *testing.T) {
 
 	pending, ok := next.(model)
 	require.True(t, ok)
+	require.Equal(t, opOpening, pending.pending)
+	require.Contains(t, stripANSI(pending.View().Content), "Reconnecting session")
 
-	msg := runCmd(t, cmd)
+	msg := requireMsgType[taskOpenedMsg](t, runBatchCmd(t, cmd))
 	next, follow := pending.Update(msg)
 	require.Nil(t, follow)
 
 	got, ok := next.(model)
 	require.True(t, ok)
 	require.NoError(t, got.err)
+	require.Equal(t, opNone, got.pending)
 	require.Equal(t, 2, frontend.attachTaskSessionCalls)
 	require.Equal(t, 1, frontend.reconnectTaskSessionCalls)
+}
+
+func TestModel_EnterDoesNotStartAnotherOpenWhileReconnectIsPending(t *testing.T) {
+	frontend := newFrontendHarness()
+	frontend.listTasks = []*core.Task{{
+		ID: "task-1", DisplayName: "first task", TmuxSession: "repo_task_1", Provider: core.ProviderCodex,
+	}}
+	m := newLoadedModel(frontend)
+
+	next, firstCmd := m.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
+	require.NotNil(t, firstCmd)
+	pending, ok := next.(model)
+	require.True(t, ok)
+	require.Equal(t, opOpening, pending.pending)
+
+	next, duplicateCmd := pending.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
+	require.Nil(t, duplicateCmd)
+	stillPending, ok := next.(model)
+	require.True(t, ok)
+	require.Equal(t, opOpening, stillPending.pending)
 }
 
 func TestModel_CreateTaskFromPromptAppendsTaskAndStartsStatusTracking(t *testing.T) {

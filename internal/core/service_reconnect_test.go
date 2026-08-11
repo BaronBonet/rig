@@ -30,6 +30,7 @@ func TestTaskServiceReconnectTaskSession_RestartsTmuxWithReconnectLaunchSpec(t *
 	require.NotNil(t, svc.sessionClient.startedTask)
 	require.Equal(t, "task-1", svc.sessionClient.startedTask.ID)
 	require.Equal(t, []string{"codex", "resume", "sess-1"}, svc.sessionClient.startedLaunch.Command)
+	require.False(t, svc.workspace.setupCalled)
 	require.True(t, svc.workspace.bootstrapCalled)
 }
 

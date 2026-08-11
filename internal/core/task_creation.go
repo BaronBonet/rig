@@ -19,17 +19,20 @@ type taskCreation struct {
 	tasks       TaskRepository
 	gitWorktree GitWorktreeClient
 	launcher    *sessionLauncher
+	operations  *taskOperationCoordinator
 }
 
 func newTaskCreation(
 	tasks TaskRepository,
 	gitWorktree GitWorktreeClient,
 	launcher *sessionLauncher,
+	operations *taskOperationCoordinator,
 ) *taskCreation {
 	return &taskCreation{
 		tasks:       tasks,
 		gitWorktree: gitWorktree,
 		launcher:    launcher,
+		operations:  operations,
 	}
 }
 
@@ -97,6 +100,20 @@ func (c *taskCreation) CreateTaskWithProgress(
 // recorded failed step while reporting the same progress milestones as
 // initial creation.
 func (c *taskCreation) RetryTaskCreationWithProgress(
+	ctx context.Context,
+	taskID string,
+	reporter TaskCreateProgressReporter,
+) (*Task, error) {
+	var task *Task
+	err := c.operations.Run(ctx, taskID, taskOperationRetryCreation, false, func(ctx context.Context) error {
+		var runErr error
+		task, runErr = c.retryTaskCreationWithProgress(ctx, taskID, reporter)
+		return runErr
+	})
+	return task, err
+}
+
+func (c *taskCreation) retryTaskCreationWithProgress(
 	ctx context.Context,
 	taskID string,
 	reporter TaskCreateProgressReporter,

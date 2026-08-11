@@ -73,6 +73,16 @@ func (s *service) detectProvider(ctx context.Context, provider Provider) Provide
 }
 
 func (s *service) SwitchTaskProvider(ctx context.Context, taskID string, provider Provider) (*Task, error) {
+	var task *Task
+	err := s.operations.Run(ctx, taskID, taskOperationSwitch, false, func(ctx context.Context) error {
+		var switchErr error
+		task, switchErr = s.switchTaskProvider(ctx, taskID, provider)
+		return switchErr
+	})
+	return task, err
+}
+
+func (s *service) switchTaskProvider(ctx context.Context, taskID string, provider Provider) (*Task, error) {
 	task, err := taskByID(ctx, s.tasks, taskID)
 	if err != nil {
 		return nil, err

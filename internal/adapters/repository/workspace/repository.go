@@ -9,6 +9,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"syscall"
 )
 
 type seedWorkspaceInput struct {
@@ -186,11 +187,26 @@ func validateRelativePath(path string) (string, error) {
 
 func removeExisting(path string) error {
 	if _, err := os.Lstat(path); err == nil {
-		return os.RemoveAll(path)
+		if err := os.RemoveAll(path); err != nil {
+			return seedDestinationRemovalError(path, err)
+		}
+		return nil
 	} else if !errors.Is(err, os.ErrNotExist) {
 		return err
 	}
 	return nil
+}
+
+func seedDestinationRemovalError(path string, err error) error {
+	if errors.Is(err, syscall.ENOTEMPTY) {
+		return fmt.Errorf(
+			"replace existing seed destination %q: directory changed while Rig was preparing the workspace; "+
+				"wait for other task operations or stop processes using it, then retry: %w",
+			path,
+			err,
+		)
+	}
+	return err
 }
 
 func ensurePathWithinRoot(root, path string) error {
