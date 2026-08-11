@@ -21,6 +21,9 @@ Use `rig` for the CLI command and Rig for the product or system.
   `failed`.
 - Creation step: The retryable task setup milestone, such as suggesting a name,
   creating the worktree, preparing the workspace, or starting the session.
+- Task operation: A lifecycle mutation for one Task, such as retrying creation,
+  reconnecting its Session, switching its Provider, or deleting it. At most one
+  Task operation may run for a Task at a time; unrelated Tasks remain independent.
 - Workspace: The local filesystem environment where a task runs.
 - Worktree: A git worktree used to isolate task changes from the main checkout.
 - Repository context: The repository root, name, and base branch used when Rig

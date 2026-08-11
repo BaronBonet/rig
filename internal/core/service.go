@@ -36,6 +36,7 @@ type service struct {
 	launcher       *sessionLauncher
 	creation       *taskCreation
 	observation    *taskObservation
+	operations     *taskOperationCoordinator
 }
 
 // The concrete service must satisfy every port it is wired into. These
@@ -71,6 +72,7 @@ func healthCheckError(checks []HealthCheck) error {
 }
 
 func NewTaskService(deps TaskServiceDependencies) *service {
+	operations := newTaskOperationCoordinator()
 	launcher := newSessionLauncher(
 		deps.Providers,
 		deps.ProviderConfig,
@@ -87,7 +89,8 @@ func NewTaskService(deps TaskServiceDependencies) *service {
 		providers:      deps.Providers,
 		providerConfig: deps.ProviderConfig,
 		launcher:       launcher,
-		creation:       newTaskCreation(deps.Tasks, deps.GitWorktree, launcher),
+		creation:       newTaskCreation(deps.Tasks, deps.GitWorktree, launcher, operations),
+		operations:     operations,
 		observation: newTaskObservation(
 			deps.Tasks,
 			deps.TmuxSession,
@@ -321,6 +324,12 @@ func (s *service) PullRequestStatus(
 }
 
 func (s *service) DeleteTask(ctx context.Context, taskID string) error {
+	return s.operations.Run(ctx, taskID, taskOperationDelete, false, func(ctx context.Context) error {
+		return s.deleteTask(ctx, taskID)
+	})
+}
+
+func (s *service) deleteTask(ctx context.Context, taskID string) error {
 	task, err := taskByID(ctx, s.tasks, taskID)
 	if err != nil {
 		return err
@@ -341,6 +350,12 @@ func (s *service) DeleteTask(ctx context.Context, taskID string) error {
 }
 
 func (s *service) ReconnectTaskSession(ctx context.Context, taskID string) error {
+	return s.operations.Run(ctx, taskID, taskOperationReconnect, true, func(ctx context.Context) error {
+		return s.reconnectTaskSession(ctx, taskID)
+	})
+}
+
+func (s *service) reconnectTaskSession(ctx context.Context, taskID string) error {
 	task, err := taskByID(ctx, s.tasks, taskID)
 	if err != nil {
 		return err
@@ -361,9 +376,12 @@ func (s *service) ReconnectTaskSession(ctx context.Context, taskID string) error
 		resumeMetadata = nil
 	}
 
-	if err := s.launcher.prepareWorkspace(ctx, task, task.RepoRoot); err != nil {
+	// Reconnect restores an existing Session. Destructive repo seeding and
+	// setup scripts belong to Task creation/retry and must not rerun here.
+	if err := s.launcher.bootstrapWorkspace(ctx, providerClient, task); err != nil {
 		return err
 	}
+	_ = s.launcher.bootstrapConfiguredProviders(ctx, task, task.Provider)
 	if err := providerClient.EnsureTaskSessionEnvironment(ctx); err != nil {
 		return fmt.Errorf("ensure task session environment: %w", err)
 	}

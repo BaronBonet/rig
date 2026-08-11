@@ -33,9 +33,8 @@ const (
 
 const defaultBuildVersion = "dev"
 
-// pendingOp is the single in-flight task operation. Create, delete, and
-// switch are mutually exclusive: while one is pending the TUI refuses to
-// start another.
+// pendingOp is the single in-flight task operation. While one is pending the
+// TUI refuses to start another.
 type pendingOp int
 
 const (
@@ -43,6 +42,7 @@ const (
 	opCreating
 	opDeleting
 	opSwitching
+	opOpening
 )
 
 const taskActivityPreviewLimit = 6
@@ -410,14 +410,18 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.transition(modeCleanupConfirm)
 			return m, nil
 		case "enter":
-			if len(m.rows) == 0 {
+			if len(m.rows) == 0 || m.pending != opNone {
 				return m, nil
 			}
 			row := m.selectedRow()
 			if row == nil || row.task == nil {
 				return m, nil
 			}
-			return m, openTaskSessionCmd(m.statusContext, m.frontend, row.task)
+			m.beginOp(opOpening)
+			return m, tea.Batch(
+				openTaskSessionCmd(m.statusContext, m.frontend, row.task),
+				shimmerTickCmd(),
+			)
 		}
 		m.clampSelection()
 		return m, nil
@@ -608,6 +612,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		return m, nil
 	case taskOpenedMsg:
+		m.endOp()
 		if msg.err != nil {
 			m.err = msg.err
 			return m, nil
