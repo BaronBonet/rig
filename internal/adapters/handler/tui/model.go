@@ -33,8 +33,9 @@ const (
 
 const defaultBuildVersion = "dev"
 
-// pendingOp is the single in-flight task operation. While one is pending the
-// TUI refuses to start another.
+// pendingOp is the single in-flight task lifecycle mutation. Session opening
+// is tracked separately because attaching to an existing session may overlap
+// creation of another task.
 type pendingOp int
 
 const (
@@ -42,7 +43,6 @@ const (
 	opCreating
 	opDeleting
 	opSwitching
-	opOpening
 )
 
 const taskActivityPreviewLimit = 6
@@ -61,6 +61,7 @@ type model struct {
 	shimmerTick   int
 	mode          modelMode
 	pending       pendingOp
+	opening       bool
 	launchCwd     string
 	buildVersion  string
 	loading       bool
@@ -410,18 +411,20 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.transition(modeCleanupConfirm)
 			return m, nil
 		case "enter":
-			if len(m.rows) == 0 || m.pending != opNone {
+			if len(m.rows) == 0 || m.opening || (m.pending != opNone && m.pending != opCreating) {
 				return m, nil
 			}
 			row := m.selectedRow()
 			if row == nil || row.task == nil {
 				return m, nil
 			}
-			m.beginOp(opOpening)
-			return m, tea.Batch(
-				openTaskSessionCmd(m.statusContext, m.frontend, row.task),
-				shimmerTickCmd(),
-			)
+			cmds := []tea.Cmd{openTaskSessionCmd(m.statusContext, m.frontend, row.task)}
+			if m.pending == opNone {
+				m.shimmerTick = 0
+				cmds = append(cmds, shimmerTickCmd())
+			}
+			m.opening = true
+			return m, tea.Batch(cmds...)
 		}
 		m.clampSelection()
 		return m, nil
@@ -612,7 +615,10 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		return m, nil
 	case taskOpenedMsg:
-		m.endOp()
+		m.opening = false
+		if m.pending == opNone {
+			m.shimmerTick = 0
+		}
 		if msg.err != nil {
 			m.err = msg.err
 			return m, nil
@@ -644,7 +650,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		return m, tea.Batch(cmds...)
 	case shimmerTickMsg:
-		if m.pending == opNone {
+		if m.pending == opNone && !m.opening {
 			return m, nil
 		}
 		m.shimmerTick++

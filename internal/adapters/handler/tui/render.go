@@ -782,7 +782,7 @@ func (m model) renderCreateProgress() string {
 
 func (m model) listCreateStatusView() string {
 	var lines []string
-	if m.pending == opOpening {
+	if m.opening {
 		lines = append(lines, stepActiveLine("Reconnecting session...", m.shimmerTick))
 	}
 	if m.create.err != nil {
