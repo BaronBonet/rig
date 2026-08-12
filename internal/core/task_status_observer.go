@@ -44,17 +44,20 @@ type taskStatusResult struct {
 }
 
 type taskStatusCycleInput struct {
-	taskID     string
-	generation uint64
-	persisted  *TaskStatusUpdate
-	task       *Task
-	runtime    TaskSessionRuntimeState
+	taskID              string
+	generation          uint64
+	persisted           *TaskStatusUpdate
+	task                *Task
+	runtime             TaskSessionRuntimeState
+	configuredProviders []Provider
 }
 
 type taskStatusCycleResult struct {
-	taskID     string
-	generation uint64
-	update     *TaskStatusUpdate
+	taskID              string
+	generation          uint64
+	update              *TaskStatusUpdate
+	expectedProvider    Provider
+	replacementProvider Provider
 }
 
 func newTaskStatusObserver(observation *taskObservation) *taskStatusObserver {
@@ -442,6 +445,7 @@ func (o *taskStatusObserver) runCycle() {
 		o.publishUnrecovered(inputs)
 		return
 	}
+	configuredProviders := o.configuredProviders(context.Background())
 
 	jobs := make(chan taskStatusCycleInput)
 	results := make(chan taskStatusCycleResult, len(inputs))
@@ -469,11 +473,8 @@ func (o *taskStatusObserver) runCycle() {
 					continue
 				}
 				input.runtime = runtime
-				results <- taskStatusCycleResult{
-					taskID:     input.taskID,
-					generation: input.generation,
-					update:     o.recoverCurrentStatus(context.Background(), input),
-				}
+				input.configuredProviders = configuredProviders
+				results <- o.recoverCurrentStatus(context.Background(), input)
 			}
 		}()
 	}
@@ -489,6 +490,17 @@ func (o *taskStatusObserver) runCycle() {
 	for result := range results {
 		o.acceptCycleResult(result)
 	}
+}
+
+func (o *taskStatusObserver) configuredProviders(ctx context.Context) []Provider {
+	if o.observation.providerConfig == nil {
+		return nil
+	}
+	setup, err := o.observation.providerConfig.GetProviderSetup(ctx)
+	if err != nil || setup == nil {
+		return nil
+	}
+	return configuredProvidersInOrder(*setup)
 }
 
 func (o *taskStatusObserver) interestedTaskIDs() []string {
@@ -551,39 +563,54 @@ func (o *taskStatusObserver) publishUnrecovered(inputs []taskStatusCycleInput) {
 func (o *taskStatusObserver) recoverCurrentStatus(
 	ctx context.Context,
 	input taskStatusCycleInput,
-) *TaskStatusUpdate {
+) taskStatusCycleResult {
+	result := taskStatusCycleResult{
+		taskID:     input.taskID,
+		generation: input.generation,
+		update:     input.persisted,
+	}
+	if replacement := replacementActiveProvider(
+		input.runtime,
+		input.task.Provider,
+		input.configuredProviders,
+		o.observation.providers,
+	); replacement != "" {
+		result.expectedProvider = input.task.Provider
+		result.replacementProvider = replacement
+		return result
+	}
+
 	update := input.persisted
 	if update == nil || update.Phase == TaskStatusPhaseStopped {
-		return update
+		return result
 	}
 
 	providerClient, err := supportedProviderClient(o.observation.providers, input.task.Provider)
 	if err != nil {
-		return update
+		return result
 	}
 
 	switch resolveStatus(update, input.runtime, providerClient.TaskSessionCommandName()) {
 	case statusTryRecover:
 		sessions, listErr := o.observation.tasks.ListTaskProviderSessions(ctx, update.TaskID)
 		if listErr != nil {
-			return update
+			return result
 		}
 		recovered, recoverErr := providerClient.RecoverLatestTaskStatus(ctx, *update, sessions)
 		if recoverErr != nil || recovered == nil {
-			return update
+			return result
 		}
 		if recovered.ObservedAt.Before(update.ObservedAt) {
-			return update
+			return result
 		}
-		return recovered
+		result.update = recovered
 	case statusStopped:
 		stopped := *update
 		stopped.Phase = TaskStatusPhaseStopped
 		stopped.RawEventName = "TaskSessionStopped"
-		return &stopped
-	default:
-		return update
+		result.update = &stopped
 	}
+	return result
 }
 
 func (o *taskStatusObserver) acceptCycleResult(result taskStatusCycleResult) {
@@ -593,10 +620,40 @@ func (o *taskStatusObserver) acceptCycleResult(result taskStatusCycleResult) {
 		o.mu.Unlock()
 		return
 	}
+	if result.replacementProvider != "" {
+		// Reserve a generation before leaving the observer lock. Hook evidence
+		// accepted after the runtime snapshot then invalidates this reconciliation
+		// instead of letting an older tmux view overwrite newer provider evidence.
+		state.generation++
+		reservedGeneration := state.generation
+		o.mu.Unlock()
+
+		adopted := o.reconcileActiveProvider(context.Background(), result)
+
+		o.mu.Lock()
+		state = o.tasks[result.taskID]
+		if state == nil || !o.stateHasInterestLocked(state) || state.generation != reservedGeneration {
+			o.mu.Unlock()
+			return
+		}
+		if adopted && result.update != nil {
+			result.update = cloneTaskStatusUpdate(result.update)
+			result.update.Provider = result.replacementProvider
+		}
+	}
 	o.publishLocked(state, result.update)
 	o.resolveWaitersLocked(state, taskStatusResult{update: result.update})
 	o.releasePersistedInterestIfIdleLocked(state)
 	o.mu.Unlock()
+}
+
+func (o *taskStatusObserver) reconcileActiveProvider(ctx context.Context, result taskStatusCycleResult) bool {
+	task, err := taskByID(ctx, o.observation.tasks, result.taskID)
+	if err != nil || task.Provider != result.expectedProvider {
+		return false
+	}
+	_, err = recordActiveProvider(ctx, o.observation.tasks, task, result.replacementProvider)
+	return err == nil
 }
 
 func (o *taskStatusObserver) publishLocked(state *observedTaskStatus, update *TaskStatusUpdate) {

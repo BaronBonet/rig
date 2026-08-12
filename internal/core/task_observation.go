@@ -453,6 +453,46 @@ func taskSessionRunningProvider(runtime TaskSessionRuntimeState, commandName str
 	return false
 }
 
+// replacementActiveProvider returns the sole configured provider proven to be
+// running after the recorded active provider has exited. Ambiguous or
+// incomplete process evidence never changes durable provider ownership.
+func replacementActiveProvider(
+	runtime TaskSessionRuntimeState,
+	current Provider,
+	configured []Provider,
+	providers map[Provider]ProviderClient,
+) Provider {
+	if !runtime.Exists || runtime.ChildProcessEvidenceUnavailable {
+		return ""
+	}
+
+	currentClient, err := supportedProviderClient(providers, current)
+	if err != nil || strings.TrimSpace(currentClient.TaskSessionCommandName()) == "" {
+		return ""
+	}
+	if taskSessionRunningProvider(runtime, currentClient.TaskSessionCommandName()) {
+		return ""
+	}
+
+	seen := make(map[Provider]bool, len(configured))
+	var replacement Provider
+	for _, provider := range configured {
+		if provider == current || seen[provider] {
+			continue
+		}
+		seen[provider] = true
+		providerClient, err := supportedProviderClient(providers, provider)
+		if err != nil || !taskSessionRunningProvider(runtime, providerClient.TaskSessionCommandName()) {
+			continue
+		}
+		if replacement != "" {
+			return ""
+		}
+		replacement = provider
+	}
+	return replacement
+}
+
 func taskSessionCommandsMatch(activeCommand, expectedCommand string) bool {
 	if activeCommand == expectedCommand {
 		return true

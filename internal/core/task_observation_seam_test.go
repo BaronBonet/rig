@@ -110,3 +110,64 @@ func TestResolveStatus_DecisionTable(t *testing.T) {
 		})
 	}
 }
+
+func TestReplacementActiveProvider_DecisionTable(t *testing.T) {
+	svc := newTestTaskService(t)
+	configured := []Provider{ProviderCodex, ProviderClaude}
+
+	cases := []struct {
+		name       string
+		runtime    TaskSessionRuntimeState
+		current    Provider
+		configured []Provider
+		want       Provider
+	}{
+		{
+			name:       "sole configured replacement is adopted",
+			runtime:    TaskSessionRuntimeState{Exists: true, ActiveCommands: []string{"zsh", "codex"}},
+			current:    ProviderClaude,
+			configured: configured,
+			want:       ProviderCodex,
+		},
+		{
+			name:       "recorded provider still running keeps ownership",
+			runtime:    TaskSessionRuntimeState{Exists: true, ActiveCommands: []string{"claude", "codex"}},
+			current:    ProviderClaude,
+			configured: configured,
+		},
+		{
+			name:       "unconfigured replacement is ignored",
+			runtime:    TaskSessionRuntimeState{Exists: true, ActiveCommands: []string{"codex"}},
+			current:    ProviderClaude,
+			configured: []Provider{ProviderClaude},
+		},
+		{
+			name: "missing child evidence cannot prove recorded provider exited",
+			runtime: TaskSessionRuntimeState{
+				Exists:                          true,
+				ActiveCommands:                  []string{"codex"},
+				ChildProcessEvidenceUnavailable: true,
+			},
+			current:    ProviderClaude,
+			configured: configured,
+		},
+		{
+			name:       "missing tmux session has no replacement",
+			runtime:    TaskSessionRuntimeState{},
+			current:    ProviderClaude,
+			configured: configured,
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			replacement := replacementActiveProvider(
+				tc.runtime,
+				tc.current,
+				tc.configured,
+				svc.service.providers,
+			)
+			require.Equal(t, tc.want, replacement)
+		})
+	}
+}
