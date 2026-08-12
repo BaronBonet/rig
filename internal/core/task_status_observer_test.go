@@ -182,6 +182,112 @@ func TestTaskStatusObserver_MultipleSubscribersShareRecoveryAndConverge(t *testi
 	svc.providerRepo.mu.Unlock()
 }
 
+func TestTaskStatusObserver_AdoptsOnlyRemainingLiveConfiguredProvider(t *testing.T) {
+	svc := newTestTaskService(t)
+	svc.observation.recoveryPollInterval = time.Hour
+	svc.providerConfig.setup = multiProviderSetup()
+	svc.sessionClient.inspectState = TaskSessionRuntimeState{
+		Exists:         true,
+		ActiveCommands: []string{"zsh", "codex"},
+	}
+	svc.taskRepo.listTasks = []*Task{{
+		ID:          "task-1",
+		Provider:    ProviderClaude,
+		TmuxSession: "repo_task-1",
+	}}
+	svc.taskRepo.providerSessionsByTask["task-1"] = []TaskProviderSession{{
+		TaskID:            "task-1",
+		Provider:          ProviderCodex,
+		ProviderSessionID: "codex-session",
+		TranscriptPath:    "/tmp/codex-session.jsonl",
+	}}
+	require.NoError(t, svc.taskRepoMock.UpsertTaskStatus(t.Context(), TaskStatusUpdate{
+		TaskID:       "task-1",
+		Provider:     ProviderClaude,
+		Phase:        TaskStatusPhaseWaitingForInput,
+		RawEventName: "Notification",
+		ObservedAt:   time.Date(2026, time.August, 12, 14, 2, 0, 0, time.UTC),
+	}))
+
+	update, err := svc.service.LatestTaskStatus(t.Context(), "task-1")
+
+	require.NoError(t, err)
+	require.Equal(t, ProviderCodex, update.Provider)
+	require.NotNil(t, svc.taskRepo.updatedTask)
+	require.Equal(t, ProviderCodex, svc.taskRepo.updatedTask.Provider)
+}
+
+func TestTaskStatusObserver_NewerHookEvidenceCancelsProviderReconciliation(t *testing.T) {
+	svc := newTestTaskService(t)
+	svc.providerConfig.setup = multiProviderSetup()
+	svc.sessionClient.inspectState = TaskSessionRuntimeState{
+		Exists:         true,
+		ActiveCommands: []string{"codex"},
+	}
+	svc.sessionClient.batchInspectStarted = make(chan struct{}, 1)
+	svc.sessionClient.batchInspectRelease = make(chan struct{})
+	svc.taskRepo.listTasks = []*Task{{
+		ID:          "task-1",
+		Provider:    ProviderClaude,
+		TmuxSession: "repo_task-1",
+	}}
+	require.NoError(t, svc.taskRepoMock.UpsertTaskStatus(t.Context(), TaskStatusUpdate{
+		TaskID:       "task-1",
+		Provider:     ProviderClaude,
+		Phase:        TaskStatusPhaseWaitingForInput,
+		RawEventName: "Notification",
+		ObservedAt:   time.Date(2026, time.August, 12, 14, 2, 0, 0, time.UTC),
+	}))
+	observation := &taskObservation{
+		tasks:                svc.taskRepoMock,
+		tmuxSession:          svc.sessionClientMock,
+		providers:            svc.service.providers,
+		providerConfig:       svc.providerConfigMock,
+		recoveryPollInterval: time.Hour,
+		recoveryWorkerLimit:  defaultTaskStatusRecoveryWorkerLimit,
+		statusCacheMaxAge:    time.Hour,
+	}
+	observer := &taskStatusObserver{
+		observation: observation,
+		tasks:       make(map[string]*observedTaskStatus),
+		wakeCycle:   make(chan struct{}, 1),
+	}
+	observation.statusObserver = observer
+
+	ctx, cancel := context.WithCancel(t.Context())
+	defer cancel()
+	stream, err := observer.SubscribeTaskStatus(ctx, "task-1")
+	require.NoError(t, err)
+	cycleDone := make(chan struct{})
+	go func() {
+		observer.runCycle()
+		close(cycleDone)
+	}()
+	select {
+	case <-svc.sessionClient.batchInspectStarted:
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for runtime snapshot")
+	}
+
+	newer := TaskStatusUpdate{
+		TaskID:       "task-1",
+		Provider:     ProviderClaude,
+		Phase:        TaskStatusPhaseStarting,
+		RawEventName: "SessionStart",
+		ObservedAt:   time.Date(2026, time.August, 12, 14, 3, 0, 0, time.UTC),
+	}
+	require.NoError(t, svc.taskRepoMock.UpsertTaskStatus(t.Context(), newer))
+	require.Equal(t, newer, receiveTaskStatus(t, stream))
+	close(svc.sessionClient.batchInspectRelease)
+
+	select {
+	case <-cycleDone:
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for reconciliation cycle")
+	}
+	require.Nil(t, svc.taskRepo.updatedTask)
+}
+
 func TestTaskStatusObserver_SuppressesEqualViewsAcrossRecoveryCycles(t *testing.T) {
 	svc := newTestTaskService(t)
 	svc.observation.recoveryPollInterval = 5 * time.Millisecond

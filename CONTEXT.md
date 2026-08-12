@@ -46,6 +46,8 @@ Use `rig` for the CLI command and Rig for the product or system.
   task.
 - Provider adoption: Rig making a manually launched provider session the active
   provider for a task.
+- Provider reconciliation: Rig restoring provider ownership from live Session
+  process evidence when the recorded Active provider has exited.
 - Provider session: A provider runtime session observed for a task, including
   its provider session ID, transcript path, model, working directory, and latest
   event name.
@@ -98,6 +100,9 @@ Use `rig` for the CLI command and Rig for the product or system.
   Task.
 - Provider adoption occurs when Rig observes the start of a manually launched
   Provider session in a Task workspace.
+- Provider reconciliation changes the Active provider only when its process is
+  absent and exactly one other Configured provider process is present. Missing
+  or ambiguous process evidence never changes provider ownership.
 - Every ready Task workspace registers hook forwarding for all Configured
   providers, so any Configured provider launched there is observable and
   adoptable.
