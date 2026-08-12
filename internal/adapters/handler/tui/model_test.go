@@ -1198,7 +1198,8 @@ func TestModel_EnterReconnectsWhenSessionIsMissing(t *testing.T) {
 
 	pending, ok := next.(model)
 	require.True(t, ok)
-	require.Equal(t, opOpening, pending.pending)
+	require.Equal(t, opNone, pending.pending)
+	require.True(t, pending.opening)
 	require.Contains(t, stripANSI(pending.View().Content), "Reconnecting session")
 
 	msg := requireMsgType[taskOpenedMsg](t, runBatchCmd(t, cmd))
@@ -1209,6 +1210,7 @@ func TestModel_EnterReconnectsWhenSessionIsMissing(t *testing.T) {
 	require.True(t, ok)
 	require.NoError(t, got.err)
 	require.Equal(t, opNone, got.pending)
+	require.False(t, got.opening)
 	require.Equal(t, 2, frontend.attachTaskSessionCalls)
 	require.Equal(t, 1, frontend.reconnectTaskSessionCalls)
 }
@@ -1224,13 +1226,43 @@ func TestModel_EnterDoesNotStartAnotherOpenWhileReconnectIsPending(t *testing.T)
 	require.NotNil(t, firstCmd)
 	pending, ok := next.(model)
 	require.True(t, ok)
-	require.Equal(t, opOpening, pending.pending)
+	require.True(t, pending.opening)
 
 	next, duplicateCmd := pending.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
 	require.Nil(t, duplicateCmd)
 	stillPending, ok := next.(model)
 	require.True(t, ok)
-	require.Equal(t, opOpening, stillPending.pending)
+	require.True(t, stillPending.opening)
+}
+
+func TestModel_EnterOpensExistingTaskWhileCreationIsPending(t *testing.T) {
+	frontend := newFrontendHarness()
+	frontend.listTasks = []*core.Task{{
+		ID: "task-1", DisplayName: "existing task", TmuxSession: "repo_task_1", Provider: core.ProviderCodex,
+	}}
+	m := newLoadedModel(frontend)
+	m.beginOp(opCreating)
+	m.create.active = core.TaskCreateProgressPreparingWorkspace
+
+	next, cmd := m.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
+	require.NotNil(t, cmd)
+
+	opening, ok := next.(model)
+	require.True(t, ok)
+	require.Equal(t, opCreating, opening.pending)
+	require.True(t, opening.opening)
+
+	msg, ok := runCmd(t, cmd).(taskOpenedMsg)
+	require.True(t, ok)
+	next, follow := opening.Update(msg)
+	require.Nil(t, follow)
+
+	got, ok := next.(model)
+	require.True(t, ok)
+	require.NoError(t, got.err)
+	require.Equal(t, opCreating, got.pending)
+	require.False(t, got.opening)
+	require.Equal(t, 1, frontend.attachTaskSessionCalls)
 }
 
 func TestModel_CreateTaskFromPromptAppendsTaskAndStartsStatusTracking(t *testing.T) {
