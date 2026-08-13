@@ -50,6 +50,9 @@ type repository struct {
 	hookSecret          string
 	transcriptIndexOnce sync.Once
 	transcripts         *codexTranscriptIndex
+	transcriptKindMu    sync.Mutex
+	transcriptKinds     map[string]codexTranscriptKind
+	transcriptKindOrder []string
 }
 
 func New(runner subprocess.Runner, cfg Config, hooks HookForwardingConfig) core.ProviderClient {

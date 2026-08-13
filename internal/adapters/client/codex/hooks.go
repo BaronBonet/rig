@@ -140,6 +140,8 @@ func DecodeHookEventInput(now func() time.Time, headerEventName string, body []b
 	input.TaskID = strings.TrimSpace(payload.TaskID)
 	input.SessionID = strings.TrimSpace(payload.SessionID)
 	input.TurnID = strings.TrimSpace(payload.TurnID)
+	input.AgentID = strings.TrimSpace(payload.AgentID)
+	input.AgentType = strings.TrimSpace(payload.AgentType)
 	input.ToolUseID = strings.TrimSpace(payload.ToolUseID)
 	input.Model = strings.TrimSpace(payload.Model)
 	input.Cwd = strings.TrimSpace(payload.Cwd)
@@ -153,6 +155,12 @@ func DecodeHookEventInput(now func() time.Time, headerEventName string, body []b
 }
 
 func (r *repository) HookEventToTaskStatus(input core.HookEventInput) (*core.TaskStatusUpdate, error) {
+	// Codex includes agent_id on tool and permission hooks emitted by a
+	// subagent. Those hooks still contribute session history and activity, but
+	// only the root agent drives the task's runtime status.
+	if strings.TrimSpace(input.AgentID) != "" {
+		return nil, nil
+	}
 	return hookCatalog.StatusUpdate(core.ProviderCodex, input)
 }
 
@@ -160,6 +168,8 @@ type hookPayload struct {
 	TaskID               string          `json:"task_id"`
 	SessionID            string          `json:"session_id"`
 	TurnID               string          `json:"turn_id"`
+	AgentID              string          `json:"agent_id"`
+	AgentType            string          `json:"agent_type"`
 	HookEventName        string          `json:"hook_event_name"`
 	Prompt               string          `json:"prompt"`
 	ToolUseID            string          `json:"tool_use_id"`
