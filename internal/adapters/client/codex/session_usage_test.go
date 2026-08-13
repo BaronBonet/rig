@@ -5,6 +5,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -156,6 +157,124 @@ func TestRepositoryRecoverLatestTaskStatus_ReturnsTaskCompleteFromNewestTranscri
 		RawEventName: "TranscriptTaskComplete",
 		ObservedAt:   time.Date(2026, time.April, 19, 11, 4, 0, 0, time.UTC),
 	}, update)
+}
+
+func TestRepositoryRecoverLatestTaskStatus_UsesRootTranscriptWhenSubagentTranscriptIsNewer(t *testing.T) {
+	repo := &repository{}
+	rootPath := writeJSONL(t, []string{
+		`{"timestamp":"2026-04-19T11:04:00Z","type":"response_item","payload":{"type":"function_call","name":"exec_command"}}`,
+	})
+	subagentPath := writeJSONL(t, []string{
+		`{"timestamp":"2026-04-19T11:05:00Z","type":"event_msg","payload":{"type":"task_complete"}}`,
+	})
+	current := core.TaskStatusUpdate{
+		TaskID:       "task-123",
+		Provider:     core.ProviderCodex,
+		Phase:        core.TaskStatusPhaseWorking,
+		RawEventName: "PostToolUse",
+		ObservedAt:   time.Date(2026, time.April, 19, 11, 3, 0, 0, time.UTC),
+	}
+
+	update, err := repo.RecoverLatestTaskStatus(t.Context(), current, []core.TaskProviderSession{
+		{
+			LastObservedAt:    time.Date(2026, time.April, 19, 11, 3, 0, 0, time.UTC),
+			TaskID:            "task-123",
+			Provider:          core.ProviderCodex,
+			ProviderSessionID: "session-123",
+			TranscriptPath:    rootPath,
+			StartSource:       "startup",
+		},
+		{
+			LastObservedAt:    time.Date(2026, time.April, 19, 11, 5, 0, 0, time.UTC),
+			TaskID:            "task-123",
+			Provider:          core.ProviderCodex,
+			ProviderSessionID: "session-123",
+			TranscriptPath:    subagentPath,
+		},
+	})
+
+	require.NoError(t, err)
+	require.Equal(t, &core.TaskStatusUpdate{
+		TaskID:       "task-123",
+		Provider:     core.ProviderCodex,
+		Phase:        core.TaskStatusPhaseWorking,
+		RawEventName: "TranscriptActivity",
+		ObservedAt:   time.Date(2026, time.April, 19, 11, 4, 0, 0, time.UTC),
+	}, update)
+}
+
+func TestRepositoryRecoverLatestTaskStatus_UsesRootTranscriptWhenSessionStartWasMissed(t *testing.T) {
+	repo := &repository{}
+	rootPath := writeJSONL(t, []string{
+		`{"timestamp":"2026-04-19T11:00:00Z","type":"session_meta","payload":{"id":"session-123","source":"cli"}}`,
+		`{"timestamp":"2026-04-19T11:04:00Z","type":"response_item","payload":{"type":"function_call","name":"exec_command"}}`,
+	})
+	subagentPath := writeJSONL(t, []string{
+		`{"timestamp":"2026-04-19T11:01:00Z","type":"session_meta","payload":{"id":"agent-456","source":{"subagent":{"thread_spawn":{"parent_thread_id":"session-123"}}},"parent_thread_id":"session-123"}}`,
+		`{"timestamp":"2026-04-19T11:01:00Z","type":"session_meta","payload":{"id":"session-123","source":"cli"}}`,
+		`{"timestamp":"2026-04-19T11:05:00Z","type":"event_msg","payload":{"type":"task_complete"}}`,
+	})
+	current := core.TaskStatusUpdate{
+		TaskID:       "task-123",
+		Provider:     core.ProviderCodex,
+		Phase:        core.TaskStatusPhaseWorking,
+		RawEventName: "PostToolUse",
+		ObservedAt:   time.Date(2026, time.April, 19, 11, 3, 0, 0, time.UTC),
+	}
+
+	update, err := repo.RecoverLatestTaskStatus(t.Context(), current, []core.TaskProviderSession{
+		{
+			LastObservedAt:    time.Date(2026, time.April, 19, 11, 3, 0, 0, time.UTC),
+			TaskID:            "task-123",
+			Provider:          core.ProviderCodex,
+			ProviderSessionID: "session-123",
+			TranscriptPath:    rootPath,
+		},
+		{
+			LastObservedAt:    time.Date(2026, time.April, 19, 11, 5, 0, 0, time.UTC),
+			TaskID:            "task-123",
+			Provider:          core.ProviderCodex,
+			ProviderSessionID: "session-123",
+			TranscriptPath:    subagentPath,
+		},
+	})
+
+	require.NoError(t, err)
+	require.Equal(t, &core.TaskStatusUpdate{
+		TaskID:       "task-123",
+		Provider:     core.ProviderCodex,
+		Phase:        core.TaskStatusPhaseWorking,
+		RawEventName: "TranscriptActivity",
+		ObservedAt:   time.Date(2026, time.April, 19, 11, 4, 0, 0, time.UTC),
+	}, update)
+}
+
+func TestReadCodexTranscriptKind_CachesPrefixClassification(t *testing.T) {
+	repo := &repository{}
+	path := writeJSONL(t, []string{
+		`{"timestamp":"2026-04-19T11:00:00Z","type":"session_meta","payload":{"id":"session-123","source":"cli"}}`,
+	})
+
+	kind, err := repo.readCodexTranscriptKind(t.Context(), path)
+	require.NoError(t, err)
+	require.Equal(t, codexTranscriptKindRoot, kind)
+	require.NoError(t, os.Remove(path))
+
+	kind, err = repo.readCodexTranscriptKind(t.Context(), path)
+	require.NoError(t, err)
+	require.Equal(t, codexTranscriptKindRoot, kind)
+}
+
+func TestCacheCodexTranscriptKind_BoundsRetainedPaths(t *testing.T) {
+	repo := &repository{}
+
+	for i := range maxCodexTranscriptKindCacheEntries + 1 {
+		repo.cacheCodexTranscriptKind(strconv.Itoa(i), codexTranscriptKindRoot)
+	}
+
+	require.Len(t, repo.transcriptKinds, maxCodexTranscriptKindCacheEntries)
+	_, oldestRetained := repo.transcriptKinds["0"]
+	require.False(t, oldestRetained)
 }
 
 func TestRepositoryRecoverLatestTaskStatus_ReturnsWorkingFromNewerTranscriptActivity(t *testing.T) {

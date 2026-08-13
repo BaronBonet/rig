@@ -1,8 +1,14 @@
 package codex
 
 import (
+	"bufio"
+	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
+	"fmt"
+	"io"
+	"os"
 	"strings"
 	"time"
 
@@ -54,6 +60,16 @@ type codexTranscriptStatus struct {
 	phase        core.TaskStatusPhase
 }
 
+type codexTranscriptKind uint8
+
+const (
+	codexTranscriptKindUnknown codexTranscriptKind = iota
+	codexTranscriptKindRoot
+	codexTranscriptKindSubagent
+)
+
+const maxCodexTranscriptKindCacheEntries = 4096
+
 func (r *repository) RecoverLatestTaskStatus(
 	ctx context.Context,
 	current core.TaskStatusUpdate,
@@ -63,7 +79,10 @@ func (r *repository) RecoverLatestTaskStatus(
 		return nil, nil
 	}
 
-	session := newestCodexTranscriptSession(sessions)
+	session, err := r.newestRootCodexTranscriptSession(ctx, sessions)
+	if err != nil {
+		return nil, err
+	}
 	if session == nil {
 		return nil, nil
 	}
@@ -128,6 +147,195 @@ func newestCodexTranscriptSession(sessions []core.TaskProviderSession) *core.Tas
 		}
 	}
 	return latest
+}
+
+func (r *repository) newestRootCodexTranscriptSession(
+	ctx context.Context,
+	sessions []core.TaskProviderSession,
+) (*core.TaskProviderSession, error) {
+	latest := newestCodexTranscriptSession(sessions)
+	if latest == nil {
+		return nil, nil
+	}
+
+	// Subagent hooks carry the root session ID but point at the subagent's own
+	// transcript. Prefer the transcript that received SessionStart for the
+	// newest logical session so a subagent's task_complete cannot make the root
+	// task appear to need input while it is still working.
+	latestSessionID := strings.TrimSpace(latest.ProviderSessionID)
+	if latestSessionID == "" {
+		return latest, nil
+	}
+
+	var latestRoot *core.TaskProviderSession
+	var candidates []core.TaskProviderSession
+	for _, session := range sessions {
+		transcriptPath := strings.TrimSpace(session.TranscriptPath)
+		if session.Provider != core.ProviderCodex ||
+			strings.TrimSpace(session.ProviderSessionID) != latestSessionID ||
+			transcriptPath == "" {
+			continue
+		}
+
+		session.TranscriptPath = transcriptPath
+		candidates = append(candidates, session)
+		if strings.TrimSpace(session.StartSource) == "" {
+			continue
+		}
+		if latestRoot == nil || session.LastObservedAt.After(latestRoot.LastObservedAt) {
+			copy := session
+			latestRoot = &copy
+		}
+	}
+	if latestRoot != nil {
+		return latestRoot, nil
+	}
+
+	// SessionStart can be missed while the daemon is unavailable. In that case,
+	// recover root/subagent provenance from the first session_meta record. Read
+	// only the transcript prefix here: Ultra-mode rollouts can contain large,
+	// copied histories, and status recovery runs every two seconds.
+	var latestUnknown *core.TaskProviderSession
+	var firstErr error
+	for _, session := range candidates {
+		kind, readErr := r.readCodexTranscriptKind(ctx, session.TranscriptPath)
+		if readErr != nil {
+			if firstErr == nil {
+				firstErr = readErr
+			}
+			continue
+		}
+
+		switch kind {
+		case codexTranscriptKindRoot:
+			if latestRoot == nil || session.LastObservedAt.After(latestRoot.LastObservedAt) {
+				copy := session
+				latestRoot = &copy
+			}
+		case codexTranscriptKindUnknown:
+			if latestUnknown == nil || session.LastObservedAt.After(latestUnknown.LastObservedAt) {
+				copy := session
+				latestUnknown = &copy
+			}
+		case codexTranscriptKindSubagent:
+		}
+	}
+	if latestRoot != nil {
+		return latestRoot, nil
+	}
+	if latestUnknown != nil {
+		return latestUnknown, nil
+	}
+	if firstErr != nil {
+		return nil, firstErr
+	}
+	return nil, nil
+}
+
+func (r *repository) readCodexTranscriptKind(
+	ctx context.Context,
+	transcriptPath string,
+) (codexTranscriptKind, error) {
+	transcriptPath = strings.TrimSpace(transcriptPath)
+	if transcriptPath == "" {
+		return codexTranscriptKindUnknown, nil
+	}
+	if kind, ok := r.cachedCodexTranscriptKind(transcriptPath); ok {
+		return kind, nil
+	}
+
+	file, err := os.Open(transcriptPath)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return codexTranscriptKindUnknown, nil
+		}
+		return codexTranscriptKindUnknown, fmt.Errorf("open transcript %q: %w", transcriptPath, err)
+	}
+	defer file.Close()
+
+	reader := bufio.NewReader(file)
+	for {
+		if err := ctx.Err(); err != nil {
+			return codexTranscriptKindUnknown, err
+		}
+
+		line, readErr := reader.ReadBytes('\n')
+		if kind := codexTranscriptLineKind(line); kind != codexTranscriptKindUnknown {
+			r.cacheCodexTranscriptKind(transcriptPath, kind)
+			return kind, nil
+		}
+		if readErr == nil {
+			continue
+		}
+		if errors.Is(readErr, io.EOF) {
+			return codexTranscriptKindUnknown, nil
+		}
+		return codexTranscriptKindUnknown, fmt.Errorf("read transcript %q: %w", transcriptPath, readErr)
+	}
+}
+
+func (r *repository) cachedCodexTranscriptKind(transcriptPath string) (codexTranscriptKind, bool) {
+	r.transcriptKindMu.Lock()
+	defer r.transcriptKindMu.Unlock()
+	if r.transcriptKinds == nil {
+		return codexTranscriptKindUnknown, false
+	}
+	kind, ok := r.transcriptKinds[transcriptPath]
+	return kind, ok
+}
+
+func (r *repository) cacheCodexTranscriptKind(transcriptPath string, kind codexTranscriptKind) {
+	r.transcriptKindMu.Lock()
+	defer r.transcriptKindMu.Unlock()
+	if r.transcriptKinds == nil {
+		r.transcriptKinds = make(map[string]codexTranscriptKind)
+	}
+	if _, exists := r.transcriptKinds[transcriptPath]; !exists {
+		r.transcriptKindOrder = append(r.transcriptKindOrder, transcriptPath)
+	}
+	r.transcriptKinds[transcriptPath] = kind
+	for len(r.transcriptKindOrder) > maxCodexTranscriptKindCacheEntries {
+		oldest := r.transcriptKindOrder[0]
+		r.transcriptKindOrder = r.transcriptKindOrder[1:]
+		delete(r.transcriptKinds, oldest)
+	}
+}
+
+func codexTranscriptLineKind(line []byte) codexTranscriptKind {
+	var envelope codexTranscriptEnvelope
+	if err := jsonUnmarshalTranscriptLine(line, &envelope); err != nil ||
+		envelope.Type != "session_meta" ||
+		len(envelope.Payload) == 0 {
+		return codexTranscriptKindUnknown
+	}
+
+	var payload struct {
+		Source         json.RawMessage `json:"source"`
+		ParentThreadID string          `json:"parent_thread_id"`
+	}
+	if err := json.Unmarshal(envelope.Payload, &payload); err != nil {
+		return codexTranscriptKindUnknown
+	}
+	if strings.TrimSpace(payload.ParentThreadID) != "" || codexSessionSourceIsSubagent(payload.Source) {
+		return codexTranscriptKindSubagent
+	}
+	return codexTranscriptKindRoot
+}
+
+func codexSessionSourceIsSubagent(raw json.RawMessage) bool {
+	trimmed := bytes.TrimSpace(raw)
+	if len(trimmed) == 0 || trimmed[0] != '{' {
+		return false
+	}
+
+	var source struct {
+		Subagent json.RawMessage `json:"subagent"`
+	}
+	if err := json.Unmarshal(trimmed, &source); err != nil {
+		return false
+	}
+	subagent := bytes.TrimSpace(source.Subagent)
+	return len(subagent) > 0 && !bytes.Equal(subagent, []byte("null"))
 }
 
 func codexResponseItemStatus(envelope codexTranscriptEnvelope) *codexTranscriptStatus {

@@ -102,6 +102,8 @@ type HookEventInput struct {
 	TaskID               string
 	SessionID            string
 	TurnID               string
+	AgentID              string
+	AgentType            string
 	EventName            string
 	Provider             Provider
 	RawPayloadJSON       string

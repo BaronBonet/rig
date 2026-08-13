@@ -48,6 +48,16 @@ func TestNewHookHTTPHandler_DecodesCodexHookAndDelegatesToTaskService(t *testing
 	require.Equal(t, http.StatusAccepted, rec.Code)
 }
 
+func TestDecodeHookEventInput_DecodesSubagentIdentity(t *testing.T) {
+	now := time.Date(2026, time.April, 20, 11, 0, 0, 0, time.UTC)
+	payload := []byte(`{"agent_id":"agent-456","agent_type":"worker","hook_event_name":"PostToolUse"}`)
+
+	input := DecodeHookEventInput(func() time.Time { return now }, "", payload)
+
+	require.Equal(t, "agent-456", input.AgentID)
+	require.Equal(t, "worker", input.AgentType)
+}
+
 func TestNewHookHTTPHandler_RejectsMissingSecret(t *testing.T) {
 	handler := NewHookHTTPHandler(core.NewMockHookEventHandler(t), time.Now, "secret-token")
 
@@ -122,4 +132,19 @@ func TestRepositoryHookEventToTaskStatus_MapsPermissionRequestToWaitingForInput(
 		RawEventName: "PermissionRequest",
 		ObservedAt:   time.Date(2026, time.April, 20, 11, 2, 0, 0, time.UTC),
 	}, update)
+}
+
+func TestRepositoryHookEventToTaskStatus_IgnoresSubagentEvent(t *testing.T) {
+	repo := New(nil, Config{Binary: "codex"}, HookForwardingConfig{})
+
+	update, err := repo.HookEventToTaskStatus(core.HookEventInput{
+		TaskID:     "task-123",
+		AgentID:    "agent-456",
+		OccurredAt: time.Date(2026, time.April, 20, 11, 2, 0, 0, time.UTC),
+		EventName:  "PermissionRequest",
+		Provider:   core.ProviderCodex,
+	})
+
+	require.NoError(t, err)
+	require.Nil(t, update)
 }

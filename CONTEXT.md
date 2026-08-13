@@ -95,7 +95,8 @@ Use `rig` for the CLI command and Rig for the product or system.
   Configured provider.
 - A Task may have many Provider sessions over time.
 - A Provider session belongs to exactly one Task and one Provider.
-- A Task's Runtime status is driven only by its Active provider.
+- A Task's Runtime status is driven only by the root agent of its Active
+  provider. Subagent hooks and transcript completion do not drive it.
 - Provider adoption changes a Task's Active provider without creating a new
   Task.
 - Provider adoption occurs when Rig observes the start of a manually launched
