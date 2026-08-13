@@ -134,7 +134,7 @@ func TestRepositoryHookEventToTaskStatus_MapsPermissionRequestToWaitingForInput(
 	}, update)
 }
 
-func TestRepositoryHookEventToTaskStatus_IgnoresSubagentEvent(t *testing.T) {
+func TestRepositoryHookEventToTaskStatus_MapsSubagentPermissionRequestToWaitingForInput(t *testing.T) {
 	repo := New(nil, Config{Binary: "codex"}, HookForwardingConfig{})
 
 	update, err := repo.HookEventToTaskStatus(core.HookEventInput{
@@ -142,6 +142,27 @@ func TestRepositoryHookEventToTaskStatus_IgnoresSubagentEvent(t *testing.T) {
 		AgentID:    "agent-456",
 		OccurredAt: time.Date(2026, time.April, 20, 11, 2, 0, 0, time.UTC),
 		EventName:  "PermissionRequest",
+		Provider:   core.ProviderCodex,
+	})
+
+	require.NoError(t, err)
+	require.Equal(t, &core.TaskStatusUpdate{
+		TaskID:       "task-123",
+		Provider:     core.ProviderCodex,
+		Phase:        core.TaskStatusPhaseWaitingForInput,
+		RawEventName: "PermissionRequest",
+		ObservedAt:   time.Date(2026, time.April, 20, 11, 2, 0, 0, time.UTC),
+	}, update)
+}
+
+func TestRepositoryHookEventToTaskStatus_IgnoresSubagentWorkEvent(t *testing.T) {
+	repo := New(nil, Config{Binary: "codex"}, HookForwardingConfig{})
+
+	update, err := repo.HookEventToTaskStatus(core.HookEventInput{
+		TaskID:     "task-123",
+		AgentID:    "agent-456",
+		OccurredAt: time.Date(2026, time.April, 20, 11, 2, 0, 0, time.UTC),
+		EventName:  "PostToolUse",
 		Provider:   core.ProviderCodex,
 	})
 

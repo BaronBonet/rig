@@ -156,9 +156,11 @@ func DecodeHookEventInput(now func() time.Time, headerEventName string, body []b
 
 func (r *repository) HookEventToTaskStatus(input core.HookEventInput) (*core.TaskStatusUpdate, error) {
 	// Codex includes agent_id on tool and permission hooks emitted by a
-	// subagent. Those hooks still contribute session history and activity, but
-	// only the root agent drives the task's runtime status.
-	if strings.TrimSpace(input.AgentID) != "" {
+	// subagent. Subagent work still contributes only session history and
+	// activity, but a permission request needs user action in the interactive
+	// session and therefore drives the task to needs-input.
+	if strings.TrimSpace(input.AgentID) != "" &&
+		strings.TrimSpace(input.EventName) != core.HookEventPermissionRequest {
 		return nil, nil
 	}
 	return hookCatalog.StatusUpdate(core.ProviderCodex, input)
