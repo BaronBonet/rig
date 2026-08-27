@@ -280,13 +280,29 @@ func (r *repository) UpsertTaskStatus(ctx context.Context, update core.TaskStatu
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	for _, subscriber := range r.subs[update.TaskID] {
-		select {
-		case subscriber <- update:
-		default:
-		}
+		offerLatestTaskStatus(subscriber, update)
 	}
 
 	return nil
+}
+
+func offerLatestTaskStatus(subscriber chan core.TaskStatusUpdate, update core.TaskStatusUpdate) {
+	select {
+	case subscriber <- update:
+		return
+	default:
+	}
+
+	// Status is a live view, so evict stale buffered evidence instead of
+	// dropping the newest hook when providers emit a burst of events.
+	select {
+	case <-subscriber:
+	default:
+	}
+	select {
+	case subscriber <- update:
+	default:
+	}
 }
 
 func (r *repository) UpsertTaskResumeMetadata(ctx context.Context, metadata core.TaskResumeMetadata) error {

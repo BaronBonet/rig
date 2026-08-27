@@ -75,7 +75,14 @@ func (r *repository) RecoverLatestTaskStatus(
 	current core.TaskStatusUpdate,
 	sessions []core.TaskProviderSession,
 ) (*core.TaskStatusUpdate, error) {
-	if current.Phase == core.TaskStatusPhaseStopped {
+	// Transcript recovery repairs stale in-progress status when a terminal hook
+	// was missed. It must not replace explicit needs-input hook evidence with
+	// transcript activity: Codex writes activity records around turn completion,
+	// and treating those as resumed work makes the live TUI fall back to working.
+	// A real resumed turn emits its own working hook and updates the persisted
+	// status directly.
+	if current.Phase == core.TaskStatusPhaseStopped ||
+		current.Phase == core.TaskStatusPhaseWaitingForInput {
 		return nil, nil
 	}
 
@@ -95,10 +102,6 @@ func (r *repository) RecoverLatestTaskStatus(
 	if status == nil || !status.observedAt.After(current.ObservedAt) {
 		return nil, nil
 	}
-	if current.Phase == core.TaskStatusPhaseWaitingForInput && status.phase == core.TaskStatusPhaseWaitingForInput {
-		return nil, nil
-	}
-
 	return &core.TaskStatusUpdate{
 		TaskID:       current.TaskID,
 		Provider:     current.Provider,
