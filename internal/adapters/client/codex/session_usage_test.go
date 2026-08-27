@@ -277,7 +277,7 @@ func TestCacheCodexTranscriptKind_BoundsRetainedPaths(t *testing.T) {
 	require.False(t, oldestRetained)
 }
 
-func TestRepositoryRecoverLatestTaskStatus_ReturnsWorkingFromNewerTranscriptActivity(t *testing.T) {
+func TestRepositoryRecoverLatestTaskStatus_KeepsWaitingForInputHookDespiteNewerTranscriptActivity(t *testing.T) {
 	repo := &repository{}
 	path := writeJSONL(t, []string{
 		`{"timestamp":"2026-04-19T11:02:00Z","type":"event_msg","payload":{"type":"task_complete"}}`,
@@ -299,13 +299,7 @@ func TestRepositoryRecoverLatestTaskStatus_ReturnsWorkingFromNewerTranscriptActi
 	}})
 
 	require.NoError(t, err)
-	require.Equal(t, &core.TaskStatusUpdate{
-		TaskID:       "task-123",
-		Provider:     core.ProviderCodex,
-		Phase:        core.TaskStatusPhaseWorking,
-		RawEventName: "TranscriptActivity",
-		ObservedAt:   time.Date(2026, time.April, 19, 11, 4, 0, 0, time.UTC),
-	}, update)
+	require.Nil(t, update)
 }
 
 func TestRepositoryRecoverLatestTaskStatus_DoesNotUseTaskCompleteWhenNewerActivityExists(t *testing.T) {

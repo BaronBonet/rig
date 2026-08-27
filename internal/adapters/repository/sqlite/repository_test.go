@@ -442,6 +442,60 @@ func TestRepositoryUpsertTaskStatus_PersistsLatestAndPublishesToSubscribers(t *t
 	}
 }
 
+func TestRepositoryUpsertTaskStatus_LiveSubscriberConvergesOnLatestStatusAfterBurst(t *testing.T) {
+	repo := newTestRepository(t)
+	task := &core.Task{
+		ID:           "task-1",
+		Slug:         "task-one",
+		Prompt:       "prompt",
+		DisplayName:  "task one",
+		RepoRoot:     "/tmp/repo",
+		RepoName:     "repo",
+		BranchName:   "feat/task-one",
+		WorktreePath: "/tmp/repo-task-one",
+		TmuxSession:  "repo_task_one",
+		Provider:     core.ProviderClaude,
+		CreatedAt:    time.Now().UTC(),
+		UpdatedAt:    time.Now().UTC(),
+	}
+	require.NoError(t, repo.CreateTask(t.Context(), task))
+
+	ctx, cancel := context.WithCancel(t.Context())
+	updates, err := repo.SubscribeTaskStatus(ctx, task.ID)
+	require.NoError(t, err)
+
+	observedAt := time.Date(2026, time.August, 24, 12, 0, 0, 0, time.UTC)
+	for index := range 9 {
+		require.NoError(t, repo.UpsertTaskStatus(t.Context(), core.TaskStatusUpdate{
+			TaskID:       task.ID,
+			Provider:     core.ProviderClaude,
+			Phase:        core.TaskStatusPhaseWorking,
+			RawEventName: "PostToolUse",
+			ObservedAt:   observedAt.Add(time.Duration(index) * time.Millisecond),
+		}))
+	}
+	waiting := core.TaskStatusUpdate{
+		TaskID:       task.ID,
+		Provider:     core.ProviderClaude,
+		Phase:        core.TaskStatusPhaseWaitingForInput,
+		RawEventName: "Stop",
+		ObservedAt:   observedAt.Add(9 * time.Millisecond),
+	}
+	require.NoError(t, repo.UpsertTaskStatus(t.Context(), waiting))
+
+	persisted, err := repo.LatestTaskStatus(t.Context(), task.ID)
+	require.NoError(t, err)
+	require.Equal(t, &waiting, persisted)
+
+	cancel()
+	var streamed []core.TaskStatusUpdate
+	for update := range updates {
+		streamed = append(streamed, update)
+	}
+	require.NotEmpty(t, streamed)
+	require.Equal(t, waiting, streamed[len(streamed)-1])
+}
+
 func TestRepositoryRecordTaskActivityAndGetTaskActivity_ReturnsNewestWindowOldestFirst(t *testing.T) {
 	repo := newTestRepository(t)
 	task := &core.Task{
