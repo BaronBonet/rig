@@ -519,6 +519,41 @@ func TestModel_ReloadDoesNotDuplicateStatusSubscriptions(t *testing.T) {
 	require.Equal(t, []string{"task-1"}, frontend.subscribeTaskStatusCalls)
 }
 
+func TestModel_RefreshPreservesTaskStatus(t *testing.T) {
+	frontend := newFrontendHarness()
+	frontend.listTasks = []*core.Task{
+		{ID: "task-1", RepoName: "repo-a", DisplayName: "first task", Provider: core.ProviderCodex},
+	}
+
+	m := newLoadedModel(frontend)
+	m.statusSubscribed["task-1"] = true
+	status := core.TaskStatusUpdate{
+		TaskID:   "task-1",
+		Provider: core.ProviderCodex,
+		Phase:    core.TaskStatusPhaseWorking,
+	}
+	next, _ := m.Update(taskStatusUpdatedMsg{
+		taskID:  "task-1",
+		update:  status,
+		updates: make(chan core.TaskStatusUpdate),
+	})
+	got, ok := next.(model)
+	require.True(t, ok)
+	require.Equal(t, &status, got.rows[0].status)
+
+	next, cmd := got.Update(tea.KeyPressMsg{Text: "r"})
+	refreshing, ok := next.(model)
+	require.True(t, ok)
+	require.True(t, refreshing.loading)
+
+	loaded := runCmd(t, cmd)
+	next, _ = refreshing.Update(loaded)
+	refreshed, ok := next.(model)
+	require.True(t, ok)
+	require.Equal(t, &status, refreshed.rows[0].status)
+	require.Empty(t, frontend.subscribeTaskStatusCalls)
+}
+
 func TestModel_ReloadCancelsStatusSubscriptionForRemovedTask(t *testing.T) {
 	frontend := newFrontendHarness()
 	frontend.listTasks = []*core.Task{

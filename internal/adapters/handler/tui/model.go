@@ -442,6 +442,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			selectedTaskID = taskID(row.task)
 		}
 		nextRows := rowsFromTasks(msg.tasks)
+		preserveTaskStatuses(nextRows, m.rows)
 		m.reconcileTaskStatusTracking(nextRows)
 		m.rows = nextRows
 		m.clampSelection()
@@ -694,6 +695,19 @@ func rowsFromTasks(tasks []*core.Task) []taskRow {
 		rows = append(rows, taskRow{task: task})
 	}
 	return groupRowsByRepo(rows)
+}
+
+func preserveTaskStatuses(nextRows []taskRow, currentRows []taskRow) {
+	statuses := make(map[string]*core.TaskStatusUpdate, len(currentRows))
+	for _, row := range currentRows {
+		if id := taskID(row.task); id != "" && row.status != nil {
+			statuses[id] = row.status
+		}
+	}
+
+	for index := range nextRows {
+		nextRows[index].status = statuses[taskID(nextRows[index].task)]
+	}
 }
 
 func (m *model) afterTasksLoadedCmds() []tea.Cmd {
