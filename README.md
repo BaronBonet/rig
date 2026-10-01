@@ -153,6 +153,14 @@ task still shows `needs input` after you submit a prompt, Rig has not yet
 received the next provider hook, such as `UserPromptSubmit`, `PreToolUse`, or
 `PostToolUse`, that marks the task as working.
 
+When a Claude task ends its turn while background work it started is still
+running (subagents, background shells, Monitor watches, workflows), Rig shows
+the task as working in the background, for example `1 subagent working`,
+instead of `needs input`. Claude wakes the task when that work finishes, and
+the next turn end updates the status. Monitor watches appear as shells, and a
+backgrounded long-running process such as a dev server keeps the task working
+until it exits.
+
 Use `rig doctor` to verify that your configured providers are available and
 that Rig's hook forwarding is installed correctly.
 

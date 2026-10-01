@@ -95,20 +95,44 @@ type WorkspaceBootstrapFile struct {
 type TaskStatusPhase string
 
 const (
-	TaskStatusPhaseStarting        TaskStatusPhase = "starting"
-	TaskStatusPhaseWorking         TaskStatusPhase = "working"
-	TaskStatusPhaseWaitingForInput TaskStatusPhase = "waiting_for_input"
-	TaskStatusPhaseStopped         TaskStatusPhase = "stopped"
+	TaskStatusPhaseStarting TaskStatusPhase = "starting"
+	TaskStatusPhaseWorking  TaskStatusPhase = "working"
+	// TaskStatusPhaseWorkingInBackground means the root agent ended its turn
+	// while background work it started is still in flight. The agent is woken
+	// when that work completes, so the task is not waiting on the user.
+	TaskStatusPhaseWorkingInBackground TaskStatusPhase = "working_in_background"
+	TaskStatusPhaseWaitingForInput     TaskStatusPhase = "waiting_for_input"
+	TaskStatusPhaseStopped             TaskStatusPhase = "stopped"
 )
+
+// TaskBackgroundWork counts the provider background work still in flight when
+// the root agent ended its turn. Providers report the full in-flight set at
+// every turn end, so the counts are replaced, never accumulated.
+type TaskBackgroundWork struct {
+	Subagents int `json:"subagents,omitempty"`
+	Shells    int `json:"shells,omitempty"`
+	Monitors  int `json:"monitors,omitempty"`
+	Workflows int `json:"workflows,omitempty"`
+	Other     int `json:"other,omitempty"`
+}
+
+func (w TaskBackgroundWork) Total() int {
+	return w.Subagents + w.Shells + w.Monitors + w.Workflows + w.Other
+}
+
+func (w TaskBackgroundWork) IsZero() bool {
+	return w.Total() == 0
+}
 
 // TaskStatusUpdate is the live status message published by the observer
 // process. It is intentionally separate from the durable Task record.
 type TaskStatusUpdate struct {
-	ObservedAt   time.Time       `json:"observed_at"`
-	TaskID       string          `json:"task_id"`
-	RawEventName string          `json:"raw_event_name"`
-	Provider     Provider        `json:"provider"`
-	Phase        TaskStatusPhase `json:"phase"`
+	ObservedAt     time.Time          `json:"observed_at"`
+	TaskID         string             `json:"task_id"`
+	RawEventName   string             `json:"raw_event_name"`
+	Provider       Provider           `json:"provider"`
+	Phase          TaskStatusPhase    `json:"phase"`
+	BackgroundWork TaskBackgroundWork `json:"background_work"`
 }
 
 // TaskSessionRuntimeState is the current tmux-side state of a task session.

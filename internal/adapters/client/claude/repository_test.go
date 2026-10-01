@@ -123,6 +123,11 @@ func TestRepositoryBuildWorkspaceBootstrapSpec_EmitsWorkspaceScopedHookSettings(
 	// work (Read, Edit, ...) keeps the task status at working.
 	require.Empty(t, settings.Hooks["PreToolUse"][0].Matcher)
 	require.Empty(t, settings.Hooks["PostToolUse"][0].Matcher)
+	require.Equal(
+		t,
+		"permission_prompt|worker_permission_prompt|elicitation_dialog|elicitation_url_dialog|agent_needs_input",
+		settings.Hooks["Notification"][0].Matcher,
+	)
 
 	scriptPath := filepath.Join(dataDir, "claude", "hooks", "forward-to-rig.sh")
 	require.Contains(t, settings.Hooks["SessionStart"][0].Hooks[0].Command, scriptPath)

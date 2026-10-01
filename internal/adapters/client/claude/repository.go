@@ -48,13 +48,33 @@ const (
 // Tool hooks are unmatched on purpose: most of Claude's work uses non-Bash
 // tools (Read, Edit, Grep, ...), and every tool event must drive the task's
 // working status.
+//
+// Stop drives needs-input unless its payload reports background work still in
+// flight; HookEventToTaskStatus then reports the task as working in the
+// background instead.
 var hookCatalog = providerkit.Catalog{
 	{Event: core.HookEventSessionStart, Matcher: "startup|resume", Phase: core.TaskStatusPhaseStarting},
 	{Event: core.HookEventUserPromptSubmit, Phase: core.TaskStatusPhaseWorking},
 	{Event: core.HookEventPreToolUse, Phase: core.TaskStatusPhaseWorking},
 	{Event: core.HookEventPostToolUse, Phase: core.TaskStatusPhaseWorking},
-	{Event: core.HookEventNotification, Phase: core.TaskStatusPhaseWaitingForInput},
+	{
+		Event:   core.HookEventNotification,
+		Matcher: strings.Join(needsInputNotificationTypes, "|"),
+		Phase:   core.TaskStatusPhaseWaitingForInput,
+	},
 	{Event: core.HookEventStop, Phase: core.TaskStatusPhaseWaitingForInput},
+}
+
+// needsInputNotificationTypes are the Claude notification types that ask the
+// user to act. Other notifications say nothing new about the task: notably
+// idle_prompt, which fires a minute after every turn end even while
+// background work is still running.
+var needsInputNotificationTypes = []string{
+	"permission_prompt",
+	"worker_permission_prompt",
+	"elicitation_dialog",
+	"elicitation_url_dialog",
+	"agent_needs_input",
 }
 
 // titleSkipPrefixes rejects Claude-specific CLI noise when parsing task

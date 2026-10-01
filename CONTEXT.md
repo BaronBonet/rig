@@ -70,6 +70,10 @@ Use `rig` for the CLI command and Rig for the product or system.
   evidence, the task's live session state, and recoverable provider session
   history. It is a live view rather than an event history, separate from the
   durable task record.
+- Background work: Provider work the root agent started that is still in
+  flight when its turn ends, such as background subagents, shells, monitors,
+  and workflows. The provider wakes the agent when it completes, so a Task
+  with background work is working in the background, not waiting for input.
 - Activity event: A compact persisted event used by the detail view to show
   recent user prompts and assistant actions.
 - Resume metadata: The minimal provider state needed to reconnect a task session
@@ -97,7 +101,9 @@ Use `rig` for the CLI command and Rig for the product or system.
 - A Provider session belongs to exactly one Task and one Provider.
 - A Task's Runtime status is driven by the root agent of its Active provider,
   plus any subagent permission request that needs user action. Subagent work
-  hooks and transcript completion do not otherwise drive it.
+  hooks and transcript completion do not otherwise drive it; in-flight
+  subagents reach it only as Background work reported at the root agent's turn
+  end.
 - Provider adoption changes a Task's Active provider without creating a new
   Task.
 - Provider adoption occurs when Rig observes the start of a manually launched
