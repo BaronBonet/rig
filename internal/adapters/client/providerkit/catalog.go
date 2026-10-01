@@ -20,7 +20,8 @@ import (
 // Binding declares one hook event a provider observes: the event's canonical
 // name (a core.HookEvent* constant), the provider-side matcher restricting
 // when the hook fires (empty = always), and the runtime phase the event
-// drives.
+// drives. A binding without a phase is observed for provider session history
+// only and never drives runtime status.
 type Binding struct {
 	Event   string
 	Matcher string
@@ -87,7 +88,8 @@ func (c Catalog) EventNames() []string {
 
 // StatusUpdate is the shared body of ProviderClient.HookEventToTaskStatus:
 // it normalizes a hook event into the task status update implied by the
-// catalog, returning nil for events the catalog does not drive status from.
+// catalog, returning nil for events the catalog does not drive status from,
+// including events bound without a phase.
 func (c Catalog) StatusUpdate(
 	provider core.Provider,
 	input core.HookEventInput,
@@ -105,6 +107,9 @@ func (c Catalog) StatusUpdate(
 	for _, binding := range c {
 		if binding.Event != eventName {
 			continue
+		}
+		if binding.Phase == "" {
+			return nil, nil
 		}
 		return &core.TaskStatusUpdate{
 			TaskID:       taskID,

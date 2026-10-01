@@ -123,7 +123,9 @@ hooks = true
 Rig installs and updates its own Codex hook forwarding entries automatically
 (in `~/.codex/hooks.json`) during provider setup and when it starts task
 sessions. The forwarding hooks post local Codex events to Rig's background
-daemon; other Codex hooks and plugins can remain enabled.
+daemon; other Codex hooks and plugins can remain enabled. Codex keeps a trust
+record for each hook entry, so when a Rig update adds a forwarding entry (for
+example `SubagentStart`), Codex asks you once to trust it.
 
 ### Claude Code
 
@@ -160,6 +162,12 @@ instead of `needs input`. Claude wakes the task when that work finishes, and
 the next turn end updates the status. Monitor watches appear as shells, and a
 backgrounded long-running process such as a dev server keeps the task working
 until it exits.
+
+When a Codex task ends its turn while subagents it spawned are still running,
+Rig shows the task as working in the background in the same way, for example
+`2 subagents working`, while the TUI is watching it. Unlike Claude, Codex does
+not wake the task when its subagents finish: their results wait for your next
+prompt, so the task returns to `needs input` once the last subagent finishes.
 
 Use `rig doctor` to verify that your configured providers are available and
 that Rig's hook forwarding is installed correctly.

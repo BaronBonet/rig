@@ -291,7 +291,15 @@ func installRigCodexHooksFixture(t *testing.T, home string, collectorURL string)
 
 	var hooks strings.Builder
 	hooks.WriteString(`{"hooks":{`)
-	events := []string{"SessionStart", "UserPromptSubmit", "Stop", "PreToolUse", "PermissionRequest", "PostToolUse"}
+	events := []string{
+		"SessionStart",
+		"UserPromptSubmit",
+		"Stop",
+		"PreToolUse",
+		"PermissionRequest",
+		"PostToolUse",
+		"SubagentStart",
+	}
 	for i, eventName := range events {
 		if i > 0 {
 			hooks.WriteString(",")
