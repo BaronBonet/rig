@@ -442,6 +442,55 @@ func TestRepositoryUpsertTaskStatus_PersistsLatestAndPublishesToSubscribers(t *t
 	}
 }
 
+func TestRepositoryUpsertTaskStatus_ReplacesBackgroundWork(t *testing.T) {
+	repo := newTestRepository(t)
+	require.NoError(t, repo.CreateTask(context.Background(), &core.Task{
+		ID:           "task-1",
+		Slug:         "task-one",
+		Prompt:       "prompt",
+		DisplayName:  "task one",
+		RepoRoot:     "/tmp/repo",
+		RepoName:     "repo",
+		BranchName:   "feat/task-one",
+		WorktreePath: "/tmp/repo-task-one",
+		TmuxSession:  "repo_task_one",
+		Provider:     core.ProviderClaude,
+		CreatedAt:    time.Now().UTC(),
+		UpdatedAt:    time.Now().UTC(),
+	}))
+
+	inBackground := core.TaskStatusUpdate{
+		TaskID:       "task-1",
+		Provider:     core.ProviderClaude,
+		Phase:        core.TaskStatusPhaseWorkingInBackground,
+		RawEventName: "Stop",
+		ObservedAt:   time.Date(2026, time.October, 1, 9, 1, 24, 0, time.UTC),
+		BackgroundWork: core.TaskBackgroundWork{
+			Subagents: 2,
+			Shells:    1,
+			Monitors:  1,
+			Workflows: 1,
+			Other:     1,
+		},
+	}
+	require.NoError(t, repo.UpsertTaskStatus(context.Background(), inBackground))
+	got, err := repo.LatestTaskStatus(context.Background(), "task-1")
+	require.NoError(t, err)
+	require.Equal(t, &inBackground, got)
+
+	settled := core.TaskStatusUpdate{
+		TaskID:       "task-1",
+		Provider:     core.ProviderClaude,
+		Phase:        core.TaskStatusPhaseWaitingForInput,
+		RawEventName: "Stop",
+		ObservedAt:   time.Date(2026, time.October, 1, 9, 40, 0, 0, time.UTC),
+	}
+	require.NoError(t, repo.UpsertTaskStatus(context.Background(), settled))
+	got, err = repo.LatestTaskStatus(context.Background(), "task-1")
+	require.NoError(t, err)
+	require.Equal(t, &settled, got)
+}
+
 func TestRepositoryUpsertTaskStatus_LiveSubscriberConvergesOnLatestStatusAfterBurst(t *testing.T) {
 	repo := newTestRepository(t)
 	task := &core.Task{
@@ -728,6 +777,38 @@ func TestRepositoryNew_ReopensMigratedDatabase(t *testing.T) {
 	require.NotNil(t, reopened)
 }
 
+func TestRepositoryNew_MigratesDatabaseWithSquashedMigrationHistory(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "state.db")
+	repo := newTestRepositoryAtPath(t, path)
+
+	// Rewind to a database created before migrations were squashed into
+	// 00001_init.sql: it records goose versions 2-5 as applied and has none of
+	// the later task_status columns.
+	for _, statement := range []string{
+		"alter table task_status drop column background_subagents",
+		"alter table task_status drop column background_shells",
+		"alter table task_status drop column background_monitors",
+		"alter table task_status drop column background_workflows",
+		"alter table task_status drop column background_other",
+		"delete from goose_db_version where version_id > 1",
+		"insert into goose_db_version (version_id, is_applied) values (2, 1), (3, 1), (4, 1), (5, 1)",
+	} {
+		_, err := repo.db.ExecContext(context.Background(), statement)
+		require.NoError(t, err, statement)
+	}
+	require.NoError(t, repo.db.Close())
+
+	reopened := newTestRepositoryAtPath(t, path)
+
+	require.Subset(t, tableColumnNames(t, reopened.db, "task_status"), []string{
+		"background_subagents",
+		"background_shells",
+		"background_monitors",
+		"background_workflows",
+		"background_other",
+	})
+}
+
 func TestRepositoryNew_ReturnsErrorAndPreservesDBWhenSchemaIsStale(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "state.db")
 
@@ -842,6 +923,11 @@ func TestRepositoryNew_CreatesSchemaForTasksAndLatestStatuses(t *testing.T) {
 		"phase",
 		"raw_event_name",
 		"observed_at",
+		"background_subagents",
+		"background_shells",
+		"background_monitors",
+		"background_workflows",
+		"background_other",
 	}
 	if !reflect.DeepEqual(statusNames, wantStatus) {
 		t.Fatalf("unexpected task_status columns:\n got: %#v\nwant: %#v", statusNames, wantStatus)

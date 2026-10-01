@@ -49,11 +49,16 @@ func updateTaskParams(task *core.Task) generated.UpdateTaskParams {
 
 func upsertTaskStatusParams(update core.TaskStatusUpdate) generated.UpsertTaskStatusParams {
 	return generated.UpsertTaskStatusParams{
-		TaskID:       update.TaskID,
-		Provider:     string(update.Provider),
-		Phase:        string(update.Phase),
-		RawEventName: update.RawEventName,
-		ObservedAt:   formatTime(update.ObservedAt),
+		TaskID:              update.TaskID,
+		Provider:            string(update.Provider),
+		Phase:               string(update.Phase),
+		RawEventName:        update.RawEventName,
+		ObservedAt:          formatTime(update.ObservedAt),
+		BackgroundSubagents: int64(update.BackgroundWork.Subagents),
+		BackgroundShells:    int64(update.BackgroundWork.Shells),
+		BackgroundMonitors:  int64(update.BackgroundWork.Monitors),
+		BackgroundWorkflows: int64(update.BackgroundWork.Workflows),
+		BackgroundOther:     int64(update.BackgroundWork.Other),
 	}
 }
 
@@ -155,6 +160,13 @@ func taskStatusUpdateFromRow(row generated.TaskStatus) *core.TaskStatusUpdate {
 		Phase:        core.TaskStatusPhase(row.Phase),
 		RawEventName: row.RawEventName,
 		ObservedAt:   parseTime(row.ObservedAt),
+		BackgroundWork: core.TaskBackgroundWork{
+			Subagents: int(row.BackgroundSubagents),
+			Shells:    int(row.BackgroundShells),
+			Monitors:  int(row.BackgroundMonitors),
+			Workflows: int(row.BackgroundWorkflows),
+			Other:     int(row.BackgroundOther),
+		},
 	}
 }
 

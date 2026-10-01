@@ -116,6 +116,10 @@ type HookEventInput struct {
 	Cwd                  string
 	TranscriptPath       string
 	StartSource          string
+	NotificationType     string
+	// BackgroundWork is the provider work still in flight when a turn ended.
+	// Only turn-end events carry it.
+	BackgroundWork TaskBackgroundWork
 }
 
 // TaskDaemon is the application port for the local daemon-backed task

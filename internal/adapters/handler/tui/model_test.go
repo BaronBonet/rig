@@ -1057,6 +1057,55 @@ func TestModel_DetailStatusUsesTaskStatusStyle(t *testing.T) {
 	require.NotContains(t, view, mutedStyle.Render("state")+"  "+primaryStyle.Render(statusText))
 }
 
+func TestTaskStatusText_NamesBackgroundWorkWithinStatusColumn(t *testing.T) {
+	cases := []struct {
+		work   core.TaskBackgroundWork
+		row    string
+		detail string
+	}{
+		{
+			work:   core.TaskBackgroundWork{Subagents: 1},
+			row:    "● 1 subagent working",
+			detail: "● working in background · 1 subagent",
+		},
+		{
+			work:   core.TaskBackgroundWork{Subagents: 2},
+			row:    "● 2 subagents working",
+			detail: "● working in background · 2 subagents",
+		},
+		{
+			work:   core.TaskBackgroundWork{Shells: 1},
+			row:    "● 1 shell working",
+			detail: "● working in background · 1 shell",
+		},
+		{
+			work:   core.TaskBackgroundWork{Subagents: 2, Monitors: 1, Shells: 1},
+			row:    "● 4 bg tasks working",
+			detail: "● working in background · 2 subagents, 1 monitor, 1 shell",
+		},
+		{
+			work:   core.TaskBackgroundWork{Subagents: 12},
+			row:    "● 12 bg tasks working",
+			detail: "● working in background · 12 subagents",
+		},
+	}
+	for _, tc := range cases {
+		status := &core.TaskStatusUpdate{
+			Phase:          core.TaskStatusPhaseWorkingInBackground,
+			BackgroundWork: tc.work,
+		}
+
+		row, rowStyle := taskStatusText(status)
+		require.Equal(t, tc.row, row)
+		require.LessOrEqual(t, lipgloss.Width(row), colWidthStatus, row)
+		require.Equal(t, healthyStyle.Render(row), rowStyle.Render(row))
+
+		detail, detailStyle := taskStatusDetailText(status)
+		require.Equal(t, tc.detail, detail)
+		require.Equal(t, healthyStyle.Render(detail), detailStyle.Render(detail))
+	}
+}
+
 func TestModel_StatusEnrichmentFailuresDoNotCollapseListView(t *testing.T) {
 	frontend := newFrontendHarness()
 	frontend.listTasks = []*core.Task{

@@ -399,7 +399,7 @@ func (m model) selectedTaskDetailView() string {
 			mutedStyle.Render("time")+"   "+primaryStyle.Bold(true).Render(elapsed)+mutedStyle.Render(" total"),
 		)
 	}
-	if statusText, statusStyle := taskStatusText(row.status); statusText != "" {
+	if statusText, statusStyle := taskStatusDetailText(row.status); statusText != "" {
 		sessionLines = append(
 			sessionLines,
 			mutedStyle.Render("state")+"  "+statusStyle.Render(statusText),
@@ -843,6 +843,8 @@ func taskStatusText(update *core.TaskStatusUpdate) (string, lipgloss.Style) {
 			return iconStatusProgress + " working · command", healthyStyle
 		}
 		return iconStatusActive + " working", healthyStyle
+	case core.TaskStatusPhaseWorkingInBackground:
+		return iconStatusActive + " " + backgroundWorkSummary(update.BackgroundWork), healthyStyle
 	case core.TaskStatusPhaseWaitingForInput:
 		return iconStatusProgress + " needs input", warningStyle
 	case core.TaskStatusPhaseStopped:
@@ -850,6 +852,61 @@ func taskStatusText(update *core.TaskStatusUpdate) (string, lipgloss.Style) {
 	default:
 		return iconStatusIdle + " idle", dimStyle
 	}
+}
+
+// taskStatusDetailText is taskStatusText for the detail panel, which has room
+// to break background work down by kind.
+func taskStatusDetailText(update *core.TaskStatusUpdate) (string, lipgloss.Style) {
+	if update == nil || update.Phase != core.TaskStatusPhaseWorkingInBackground {
+		return taskStatusText(update)
+	}
+
+	text := iconStatusActive + " working in background"
+	if parts := backgroundWorkParts(update.BackgroundWork); len(parts) > 0 {
+		text += " · " + strings.Join(parts, ", ")
+	}
+	return text, healthyStyle
+}
+
+// backgroundWorkSummary names the in-flight work when it is all one kind and
+// sums it otherwise, so the label fits the list's status column.
+func backgroundWorkSummary(work core.TaskBackgroundWork) string {
+	if work.IsZero() {
+		return "working"
+	}
+	parts := backgroundWorkParts(work)
+	if len(parts) == 1 && lipgloss.Width(iconStatusActive+" "+parts[0]+" working") <= colWidthStatus {
+		return parts[0] + " working"
+	}
+	return countNoun(work.Total(), "bg task") + " working"
+}
+
+func backgroundWorkParts(work core.TaskBackgroundWork) []string {
+	kinds := []struct {
+		noun  string
+		count int
+	}{
+		{"subagent", work.Subagents},
+		{"monitor", work.Monitors},
+		{"workflow", work.Workflows},
+		{"shell", work.Shells},
+		{"bg task", work.Other},
+	}
+
+	var parts []string
+	for _, kind := range kinds {
+		if kind.count > 0 {
+			parts = append(parts, countNoun(kind.count, kind.noun))
+		}
+	}
+	return parts
+}
+
+func countNoun(count int, noun string) string {
+	if count == 1 {
+		return "1 " + noun
+	}
+	return strconv.Itoa(count) + " " + noun + "s"
 }
 
 func taskCreationFailureStatusText(task *core.Task) (string, lipgloss.Style) {

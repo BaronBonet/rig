@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"slices"
 	"strings"
 	"time"
 
@@ -149,29 +150,102 @@ func DecodeHookEventInput(now func() time.Time, headerEventName string, body []b
 	input.CommandText = strings.TrimSpace(payload.ToolInput.Command)
 	input.CommandResultText = flattenPayloadText(payload.ToolResponse)
 	input.ToolUseID = strings.TrimSpace(payload.ToolUseID)
+	input.AgentID = strings.TrimSpace(payload.AgentID)
+	input.AgentType = strings.TrimSpace(payload.AgentType)
+	input.NotificationType = strings.TrimSpace(payload.NotificationType)
+	input.BackgroundWork = backgroundWorkFromTasks(payload.BackgroundTasks)
 	return input
 }
 
 func (r *repository) HookEventToTaskStatus(input core.HookEventInput) (*core.TaskStatusUpdate, error) {
-	return hookCatalog.StatusUpdate(core.ProviderClaude, input)
+	eventName := strings.TrimSpace(input.EventName)
+	if eventName == core.HookEventNotification && !notificationNeedsInput(input.NotificationType) {
+		return nil, nil
+	}
+	// Claude includes agent_id only on hooks fired from inside a subagent.
+	// Subagent work reaches the task as background work on the root agent's
+	// Stop, but a notification asking the user to act drives needs-input
+	// wherever it fires.
+	if strings.TrimSpace(input.AgentID) != "" && eventName != core.HookEventNotification {
+		return nil, nil
+	}
+
+	update, err := hookCatalog.StatusUpdate(core.ProviderClaude, input)
+	if err != nil || update == nil {
+		return update, err
+	}
+	if eventName == core.HookEventStop && !input.BackgroundWork.IsZero() {
+		update.Phase = core.TaskStatusPhaseWorkingInBackground
+		update.BackgroundWork = input.BackgroundWork
+	}
+	return update, nil
+}
+
+func notificationNeedsInput(notificationType string) bool {
+	// Payloads without a type predate typed notifications; keep treating them
+	// as needs-input.
+	if notificationType == "" {
+		return true
+	}
+	return slices.Contains(needsInputNotificationTypes, notificationType)
+}
+
+// backgroundWorkFromTasks counts the in-flight work a Stop payload reports.
+// Every counted kind wakes the root agent with a new turn when it completes,
+// so the next Stop replaces these counts. Claude's own housekeeping tasks
+// (dream, auto-mode scan, memory import) finish without a new turn, so they
+// are not counted and cannot pin a task at working.
+func backgroundWorkFromTasks(tasks []hookBackgroundTask) core.TaskBackgroundWork {
+	var work core.TaskBackgroundWork
+	for _, task := range tasks {
+		if status := strings.TrimSpace(task.Status); status != "running" && status != "pending" {
+			continue
+		}
+		switch strings.TrimSpace(task.Type) {
+		case "subagent":
+			work.Subagents++
+		// Monitor tool watches run as background shells and are reported as
+		// such; "monitor" covers MCP and websocket monitors.
+		case "shell":
+			work.Shells++
+		case "monitor":
+			work.Monitors++
+		case "workflow":
+			work.Workflows++
+		case "teammate", "cloud session", "MCP task":
+			work.Other++
+		}
+	}
+	return work
 }
 
 type hookPayload struct {
-	SessionID      string          `json:"session_id"`
-	HookEventName  string          `json:"hook_event_name"`
-	Prompt         string          `json:"prompt"`
-	ToolUseID      string          `json:"tool_use_id"`
-	Model          string          `json:"model"`
-	Cwd            string          `json:"cwd"`
-	TranscriptPath string          `json:"transcript_path"`
-	Source         string          `json:"source"`
-	Message        string          `json:"message"`
-	ToolInput      hookToolInput   `json:"tool_input"`
-	ToolResponse   json.RawMessage `json:"tool_response"`
+	SessionID        string               `json:"session_id"`
+	HookEventName    string               `json:"hook_event_name"`
+	Prompt           string               `json:"prompt"`
+	ToolUseID        string               `json:"tool_use_id"`
+	AgentID          string               `json:"agent_id"`
+	AgentType        string               `json:"agent_type"`
+	Model            string               `json:"model"`
+	Cwd              string               `json:"cwd"`
+	TranscriptPath   string               `json:"transcript_path"`
+	Source           string               `json:"source"`
+	Message          string               `json:"message"`
+	NotificationType string               `json:"notification_type"`
+	ToolInput        hookToolInput        `json:"tool_input"`
+	ToolResponse     json.RawMessage      `json:"tool_response"`
+	BackgroundTasks  []hookBackgroundTask `json:"background_tasks"`
 }
 
 type hookToolInput struct {
 	Command string `json:"command"`
+}
+
+// hookBackgroundTask is one entry of a Stop payload's background_tasks: the
+// work registered in the session that is still in flight at turn end.
+type hookBackgroundTask struct {
+	Type   string `json:"type"`
+	Status string `json:"status"`
 }
 
 func flattenPayloadText(raw json.RawMessage) string {
