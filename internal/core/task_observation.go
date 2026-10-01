@@ -453,6 +453,24 @@ func taskSessionRunningProvider(runtime TaskSessionRuntimeState, commandName str
 	return false
 }
 
+// taskSessionProviderStartedAt returns when the newest process running the
+// provider command started, or zero when process evidence has no start time.
+func taskSessionProviderStartedAt(runtime TaskSessionRuntimeState, commandName string) time.Time {
+	var startedAt time.Time
+	expectedCommand := filepath.Base(strings.TrimSpace(commandName))
+	if expectedCommand == "" {
+		return startedAt
+	}
+
+	for command, commandStartedAt := range runtime.CommandStartedAt {
+		activeCommand := filepath.Base(strings.TrimSpace(command))
+		if taskSessionCommandsMatch(activeCommand, expectedCommand) && commandStartedAt.After(startedAt) {
+			startedAt = commandStartedAt
+		}
+	}
+	return startedAt
+}
+
 // replacementActiveProvider returns the sole configured provider proven to be
 // running after the recorded active provider has exited. Ambiguous or
 // incomplete process evidence never changes durable provider ownership.

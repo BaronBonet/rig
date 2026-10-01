@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"strconv"
 	"strings"
 	"time"
 
@@ -144,12 +145,12 @@ func (r *repository) InspectTaskSession(ctx context.Context, task *core.Task) (c
 	// pane_current_command reports the foreground process title, which some
 	// provider CLIs rewrite (Claude Code sets it to its version string), so the
 	// comm names of each pane's child processes are reported as well.
-	childCommands, childEvidenceAvailable := r.paneChildCommands(ctx, panePIDs)
-	commands = append(commands, childCommands...)
+	children, childEvidenceAvailable := r.paneChildProcesses(ctx, panePIDs)
 
 	return core.TaskSessionRuntimeState{
 		Exists:                          true,
-		ActiveCommands:                  commands,
+		ActiveCommands:                  append(commands, processCommands(children)...),
+		CommandStartedAt:                processCommandStartTimes(children),
 		ChildProcessEvidenceUnavailable: !childEvidenceAvailable,
 	}, nil
 }
@@ -221,7 +222,7 @@ func (r *repository) InspectTaskSessions(
 	for _, panePIDs := range panePIDsBySession {
 		allPanePIDs = append(allPanePIDs, panePIDs...)
 	}
-	childCommandsByPID, processInventoryAvailable := r.childCommandsByParentPID(ctx, allPanePIDs)
+	childProcessesByPID, processInventoryAvailable := r.childProcessesByParentPID(ctx, allPanePIDs)
 	childEvidenceAvailable := allPanePIDsPresent && processInventoryAvailable
 
 	for session, taskIDs := range taskIDsBySession {
@@ -231,14 +232,16 @@ func (r *repository) InspectTaskSessions(
 			continue
 		}
 
-		activeCommands := append([]string(nil), commands...)
+		var children []paneChildProcess
 		for _, panePID := range panePIDsBySession[session] {
-			activeCommands = append(activeCommands, childCommandsByPID[panePID]...)
+			children = append(children, childProcessesByPID[panePID]...)
 		}
+		activeCommands := append(append([]string(nil), commands...), processCommands(children)...)
 		for _, taskID := range taskIDs {
 			states[taskID] = core.TaskSessionRuntimeState{
 				Exists:                          true,
 				ActiveCommands:                  append([]string(nil), activeCommands...),
+				CommandStartedAt:                processCommandStartTimes(children),
 				ChildProcessEvidenceUnavailable: !childEvidenceAvailable,
 			}
 		}
@@ -247,29 +250,36 @@ func (r *repository) InspectTaskSessions(
 	return states, nil
 }
 
-// paneChildCommands returns the process comm names of the direct children of
-// each pane's root process, typically the CLI the pane shell is running.
-func (r *repository) paneChildCommands(ctx context.Context, panePIDs []string) ([]string, bool) {
-	commandsByPID, available := r.childCommandsByParentPID(ctx, panePIDs)
-	var commands []string
-	for _, panePID := range panePIDs {
-		commands = append(commands, commandsByPID[panePID]...)
-	}
-	return commands, available
+// paneChildProcess is one direct child of a pane's root process, typically the
+// CLI the pane shell is running. startedAt is zero when ps reported no
+// parseable elapsed time.
+type paneChildProcess struct {
+	command   string
+	startedAt time.Time
 }
 
-func (r *repository) childCommandsByParentPID(
+// paneChildProcesses returns the direct children of each pane's root process.
+func (r *repository) paneChildProcesses(ctx context.Context, panePIDs []string) ([]paneChildProcess, bool) {
+	processesByPID, available := r.childProcessesByParentPID(ctx, panePIDs)
+	var processes []paneChildProcess
+	for _, panePID := range panePIDs {
+		processes = append(processes, processesByPID[panePID]...)
+	}
+	return processes, available
+}
+
+func (r *repository) childProcessesByParentPID(
 	ctx context.Context,
 	panePIDs []string,
-) (map[string][]string, bool) {
-	commandsByPID := make(map[string][]string)
+) (map[string][]paneChildProcess, bool) {
+	processesByPID := make(map[string][]paneChildProcess)
 	if len(panePIDs) == 0 {
-		return commandsByPID, true
+		return processesByPID, true
 	}
 
-	result, err := r.runner.Run(ctx, "", "ps", "-axo", "ppid=,comm=")
+	result, err := r.runner.Run(ctx, "", "ps", "-axo", "ppid=,etime=,comm=")
 	if err != nil {
-		return commandsByPID, false
+		return processesByPID, false
 	}
 
 	wanted := make(map[string]bool, len(panePIDs))
@@ -277,16 +287,71 @@ func (r *repository) childCommandsByParentPID(
 		wanted[pid] = true
 	}
 
+	now := r.now()
 	for _, line := range strings.Split(result.Stdout, "\n") {
 		fields := strings.Fields(line)
-		if len(fields) < 2 {
+		if len(fields) < 3 || !wanted[fields[0]] {
 			continue
 		}
-		if wanted[fields[0]] {
-			commandsByPID[fields[0]] = append(commandsByPID[fields[0]], strings.Join(fields[1:], " "))
+		process := paneChildProcess{command: strings.Join(fields[2:], " ")}
+		if elapsed, ok := parseProcessElapsedTime(fields[1]); ok {
+			process.startedAt = now.Add(-elapsed)
+		}
+		processesByPID[fields[0]] = append(processesByPID[fields[0]], process)
+	}
+	return processesByPID, true
+}
+
+// parseProcessElapsedTime parses ps's etime format, [[dd-]hh:]mm:ss.
+func parseProcessElapsedTime(raw string) (time.Duration, bool) {
+	var days int
+	if dayPart, clock, ok := strings.Cut(raw, "-"); ok {
+		parsed, err := strconv.Atoi(dayPart)
+		if err != nil || parsed < 0 {
+			return 0, false
+		}
+		days, raw = parsed, clock
+	}
+
+	parts := strings.Split(raw, ":")
+	if len(parts) < 2 || len(parts) > 3 {
+		return 0, false
+	}
+	seconds := 0
+	for _, part := range parts {
+		value, err := strconv.Atoi(part)
+		if err != nil || value < 0 {
+			return 0, false
+		}
+		seconds = seconds*60 + value
+	}
+	return time.Duration(days)*24*time.Hour + time.Duration(seconds)*time.Second, true
+}
+
+func processCommands(processes []paneChildProcess) []string {
+	commands := make([]string, 0, len(processes))
+	for _, process := range processes {
+		commands = append(commands, process.command)
+	}
+	return commands
+}
+
+// processCommandStartTimes maps each command to when its newest process
+// started, or returns nil when no process has a known start time.
+func processCommandStartTimes(processes []paneChildProcess) map[string]time.Time {
+	var startedAt map[string]time.Time
+	for _, process := range processes {
+		if process.startedAt.IsZero() {
+			continue
+		}
+		if startedAt == nil {
+			startedAt = make(map[string]time.Time)
+		}
+		if process.startedAt.After(startedAt[process.command]) {
+			startedAt[process.command] = process.startedAt
 		}
 	}
-	return commandsByPID, true
+	return startedAt
 }
 
 func (r *repository) DeleteTaskSession(ctx context.Context, task *core.Task) error {

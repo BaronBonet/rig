@@ -169,3 +169,35 @@ func TestRepositoryHookEventToTaskStatus_IgnoresSubagentWorkEvent(t *testing.T) 
 	require.NoError(t, err)
 	require.Nil(t, update)
 }
+
+func TestRepositoryHookEventToTaskStatus_SubagentStartDrivesNoStatus(t *testing.T) {
+	now := time.Date(2026, time.October, 1, 10, 52, 0, 0, time.UTC)
+	payload := []byte(`{"agent_id":"agent-456","agent_type":"worker","cwd":"/tmp/repo-task",` +
+		`"hook_event_name":"SubagentStart","model":"gpt-5.5","permission_mode":"default",` +
+		`"session_id":"session-123","transcript_path":"/tmp/codex-subagent.jsonl","turn_id":"turn-1"}`)
+	repo := New(nil, Config{Binary: "codex"}, HookForwardingConfig{})
+
+	input := DecodeHookEventInput(func() time.Time { return now }, "SubagentStart", payload)
+	input.TaskID = "task-123"
+	update, err := repo.HookEventToTaskStatus(input)
+
+	require.NoError(t, err)
+	require.Nil(t, update)
+	require.Equal(t, "session-123", input.SessionID)
+	require.Equal(t, "/tmp/codex-subagent.jsonl", input.TranscriptPath)
+	require.Equal(t, "agent-456", input.AgentID)
+}
+
+func TestRepositoryHookEventToTaskStatus_SubagentStartWithoutAgentIDDrivesNoStatus(t *testing.T) {
+	repo := New(nil, Config{Binary: "codex"}, HookForwardingConfig{})
+
+	update, err := repo.HookEventToTaskStatus(core.HookEventInput{
+		TaskID:     "task-123",
+		OccurredAt: time.Date(2026, time.October, 1, 10, 52, 0, 0, time.UTC),
+		EventName:  "SubagentStart",
+		Provider:   core.ProviderCodex,
+	})
+
+	require.NoError(t, err)
+	require.Nil(t, update)
+}

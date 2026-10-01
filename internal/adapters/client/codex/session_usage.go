@@ -74,16 +74,27 @@ func (r *repository) RecoverLatestTaskStatus(
 	ctx context.Context,
 	current core.TaskStatusUpdate,
 	sessions []core.TaskProviderSession,
+	providerStartedAt time.Time,
 ) (*core.TaskStatusUpdate, error) {
 	// Transcript recovery repairs stale in-progress status when a terminal hook
 	// was missed. It must not replace explicit needs-input hook evidence with
-	// transcript activity: Codex writes activity records around turn completion,
-	// and treating those as resumed work makes the live TUI fall back to working.
-	// A real resumed turn emits its own working hook and updates the persisted
-	// status directly.
-	if current.Phase == core.TaskStatusPhaseStopped ||
-		current.Phase == core.TaskStatusPhaseWaitingForInput {
+	// root transcript activity: Codex writes activity records around turn
+	// completion, and treating those as resumed work makes the live TUI fall
+	// back to working. A real resumed turn emits its own working hook and
+	// updates the persisted status directly. The one exception is the root
+	// agent's Stop while its subagents are still running, which reads as
+	// working in the background.
+	switch current.Phase {
+	case core.TaskStatusPhaseStopped:
 		return nil, nil
+	case core.TaskStatusPhaseWaitingForInput:
+		// Only the root agent's turn end can leave subagents running in the
+		// background; a permission request, from the root agent or a subagent,
+		// always keeps needing input.
+		if strings.TrimSpace(current.RawEventName) != core.HookEventStop {
+			return nil, nil
+		}
+		return r.recoverBackgroundSubagents(ctx, current, sessions, providerStartedAt)
 	}
 
 	session, err := r.newestRootCodexTranscriptSession(ctx, sessions)
@@ -109,6 +120,80 @@ func (r *repository) RecoverLatestTaskStatus(
 		RawEventName: status.rawEventName,
 		ObservedAt:   status.observedAt,
 	}, nil
+}
+
+// recoverBackgroundSubagents reports a task whose root agent ended its turn as
+// working in the background while thread-spawned subagents still have an open
+// turn. Codex delivers a finished subagent's result without waking the root
+// agent, so once the last subagent finishes this returns nil and the task
+// falls back to the persisted needs-input.
+func (r *repository) recoverBackgroundSubagents(
+	ctx context.Context,
+	current core.TaskStatusUpdate,
+	sessions []core.TaskProviderSession,
+	providerStartedAt time.Time,
+) (*core.TaskStatusUpdate, error) {
+	root, err := r.newestRootCodexTranscriptSession(ctx, sessions)
+	if err != nil || root == nil {
+		return nil, err
+	}
+	running, err := r.countRunningSubagents(ctx, *root, sessions, providerStartedAt)
+	if err != nil || running == 0 {
+		return nil, err
+	}
+	return &core.TaskStatusUpdate{
+		TaskID:       current.TaskID,
+		Provider:     current.Provider,
+		Phase:        core.TaskStatusPhaseWorkingInBackground,
+		RawEventName: "TranscriptSubagentsRunning",
+		// The observer discards recoveries older than the persisted evidence.
+		ObservedAt:     current.ObservedAt,
+		BackgroundWork: core.TaskBackgroundWork{Subagents: running},
+	}, nil
+}
+
+// countRunningSubagents counts the root session's subagents whose latest turn
+// is still open. A turn opened before the current Codex process started was
+// cut off when an earlier process was killed, for example before a resume, so
+// it is not counted. Codex records nothing in the rollout on resume, so the
+// process start time is the only evidence of that boundary.
+func (r *repository) countRunningSubagents(
+	ctx context.Context,
+	root core.TaskProviderSession,
+	sessions []core.TaskProviderSession,
+	providerStartedAt time.Time,
+) (int, error) {
+	rootSessionID := strings.TrimSpace(root.ProviderSessionID)
+	if rootSessionID == "" {
+		return 0, nil
+	}
+
+	running := 0
+	for _, session := range sessions {
+		transcriptPath := strings.TrimSpace(session.TranscriptPath)
+		if session.Provider != core.ProviderCodex ||
+			strings.TrimSpace(session.ProviderSessionID) != rootSessionID ||
+			transcriptPath == "" ||
+			transcriptPath == root.TranscriptPath {
+			continue
+		}
+
+		kind, err := r.readCodexTranscriptKind(ctx, transcriptPath)
+		if err != nil {
+			return 0, err
+		}
+		if kind != codexTranscriptKindSubagent {
+			continue
+		}
+		snapshot, err := r.getTranscriptIndex().read(ctx, transcriptPath)
+		if err != nil {
+			return 0, err
+		}
+		if snapshot.turn.openSince(providerStartedAt) {
+			running++
+		}
+	}
+	return running, nil
 }
 
 func (r *repository) ReadSessionActivity(
@@ -370,6 +455,13 @@ func codexEventMessageStatus(observedAt time.Time, eventType string) *codexTrans
 		return &codexTranscriptStatus{
 			observedAt:   observedAt,
 			rawEventName: "TranscriptTaskComplete",
+			phase:        core.TaskStatusPhaseWaitingForInput,
+		}
+	case "turn_aborted":
+		// An interrupted turn ends without task_complete or a Stop hook.
+		return &codexTranscriptStatus{
+			observedAt:   observedAt,
+			rawEventName: "TranscriptTurnAborted",
 			phase:        core.TaskStatusPhaseWaitingForInput,
 		}
 	default:

@@ -195,7 +195,7 @@ func TestRepositoryActivityAndTokenUsageDegradeGracefully(t *testing.T) {
 	require.NoError(t, err)
 	require.Nil(t, usage)
 
-	recovered, err := repo.RecoverLatestTaskStatus(t.Context(), core.TaskStatusUpdate{}, nil)
+	recovered, err := repo.RecoverLatestTaskStatus(t.Context(), core.TaskStatusUpdate{}, nil, time.Time{})
 	require.NoError(t, err)
 	require.Nil(t, recovered)
 }

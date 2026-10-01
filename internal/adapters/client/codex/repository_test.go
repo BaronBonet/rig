@@ -84,6 +84,9 @@ func TestRepositoryEnsureTaskSessionEnvironment_InstallsRigHooksIntoCodexHome(t 
 	require.Contains(t, cfg.Hooks, "PreToolUse")
 	require.Contains(t, cfg.Hooks, "PermissionRequest")
 	require.Contains(t, cfg.Hooks, "PostToolUse")
+	require.Contains(t, cfg.Hooks, "SubagentStart")
+	require.Len(t, cfg.Hooks["SubagentStart"], 1)
+	require.Empty(t, cfg.Hooks["SubagentStart"][0].Matcher)
 	require.Len(t, cfg.Hooks["PermissionRequest"], 1)
 	require.Empty(t, cfg.Hooks["PermissionRequest"][0].Matcher)
 
@@ -156,6 +159,31 @@ func TestRepositoryDoctorReportsMissingRigHookEvents(t *testing.T) {
 	err := repo.Doctor(t.Context())
 
 	require.ErrorContains(t, err, "missing UserPromptSubmit hook")
+}
+
+func TestRepositoryDoctorReportsMissingSubagentStartHook(t *testing.T) {
+	tempDir := t.TempDir()
+	runner := subprocess.NewMockRunner(t)
+	runner.EXPECT().Run(mock.Anything, "", "codex", "--version").Return(subprocess.Result{}, nil)
+	repo := New(runner, Config{Binary: "codex"}, HookForwardingConfig{
+		CollectorURL: "http://127.0.0.1:4124/codex-hook",
+	}).(*repository)
+	repo.codexHomeDir = func() (string, error) { return tempDir, nil }
+	require.NoError(t, repo.EnsureTaskSessionEnvironment(t.Context()))
+
+	hooksPath := filepath.Join(tempDir, "hooks.json")
+	hooksJSON, err := os.ReadFile(hooksPath)
+	require.NoError(t, err)
+	var cfg providerkit.HookConfig
+	require.NoError(t, json.Unmarshal(hooksJSON, &cfg))
+	delete(cfg.Hooks, "SubagentStart")
+	hooksJSON, err = json.Marshal(cfg)
+	require.NoError(t, err)
+	require.NoError(t, os.WriteFile(hooksPath, hooksJSON, 0o644))
+
+	err = repo.Doctor(t.Context())
+
+	require.ErrorContains(t, err, "missing SubagentStart hook")
 }
 
 func TestRepositoryDoctorReportsStaleHookCollectorURL(t *testing.T) {

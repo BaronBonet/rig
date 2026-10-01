@@ -26,6 +26,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"github.com/BaronBonet/rig/internal/adapters/client/providerkit"
 	"github.com/BaronBonet/rig/internal/core"
@@ -249,6 +250,7 @@ func (r *repository) RecoverLatestTaskStatus(
 	context.Context,
 	core.TaskStatusUpdate,
 	[]core.TaskProviderSession,
+	time.Time,
 ) (*core.TaskStatusUpdate, error) {
 	return nil, nil
 }

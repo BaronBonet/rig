@@ -300,10 +300,13 @@ type ProviderClient interface {
 	HookEventToTaskStatus(input HookEventInput) (*TaskStatusUpdate, error)
 	// RecoverLatestTaskStatus returns a computed replacement for a stale latest
 	// task status when provider-side state contains a newer observation.
+	// providerStartedAt is when the provider process running in the task
+	// session started, or zero when process evidence does not say.
 	RecoverLatestTaskStatus(
 		ctx context.Context,
 		current TaskStatusUpdate,
 		sessions []TaskProviderSession,
+		providerStartedAt time.Time,
 	) (*TaskStatusUpdate, error)
 	// ReadSessionActivity reads provider-specific user and assistant activity
 	// from one provider transcript after the supplied timestamp.

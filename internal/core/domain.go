@@ -137,7 +137,11 @@ type TaskStatusUpdate struct {
 
 // TaskSessionRuntimeState is the current tmux-side state of a task session.
 type TaskSessionRuntimeState struct {
-	ActiveCommands                  []string
+	ActiveCommands []string
+	// CommandStartedAt maps the command of each pane child process to when its
+	// newest process started. Commands without a known start time, such as the
+	// pane's foreground command, are absent.
+	CommandStartedAt                map[string]time.Time
 	Exists                          bool
 	ChildProcessEvidenceUnavailable bool
 }
@@ -240,6 +244,7 @@ const (
 	HookEventStop              = "Stop"
 	HookEventNotification      = "Notification"
 	HookEventPermissionRequest = "PermissionRequest"
+	HookEventSubagentStart     = "SubagentStart"
 )
 
 // SupportedProviders returns every provider Rig knows how to integrate with,
