@@ -1,6 +1,7 @@
 package tui
 
 import (
+	"fmt"
 	"strings"
 	"time"
 
@@ -75,7 +76,13 @@ func (m model) importSessionView() string {
 		builder.WriteString(dimStyle.Render("Resume a session as a task. Close its old pane first: one "+
 			"conversation must not run in two places.") + "\n\n")
 		width := m.totalWidth() - 24
-		for index, session := range m.sessionImport.sessions {
+		sessions := m.sessionImport.sessions
+		start, end := visibleRange(len(sessions), m.sessionImport.selected, m.importListRows())
+		if start > 0 {
+			builder.WriteString(mutedStyle.Render(fmt.Sprintf("  ↑ %d more", start)) + "\n")
+		}
+		for index := start; index < end; index++ {
+			session := sessions[index]
 			cursor := "  "
 			titleStyle := dimStyle
 			if index == m.sessionImport.selected {
@@ -87,6 +94,9 @@ func (m model) importSessionView() string {
 				titleStyle.Render(padRightVisible(truncateStr(session.Title, width), width)) +
 				mutedStyle.Render(sessionAgeText(session.LastActiveAt)) + "\n")
 		}
+		if end < len(sessions) {
+			builder.WriteString(mutedStyle.Render(fmt.Sprintf("  ↓ %d more", len(sessions)-end)) + "\n")
+		}
 	}
 
 	builder.WriteString("\n")
@@ -95,6 +105,25 @@ func (m model) importSessionView() string {
 		[2]string{"esc", "cancel"},
 	))
 	return builder.String()
+}
+
+// importListRows is how many sessions fit between the picker's header and
+// footer; 0 means the terminal height is not known yet and all are shown.
+func (m model) importListRows() int {
+	if m.height <= 0 {
+		return 0
+	}
+	return max(m.height-10, 3)
+}
+
+// visibleRange returns the [start, end) slice of a list of total rows that
+// keeps selected in view when only rows fit; rows <= 0 shows everything.
+func visibleRange(total int, selected int, rows int) (int, int) {
+	if rows <= 0 || total <= rows {
+		return 0, total
+	}
+	start := min(max(selected-rows/2, 0), total-rows)
+	return start, start + rows
 }
 
 // sessionAgeText says how long ago a session was last active; "active now"

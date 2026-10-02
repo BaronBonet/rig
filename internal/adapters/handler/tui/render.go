@@ -572,11 +572,12 @@ func (m model) promptInputView() string {
 	}
 
 	builder.WriteString("\n\n")
-	builder.WriteString(footerKeybinds(
-		[2]string{"enter", "submit"},
-		[2]string{"ctrl+p", "pull requests"},
-		[2]string{"esc", "cancel"},
-	))
+	binds := [][2]string{{"enter", "submit"}, {"ctrl+p", "pull requests"}, {"esc", "cancel"}}
+	if m.draft.outsideGit {
+		// Pull requests need a repository to look them up in.
+		binds = [][2]string{{"enter", "submit"}, {"esc", "cancel"}}
+	}
+	builder.WriteString(footerKeybinds(binds...))
 
 	return builder.String()
 }

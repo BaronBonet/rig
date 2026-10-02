@@ -876,6 +876,10 @@ func (m model) updatePromptInput(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 		if typed.String() == "ctrl+p" {
+			if m.draft.outsideGit {
+				m.draft.err = errors.New("pull requests need a git repository")
+				return m, nil
+			}
 			repoRoot, repoName, ok := m.currentRepoScope()
 			if !ok {
 				m.draft.err = errors.New("repo scope unavailable")

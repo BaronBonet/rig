@@ -2,6 +2,7 @@ package tui
 
 import (
 	"errors"
+	"fmt"
 	"testing"
 	"time"
 
@@ -99,4 +100,47 @@ func TestImportMode_EscReturnsToTheTaskList(t *testing.T) {
 	require.True(t, ok)
 	require.Equal(t, modeBrowse, m.mode)
 	require.Empty(t, m.sessionImport.sessions)
+}
+
+func TestVisibleRange_KeepsTheSelectionInView(t *testing.T) {
+	start, end := visibleRange(30, 0, 10)
+	require.Equal(t, [2]int{0, 10}, [2]int{start, end})
+
+	start, end = visibleRange(30, 15, 10)
+	require.Equal(t, [2]int{10, 20}, [2]int{start, end})
+
+	start, end = visibleRange(30, 29, 10)
+	require.Equal(t, [2]int{20, 30}, [2]int{start, end})
+
+	start, end = visibleRange(5, 4, 10)
+	require.Equal(t, [2]int{0, 5}, [2]int{start, end})
+
+	start, end = visibleRange(30, 7, 0)
+	require.Equal(t, [2]int{0, 30}, [2]int{start, end}, "unknown height shows everything")
+}
+
+func TestImportMode_ScrollsLongListsInShortTerminals(t *testing.T) {
+	frontend := newFrontendHarness()
+	for index := range 30 {
+		frontend.importableSessions = append(frontend.importableSessions, core.ProviderSessionSummary{
+			Provider: core.ProviderClaude, SessionID: "sess", Title: fmt.Sprintf("session %02d", index), Cwd: "/tmp/repo",
+		})
+	}
+	m := newLoadedModel(frontend)
+	m.height = 20
+
+	next, cmd := m.Update(tea.KeyPressMsg{Code: 'i', Text: "i"})
+	m, _ = next.(model)
+	next, _ = m.Update(runCmd(t, cmd))
+	m, _ = next.(model)
+	for range 25 {
+		next, _ = m.Update(tea.KeyPressMsg{Code: tea.KeyDown})
+		m, _ = next.(model)
+	}
+
+	view := stripANSI(m.View().Content)
+	require.Contains(t, view, "> claude  session 25")
+	require.NotContains(t, view, "session 00")
+	require.Contains(t, view, "↑ 20 more")
+	require.NotContains(t, view, "↓", "no marker below the last page")
 }

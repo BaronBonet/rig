@@ -84,3 +84,17 @@ func TestRepoHeader_NamesFolderTasksByTheirPath(t *testing.T) {
 
 	require.Equal(t, "~/dev/project/code", stripANSI(header))
 }
+
+func TestComposer_PullRequestsAreUnavailableOutsideGit(t *testing.T) {
+	frontend := newFrontendHarness()
+	m := composerIn(t, frontend, t.TempDir())
+	require.NotContains(t, stripANSI(m.View().Content), "ctrl+p")
+
+	next, cmd := m.Update(tea.KeyPressMsg{Code: 'p', Mod: tea.ModCtrl})
+	m, ok := next.(model)
+
+	require.True(t, ok)
+	require.Nil(t, cmd)
+	require.Equal(t, modePromptInput, m.mode)
+	require.ErrorContains(t, m.draft.err, "need a git repository")
+}
