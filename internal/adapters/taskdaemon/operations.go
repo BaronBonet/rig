@@ -89,6 +89,18 @@ var opGetTaskTokenUsage = unaryOp[taskIDRequest, *core.TaskTokenUsage]{
 	},
 }
 
+var opListTaskWorktrees = unaryOp[taskIDRequest, []core.TaskWorktree]{
+	command:  "list_task_worktrees",
+	envelope: "task_worktrees_list",
+	call: func(ctx context.Context, svc core.TaskService, req taskIDRequest) ([]core.TaskWorktree, error) {
+		taskID, err := requiredTaskID("list_task_worktrees", req.TaskID)
+		if err != nil {
+			return nil, err
+		}
+		return svc.ListTaskWorktrees(ctx, taskID)
+	},
+}
+
 var opListRepoPullRequests = unaryOp[repoPullRequestsRequest, []core.RepoPullRequest]{
 	command:  "list_repo_pull_requests",
 	envelope: "repo_pull_requests_list",
@@ -229,6 +241,7 @@ func serveUnary[Req, Resp any](op unaryOp[Req, Resp]) unaryHandler {
 var socketUnaryHandlers = map[string]unaryHandler{
 	opGetTaskActivity.command:      serveUnary(opGetTaskActivity),
 	opGetTaskTokenUsage.command:    serveUnary(opGetTaskTokenUsage),
+	opListTaskWorktrees.command:    serveUnary(opListTaskWorktrees),
 	opListRepoPullRequests.command: serveUnary(opListRepoPullRequests),
 	opPullRequestStatus.command:    serveUnary(opPullRequestStatus),
 	opReconnectTaskSession.command: serveUnary(opReconnectTaskSession),

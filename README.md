@@ -33,6 +33,8 @@ a background daemon handles longer running orchestration.
 - **Live observability**: the daemon records task status, recent prompt and
   assistant activity, provider sessions, transcript metadata, and token usage in
   SQLite.
+- **Worktrees per task**: see which worktrees and branches each task is editing,
+  across repositories, read from provider transcripts including subagents.
 - **Retry and cleanup**: retry failed task setup from the recorded creation step
   or remove a task's tmux session and worktree while keeping its branch.
 - **Workspace seeding**: copy repo-local files and run a repo-local setup script
@@ -163,6 +165,24 @@ until it exits.
 
 Use `rig doctor` to verify that your configured providers are available and
 that Rig's hook forwarding is installed correctly.
+
+### Worktrees per task
+
+A task row lists the worktrees its provider sessions have edited, most recently
+edited first, and the detail view shows each one's repository and the branch it
+has checked out now. Edits are read from provider transcripts, including Claude
+Code subagent transcripts, so a task that works across several repositories and
+worktrees shows all of them.
+
+- A deleted worktree disappears from the list; a new one appears on its first
+  edit.
+- Rig remembers the branch a worktree had at the task's latest edit there. If
+  the worktree has since checked out another branch, usually because other work
+  reused it, it is dimmed and reads "now on `<branch>`". The task's next edit
+  there adopts the new branch.
+- Only file edit tools count (Claude Code Edit/Write/MultiEdit/NotebookEdit,
+  Codex patches). Files changed through shell commands are not tracked, and
+  Codex subagent edits are not included.
 
 ## Usage
 

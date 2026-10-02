@@ -27,6 +27,7 @@ type fakeTaskService struct {
 	tasks      []*core.Task
 	activity   map[string][]core.TaskActivityEvent
 	usage      map[string]*core.TaskTokenUsage
+	worktrees  map[string][]core.TaskWorktree
 	prs        map[string][]core.RepoPullRequest
 	prStatuses map[string]*core.PRStatus
 	setup      *core.ProviderSetup
@@ -51,6 +52,7 @@ func newFakeTaskService() *fakeTaskService {
 	return &fakeTaskService{
 		activity:     map[string][]core.TaskActivityEvent{},
 		usage:        map[string]*core.TaskTokenUsage{},
+		worktrees:    map[string][]core.TaskWorktree{},
 		prs:          map[string][]core.RepoPullRequest{},
 		prStatuses:   map[string]*core.PRStatus{},
 		latest:       map[string]*core.TaskStatusUpdate{},
@@ -131,6 +133,12 @@ func (f *fakeTaskService) GetTaskTokenUsage(_ context.Context, taskID string) (*
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	return f.usage[taskID], f.errByOp["get_task_token_usage"]
+}
+
+func (f *fakeTaskService) ListTaskWorktrees(_ context.Context, taskID string) ([]core.TaskWorktree, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.worktrees[taskID], f.errByOp["list_task_worktrees"]
 }
 
 func (f *fakeTaskService) ListTasks(context.Context) ([]*core.Task, error) {
@@ -258,6 +266,14 @@ func TestUnaryOperationsRoundTrip(t *testing.T) {
 		{TaskID: "task-1", Role: core.TaskActivityRoleAssistant, Text: "editing main.go"},
 	}
 	svc.usage["task-1"] = &core.TaskTokenUsage{InputTokens: 100, OutputTokens: 25}
+	svc.worktrees["task-1"] = []core.TaskWorktree{{
+		LastEditAt:   time.Date(2026, time.October, 2, 9, 0, 0, 0, time.UTC),
+		WorktreePath: "/src/api-1",
+		RepoName:     "api",
+		Branch:       "feat/reuse",
+		EditedBranch: "feat/billing",
+		EditCount:    3,
+	}}
 	svc.prs["/tmp/repo"] = []core.RepoPullRequest{{Number: 7, Title: "retry flow", BranchName: "retries"}}
 	svc.prStatuses["/tmp/repo|retries"] = &core.PRStatus{State: core.PRStateOpen, Number: 7}
 	svc.setup = &core.ProviderSetup{
@@ -301,6 +317,17 @@ func TestUnaryOperationsRoundTrip(t *testing.T) {
 
 	t.Run("get task token usage requires task id", func(t *testing.T) {
 		_, err := client.GetTaskTokenUsage(ctx, "")
+		require.ErrorContains(t, err, "task_id required")
+	})
+
+	t.Run("list task worktrees", func(t *testing.T) {
+		worktrees, err := client.ListTaskWorktrees(ctx, "task-1")
+		require.NoError(t, err)
+		require.Equal(t, svc.worktrees["task-1"], worktrees)
+	})
+
+	t.Run("list task worktrees requires task id", func(t *testing.T) {
+		_, err := client.ListTaskWorktrees(ctx, " ")
 		require.ErrorContains(t, err, "task_id required")
 	})
 

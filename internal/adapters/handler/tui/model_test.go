@@ -441,10 +441,11 @@ func TestModel_AfterLoadUsesSubscriptionsAsInitialStatusSource(t *testing.T) {
 	require.True(t, ok)
 
 	msgs := runBatchCmd(t, cmd)
-	require.Len(t, msgs, 6)
+	require.Len(t, msgs, 8)
 	require.Empty(t, frontend.latestTaskStatusCalls)
 	require.Equal(t, []string{"task-1:6", "task-2:6"}, frontend.getTaskActivityCalls)
 	require.Equal(t, []string{"task-1", "task-2"}, frontend.getTaskTokenUsageCalls)
+	require.Equal(t, []string{"task-1", "task-2"}, frontend.listTaskWorktreesCalls)
 	require.Equal(t, []string{"task-1", "task-2"}, frontend.subscribeTaskStatusCalls)
 }
 
@@ -932,7 +933,7 @@ func TestModel_TaskStatusUpdateReloadsTaskActivity(t *testing.T) {
 
 	batchMsg, ok := runCmd(t, followCmd).(tea.BatchMsg)
 	require.True(t, ok)
-	require.Len(t, batchMsg, 3)
+	require.Len(t, batchMsg, 4)
 
 	activityMsg, ok := batchMsg[0]().(taskActivityLoadedMsg)
 	require.True(t, ok)
@@ -945,10 +946,50 @@ func TestModel_TaskStatusUpdateReloadsTaskActivity(t *testing.T) {
 	tokenMsg, ok := batchMsg[1]().(taskTokenUsageLoadedMsg)
 	require.True(t, ok)
 	require.Equal(t, []string{"task-1", "task-1"}, frontend.getTaskTokenUsageCalls)
+	_, ok = batchMsg[2]().(taskWorktreesLoadedMsg)
+	require.True(t, ok)
 	next, _ = got.Update(tokenMsg)
 	got, ok = next.(model)
 	require.True(t, ok)
 	require.Equal(t, "fresh activity", got.rows[0].activity[0].Text)
+}
+
+func TestModel_WorktreesLoadedRenderInTaskRowAndDetail(t *testing.T) {
+	frontend := newFrontendHarness()
+	m := newLoadedModel(frontend)
+	m.rows = []taskRow{{
+		task: &core.Task{ID: "task-1", DisplayName: "search integration", Provider: core.ProviderClaude},
+	}}
+	edited := time.Date(2026, time.October, 2, 9, 0, 0, 0, time.UTC)
+
+	next, _ := m.Update(taskWorktreesLoadedMsg{
+		taskID: "task-1",
+		worktrees: []core.TaskWorktree{
+			{
+				LastEditAt: edited, WorktreePath: "/src/api-search", RepoName: "api",
+				Branch: "fix/null-check", EditedBranch: "fix/null-check", EditCount: 4,
+			},
+			{
+				LastEditAt: edited, WorktreePath: "/src/web-search", RepoName: "web",
+				Branch: "feat/search", EditedBranch: "feat/search", EditCount: 2,
+			},
+			{
+				LastEditAt: edited, WorktreePath: "/src/web-1", RepoName: "web",
+				Branch: "feat/deep-links", EditedBranch: "fix/avatar", EditCount: 1,
+			},
+		},
+	})
+
+	got, ok := next.(model)
+	require.True(t, ok)
+	_, rowLine := got.renderRow(0, got.rows[0], 120)
+	require.Contains(t, stripANSI(rowLine), "api-search · web-search · +1")
+
+	view := stripANSI(got.selectedTaskDetailView())
+	require.Contains(t, view, "WORKTREES")
+	require.Contains(t, view, "api  api-search  fix/null-check")
+	require.Contains(t, view, "web  web-search  feat/search")
+	require.Contains(t, view, "web  web-1       now on feat/deep-links")
 }
 
 func TestModel_TokenUsageLoadedRendersInSelectedTaskDetail(t *testing.T) {
@@ -2333,6 +2374,8 @@ type frontendHarness struct {
 	getTaskTokenUsage           map[string]*core.TaskTokenUsage
 	getTaskTokenUsageErr        map[string]error
 	getTaskTokenUsageCalls      []string
+	listTaskWorktrees           map[string][]core.TaskWorktree
+	listTaskWorktreesCalls      []string
 	getTaskActivity             map[string][]core.TaskActivityEvent
 	getTaskActivityErr          map[string]error
 	getTaskActivityCalls        []string
@@ -2521,6 +2564,12 @@ func newFrontendHarness() *frontendHarness {
 				return nil, nil
 			}
 			return frontend.getTaskTokenUsage[taskID], nil
+		},
+	).Maybe()
+	frontend.mock.EXPECT().ListTaskWorktrees(mock.Anything, mock.Anything).RunAndReturn(
+		func(_ context.Context, taskID string) ([]core.TaskWorktree, error) {
+			frontend.listTaskWorktreesCalls = append(frontend.listTaskWorktreesCalls, taskID)
+			return frontend.listTaskWorktrees[taskID], nil
 		},
 	).Maybe()
 	frontend.mock.EXPECT().SubscribeTaskStatus(mock.Anything, mock.Anything).RunAndReturn(

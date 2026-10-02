@@ -168,6 +168,17 @@ func taskTokenUsageCmd(ctx context.Context, frontend core.TaskFrontend, taskID s
 	}
 }
 
+func taskWorktreesCmd(ctx context.Context, frontend core.TaskFrontend, taskID string) tea.Cmd {
+	return func() tea.Msg {
+		worktrees, err := frontend.ListTaskWorktrees(ctx, taskID)
+		return taskWorktreesLoadedMsg{
+			err:       err,
+			taskID:    taskID,
+			worktrees: worktrees,
+		}
+	}
+}
+
 func pullRequestStatusCmd(
 	ctx context.Context,
 	frontend core.TaskFrontend,

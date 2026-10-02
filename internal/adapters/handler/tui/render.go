@@ -3,6 +3,7 @@ package tui
 import (
 	"fmt"
 	"math"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"time"
@@ -326,6 +327,9 @@ func (m model) renderRow(index int, row taskRow, totalWidth int) (string, string
 	if tokenText != "" {
 		prText += "  " + tokenText
 	}
+	if worktreesText := taskWorktreesRowText(row.worktrees); worktreesText != "" {
+		prText += "  " + worktreesText
+	}
 
 	if index == m.selected {
 		line1 := lipgloss.NewStyle().Foreground(colorAccent).Bold(true).Render(nameCell) +
@@ -415,6 +419,13 @@ func (m model) selectedTaskDetailView() string {
 	var builder strings.Builder
 	for _, line := range zipColumns(workspaceLines, sessionLines, detailColWidth) {
 		builder.WriteString(line + "\n")
+	}
+
+	if worktreeLines := taskWorktreesDetailLines(row.worktrees, totalWidth-6); len(worktreeLines) > 0 {
+		builder.WriteString("\n")
+		for _, line := range worktreeLines {
+			builder.WriteString("   " + line + "\n")
+		}
 	}
 
 	if tokenLines := taskTokenUsageDetailLines(row.tokenUsage); len(tokenLines) > 0 {
@@ -946,6 +957,59 @@ func prStatusDetailText(status *core.PRStatus) string {
 	}
 
 	return mutedStyle.Render("pr") + "     " + prStatusText(status)
+}
+
+// taskWorktreesRowLimit caps how many worktree names fit on a task row; the
+// detail view lists all of them.
+const taskWorktreesRowLimit = 2
+
+// taskWorktreesRowText names the worktrees a task has edited, most recently
+// edited first. A worktree that has since checked out another branch is dimmed:
+// it most likely belongs to other work now.
+func taskWorktreesRowText(worktrees []core.TaskWorktree) string {
+	parts := make([]string, 0, taskWorktreesRowLimit+1)
+	for index, worktree := range worktrees {
+		if index == taskWorktreesRowLimit {
+			parts = append(parts, mutedStyle.Render(fmt.Sprintf("+%d", len(worktrees)-index)))
+			break
+		}
+		style := primaryStyle
+		if worktree.BranchChanged() {
+			style = dimStyle
+		}
+		parts = append(parts, style.Render(filepath.Base(worktree.WorktreePath)))
+	}
+	return strings.Join(parts, mutedStyle.Render(" · "))
+}
+
+// taskWorktreesDetailLines lists every worktree the task has edited with the
+// branch it has checked out now. When that branch differs from the one the
+// task last edited on, the line is dimmed and reads "now on <branch>".
+func taskWorktreesDetailLines(worktrees []core.TaskWorktree, width int) []string {
+	if len(worktrees) == 0 {
+		return nil
+	}
+
+	repoWidth, nameWidth := 0, 0
+	for _, worktree := range worktrees {
+		repoWidth = max(repoWidth, lipgloss.Width(worktree.RepoName))
+		nameWidth = max(nameWidth, lipgloss.Width(filepath.Base(worktree.WorktreePath)))
+	}
+
+	lines := []string{headerLabelStyle.Render("WORKTREES")}
+	for _, worktree := range worktrees {
+		repo := padRightVisible(worktree.RepoName, repoWidth+2)
+		name := padRightVisible(filepath.Base(worktree.WorktreePath), nameWidth+2)
+		branch := emptyFallback(worktree.Branch, "(detached)")
+		if worktree.BranchChanged() {
+			lines = append(lines, dimStyle.Render(truncateStr(repo+name+"now on "+branch, width)))
+			continue
+		}
+		lines = append(lines, mutedStyle.Render(repo)+primaryStyle.Render(name)+primaryStyle.Render(
+			truncateStr(branch, max(width-lipgloss.Width(repo+name), 10)),
+		))
+	}
+	return lines
 }
 
 func taskTokenUsageRowText(usage *core.TaskTokenUsage) string {

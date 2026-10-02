@@ -18,6 +18,7 @@ type taskRow struct {
 	status      *core.TaskStatusUpdate
 	tokenUsage  *core.TaskTokenUsage
 	pullRequest *core.PRStatus
+	worktrees   []core.TaskWorktree
 }
 
 type modelMode int
@@ -158,6 +159,12 @@ type taskTokenUsageLoadedMsg struct {
 	usage  *core.TaskTokenUsage
 	err    error
 	taskID string
+}
+
+type taskWorktreesLoadedMsg struct {
+	err       error
+	taskID    string
+	worktrees []core.TaskWorktree
 }
 
 type taskStatusSubscriptionReadyMsg struct {
@@ -467,6 +474,14 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		m.setTaskTokenUsage(msg.taskID, msg.usage)
 		return m, nil
+	case taskWorktreesLoadedMsg:
+		// A worktree that cannot be inspected keeps the last known list; the
+		// next refresh retries.
+		if msg.err != nil {
+			return m, nil
+		}
+		m.setTaskWorktrees(msg.taskID, msg.worktrees)
+		return m, nil
 	case taskStatusSubscriptionReadyMsg:
 		if msg.err != nil {
 			m.cancelTaskStatusTracking(msg.taskID)
@@ -479,6 +494,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		cmds := []tea.Cmd{
 			taskActivityCmd(m.statusContext, m.frontend, msg.taskID, taskActivityPreviewLimit),
 			taskTokenUsageCmd(m.statusContext, m.frontend, msg.taskID),
+			taskWorktreesCmd(m.statusContext, m.frontend, msg.taskID),
 			waitForTaskStatusCmd(msg.taskID, msg.updates),
 		}
 		// A live status from a different provider than the task record means
@@ -647,6 +663,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			cmds = append(cmds,
 				taskActivityCmd(m.statusContext, m.frontend, id, taskActivityPreviewLimit),
 				taskTokenUsageCmd(m.statusContext, m.frontend, id),
+				taskWorktreesCmd(m.statusContext, m.frontend, id),
 			)
 		}
 		return m, tea.Batch(cmds...)
@@ -718,6 +735,7 @@ func (m *model) afterTasksLoadedCmds() []tea.Cmd {
 		if taskID != "" {
 			cmds = append(cmds, taskActivityCmd(m.statusContext, m.frontend, taskID, taskActivityPreviewLimit))
 			cmds = append(cmds, taskTokenUsageCmd(m.statusContext, m.frontend, taskID))
+			cmds = append(cmds, taskWorktreesCmd(m.statusContext, m.frontend, taskID))
 		}
 		if cmd := m.taskPullRequestStatusCmd(row.task); cmd != nil {
 			cmds = append(cmds, cmd)
@@ -1095,6 +1113,12 @@ func (m *model) setTaskTokenUsage(taskID string, usage *core.TaskTokenUsage) {
 	}
 	copied := *usage
 	row.tokenUsage = &copied
+}
+
+func (m *model) setTaskWorktrees(taskID string, worktrees []core.TaskWorktree) {
+	if row := m.taskRowByID(taskID); row != nil {
+		row.worktrees = append([]core.TaskWorktree(nil), worktrees...)
+	}
 }
 
 func (m *model) upsertTaskRow(task *core.Task) int {

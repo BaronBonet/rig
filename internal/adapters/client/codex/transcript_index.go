@@ -20,6 +20,7 @@ const (
 	defaultCodexTranscriptIndexBudget = 64 << 20
 	transcriptIndexEntryOverhead      = 256
 	transcriptActivityOverhead        = 96
+	transcriptFileChangeOverhead      = 48
 	transcriptReadBufferSize          = 64 << 10
 )
 
@@ -49,22 +50,24 @@ type codexTranscriptIndexStats struct {
 type codexTranscriptEntry struct {
 	mu sync.Mutex
 
-	path       string
-	element    *list.Element
-	users      int
-	weight     int64
-	identity   os.FileInfo
-	offset     int64
-	trailing   []byte
-	status     *codexTranscriptStatus
-	usage      *core.SessionTokenUsage
-	activities []core.TaskActivityEvent
+	path        string
+	element     *list.Element
+	users       int
+	weight      int64
+	identity    os.FileInfo
+	offset      int64
+	trailing    []byte
+	status      *codexTranscriptStatus
+	usage       *core.SessionTokenUsage
+	activities  []core.TaskActivityEvent
+	fileChanges []core.SessionFileChange
 }
 
 type codexTranscriptSnapshot struct {
-	status     *codexTranscriptStatus
-	usage      *core.SessionTokenUsage
-	activities []core.TaskActivityEvent
+	status      *codexTranscriptStatus
+	usage       *core.SessionTokenUsage
+	activities  []core.TaskActivityEvent
+	fileChanges []core.SessionFileChange
 }
 
 func newCodexTranscriptIndex(maxBytes int64) *codexTranscriptIndex {
@@ -202,12 +205,14 @@ func (i *codexTranscriptIndex) refreshLocked(ctx context.Context, entry *codexTr
 	status := cloneCodexTranscriptStatus(entry.status)
 	usage := cloneSessionTokenUsage(entry.usage)
 	activities := append([]core.TaskActivityEvent(nil), entry.activities...)
+	fileChanges := append([]core.SessionFileChange(nil), entry.fileChanges...)
 	if rebuild {
 		offset = 0
 		trailing = nil
 		status = nil
 		usage = nil
 		activities = nil
+		fileChanges = nil
 	}
 
 	readOffset := offset + int64(len(trailing))
@@ -230,7 +235,7 @@ func (i *codexTranscriptIndex) refreshLocked(ctx context.Context, entry *codexTr
 			return err
 		}
 		lineEnd += consumed
-		parseCodexTranscriptRecord(pending[consumed:lineEnd], &status, &usage, &activities)
+		parseCodexTranscriptRecord(pending[consumed:lineEnd], &status, &usage, &activities, &fileChanges)
 		consumed = lineEnd + 1
 	}
 
@@ -242,6 +247,7 @@ func (i *codexTranscriptIndex) refreshLocked(ctx context.Context, entry *codexTr
 	entry.status = status
 	entry.usage = usage
 	entry.activities = activities
+	entry.fileChanges = fileChanges
 	if rebuild {
 		i.metrics.rebuilds.Add(1)
 	}
@@ -280,6 +286,7 @@ func parseCodexTranscriptRecord(
 	status **codexTranscriptStatus,
 	usage **core.SessionTokenUsage,
 	activities *[]core.TaskActivityEvent,
+	fileChanges *[]core.SessionFileChange,
 ) {
 	var envelope codexTranscriptEnvelope
 	if err := jsonUnmarshalTranscriptLine(line, &envelope); err != nil {
@@ -296,6 +303,7 @@ func parseCodexTranscriptRecord(
 	if activity := codexTranscriptActivityEvent("", envelope); activity != nil {
 		*activities = append(*activities, *activity)
 	}
+	*fileChanges = append(*fileChanges, codexTranscriptFileChanges(envelope)...)
 }
 
 func jsonUnmarshalTranscriptLine(line []byte, target any) error {
@@ -339,9 +347,10 @@ func codexTranscriptEnvelopeTokenUsage(envelope codexTranscriptEnvelope) *core.S
 
 func snapshotTranscriptEntry(entry *codexTranscriptEntry) codexTranscriptSnapshot {
 	return codexTranscriptSnapshot{
-		status:     cloneCodexTranscriptStatus(entry.status),
-		usage:      cloneSessionTokenUsage(entry.usage),
-		activities: append([]core.TaskActivityEvent(nil), entry.activities...),
+		status:      cloneCodexTranscriptStatus(entry.status),
+		usage:       cloneSessionTokenUsage(entry.usage),
+		activities:  append([]core.TaskActivityEvent(nil), entry.activities...),
+		fileChanges: append([]core.SessionFileChange(nil), entry.fileChanges...),
 	}
 }
 
@@ -354,6 +363,9 @@ func transcriptEntryWeight(entry *codexTranscriptEntry) int64 {
 				len(activity.Role) +
 				len(activity.Text),
 		)
+	}
+	for _, change := range entry.fileChanges {
+		weight += int64(transcriptFileChangeOverhead + len(change.Path))
 	}
 	return weight
 }

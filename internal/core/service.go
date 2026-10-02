@@ -36,6 +36,7 @@ type service struct {
 	launcher       *sessionLauncher
 	creation       *taskCreation
 	observation    *taskObservation
+	worktrees      *taskWorktrees
 	operations     *taskOperationCoordinator
 }
 
@@ -90,6 +91,7 @@ func NewTaskService(deps TaskServiceDependencies) *service {
 		providerConfig: deps.ProviderConfig,
 		launcher:       launcher,
 		creation:       newTaskCreation(deps.Tasks, deps.GitWorktree, launcher, operations),
+		worktrees:      newTaskWorktrees(deps.Tasks, deps.GitWorktree, deps.Providers),
 		operations:     operations,
 		observation: newTaskObservation(
 			deps.Tasks,
@@ -265,6 +267,10 @@ func (s *service) GetTaskActivity(ctx context.Context, taskID string, limit int)
 
 func (s *service) GetTaskTokenUsage(ctx context.Context, taskID string) (*TaskTokenUsage, error) {
 	return s.observation.GetTaskTokenUsage(ctx, taskID)
+}
+
+func (s *service) ListTaskWorktrees(ctx context.Context, taskID string) ([]TaskWorktree, error) {
+	return s.worktrees.ListTaskWorktrees(ctx, taskID)
 }
 
 func (s *service) ListRepoPullRequests(ctx context.Context, cwd string) ([]RepoPullRequest, error) {

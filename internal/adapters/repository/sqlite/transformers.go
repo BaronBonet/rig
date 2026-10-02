@@ -97,6 +97,32 @@ func upsertTaskProviderSessionParams(session core.TaskProviderSession) generated
 	}
 }
 
+func upsertTaskWorktreeParams(record core.TaskWorktreeRecord) generated.UpsertTaskWorktreeParams {
+	return generated.UpsertTaskWorktreeParams{
+		TaskID:       record.TaskID,
+		WorktreePath: record.WorktreePath,
+		RepoName:     record.RepoName,
+		Branch:       record.Branch,
+		LastEditAt:   formatTime(record.LastEditAt),
+		EditCount:    int64(record.EditCount),
+	}
+}
+
+func taskWorktreeRecordsFromRows(rows []generated.TaskWorktree) []core.TaskWorktreeRecord {
+	records := make([]core.TaskWorktreeRecord, 0, len(rows))
+	for _, row := range rows {
+		records = append(records, core.TaskWorktreeRecord{
+			LastEditAt:   parseTime(row.LastEditAt),
+			TaskID:       row.TaskID,
+			WorktreePath: row.WorktreePath,
+			RepoName:     row.RepoName,
+			Branch:       row.Branch,
+			EditCount:    int(row.EditCount),
+		})
+	}
+	return records
+}
+
 func formatTime(ts time.Time) string {
 	if ts.IsZero() {
 		return ""

@@ -1008,3 +1008,44 @@ func tableColumnNames(t *testing.T, db *sql.DB, table string) []string {
 	}
 	return names
 }
+
+func TestRepositoryTaskWorktreeRecords_UpsertReplacesAndDeleteTaskCascades(t *testing.T) {
+	repo := newTestRepository(t)
+	ctx := context.Background()
+	now := time.Date(2026, time.October, 2, 9, 0, 0, 0, time.UTC)
+	require.NoError(t, repo.CreateTask(ctx, &core.Task{
+		ID:           "task-1",
+		Slug:         "task-one",
+		DisplayName:  "task one",
+		RepoRoot:     "/src/code",
+		RepoName:     "code",
+		WorktreePath: "/src/code",
+		TmuxSession:  "code_task_one",
+		Provider:     core.ProviderClaude,
+		CreatedAt:    now,
+		UpdatedAt:    now,
+	}))
+
+	record := core.TaskWorktreeRecord{
+		LastEditAt:   now,
+		TaskID:       "task-1",
+		WorktreePath: "/src/api-1",
+		RepoName:     "api",
+		Branch:       "feat/billing",
+		EditCount:    2,
+	}
+	require.NoError(t, repo.UpsertTaskWorktreeRecord(ctx, record))
+	record.Branch = "feat/reuse"
+	record.EditCount = 3
+	record.LastEditAt = now.Add(time.Minute)
+	require.NoError(t, repo.UpsertTaskWorktreeRecord(ctx, record))
+
+	records, err := repo.ListTaskWorktreeRecords(ctx, "task-1")
+	require.NoError(t, err)
+	require.Equal(t, []core.TaskWorktreeRecord{record}, records)
+
+	require.NoError(t, repo.DeleteTask(ctx, "task-1"))
+	records, err = repo.ListTaskWorktreeRecords(ctx, "task-1")
+	require.NoError(t, err)
+	require.Empty(t, records)
+}

@@ -13,7 +13,7 @@ import (
 
 var currentFrontendBuildVersion = "dev"
 
-const currentFrontendProtocolVersion = 10
+const currentFrontendProtocolVersion = 11
 
 // socketRequest is one frontend request on the daemon socket. Payload carries
 // the operation's typed request body; its shape per command is declared in

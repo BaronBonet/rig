@@ -87,6 +87,7 @@ type repository struct {
 	binary       string
 	collectorURL string
 	hookSecret   string
+	fileChanges  transcriptEditCache
 }
 
 func New(runner subprocess.Runner, cfg Config, hooks HookForwardingConfig) core.ProviderClient {

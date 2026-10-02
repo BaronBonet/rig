@@ -173,6 +173,10 @@ type TaskService interface {
 	// GetTaskTokenUsage returns the summed token usage across provider sessions
 	// observed for the selected task.
 	GetTaskTokenUsage(ctx context.Context, taskID string) (*TaskTokenUsage, error)
+	// ListTaskWorktrees returns the existing worktrees the task's provider
+	// sessions have edited, most recently edited first, each with the branch it
+	// has checked out now and the branch it had at the task's last edit there.
+	ListTaskWorktrees(ctx context.Context, taskID string) ([]TaskWorktree, error)
 	// ListTasks returns all known tasks.
 	ListTasks(ctx context.Context) ([]*Task, error)
 	// LatestTaskStatus returns the latest published live status for a task, or
@@ -266,6 +270,12 @@ type TaskRepository interface {
 	LatestTaskResumeMetadata(ctx context.Context, taskID string) (*TaskResumeMetadata, error)
 	// ListTaskProviderSessions returns provider sessions observed for a task.
 	ListTaskProviderSessions(ctx context.Context, taskID string) ([]TaskProviderSession, error)
+	// UpsertTaskWorktreeRecord stores the latest observation of a worktree the
+	// task has edited, replacing any earlier one for the same worktree.
+	UpsertTaskWorktreeRecord(ctx context.Context, record TaskWorktreeRecord) error
+	// ListTaskWorktreeRecords returns every stored worktree observation for a
+	// task.
+	ListTaskWorktreeRecords(ctx context.Context, taskID string) ([]TaskWorktreeRecord, error)
 	// SubscribeTaskStatus subscribes to live status updates for a task. The
 	// subscription lifetime is owned by ctx; cancelling it removes the
 	// subscription and closes the update channel.
@@ -315,6 +325,9 @@ type ProviderClient interface {
 	// ReadSessionTokenUsage reads provider-specific token usage from one
 	// provider transcript.
 	ReadSessionTokenUsage(ctx context.Context, transcriptPath string) (*SessionTokenUsage, error)
+	// ReadSessionFileChanges reads the file edits one provider session made,
+	// including edits made by its subagents, as absolute paths.
+	ReadSessionFileChanges(ctx context.Context, session TaskProviderSession) ([]SessionFileChange, error)
 }
 
 // GitWorktreeClient manages the Git worktree operations needed by the new task
@@ -341,6 +354,13 @@ type GitWorktreeClient interface {
 	CreateTaskWorkspaceFromPullRequest(ctx context.Context, task *Task, pullRequestNumber int) error
 	// RemoveTaskWorkspace deletes a task worktree while keeping its branch.
 	RemoveTaskWorkspace(ctx context.Context, task *Task) error
+	// WorktreeRootOf returns the root of the Git worktree containing dir, or ""
+	// when dir does not exist or is not inside a Git worktree. It reads only the
+	// filesystem, so it is cheap enough to call once per edited directory.
+	WorktreeRootOf(dir string) string
+	// InspectWorktree reports the repository and the branch checked out now for
+	// the worktree rooted at root, or nil when root is no longer a worktree.
+	InspectWorktree(ctx context.Context, root string) (*WorktreeRef, error)
 }
 
 // PullRequestClient lists repository pull requests through an external

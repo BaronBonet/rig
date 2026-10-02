@@ -225,6 +225,52 @@ func (u TaskTokenUsage) IsZero() bool {
 		u.TotalTokens == 0
 }
 
+// SessionFileChange is one file edit a Provider session made, recovered from
+// its Provider transcript (including the transcripts of its subagents).
+type SessionFileChange struct {
+	ObservedAt time.Time
+	Path       string
+}
+
+// WorktreeRef identifies the Git worktree a directory belongs to and the branch
+// it has checked out now. Branch is empty for a detached HEAD.
+type WorktreeRef struct {
+	Root     string
+	RepoName string
+	Branch   string
+}
+
+// TaskWorktreeRecord is the durable observation behind a Task's touched
+// worktrees: the branch the worktree had when the Task's latest edit there was
+// first observed. Comparing it with the branch checked out now tells whether the
+// worktree has since moved on to other work.
+type TaskWorktreeRecord struct {
+	LastEditAt   time.Time
+	TaskID       string
+	WorktreePath string
+	RepoName     string
+	Branch       string
+	EditCount    int
+}
+
+// TaskWorktree is a worktree the Task has edited that still exists, as it
+// stands now. Branch is what the worktree has checked out now; EditedBranch is
+// what it had at the Task's latest edit there.
+type TaskWorktree struct {
+	LastEditAt   time.Time `json:"last_edit_at"`
+	WorktreePath string    `json:"worktree_path"`
+	RepoName     string    `json:"repo_name"`
+	Branch       string    `json:"branch"`
+	EditedBranch string    `json:"edited_branch"`
+	EditCount    int       `json:"edit_count"`
+}
+
+// BranchChanged reports whether the worktree has checked out another branch
+// since the Task last edited it, which usually means other work reused it.
+func (w TaskWorktree) BranchChanged() bool {
+	return w.Branch != w.EditedBranch
+}
+
 // Provider identifies the supported interactive runtime backing a task.
 type Provider string
 

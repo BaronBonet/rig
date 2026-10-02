@@ -35,6 +35,10 @@ func (f *frontend) GetTaskTokenUsage(ctx context.Context, taskID string) (*core.
 	return callUnary(ctx, f, opGetTaskTokenUsage, taskIDRequest{TaskID: taskID})
 }
 
+func (f *frontend) ListTaskWorktrees(ctx context.Context, taskID string) ([]core.TaskWorktree, error) {
+	return callUnary(ctx, f, opListTaskWorktrees, taskIDRequest{TaskID: taskID})
+}
+
 func (f *frontend) ListRepoPullRequests(ctx context.Context, cwd string) ([]core.RepoPullRequest, error) {
 	return callUnary(ctx, f, opListRepoPullRequests, repoPullRequestsRequest{Cwd: cwd})
 }

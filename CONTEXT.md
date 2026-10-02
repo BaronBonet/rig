@@ -80,6 +80,10 @@ Use `rig` for the CLI command and Rig for the product or system.
   after its tmux session has been lost.
 - Token usage: The summed provider token counts observed across a task's
   provider sessions.
+- Touched worktree: A Git worktree a task's provider sessions have edited, shown
+  with the branch it has checked out now. Rig records the branch at the task's
+  latest edit there; a different branch now means the worktree moved on to
+  other work.
 - Pull request status: The GitHub pull request state associated with a task
   branch, if any.
 
