@@ -370,7 +370,10 @@ func (s *service) reconnectTaskSession(ctx context.Context, taskID string) error
 	if err != nil {
 		return err
 	}
+	return s.reconnectTask(ctx, task)
+}
 
+func (s *service) reconnectTask(ctx context.Context, task *Task) error {
 	_, providerClient, err := s.launcher.resolveProvider(ctx, task.Provider)
 	if err != nil {
 		return err

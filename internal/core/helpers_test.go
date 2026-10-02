@@ -141,6 +141,7 @@ type providerClientState struct {
 	usageByTranscript       map[string]*SessionTokenUsage
 	tokenUsageCalls         []providerTokenUsageCall
 	builtLaunchSpecs        []TaskSessionLaunchSpec
+	folderSessions          []ProviderSessionSummary
 }
 
 func (s *providerClientState) mockCommandName() string {
@@ -580,6 +581,17 @@ func configureProviderClientMock(client *MockProviderClient, state *providerClie
 			}
 			events := state.activityByTranscript[transcriptPath]
 			return append([]TaskActivityEvent(nil), events...), nil
+		},
+	).Maybe()
+	client.EXPECT().ListFolderSessions(mock.Anything, mock.Anything, mock.Anything).RunAndReturn(
+		func(_ context.Context, folder string, _ int) ([]ProviderSessionSummary, error) {
+			var sessions []ProviderSessionSummary
+			for _, session := range state.folderSessions {
+				if session.Cwd == folder {
+					sessions = append(sessions, session)
+				}
+			}
+			return sessions, nil
 		},
 	).Maybe()
 	client.EXPECT().ReadSessionTokenUsage(mock.Anything, mock.Anything).RunAndReturn(

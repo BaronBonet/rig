@@ -30,6 +30,7 @@ const (
 	modeCleanupConfirm
 	modeProviderSetup
 	modeSwitchProvider
+	modeImportSession
 )
 
 const defaultBuildVersion = "dev"
@@ -44,6 +45,7 @@ const (
 	opCreating
 	opDeleting
 	opSwitching
+	opImporting
 )
 
 const taskActivityPreviewLimit = 6
@@ -85,6 +87,7 @@ type model struct {
 	draft          taskDraft
 	setupForm      setupFormState
 	providerSwitch switchState
+	sessionImport  importState
 
 	// In-flight creation progress; outlives the draft and renders in browse.
 	create createFlowState
@@ -132,6 +135,16 @@ type setupFormState struct {
 type switchState struct {
 	options  []core.Provider
 	selected int
+}
+
+// importState is the session import picker: provider sessions started in the
+// launch folder that no task owns yet.
+type importState struct {
+	err      error
+	folder   string
+	sessions []core.ProviderSessionSummary
+	selected int
+	loading  bool
 }
 
 // providerSetupRow is one supported provider in the provider setup UI.
@@ -235,6 +248,16 @@ type providerSetupSavedMsg struct {
 }
 
 type taskProviderSwitchedMsg struct {
+	task *core.Task
+	err  error
+}
+
+type importableSessionsLoadedMsg struct {
+	err      error
+	sessions []core.ProviderSessionSummary
+}
+
+type sessionImportedMsg struct {
 	task *core.Task
 	err  error
 }
@@ -372,6 +395,9 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if m.mode == modeSwitchProvider {
 			return m.updateSwitchProvider(msg)
 		}
+		if m.mode == modeImportSession {
+			return m.updateImportSession(msg)
+		}
 
 		if isQuitKey(msg) {
 			return m.quit()
@@ -394,6 +420,8 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m.enterPromptInputMode("")
 		case "p":
 			return m.enterSwitchProviderMode()
+		case "i":
+			return m.enterImportSessionMode()
 		case "S":
 			return m.enterProviderSetupMode()
 		case "r":
@@ -560,6 +588,27 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.transition(modeBrowse)
 		m.loading = true
 		return m, loadTasksCmd(m.statusContext, m.frontend)
+	case importableSessionsLoadedMsg:
+		if m.mode != modeImportSession {
+			return m, nil
+		}
+		m.sessionImport.loading = false
+		m.sessionImport.err = msg.err
+		m.sessionImport.sessions = msg.sessions
+		m.sessionImport.selected = 0
+		return m, nil
+	case sessionImportedMsg:
+		m.endOp()
+		m.transition(modeBrowse)
+		m.err = msg.err
+		if msg.task == nil {
+			return m, nil
+		}
+		if index := m.upsertTaskRow(msg.task); index >= 0 {
+			m.selected = index
+		}
+		m.clampSelection()
+		return m, tea.Batch(m.taskStatusTrackingCmds(taskID(msg.task))...)
 	case taskProviderSwitchedMsg:
 		m.endOp()
 		m.transition(modeBrowse)
@@ -698,6 +747,8 @@ func (m model) View() tea.View {
 		body = m.providerSetupView()
 	case modeSwitchProvider:
 		body = m.switchProviderView()
+	case modeImportSession:
+		body = m.importSessionView()
 	default:
 		body = m.listView()
 	}

@@ -28,6 +28,10 @@ type fakeTaskService struct {
 	activity   map[string][]core.TaskActivityEvent
 	usage      map[string]*core.TaskTokenUsage
 	worktrees  map[string][]core.TaskWorktree
+	importable []core.ProviderSessionSummary
+	imported   []core.ProviderSessionSummary
+	importTask *core.Task
+	importErr  error
 	prs        map[string][]core.RepoPullRequest
 	prStatuses map[string]*core.PRStatus
 	setup      *core.ProviderSetup
@@ -133,6 +137,28 @@ func (f *fakeTaskService) GetTaskTokenUsage(_ context.Context, taskID string) (*
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	return f.usage[taskID], f.errByOp["get_task_token_usage"]
+}
+
+func (f *fakeTaskService) ListImportableSessions(
+	_ context.Context,
+	folder string,
+) ([]core.ProviderSessionSummary, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	var sessions []core.ProviderSessionSummary
+	for _, session := range f.importable {
+		if session.Cwd == folder {
+			sessions = append(sessions, session)
+		}
+	}
+	return sessions, f.errByOp["list_importable_sessions"]
+}
+
+func (f *fakeTaskService) ImportSession(_ context.Context, session core.ProviderSessionSummary) (*core.Task, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.imported = append(f.imported, session)
+	return f.importTask, f.importErr
 }
 
 func (f *fakeTaskService) ListTaskWorktrees(_ context.Context, taskID string) ([]core.TaskWorktree, error) {
@@ -266,6 +292,14 @@ func TestUnaryOperationsRoundTrip(t *testing.T) {
 		{TaskID: "task-1", Role: core.TaskActivityRoleAssistant, Text: "editing main.go"},
 	}
 	svc.usage["task-1"] = &core.TaskTokenUsage{InputTokens: 100, OutputTokens: 25}
+	svc.importable = []core.ProviderSessionSummary{{
+		LastActiveAt:   time.Date(2026, time.October, 2, 8, 0, 0, 0, time.UTC),
+		Provider:       core.ProviderClaude,
+		SessionID:      "sess-1",
+		Title:          "search-integration",
+		Cwd:            "/src/code",
+		TranscriptPath: "/claude/projects/-src-code/sess-1.jsonl",
+	}}
 	svc.worktrees["task-1"] = []core.TaskWorktree{{
 		LastEditAt:   time.Date(2026, time.October, 2, 9, 0, 0, 0, time.UTC),
 		WorktreePath: "/src/api-1",
@@ -324,6 +358,26 @@ func TestUnaryOperationsRoundTrip(t *testing.T) {
 		worktrees, err := client.ListTaskWorktrees(ctx, "task-1")
 		require.NoError(t, err)
 		require.Equal(t, svc.worktrees["task-1"], worktrees)
+	})
+
+	t.Run("list importable sessions", func(t *testing.T) {
+		sessions, err := client.ListImportableSessions(ctx, "/src/code")
+		require.NoError(t, err)
+		require.Equal(t, svc.importable, sessions)
+	})
+
+	t.Run("import session returns the task alongside a session start error", func(t *testing.T) {
+		svc.mu.Lock()
+		svc.importTask = &core.Task{ID: "task-imported", WorkspaceKind: core.WorkspaceKindFolder}
+		svc.importErr = errors.New("imported, but its session did not start")
+		svc.mu.Unlock()
+
+		task, err := client.ImportSession(ctx, svc.importable[0])
+
+		require.ErrorContains(t, err, "session did not start")
+		require.NotNil(t, task)
+		require.Equal(t, "task-imported", task.ID)
+		require.Equal(t, svc.importable[0], svc.imported[0])
 	})
 
 	t.Run("list task worktrees requires task id", func(t *testing.T) {

@@ -168,6 +168,20 @@ func taskTokenUsageCmd(ctx context.Context, frontend core.TaskFrontend, taskID s
 	}
 }
 
+func listImportableSessionsCmd(ctx context.Context, frontend core.TaskFrontend, folder string) tea.Cmd {
+	return func() tea.Msg {
+		sessions, err := frontend.ListImportableSessions(ctx, folder)
+		return importableSessionsLoadedMsg{err: err, sessions: sessions}
+	}
+}
+
+func importSessionCmd(ctx context.Context, frontend core.TaskFrontend, session core.ProviderSessionSummary) tea.Cmd {
+	return func() tea.Msg {
+		task, err := frontend.ImportSession(ctx, session)
+		return sessionImportedMsg{task: task, err: err}
+	}
+}
+
 func taskWorktreesCmd(ctx context.Context, frontend core.TaskFrontend, taskID string) tea.Cmd {
 	return func() tea.Msg {
 		worktrees, err := frontend.ListTaskWorktrees(ctx, taskID)

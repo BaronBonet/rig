@@ -179,6 +179,17 @@ their hook events are told apart by the `RIG_TASK_ID` each session exports, so
 provider sessions you start in that folder outside Rig are never attributed to
 a task.
 
+### Importing sessions
+
+Press `i` to list the Claude Code and Codex sessions that were started in the
+folder you launched `rig` from and do not belong to a task yet, newest first,
+named the way the provider names them. Importing one creates a folder task and
+resumes the session in the task's own tmux session (`claude --resume <id>` or
+`codex resume <id>`), with its history, token usage and worktrees already
+known. Close the session where it was running first: one conversation must not
+run in two places. If the session fails to start, the task is still created and
+`enter` retries.
+
 ### Worktrees per task
 
 A task row lists the worktrees its provider sessions have edited, most recently
@@ -218,7 +229,9 @@ Common TUI keys:
 | `n` | Create a task from a prompt |
 | `tab` | Cycle configured providers while composing a task |
 | `ctrl+p` | Pick a GitHub pull request while creating a task |
+| `ctrl+o` | Run the new task in this folder instead of a new worktree |
 | `enter` | Attach to the selected task's tmux session |
+| `i` | Import a provider session started in this folder outside Rig |
 | `p` | Switch the selected task to another configured provider |
 | `r` | Refresh task data |
 | `R` | Retry a failed task creation |

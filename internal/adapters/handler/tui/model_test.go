@@ -72,7 +72,7 @@ func TestModel_ViewRendersTaskMetadata(t *testing.T) {
 
 	view := stripANSI(got.View().Content)
 	require.Contains(t, view, "RIG dev")
-	require.Contains(t, view, "n new   p provider   r refresh   space details   x clean   q quit")
+	require.Contains(t, view, "n new   i import   p provider   r refresh   space details   x clean   q quit")
 	require.Contains(t, view, "first task")
 	require.Contains(t, view, "repo-a")
 	require.Contains(t, view, "feat/first-task")
@@ -2089,7 +2089,7 @@ func TestModel_PRPickerEnterCreatesTaskFromSelectedPR(t *testing.T) {
 	require.Equal(t, modeBrowse, pending.mode)
 	require.Equal(t, opCreating, pending.pending)
 	view := stripANSI(pending.View().Content)
-	require.Contains(t, view, "n new   p provider   r refresh   space details   x clean   q quit")
+	require.Contains(t, view, "n new   i import   p provider   r refresh   space details   x clean   q quit")
 	require.Contains(t, view, "Creating task from pull request")
 	require.NotContains(t, view, "Suggesting name")
 	require.Less(t, strings.Index(view, "existing task"), strings.Index(view, "Creating task from pull request"))
@@ -2161,7 +2161,7 @@ func TestModel_PRPickerCreateFailureReturnsToBrowseWithProgressAndError(t *testi
 	require.ErrorContains(t, got.create.err, "create failed")
 
 	view = stripANSI(got.View().Content)
-	require.Contains(t, view, "n new   p provider   r refresh   space details   x clean   q quit")
+	require.Contains(t, view, "n new   i import   p provider   r refresh   space details   x clean   q quit")
 	require.Contains(t, view, "Creating task from pull request")
 	require.NotContains(t, view, "Creating worktree")
 	require.Contains(t, view, "create failed")
@@ -2376,6 +2376,11 @@ type frontendHarness struct {
 	getTaskTokenUsageCalls      []string
 	listTaskWorktrees           map[string][]core.TaskWorktree
 	listTaskWorktreesCalls      []string
+	importableSessions          []core.ProviderSessionSummary
+	importableSessionsFolder    string
+	importedSession             *core.ProviderSessionSummary
+	importTask                  *core.Task
+	importErr                   error
 	getTaskActivity             map[string][]core.TaskActivityEvent
 	getTaskActivityErr          map[string]error
 	getTaskActivityCalls        []string
@@ -2564,6 +2569,18 @@ func newFrontendHarness() *frontendHarness {
 				return nil, nil
 			}
 			return frontend.getTaskTokenUsage[taskID], nil
+		},
+	).Maybe()
+	frontend.mock.EXPECT().ListImportableSessions(mock.Anything, mock.Anything).RunAndReturn(
+		func(_ context.Context, folder string) ([]core.ProviderSessionSummary, error) {
+			frontend.importableSessionsFolder = folder
+			return frontend.importableSessions, nil
+		},
+	).Maybe()
+	frontend.mock.EXPECT().ImportSession(mock.Anything, mock.Anything).RunAndReturn(
+		func(_ context.Context, session core.ProviderSessionSummary) (*core.Task, error) {
+			frontend.importedSession = &session
+			return frontend.importTask, frontend.importErr
 		},
 	).Maybe()
 	frontend.mock.EXPECT().ListTaskWorktrees(mock.Anything, mock.Anything).RunAndReturn(

@@ -246,6 +246,17 @@ func (u TaskTokenUsage) IsZero() bool {
 		u.TotalTokens == 0
 }
 
+// ProviderSessionSummary is a provider session found in the provider's own
+// session store rather than through Rig, offered for import as a Task.
+type ProviderSessionSummary struct {
+	LastActiveAt   time.Time `json:"last_active_at"`
+	Provider       Provider  `json:"provider"`
+	SessionID      string    `json:"session_id"`
+	Title          string    `json:"title"`
+	Cwd            string    `json:"cwd"`
+	TranscriptPath string    `json:"transcript_path"`
+}
+
 // SessionFileChange is one file edit a Provider session made, recovered from
 // its Provider transcript (including the transcripts of its subagents).
 type SessionFileChange struct {

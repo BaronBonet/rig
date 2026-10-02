@@ -43,6 +43,21 @@ type repoPullRequestsRequest struct {
 	Cwd string `json:"cwd"`
 }
 
+type importableSessionsRequest struct {
+	Folder string `json:"folder"`
+}
+
+type importSessionRequest struct {
+	Session core.ProviderSessionSummary `json:"session"`
+}
+
+// importSessionResponse carries the task even when its session failed to
+// start, so the TUI can show the imported task next to the error.
+type importSessionResponse struct {
+	Task  *core.Task `json:"task,omitempty"`
+	Error string     `json:"error,omitempty"`
+}
+
 type pullRequestStatusRequest struct {
 	Cwd        string `json:"cwd"`
 	BranchName string `json:"branch_name"`
@@ -86,6 +101,34 @@ var opGetTaskTokenUsage = unaryOp[taskIDRequest, *core.TaskTokenUsage]{
 			return nil, err
 		}
 		return svc.GetTaskTokenUsage(ctx, taskID)
+	},
+}
+
+var opListImportableSessions = unaryOp[importableSessionsRequest, []core.ProviderSessionSummary]{
+	command:  "list_importable_sessions",
+	envelope: "importable_sessions_list",
+	call: func(
+		ctx context.Context,
+		svc core.TaskService,
+		req importableSessionsRequest,
+	) ([]core.ProviderSessionSummary, error) {
+		return svc.ListImportableSessions(ctx, req.Folder)
+	},
+}
+
+var opImportSession = unaryOp[importSessionRequest, importSessionResponse]{
+	command:  "import_session",
+	envelope: "session_imported",
+	call: func(ctx context.Context, svc core.TaskService, req importSessionRequest) (importSessionResponse, error) {
+		task, err := svc.ImportSession(ctx, req.Session)
+		if err != nil && task == nil {
+			return importSessionResponse{}, err
+		}
+		response := importSessionResponse{Task: task}
+		if err != nil {
+			response.Error = err.Error()
+		}
+		return response, nil
 	},
 }
 
@@ -239,19 +282,21 @@ func serveUnary[Req, Resp any](op unaryOp[Req, Resp]) unaryHandler {
 // callUnary. The frontend cannot compile without a descriptor per TaskService
 // method, which keeps this table honest.
 var socketUnaryHandlers = map[string]unaryHandler{
-	opGetTaskActivity.command:      serveUnary(opGetTaskActivity),
-	opGetTaskTokenUsage.command:    serveUnary(opGetTaskTokenUsage),
-	opListTaskWorktrees.command:    serveUnary(opListTaskWorktrees),
-	opListRepoPullRequests.command: serveUnary(opListRepoPullRequests),
-	opPullRequestStatus.command:    serveUnary(opPullRequestStatus),
-	opReconnectTaskSession.command: serveUnary(opReconnectTaskSession),
-	opGetProviderSetup.command:     serveUnary(opGetProviderSetup),
-	opSaveProviderSetup.command:    serveUnary(opSaveProviderSetup),
-	opDetectProviders.command:      serveUnary(opDetectProviders),
-	opSwitchTaskProvider.command:   serveUnary(opSwitchTaskProvider),
-	opDeleteTask.command:           serveUnary(opDeleteTask),
-	opListTasks.command:            serveUnary(opListTasks),
-	opLatestTaskStatus.command:     serveUnary(opLatestTaskStatus),
+	opGetTaskActivity.command:        serveUnary(opGetTaskActivity),
+	opGetTaskTokenUsage.command:      serveUnary(opGetTaskTokenUsage),
+	opListTaskWorktrees.command:      serveUnary(opListTaskWorktrees),
+	opListImportableSessions.command: serveUnary(opListImportableSessions),
+	opImportSession.command:          serveUnary(opImportSession),
+	opListRepoPullRequests.command:   serveUnary(opListRepoPullRequests),
+	opPullRequestStatus.command:      serveUnary(opPullRequestStatus),
+	opReconnectTaskSession.command:   serveUnary(opReconnectTaskSession),
+	opGetProviderSetup.command:       serveUnary(opGetProviderSetup),
+	opSaveProviderSetup.command:      serveUnary(opSaveProviderSetup),
+	opDetectProviders.command:        serveUnary(opDetectProviders),
+	opSwitchTaskProvider.command:     serveUnary(opSwitchTaskProvider),
+	opDeleteTask.command:             serveUnary(opDeleteTask),
+	opListTasks.command:              serveUnary(opListTasks),
+	opLatestTaskStatus.command:       serveUnary(opLatestTaskStatus),
 }
 
 func errorEnvelope(err error) socketEnvelope {

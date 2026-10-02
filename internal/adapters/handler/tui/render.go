@@ -582,7 +582,7 @@ func (m model) promptInputView() string {
 }
 
 func (m model) listKeybindText() string {
-	binds := [][2]string{{"n", "new"}, {"p", "provider"}, {"r", "refresh"}}
+	binds := [][2]string{{"n", "new"}, {"i", "import"}, {"p", "provider"}, {"r", "refresh"}}
 	if row := m.selectedRow(); row != nil && row.task != nil &&
 		row.task.CreationStatus == core.TaskCreationStatusFailed {
 		binds = append(binds, [2]string{"R", "retry"})

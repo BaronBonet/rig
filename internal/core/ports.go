@@ -180,6 +180,14 @@ type TaskService interface {
 	// sessions have edited, most recently edited first, each with the branch it
 	// has checked out now and the branch it had at the task's last edit there.
 	ListTaskWorktrees(ctx context.Context, taskID string) ([]TaskWorktree, error)
+	// ListImportableSessions returns the configured providers' sessions that
+	// were started in folder and do not belong to a task yet, most recently
+	// active first.
+	ListImportableSessions(ctx context.Context, folder string) ([]ProviderSessionSummary, error)
+	// ImportSession makes a provider session started outside Rig a folder task
+	// and resumes it in the task's own session. When the task is created but
+	// its session fails to start, both the task and the error are returned.
+	ImportSession(ctx context.Context, session ProviderSessionSummary) (*Task, error)
 	// ListTasks returns all known tasks.
 	ListTasks(ctx context.Context) ([]*Task, error)
 	// LatestTaskStatus returns the latest published live status for a task, or
@@ -331,6 +339,9 @@ type ProviderClient interface {
 	// ReadSessionFileChanges reads the file edits one provider session made,
 	// including edits made by its subagents, as absolute paths.
 	ReadSessionFileChanges(ctx context.Context, session TaskProviderSession) ([]SessionFileChange, error)
+	// ListFolderSessions lists up to limit provider sessions started in folder,
+	// most recently active first, from the provider's own session store.
+	ListFolderSessions(ctx context.Context, folder string, limit int) ([]ProviderSessionSummary, error)
 }
 
 // GitWorktreeClient manages the Git worktree operations needed by the new task

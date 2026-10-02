@@ -88,6 +88,9 @@ type repository struct {
 	collectorURL string
 	hookSecret   string
 	fileChanges  transcriptEditCache
+	// claudeConfigDir overrides where Claude Code keeps its sessions; nil
+	// means CLAUDE_CONFIG_DIR or ~/.claude.
+	claudeConfigDir func() (string, error)
 }
 
 func New(runner subprocess.Runner, cfg Config, hooks HookForwardingConfig) core.ProviderClient {
