@@ -69,6 +69,19 @@ func (l *sessionLauncher) resolveProvider(
 	return provider, providerClient, nil
 }
 
+// repoSettings reads the repository's own settings for worktree tasks; without
+// a workspace manager there are none.
+func (l *sessionLauncher) repoSettings(repoRoot string) (RepoSettings, error) {
+	if l.workspace == nil {
+		return RepoSettings{}, nil
+	}
+	settings, err := l.workspace.LoadRepoSettings(repoRoot)
+	if err != nil {
+		return RepoSettings{}, fmt.Errorf("load repo settings: %w", err)
+	}
+	return settings, nil
+}
+
 // prepareWorkspace applies repo-local workspace setup (when enabled) and the
 // active provider's bootstrap files, in that order. Seeding must precede
 // bootstrap so provider files can rely on repo-local configuration.

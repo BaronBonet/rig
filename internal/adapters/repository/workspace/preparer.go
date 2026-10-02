@@ -58,6 +58,14 @@ func (p *preparer) SetupTaskWorkspace(ctx context.Context, task *core.Task, repo
 	return nil
 }
 
+func (p *preparer) LoadRepoSettings(repoRoot string) (core.RepoSettings, error) {
+	config, err := loadRepoConfig(repoRoot)
+	if err != nil {
+		return core.RepoSettings{}, err
+	}
+	return core.RepoSettings{BaseBranch: config.BaseBranch, WorktreeName: config.WorktreeName}, nil
+}
+
 func (p *preparer) BootstrapTaskWorkspace(
 	_ context.Context,
 	task *core.Task,

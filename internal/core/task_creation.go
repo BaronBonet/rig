@@ -134,7 +134,11 @@ func (c *taskCreation) retryTaskCreationWithProgress(
 		task,
 		task.RepoRoot,
 		func(ctx context.Context) error {
-			return c.gitWorktree.CreateTaskWorkspace(ctx, task)
+			settings, err := c.launcher.repoSettings(task.RepoRoot)
+			if err != nil {
+				return err
+			}
+			return c.createTaskWorktree(ctx, task, settings)
 		},
 	), task.CreationStep)
 	if !ok {
@@ -169,9 +173,15 @@ func (c *taskCreation) createTaskFromPrompt(
 		return nil, err
 	}
 
+	settings, err := c.launcher.repoSettings(repoCtx.Root)
+	if err != nil {
+		return nil, err
+	}
+
 	taskSlug := uniqueTaskSlug(repoCtx.Root, suggestion.Name, existingTasks)
 	task := newPromptTaskRecord(
 		repoCtx,
+		settings,
 		provider,
 		suggestion.Name,
 		taskSlug,
@@ -187,7 +197,7 @@ func (c *taskCreation) createTaskFromPrompt(
 		task,
 		repoCtx.Root,
 		func(ctx context.Context) error {
-			return c.gitWorktree.CreateTaskWorkspace(ctx, task)
+			return c.createTaskWorktree(ctx, task, settings)
 		},
 	)
 	if err := c.runSteps(ctx, task, reporter, steps, taskCreationStepPersistenceReadyOnly); err != nil {
@@ -283,9 +293,15 @@ func (c *taskCreation) createTaskFromPullRequest(
 		return nil, fmt.Errorf("PR already has workspace")
 	}
 
+	settings, err := c.launcher.repoSettings(repoCtx.Root)
+	if err != nil {
+		return nil, err
+	}
+
 	taskSlug := uniqueTaskSlug(repoCtx.Root, pr.BranchName, existingTasks)
 	task := newPullRequestTaskRecord(
 		repoCtx,
+		settings,
 		provider,
 		prDisplayName(*pr),
 		taskSlug,
@@ -476,6 +492,7 @@ func (c *taskCreation) markReady(ctx context.Context, task *Task) error {
 
 func newPromptTaskRecord(
 	repoCtx RepoContext,
+	settings RepoSettings,
 	provider Provider,
 	displayName string,
 	taskSlug string,
@@ -491,7 +508,7 @@ func newPromptTaskRecord(
 		RepoRoot:       repoCtx.Root,
 		RepoName:       repoCtx.Name,
 		BranchName:     branchNameForTask(taskSlug, branchType),
-		WorktreePath:   taskWorktreePath(repoCtx, taskSlug),
+		WorktreePath:   taskWorktreePath(repoCtx, settings, taskSlug),
 		TmuxSession:    taskSessionName(repoCtx, taskSlug),
 		Provider:       provider,
 		CreationStatus: TaskCreationStatusCreating,
@@ -503,6 +520,7 @@ func newPromptTaskRecord(
 
 func newPullRequestTaskRecord(
 	repoCtx RepoContext,
+	settings RepoSettings,
 	provider Provider,
 	displayName string,
 	taskSlug string,
@@ -518,7 +536,7 @@ func newPullRequestTaskRecord(
 		RepoRoot:       repoCtx.Root,
 		RepoName:       repoCtx.Name,
 		BranchName:     strings.TrimSpace(branchName),
-		WorktreePath:   taskWorktreePath(repoCtx, taskSlug),
+		WorktreePath:   taskWorktreePath(repoCtx, settings, taskSlug),
 		TmuxSession:    taskSessionName(repoCtx, taskSlug),
 		Provider:       provider,
 		CreationStatus: TaskCreationStatusCreating,
@@ -560,8 +578,27 @@ func branchNameForTask(taskSlug string, branchType string) string {
 	return TaskSuggestion{BranchType: branchType}.BranchTypeOrDefault() + "/" + taskSlug
 }
 
-func taskWorktreePath(repoCtx RepoContext, taskSlug string) string {
-	return filepath.Join(filepath.Dir(repoCtx.Root), taskRuntimeStem(repoCtx, taskSlug))
+func taskWorktreePath(repoCtx RepoContext, settings RepoSettings, taskSlug string) string {
+	name := taskRuntimeStem(repoCtx, taskSlug)
+	if template := strings.TrimSpace(settings.WorktreeName); template != "" {
+		name = strings.NewReplacer("{repo}", repoCtx.Name, "{slug}", taskSlug).Replace(template)
+	}
+	return filepath.Join(filepath.Dir(repoCtx.Root), name)
+}
+
+// createTaskWorktree creates the task's worktree from the repository's
+// configured base branch, fetched from origin, or from the branch the main
+// checkout has checked out when none is configured.
+func (c *taskCreation) createTaskWorktree(ctx context.Context, task *Task, settings RepoSettings) error {
+	baseRef := ""
+	if baseBranch := strings.TrimSpace(settings.BaseBranch); baseBranch != "" {
+		ref, err := c.gitWorktree.ResolveBaseRef(ctx, task.RepoRoot, baseBranch)
+		if err != nil {
+			return err
+		}
+		baseRef = ref
+	}
+	return c.gitWorktree.CreateTaskWorkspace(ctx, task, baseRef)
 }
 
 func taskSessionName(repoCtx RepoContext, taskSlug string) string {

@@ -66,24 +66,37 @@ func (r *repository) IsBranchUsedByWorktree(ctx context.Context, repoRoot string
 	return false, nil
 }
 
-func (r *repository) CreateTaskWorkspace(ctx context.Context, task *core.Task) error {
-	repoCtx, err := r.DetectRepo(ctx, task.RepoRoot)
-	if err != nil {
+func (r *repository) CreateTaskWorkspace(ctx context.Context, task *core.Task, baseRef string) error {
+	if strings.TrimSpace(baseRef) == "" {
+		repoCtx, err := r.DetectRepo(ctx, task.RepoRoot)
+		if err != nil {
+			return err
+		}
+		_, err = r.runner.Run(ctx, task.RepoRoot, "git", "worktree", "add", task.WorktreePath, "-b",
+			task.BranchName, repoCtx.BaseBranch)
 		return err
 	}
 
-	_, err = r.runner.Run(
-		ctx,
-		task.RepoRoot,
-		"git",
-		"worktree",
-		"add",
-		task.WorktreePath,
-		"-b",
-		task.BranchName,
-		repoCtx.BaseBranch,
-	)
+	// --no-track: a task branch started from origin/<base> must not take the
+	// base branch as its upstream, or a bare push could land on the base.
+	_, err := r.runner.Run(ctx, task.RepoRoot, "git", "worktree", "add", "--no-track", task.WorktreePath, "-b",
+		task.BranchName, baseRef)
 	return err
+}
+
+func (r *repository) ResolveBaseRef(ctx context.Context, repoRoot string, baseBranch string) (string, error) {
+	baseBranch = strings.TrimSpace(baseBranch)
+	if baseBranch == "" {
+		return "", nil
+	}
+	if _, err := r.runner.Run(ctx, repoRoot, "git", "fetch", "--quiet", "origin", baseBranch); err == nil {
+		return "origin/" + baseBranch, nil
+	}
+	if _, err := r.runner.Run(ctx, repoRoot, "git", "rev-parse", "--verify", "--quiet",
+		"refs/heads/"+baseBranch); err == nil {
+		return baseBranch, nil
+	}
+	return "", fmt.Errorf("base branch %q is neither on origin nor a local branch", baseBranch)
 }
 
 func (r *repository) CreateTaskWorkspaceFromBranch(ctx context.Context, task *core.Task) error {

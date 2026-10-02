@@ -246,6 +246,17 @@ func (u TaskTokenUsage) IsZero() bool {
 		u.TotalTokens == 0
 }
 
+// RepoSettings is a repository's own configuration, from its .rig.yaml, for
+// the worktree Tasks Rig creates in it.
+type RepoSettings struct {
+	// BaseBranch is the branch new worktree Tasks start from, fetched from
+	// origin first. Empty means the branch the main checkout has checked out.
+	BaseBranch string
+	// WorktreeName names a new Task's worktree folder from {repo} and {slug}.
+	// Empty means "{repo}_{slug}".
+	WorktreeName string
+}
+
 // ProviderSessionSummary is a provider session found in the provider's own
 // session store rather than through Rig, offered for import as a Task.
 type ProviderSessionSummary struct {

@@ -490,3 +490,35 @@ func TestTaskServiceCreateTaskWithProgress_AllowsNilReporter(t *testing.T) {
 	require.NoError(t, err)
 	require.NotNil(t, task)
 }
+
+func TestTaskServiceCreateTask_UsesTheRepositorysBaseBranchAndWorktreeName(t *testing.T) {
+	svc := newTestTaskService(t)
+	svc.providerRepo.suggestedName = "billing retry flow"
+	svc.workspace.repoSettings = RepoSettings{BaseBranch: "develop", WorktreeName: "{repo}-{slug}"}
+
+	task, err := svc.service.CreateTaskWithProgress(t.Context(), CreateTaskInput{
+		Cwd:    "/tmp/repo",
+		Prompt: "add billing retry flow",
+	}, nil)
+
+	require.NoError(t, err)
+	require.Equal(t, "/tmp/repo-billing-retry-flow", task.WorktreePath)
+	require.Equal(t, "repo_billing-retry-flow", task.TmuxSession, "session names keep their own scheme")
+	require.Equal(t, "develop", svc.repoClient.resolvedBaseBranch)
+	require.Equal(t, "origin/develop", svc.repoClient.createdFromRef)
+}
+
+func TestTaskServiceCreateTask_WithoutSettingsBranchesFromTheMainCheckout(t *testing.T) {
+	svc := newTestTaskService(t)
+	svc.providerRepo.suggestedName = "billing retry flow"
+
+	task, err := svc.service.CreateTaskWithProgress(t.Context(), CreateTaskInput{
+		Cwd:    "/tmp/repo",
+		Prompt: "add billing retry flow",
+	}, nil)
+
+	require.NoError(t, err)
+	require.Equal(t, "/tmp/repo_billing-retry-flow", task.WorktreePath)
+	require.Empty(t, svc.repoClient.resolvedBaseBranch)
+	require.Empty(t, svc.repoClient.createdFromRef)
+}

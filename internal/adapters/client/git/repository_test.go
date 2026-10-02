@@ -118,7 +118,23 @@ func TestRepositoryCreateTaskWorkspace_UsesDetectedBaseBranch(t *testing.T) {
 		RepoRoot:     "/tmp/repo",
 		BranchName:   "feat/billing-retry-flow",
 		WorktreePath: "/tmp/repo-billing-retry-flow",
-	})
+	}, "")
+	require.NoError(t, err)
+}
+
+func TestRepositoryCreateTaskWorkspace_StartsFromTheResolvedBaseRefWithoutTrackingIt(t *testing.T) {
+	runner := subprocess.NewMockRunner(t)
+	runner.EXPECT().
+		Run(mock.Anything, "/tmp/repo", "git", "worktree", "add", "--no-track", "/tmp/repo-retry",
+			"-b", "feat/retry", "origin/develop").
+		Return(subprocess.Result{}, nil).
+		Once()
+
+	err := New(runner).CreateTaskWorkspace(context.Background(), &core.Task{
+		RepoRoot:     "/tmp/repo",
+		BranchName:   "feat/retry",
+		WorktreePath: "/tmp/repo-retry",
+	}, "origin/develop")
 	require.NoError(t, err)
 }
 

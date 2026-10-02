@@ -110,3 +110,60 @@ func TestRepoNameFromCommonDir(t *testing.T) {
 	require.Equal(t, "api", repoNameFromCommonDir("/src/api/.bare"))
 	require.Equal(t, "api", repoNameFromCommonDir("/src/api/.git/"))
 }
+
+func TestRepositoryResolveBaseRef_FetchesTheBaseBranchFromOrigin(t *testing.T) {
+	remote, _ := newRepoWithLinkedWorktree(t)
+	runGit(t, remote, "branch", "develop")
+	clone := filepath.Join(t.TempDir(), "clone")
+	runGit(t, filepath.Dir(clone), "clone", "-q", remote, clone)
+	// develop gains a commit after the clone; resolving must fetch it.
+	runGit(t, remote, "commit", "-q", "--allow-empty", "-m", "newer develop")
+	runGit(t, remote, "branch", "-f", "develop", "HEAD")
+	repo := New(subprocess.ExecRunner{})
+
+	ref, err := repo.ResolveBaseRef(t.Context(), clone, "develop")
+
+	require.NoError(t, err)
+	require.Equal(t, "origin/develop", ref)
+	require.Equal(t, gitOutput(t, remote, "rev-parse", "develop"), gitOutput(t, clone, "rev-parse", ref))
+}
+
+func TestRepositoryResolveBaseRef_FallsBackToTheLocalBranchOffline(t *testing.T) {
+	main, _ := newRepoWithLinkedWorktree(t)
+	repo := New(subprocess.ExecRunner{})
+
+	ref, err := repo.ResolveBaseRef(t.Context(), main, "main")
+	require.NoError(t, err)
+	require.Equal(t, "main", ref, "no origin remote, so the local branch is used")
+
+	_, err = repo.ResolveBaseRef(t.Context(), main, "develop")
+	require.ErrorContains(t, err, "neither on origin nor a local branch")
+}
+
+func gitOutput(t *testing.T, dir string, args ...string) string {
+	t.Helper()
+	output, err := exec.CommandContext(t.Context(), "git", append([]string{"-C", dir}, args...)...).Output()
+	require.NoError(t, err)
+	return string(output)
+}
+
+func TestRepositoryCreateTaskWorkspace_BranchFromOriginHasNoUpstream(t *testing.T) {
+	remote, _ := newRepoWithLinkedWorktree(t)
+	runGit(t, remote, "branch", "develop")
+	clone := filepath.Join(t.TempDir(), "api")
+	runGit(t, filepath.Dir(clone), "clone", "-q", remote, clone)
+	repo := New(subprocess.ExecRunner{})
+	ref, err := repo.ResolveBaseRef(t.Context(), clone, "develop")
+	require.NoError(t, err)
+	worktree := filepath.Join(filepath.Dir(clone), "api-retry")
+
+	require.NoError(t, repo.CreateTaskWorkspace(t.Context(), &core.Task{
+		RepoRoot:     clone,
+		BranchName:   "feat/retry",
+		WorktreePath: worktree,
+	}, ref))
+
+	require.Equal(t, "feat/retry\n", gitOutput(t, worktree, "branch", "--show-current"))
+	upstream := exec.CommandContext(t.Context(), "git", "-C", worktree, "rev-parse", "--abbrev-ref", "@{upstream}")
+	require.Error(t, upstream.Run(), "a task branch must not track the base branch")
+}

@@ -357,9 +357,14 @@ type GitWorktreeClient interface {
 	// workspace for the same branch.
 	IsBranchUsedByWorktree(ctx context.Context, repoRoot string, branchName string) (bool, error)
 	// CreateTaskWorkspace creates a new Git worktree for a task by creating the
-	// task branch from the repository base branch and checking it out into the
-	// task's worktree path.
-	CreateTaskWorkspace(ctx context.Context, task *Task) error
+	// task branch from baseRef, or from the branch the main checkout has checked
+	// out when baseRef is empty, and checking it out into the task's worktree
+	// path.
+	CreateTaskWorkspace(ctx context.Context, task *Task, baseRef string) error
+	// ResolveBaseRef fetches baseBranch from origin and returns the ref new task
+	// branches start from: origin/<baseBranch>, or the local branch when the
+	// fetch fails, so task creation still works offline.
+	ResolveBaseRef(ctx context.Context, repoRoot string, baseBranch string) (string, error)
 	// CreateTaskWorkspaceFromBranch creates a task worktree by checking out an
 	// already existing branch, such as a branch associated with a pull request.
 	CreateTaskWorkspaceFromBranch(ctx context.Context, task *Task) error
@@ -419,4 +424,7 @@ type TaskWorkspaceManager interface {
 	// BootstrapTaskWorkspace writes the provider-specific bootstrap files needed
 	// to launch the interactive task session inside the task workspace.
 	BootstrapTaskWorkspace(ctx context.Context, task *Task, bootstrapSpec WorkspaceBootstrapSpec) error
+	// LoadRepoSettings reads the repository's own settings for the worktree
+	// tasks Rig creates in it.
+	LoadRepoSettings(repoRoot string) (RepoSettings, error)
 }

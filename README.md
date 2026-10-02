@@ -302,6 +302,27 @@ seed:
 - Paths in `.rig.yaml` must be repo-relative. Absolute paths, `..`, and glob
   patterns are rejected.
 
+### Base branch and worktree names
+
+The same file sets where new worktree tasks start and what their folders are
+called:
+
+```yaml
+base_branch: develop
+worktree_name: "{repo}-{slug}"
+```
+
+- `base_branch` fetches the branch from `origin` and starts each new task
+  branch from `origin/<branch>`, falling back to the local branch when the
+  fetch fails. Without it, tasks start from whatever the main checkout has
+  checked out. Task branches never track the base branch, so a bare `git push`
+  cannot land on it.
+- `worktree_name` names the worktree folder created next to the repository from
+  `{repo}` and `{slug}`; it must contain `{slug}` and name a single folder. The
+  default is `{repo}_{slug}`. Session names are unaffected.
+
+`.rig.yaml` is read from the main checkout, so it can stay untracked there.
+
 ## Troubleshooting
 
 ### `task daemon did not become healthy` on startup

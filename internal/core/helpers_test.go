@@ -83,7 +83,9 @@ type repoClientState struct {
 	removedTask     *Task
 	createdPRNumber int
 	// outsideWorktree makes the creation cwd look like a plain folder.
-	outsideWorktree bool
+	outsideWorktree    bool
+	createdFromRef     string
+	resolvedBaseBranch string
 }
 
 type sessionClientState struct {
@@ -184,6 +186,7 @@ type workspaceManagerState struct {
 	bootstrapCalledBeforeSession bool
 	preparedDisplayName          string
 	preparedBranchName           string
+	repoSettings                 RepoSettings
 }
 
 func newTestTaskService(t *testing.T) *testTaskServiceHarness {
@@ -313,10 +316,17 @@ func configureGitWorktreeMock(client *MockGitWorktreeClient, state *repoClientSt
 			return state.branchInUse[branchName], nil
 		},
 	).Maybe()
-	client.EXPECT().CreateTaskWorkspace(mock.Anything, mock.Anything).RunAndReturn(
-		func(_ context.Context, task *Task) error {
+	client.EXPECT().CreateTaskWorkspace(mock.Anything, mock.Anything, mock.Anything).RunAndReturn(
+		func(_ context.Context, task *Task, baseRef string) error {
 			state.createdTask = cloneTask(task)
+			state.createdFromRef = baseRef
 			return state.createErr
+		},
+	).Maybe()
+	client.EXPECT().ResolveBaseRef(mock.Anything, mock.Anything, mock.Anything).RunAndReturn(
+		func(_ context.Context, _ string, baseBranch string) (string, error) {
+			state.resolvedBaseBranch = baseBranch
+			return "origin/" + baseBranch, nil
 		},
 	).Maybe()
 	client.EXPECT().CreateTaskWorkspaceFromBranch(mock.Anything, mock.Anything).RunAndReturn(
@@ -631,6 +641,11 @@ func configureWorkspaceManagerMock(
 			}
 			state.setupCalledBeforeSession = session.startedTask == nil
 			return state.setupErr
+		},
+	).Maybe()
+	workspace.EXPECT().LoadRepoSettings(mock.Anything).RunAndReturn(
+		func(string) (RepoSettings, error) {
+			return state.repoSettings, nil
 		},
 	).Maybe()
 	workspace.EXPECT().BootstrapTaskWorkspace(mock.Anything, mock.Anything, mock.Anything).RunAndReturn(
