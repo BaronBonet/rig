@@ -86,6 +86,10 @@ Use `rig` for the CLI command and Rig for the product or system.
 ## Relationships
 
 - A Task has exactly one Active provider.
+- A Session carries its Task's ID in `RIG_TASK_ID`. A Hook event carrying a
+  known Task ID belongs to that Task; otherwise it belongs to the single Task
+  whose Workspace matches the hook's working directory, and a directory shared
+  by several Tasks attributes nothing.
 - A Default provider becomes the Active provider for a new Task unless the user
   selects a different provider during Task creation.
 - An environment-selected Default provider must be one of the user's Configured

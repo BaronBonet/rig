@@ -44,7 +44,7 @@ func (r *repository) StartTaskSession(ctx context.Context, task *core.Task, laun
 	// and fresh tasks need a new session created.
 	alreadyExists := r.sessionExists(ctx, task.TmuxSession)
 	if !alreadyExists {
-		if err := r.createSession(ctx, task.TmuxSession, task.WorktreePath); err != nil {
+		if err := r.createSession(ctx, task.TmuxSession, task.WorktreePath, task.ID); err != nil {
 			return err
 		}
 	}
@@ -309,22 +309,17 @@ func (r *repository) DeleteTaskSession(ctx context.Context, task *core.Task) err
 	return err
 }
 
-func (r *repository) createSession(ctx context.Context, sessionName, workingDir string) error {
+func (r *repository) createSession(ctx context.Context, sessionName, workingDir, taskID string) error {
 	sessionName = normalizedSessionName(sessionName)
 
-	_, err := r.runner.Run(
-		ctx,
-		"",
-		"tmux",
-		"new-session",
-		"-d",
-		"-s",
-		sessionName,
-		"-n",
-		taskWindowName,
-		"-c",
-		workingDir,
-	)
+	args := []string{"new-session", "-d", "-s", sessionName, "-n", taskWindowName, "-c", workingDir}
+	// The session environment reaches every shell and provider started in it,
+	// and through them the provider hooks that report back to Rig.
+	if taskID = strings.TrimSpace(taskID); taskID != "" {
+		args = append(args, "-e", core.TaskIDEnvVar+"="+taskID)
+	}
+
+	_, err := r.runner.Run(ctx, "", "tmux", args...)
 	if err != nil {
 		return err
 	}

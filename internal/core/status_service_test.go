@@ -638,6 +638,53 @@ func TestTaskStatusService_HandleHookEventResolvesTaskIDAndPublishesMappedUpdate
 	}, *update)
 }
 
+func TestTaskStatusService_HandleHookEventPrefersCarriedTaskIDOverSharedWorkspace(t *testing.T) {
+	svc := newTestTaskService(t)
+	svc.taskRepo.listTasks = []*Task{
+		{ID: "task-a", WorktreePath: "/tmp/shared"},
+		{ID: "task-b", WorktreePath: "/tmp/shared"},
+	}
+
+	err := svc.service.HandleHookEvent(t.Context(), HookEventInput{
+		Provider:  ProviderCodex,
+		TaskID:    "task-b",
+		Cwd:       "/tmp/shared",
+		EventName: "SessionStart",
+	})
+	require.NoError(t, err)
+	require.Equal(t, "task-b", svc.providerRepo.hookInput.TaskID)
+}
+
+func TestTaskStatusService_HandleHookEventFallsBackToWorkspaceForUnknownTaskID(t *testing.T) {
+	svc := newTestTaskService(t)
+	svc.taskRepo.listTasks = []*Task{{ID: "task-123", WorktreePath: "/tmp/repo-task"}}
+
+	err := svc.service.HandleHookEvent(t.Context(), HookEventInput{
+		Provider:  ProviderCodex,
+		TaskID:    "task-deleted",
+		Cwd:       "/tmp/repo-task",
+		EventName: "SessionStart",
+	})
+	require.NoError(t, err)
+	require.Equal(t, "task-123", svc.providerRepo.hookInput.TaskID)
+}
+
+func TestTaskStatusService_HandleHookEventIgnoresWorkspaceSharedByTasksWithoutTaskID(t *testing.T) {
+	svc := newTestTaskService(t)
+	svc.taskRepo.listTasks = []*Task{
+		{ID: "task-a", WorktreePath: "/tmp/shared"},
+		{ID: "task-b", WorktreePath: "/tmp/shared"},
+	}
+
+	err := svc.service.HandleHookEvent(t.Context(), HookEventInput{
+		Provider:  ProviderCodex,
+		Cwd:       "/tmp/shared",
+		EventName: "SessionStart",
+	})
+	require.ErrorIs(t, err, ErrUnmanagedHookEvent)
+	require.Empty(t, svc.providerRepo.hookInput.TaskID)
+}
+
 func TestTaskStatusService_HandleHookEventPersistsResumeMetadataWhenSessionIDPresent(t *testing.T) {
 	svc := newTestTaskService(t)
 	svc.taskRepo.listTasks = []*Task{{

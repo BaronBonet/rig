@@ -34,6 +34,11 @@ type Task struct {
 	CreationError  string                 `json:"creation_error"`
 }
 
+// TaskIDEnvVar names the environment variable Rig sets on every Task Session so
+// provider hooks can report which Task they belong to, even when several Tasks
+// share a workspace.
+const TaskIDEnvVar = "RIG_TASK_ID"
+
 type TaskCreationStatus string
 
 const (
