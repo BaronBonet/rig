@@ -38,6 +38,9 @@ type CreateTaskInput struct {
 	Cwd      string           `json:"cwd"`
 	Prompt   string           `json:"prompt"`
 	Provider Provider         `json:"provider"`
+	// Workspace requests a folder Task in Cwd. Empty creates a worktree Task
+	// when Cwd is inside a Git worktree and a folder Task otherwise.
+	Workspace WorkspaceKind `json:"workspace,omitempty"`
 }
 
 type TaskCreateProgressStep string

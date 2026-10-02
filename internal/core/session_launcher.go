@@ -91,7 +91,9 @@ func (l *sessionLauncher) prepareWorkspace(ctx context.Context, task *Task, repo
 		return nil
 	}
 
-	if l.enableWorkspaceSetup {
+	// Seeding copies repo files into a new worktree; a folder Task's workspace
+	// is the original folder, so there is nothing to seed.
+	if l.enableWorkspaceSetup && !task.UsesFolderWorkspace() {
 		if err := l.workspace.SetupTaskWorkspace(ctx, task, repoRoot); err != nil {
 			return fmt.Errorf("setup workspace: %w", err)
 		}

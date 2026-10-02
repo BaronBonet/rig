@@ -344,8 +344,12 @@ func (s *service) deleteTask(ctx context.Context, taskID string) error {
 	if err := s.tmuxSession.DeleteTaskSession(ctx, task); err != nil {
 		return fmt.Errorf("delete task session: %w", err)
 	}
-	if err := s.gitWorktree.RemoveTaskWorkspace(ctx, task); err != nil {
-		return fmt.Errorf("remove task workspace: %w", err)
+	// A folder Task's workspace is an existing folder other Tasks may share;
+	// only a worktree Rig created is removed.
+	if !task.UsesFolderWorkspace() {
+		if err := s.gitWorktree.RemoveTaskWorkspace(ctx, task); err != nil {
+			return fmt.Errorf("remove task workspace: %w", err)
+		}
 	}
 	if err := s.tasks.DeleteTask(ctx, task.ID); err != nil {
 		return fmt.Errorf("delete task record: %w", err)

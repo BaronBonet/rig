@@ -292,6 +292,10 @@ func (m model) renderRepoHeader(task *core.Task, totalWidth int) string {
 	if task != nil {
 		name = emptyFallback(task.RepoName, name)
 	}
+	// Folders are often all called "code"; their path tells them apart.
+	if task.UsesFolderWorkspace() {
+		name = homeRelativePath(task.RepoRoot)
+	}
 	return headerLabelStyle.Render(truncateStr(name, totalWidth))
 }
 
@@ -544,7 +548,8 @@ func (m model) promptInputView() string {
 	if len(m.configuredProviders()) > 1 {
 		providerLine += mutedStyle.Render("  ·  ") + keybindStyle.Render("tab") + mutedStyle.Render(" cycle")
 	}
-	builder.WriteString(providerLine + "\n\n")
+	builder.WriteString(providerLine + "\n")
+	builder.WriteString(m.draftWorkspaceLine() + "\n\n")
 
 	promptBoxWidth := totalWidth - 4
 	if promptBoxWidth < 20 {

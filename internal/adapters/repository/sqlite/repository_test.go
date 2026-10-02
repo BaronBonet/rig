@@ -47,6 +47,7 @@ func TestRepositoryCreateTaskAndListTasks_PersistsCoreTaskFields(t *testing.T) {
 		BranchName:     "feat/one",
 		WorktreePath:   "/tmp/repo-one",
 		TmuxSession:    "repo_one",
+		WorkspaceKind:  core.WorkspaceKindWorktree,
 		Provider:       core.ProviderCodex,
 		CreationStatus: core.TaskCreationStatusReady,
 		CreatedAt:      now,
@@ -62,6 +63,7 @@ func TestRepositoryCreateTaskAndListTasks_PersistsCoreTaskFields(t *testing.T) {
 		BranchName:     "feat/two",
 		WorktreePath:   "/tmp/repo-two",
 		TmuxSession:    "repo_two",
+		WorkspaceKind:  core.WorkspaceKindWorktree,
 		Provider:       core.ProviderCodex,
 		CreationStatus: core.TaskCreationStatusReady,
 		CreatedAt:      now.Add(time.Second),
@@ -98,6 +100,7 @@ func TestRepositoryUpdateTask_PersistsMutations(t *testing.T) {
 		BranchName:     "feat/task-name",
 		WorktreePath:   "/tmp/repo-task-name",
 		TmuxSession:    "repo_task_name",
+		WorkspaceKind:  core.WorkspaceKindWorktree,
 		Provider:       core.ProviderCodex,
 		CreationStatus: core.TaskCreationStatusReady,
 		CreatedAt:      now,
@@ -137,6 +140,7 @@ func TestRepositoryUpdateTask_PersistsCreationFailureMetadata(t *testing.T) {
 		BranchName:     "feat/task-name",
 		WorktreePath:   "/tmp/repo-task-name",
 		TmuxSession:    "repo_task_name",
+		WorkspaceKind:  core.WorkspaceKindWorktree,
 		Provider:       core.ProviderCodex,
 		CreationStatus: core.TaskCreationStatusCreating,
 		CreatedAt:      now,
@@ -790,6 +794,8 @@ func TestRepositoryNew_MigratesDatabaseWithSquashedMigrationHistory(t *testing.T
 		"alter table task_status drop column background_monitors",
 		"alter table task_status drop column background_workflows",
 		"alter table task_status drop column background_other",
+		"drop table task_worktrees",
+		"alter table tasks drop column workspace_kind",
 		"delete from goose_db_version where version_id > 1",
 		"insert into goose_db_version (version_id, is_applied) values (2, 1), (3, 1), (4, 1), (5, 1)",
 	} {
@@ -911,6 +917,7 @@ func TestRepositoryNew_CreatesSchemaForTasksAndLatestStatuses(t *testing.T) {
 		"creation_status",
 		"creation_step",
 		"creation_error",
+		"workspace_kind",
 	}
 	if !reflect.DeepEqual(names, wantTasks) {
 		t.Fatalf("unexpected tasks columns:\n got: %#v\nwant: %#v", names, wantTasks)
@@ -1048,4 +1055,29 @@ func TestRepositoryTaskWorktreeRecords_UpsertReplacesAndDeleteTaskCascades(t *te
 	records, err = repo.ListTaskWorktreeRecords(ctx, "task-1")
 	require.NoError(t, err)
 	require.Empty(t, records)
+}
+
+func TestRepositoryTasks_PersistWorkspaceKind(t *testing.T) {
+	repo := newTestRepository(t)
+	ctx := context.Background()
+	now := time.Date(2026, time.October, 2, 9, 0, 0, 0, time.UTC)
+	base := core.Task{RepoName: "code", Provider: core.ProviderClaude, CreatedAt: now, UpdatedAt: now}
+
+	folderTask := base
+	folderTask.ID, folderTask.Slug, folderTask.WorkspaceKind = "task-folder", "folder", core.WorkspaceKindFolder
+	worktreeTask := base
+	worktreeTask.ID, worktreeTask.Slug = "task-worktree", "worktree"
+	require.NoError(t, repo.CreateTask(ctx, &folderTask))
+	require.NoError(t, repo.CreateTask(ctx, &worktreeTask))
+
+	tasks, err := repo.ListTasks(ctx)
+	require.NoError(t, err)
+	kinds := map[string]core.WorkspaceKind{}
+	for _, task := range tasks {
+		kinds[task.ID] = task.WorkspaceKind
+	}
+	require.Equal(t, map[string]core.WorkspaceKind{
+		"task-folder":   core.WorkspaceKindFolder,
+		"task-worktree": core.WorkspaceKindWorktree,
+	}, kinds)
 }

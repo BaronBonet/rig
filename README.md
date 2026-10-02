@@ -24,6 +24,8 @@ a background daemon handles longer running orchestration.
   create a local task workspace for reviewing or continuing that branch.
 - **Isolated workspaces**: every task runs in its own git worktree so parallel
   tasks do not collide with the main checkout or each other.
+- **Folder tasks**: run a task in an existing folder as it is, Git or not, for
+  sessions that work across several repositories from a parent folder.
 - **Tmux sessions**: attach to any task from the TUI, reconnect missing sessions
   from provider resume metadata, and keep work running outside the foreground
   `rig` process.
@@ -165,6 +167,17 @@ until it exits.
 
 Use `rig doctor` to verify that your configured providers are available and
 that Rig's hook forwarding is installed correctly.
+
+### Folder tasks
+
+Press `ctrl+o` while composing a task to run it in the folder you launched
+`rig` from instead of a new worktree. Outside a Git repository this is the only
+option. A folder task gets its own tmux session but no branch: Rig never seeds
+the folder, never removes it on cleanup (`x` only ends the session), and groups
+folder tasks under the folder's path. Several tasks can share one folder;
+their hook events are told apart by the `RIG_TASK_ID` each session exports, so
+provider sessions you start in that folder outside Rig are never attributed to
+a task.
 
 ### Worktrees per task
 

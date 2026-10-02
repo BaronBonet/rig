@@ -32,6 +32,27 @@ type Task struct {
 	CreationStatus TaskCreationStatus     `json:"creation_status"`
 	CreationStep   TaskCreateProgressStep `json:"creation_step"`
 	CreationError  string                 `json:"creation_error"`
+	WorkspaceKind  WorkspaceKind          `json:"workspace_kind"`
+}
+
+// WorkspaceKind says how a Task's Workspace came to be, which decides what Rig
+// may create and remove there.
+type WorkspaceKind string
+
+const (
+	// WorkspaceKindWorktree is a dedicated worktree and branch Rig created for
+	// the Task; cleanup removes the worktree and keeps the branch.
+	WorkspaceKindWorktree WorkspaceKind = "worktree"
+	// WorkspaceKindFolder is an existing folder, Git or not, that the Task runs
+	// in as it is. Several Tasks may share it, and Rig never creates or removes
+	// files or branches there beyond provider hook registration.
+	WorkspaceKindFolder WorkspaceKind = "folder"
+)
+
+// UsesFolderWorkspace reports whether the Task runs in an existing folder
+// rather than a worktree Rig created for it.
+func (t *Task) UsesFolderWorkspace() bool {
+	return t != nil && t.WorkspaceKind == WorkspaceKindFolder
 }
 
 // TaskIDEnvVar names the environment variable Rig sets on every Task Session so

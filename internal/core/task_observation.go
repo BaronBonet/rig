@@ -284,9 +284,10 @@ func isProviderAdoptionEvent(input HookEventInput) bool {
 
 // resolveHookTaskID finds the Task a hook event belongs to. A Task ID carried by
 // the event wins: Rig sets it on every Task Session it launches. Otherwise the
-// hook's working directory must match exactly one Task workspace; Tasks sharing
-// a workspace cannot be told apart by directory, so such events stay unmanaged
-// rather than being attributed to the wrong Task.
+// hook's working directory must match exactly one worktree Task; Tasks sharing a
+// workspace cannot be told apart by directory, so such events stay unmanaged
+// rather than being attributed to the wrong Task. Folder Tasks never match by
+// directory: their folder also hosts provider sessions Rig did not launch.
 func (o *taskObservation) resolveHookTaskID(ctx context.Context, input HookEventInput) (string, error) {
 	tasks, err := o.tasks.ListTasks(ctx)
 	if err != nil {
@@ -308,7 +309,7 @@ func (o *taskObservation) resolveHookTaskID(ctx context.Context, input HookEvent
 
 	matchedTaskID := ""
 	for _, task := range tasks {
-		if task == nil || strings.TrimSpace(task.WorktreePath) != cwd {
+		if task == nil || task.UsesFolderWorkspace() || strings.TrimSpace(task.WorktreePath) != cwd {
 			continue
 		}
 		if matchedTaskID != "" {

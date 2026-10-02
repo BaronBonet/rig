@@ -24,6 +24,7 @@ func createTaskParams(task *core.Task) generated.CreateTaskParams {
 		CreationError:  task.CreationError,
 		CreatedAt:      formatTime(task.CreatedAt),
 		UpdatedAt:      formatTime(task.UpdatedAt),
+		WorkspaceKind:  string(normalizeWorkspaceKind(task.WorkspaceKind)),
 	}
 }
 
@@ -43,6 +44,7 @@ func updateTaskParams(task *core.Task) generated.UpdateTaskParams {
 		CreationError:  task.CreationError,
 		CreatedAt:      formatTime(task.CreatedAt),
 		UpdatedAt:      formatTime(task.UpdatedAt),
+		WorkspaceKind:  string(normalizeWorkspaceKind(task.WorkspaceKind)),
 		ID:             task.ID,
 	}
 }
@@ -161,7 +163,15 @@ func taskFromRow(row generated.ListTasksRow) *core.Task {
 		CreationError:  row.CreationError,
 		CreatedAt:      parseTime(row.CreatedAt),
 		UpdatedAt:      parseTime(row.UpdatedAt),
+		WorkspaceKind:  normalizeWorkspaceKind(core.WorkspaceKind(row.WorkspaceKind)),
 	}
+}
+
+func normalizeWorkspaceKind(kind core.WorkspaceKind) core.WorkspaceKind {
+	if kind == core.WorkspaceKindFolder {
+		return core.WorkspaceKindFolder
+	}
+	return core.WorkspaceKindWorktree
 }
 
 func normalizeTaskCreationStatus(status core.TaskCreationStatus) core.TaskCreationStatus {

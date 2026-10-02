@@ -82,6 +82,8 @@ type repoClientState struct {
 	createdTask     *Task
 	removedTask     *Task
 	createdPRNumber int
+	// outsideWorktree makes the creation cwd look like a plain folder.
+	outsideWorktree bool
 }
 
 type sessionClientState struct {
@@ -284,6 +286,14 @@ func configureGitWorktreeMock(client *MockGitWorktreeClient, state *repoClientSt
 	client.EXPECT().HealthCheck(mock.Anything).RunAndReturn(
 		func(context.Context) error {
 			return state.healthErr
+		},
+	).Maybe()
+	client.EXPECT().WorktreeRootOf(mock.Anything).RunAndReturn(
+		func(dir string) string {
+			if state.outsideWorktree {
+				return ""
+			}
+			return dir
 		},
 	).Maybe()
 	client.EXPECT().DetectRepo(mock.Anything, mock.Anything).RunAndReturn(

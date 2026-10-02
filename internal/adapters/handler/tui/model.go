@@ -103,6 +103,10 @@ type taskDraft struct {
 	repoRoot   string
 	repoName   string
 	err        error // validation error shown inside the draft views
+	// inFolder runs the new task in the launch folder as it is instead of a
+	// new worktree; it is the only choice outside a Git worktree.
+	inFolder   bool
+	outsideGit bool
 }
 
 // createFlowState is the progress of an in-flight or just-failed task
@@ -754,15 +758,20 @@ func (m model) submitPrompt() (model, tea.Cmd) {
 	// Capture the draft's inputs before the transition discards it.
 	cwd := m.currentCreateCwd()
 	provider := m.effectiveCreateProvider()
+	var workspace core.WorkspaceKind
+	if m.draft.inFolder {
+		workspace = core.WorkspaceKindFolder
+	}
 	m.transition(modeBrowse)
 	m.beginOp(opCreating)
 	m.create = createFlowState{}
 
 	return m, tea.Batch(
 		createTaskStreamCmd(m.statusContext, m.frontend, core.CreateTaskInput{
-			Cwd:      cwd,
-			Prompt:   prompt,
-			Provider: provider,
+			Cwd:       cwd,
+			Prompt:    prompt,
+			Provider:  provider,
+			Workspace: workspace,
 		}),
 		shimmerTickCmd(),
 	)
@@ -806,6 +815,13 @@ func (m model) updatePromptInput(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if typed.String() == "tab" {
 			// Tab cycles through configured providers for the new task.
 			m.cycleCreateProvider()
+			return m, nil
+		}
+		if typed.String() == "ctrl+o" {
+			// Outside Git the folder is the only workspace there is.
+			if !m.draft.outsideGit {
+				m.draft.inFolder = !m.draft.inFolder
+			}
 			return m, nil
 		}
 		if typed.String() == "ctrl+p" {
@@ -918,7 +934,8 @@ func (m model) enterPromptInputMode(initialValue string) (tea.Model, tea.Cmd) {
 	}
 	input := newPromptInput()
 	input.SetValue(initialValue)
-	m.draft = taskDraft{prompt: initialValue, input: input}
+	outsideGit := !insideGitWorktree(m.currentCreateCwd())
+	m.draft = taskDraft{prompt: initialValue, input: input, inFolder: outsideGit, outsideGit: outsideGit}
 	m.create.err = nil
 	m.create.fromPR = false
 	return m, m.draft.input.Focus()
