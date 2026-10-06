@@ -100,6 +100,8 @@ func TestTaskServiceNewTaskSession_RefusesWhileTheProviderIsRunning(t *testing.T
 	}, nil)
 
 	require.ErrorIs(t, err, ErrProviderSessionActive)
+	require.ErrorContains(t, err, "codex is still open in the task's window, idle or not")
+	require.ErrorContains(t, err, "start the session in a new window instead")
 	require.Nil(t, svc.sessionClient.startedTask)
 	require.Nil(t, svc.taskRepo.updatedTask)
 }

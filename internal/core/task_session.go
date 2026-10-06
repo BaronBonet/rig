@@ -131,7 +131,8 @@ func (s *service) refuseWhileProviderRuns(ctx context.Context, task *Task, next 
 		client, clientErr := supportedProviderClient(s.providers, candidate)
 		if clientErr == nil && taskSessionRunningProvider(runtime, client.TaskSessionCommandName()) {
 			return fmt.Errorf(
-				"%w: exit %s in the task session before starting a new session",
+				"%w: %s is still open in the task's window, idle or not; "+
+					"exit it there, or start the session in a new window instead",
 				ErrProviderSessionActive,
 				candidate,
 			)
