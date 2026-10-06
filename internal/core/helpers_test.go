@@ -130,6 +130,10 @@ type providerClientState struct {
 	launchErr               error
 	launchRequest           TaskSessionLaunchSpec
 	launchOptions           ProviderLaunchOptions
+	handoffPath             string
+	handoffErr              error
+	handoffSession          *TaskProviderSession
+	handoffFocus            string
 	reconnectLaunchErr      error
 	reconnectLaunch         TaskSessionLaunchSpec
 	hookErr                 error
@@ -579,6 +583,20 @@ func configureProviderClientMock(client *MockProviderClient, state *providerClie
 	client.EXPECT().LaunchOptions().RunAndReturn(func() ProviderLaunchOptions {
 		return state.launchOptions
 	}).Maybe()
+	client.EXPECT().WriteSessionHandoff(mock.Anything, mock.Anything, mock.Anything, mock.Anything).RunAndReturn(
+		func(_ context.Context, _ *Task, session TaskProviderSession, focus string) (string, error) {
+			if state.events != nil {
+				*state.events = append(*state.events, "write_session_handoff")
+			}
+			copied := session
+			state.handoffSession = &copied
+			state.handoffFocus = focus
+			if state.handoffErr != nil {
+				return "", state.handoffErr
+			}
+			return state.handoffPath, nil
+		},
+	).Maybe()
 	client.EXPECT().HookEventToTaskStatus(mock.Anything).RunAndReturn(
 		func(input HookEventInput) (*TaskStatusUpdate, error) {
 			state.hookInput = input

@@ -45,7 +45,8 @@ type fakeTaskService struct {
 	createTask  *core.Task
 	createErr   error
 
-	launchSettings *core.LaunchSettings
+	newSessionInput *core.NewTaskSessionInput
+	launchSettings  *core.LaunchSettings
 
 	updates      chan core.TaskStatusUpdate
 	subscribeErr error
@@ -106,6 +107,16 @@ func (f *fakeTaskService) RetryTaskCreationStream(
 	_ context.Context,
 	taskID string,
 ) (<-chan core.TaskCreateEvent, error) {
+	return f.taskCreateResult()
+}
+
+func (f *fakeTaskService) NewTaskSessionStream(
+	_ context.Context,
+	input core.NewTaskSessionInput,
+) (<-chan core.TaskCreateEvent, error) {
+	f.mu.Lock()
+	f.newSessionInput = &input
+	f.mu.Unlock()
 	return f.taskCreateResult()
 }
 

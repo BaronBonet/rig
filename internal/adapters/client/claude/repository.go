@@ -26,6 +26,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"github.com/BaronBonet/rig/internal/adapters/client/providerkit"
 	"github.com/BaronBonet/rig/internal/core"
@@ -94,6 +95,7 @@ var titleSkipPrefixes = []string(nil)
 var launchOptions = core.ProviderLaunchOptions{
 	Models:  []string{"fable", "opus", "sonnet", "haiku"},
 	Efforts: []string{"low", "medium", "high", "xhigh", "max"},
+	Handoff: true,
 }
 
 type repository struct {
@@ -230,6 +232,7 @@ func (r *repository) LaunchOptions() core.ProviderLaunchOptions {
 	return core.ProviderLaunchOptions{
 		Models:  append([]string(nil), launchOptions.Models...),
 		Efforts: append([]string(nil), launchOptions.Efforts...),
+		Handoff: launchOptions.Handoff,
 	}
 }
 
@@ -259,6 +262,94 @@ func (r *repository) BuildTaskSessionLaunchSpec(task *core.Task) (core.TaskSessi
 		ReadyMarker:  readyMarker,
 		PrefillInput: prefillInput,
 	}, nil
+}
+
+// WriteSessionHandoff runs the previous session once more in print mode,
+// forked so the session itself is left as it was, even while it is still open
+// interactively, with hooks and tools off so nothing but the note comes out,
+// and saves the note under rig's data dir. The session's own model is used: a
+// smaller one might not fit its context. The request goes in on stdin: as an
+// argument it would be swallowed by the variadic --tools flag.
+func (r *repository) WriteSessionHandoff(
+	ctx context.Context,
+	task *core.Task,
+	session core.TaskProviderSession,
+	focus string,
+) (string, error) {
+	sessionID := strings.TrimSpace(session.ProviderSessionID)
+	if sessionID == "" {
+		return "", fmt.Errorf("session ID is required")
+	}
+
+	args := []string{
+		"-p", "--output-format", "text",
+		"--resume", sessionID, "--fork-session", "--no-session-persistence",
+		"--setting-sources", "user", "--tools", "",
+	}
+	if model := strings.TrimSpace(session.Model); model != "" {
+		args = append(args, "--model", model)
+	} else if model := task.Launch().Model; model != "" {
+		args = append(args, "--model", model)
+	}
+
+	cwd := strings.TrimSpace(session.Cwd)
+	if cwd == "" {
+		cwd = strings.TrimSpace(task.WorktreePath)
+	}
+	result, err := r.runner.RunWithStdin(ctx, subprocess.RunWithStdinOptions{
+		Env:   providerkit.EnvOverrides(task.ProviderEnv, ConfigEnvVars),
+		Cwd:   cwd,
+		Name:  r.binary,
+		Args:  args,
+		Stdin: handoffPrompt(focus),
+	})
+	if err != nil {
+		return "", fmt.Errorf("claude print mode failed: %w", err)
+	}
+	note := strings.TrimSpace(result.Stdout)
+	if note == "" {
+		return "", fmt.Errorf("claude returned an empty handoff note")
+	}
+
+	path, err := r.handoffPath(task, sessionID)
+	if err != nil {
+		return "", err
+	}
+	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+		return "", fmt.Errorf("create handoff directory: %w", err)
+	}
+	if err := os.WriteFile(path, []byte(note+"\n"), 0o600); err != nil {
+		return "", fmt.Errorf("write handoff note: %w", err)
+	}
+	return path, nil
+}
+
+// handoffPrompt is the handoff request, told what the next session will be
+// asked to do so the note covers what it needs for that.
+func handoffPrompt(focus string) string {
+	focus = strings.TrimSpace(focus)
+	if focus == "" {
+		return prompts.HandoffPrompt
+	}
+	return prompts.HandoffPrompt +
+		"\n\nThe next session will start with this instruction from the user:\n" + focus +
+		"\n\nMake sure the note covers everything it needs for that: " +
+		"the context, files, decisions and open questions that bear on it."
+}
+
+// handoffPath names a task's handoff notes under rig's data dir, one file per
+// session they were written from, so earlier notes stay readable.
+func (r *repository) handoffPath(task *core.Task, sessionID string) (string, error) {
+	dataDir, err := r.resolveRigDataDir()
+	if err != nil {
+		return "", err
+	}
+	stamp := time.Now().UTC().Format("20060102-150405")
+	short := sessionID
+	if len(short) > 8 {
+		short = short[:8]
+	}
+	return filepath.Join(dataDir, "handoffs", strings.TrimSpace(task.ID), stamp+"-"+short+".md"), nil
 }
 
 func (r *repository) BuildReconnectTaskSessionLaunchSpec(

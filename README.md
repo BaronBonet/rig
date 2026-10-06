@@ -18,6 +18,10 @@ a background daemon handles longer running orchestration.
   provider suggests a task name, then Rig creates the branch and worktree,
   prepares the workspace, and starts the tmux session with the model and
   effort you picked.
+- **Sessions per task**: start a fresh provider session in an existing task
+  when its context has grown, from a handoff note the previous session
+  writes, instead of compacting. The task stays one row however many
+  sessions it takes.
 - **Multi-provider support**: enable Codex and Claude Code through `rig setup`,
   pick a default provider, cycle providers with `tab` while creating a task, and
   switch an existing task to another configured provider.
@@ -277,9 +281,11 @@ Common TUI keys:
 | Key | Action |
 |-----|--------|
 | `n` | Create a task from a prompt |
+| `N` | Start a fresh session in the selected task |
 | `tab` | Cycle configured providers while composing a task |
 | `ctrl+t` | Cycle the model while composing |
 | `ctrl+r` | Cycle the effort while composing |
+| `ctrl+g` | Toggle the handoff note while composing a new session |
 | `ctrl+p` | Pick a GitHub pull request while creating a task |
 | `ctrl+o` | Run the new task in this folder instead of a new worktree |
 | `enter` | Attach to the selected task's tmux session |
@@ -326,6 +332,43 @@ resumes the session with the same options, and shown in the detail view.
 The options a provider was last launched with are preselected the next time
 you compose with it; they live in `~/.config/rig/config.json` under
 `launch_defaults`, next to provider setup.
+
+## Sessions per task
+
+A task is the durable unit — branch, worktree, tmux session, history — and may
+run many provider sessions over time. When a session's context has grown to
+the point where every turn re-reads hundreds of thousands of tokens, a fresh
+session that starts from a short handoff note is cheaper and sharper than
+compacting, and keeps the task as one row.
+
+Press `N` on the task. The composer shows the continuation prompt the new
+session will start with — the task, its original ask, and where to pick up
+its state — and a box for your own instruction for this session, which is
+optional and goes last under `Now:`. The task's model and effort are
+preselected; `tab`, `ctrl+t` and `ctrl+r` change them.
+
+With `handoff` on (the default for Claude Code), Rig first runs the previous
+session once more in print mode and asks it for a handoff note — goal, state,
+decisions, where things are, gotchas, next step — told what your instruction
+for the next session is, so the note covers what that session needs. The note
+is saved under `~/.local/share/rig/handoffs/<task id>/`. The session is forked
+and not saved, with workspace hooks and tools off, so the previous
+conversation is left exactly as it was and nothing but the note comes out. The
+continuation prompt then points at the note; without a handoff it asks the
+session to recover the state from the workspace first. `ctrl+g` skips the
+handoff; a task without a previous session skips it on its own. Codex cannot
+write handoff notes yet.
+
+`N` refuses while a provider is still running in the task session; Rig never
+kills an interactive session. The task keeps its row, now with one more session
+behind it.
+
+Choosing another provider with `tab` switches the task to it, as `p` does, and
+starts the new session there.
+
+You can also start a session by hand: exit the provider and run `claude` or
+`codex` in the task's tmux window. Rig adopts the new session into the same
+task, with its history and token usage, and reconnects resume the latest one.
 
 ## Switching Providers
 

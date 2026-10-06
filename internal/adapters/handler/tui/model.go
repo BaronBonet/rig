@@ -129,6 +129,12 @@ type taskDraft struct {
 	// provider's own default.
 	model  string
 	effort string
+	// forTask, when set, makes the draft a fresh session of that existing
+	// task rather than a new task.
+	forTask *core.Task
+	// handoff asks the task's previous session for a handoff note before the
+	// new session starts.
+	handoff bool
 }
 
 // createFlowState is the progress of an in-flight or just-failed task
@@ -137,7 +143,10 @@ type createFlowState struct {
 	active core.TaskCreateProgressStep
 	done   []core.TaskCreateProgressStep
 	fromPR bool
-	err    error
+	// newSession marks a fresh session of an existing task, which has only
+	// the session steps.
+	newSession bool
+	err        error
 }
 
 // setupFormState is the provider setup screen's working state.
@@ -377,6 +386,9 @@ func (m *model) cycleCreateProvider() {
 		}
 	}
 	m.applyLaunchDefaults(m.draft.provider)
+	if m.draft.forTask != nil {
+		m.draft.handoff = m.providerSupportsHandoff(m.draft.provider)
+	}
 }
 
 // launchChoices lists the models and efforts provider accepts, each led by
@@ -391,6 +403,15 @@ func (m model) launchChoices(provider core.Provider) ([]string, []string) {
 		return models, efforts
 	}
 	return append(models, options.Models...), append(efforts, options.Efforts...)
+}
+
+// providerSupportsHandoff reports whether provider can write a handoff note
+// from a previous session.
+func (m model) providerSupportsHandoff(provider core.Provider) bool {
+	if m.launchSettings == nil {
+		return false
+	}
+	return m.launchSettings.Options[provider].Handoff
 }
 
 // cycleCreateModel advances the draft's model through the provider's choices.
@@ -518,6 +539,8 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				return m.enterProviderSetupMode()
 			}
 			return m.enterPromptInputMode("")
+		case "N":
+			return m.enterNewSessionMode()
 		case "p":
 			return m.enterSwitchProviderMode()
 		case "i":
@@ -930,7 +953,9 @@ func (m *model) afterTasksLoadedCmds() []tea.Cmd {
 func (m model) submitPrompt() (model, tea.Cmd) {
 	m.ensurePromptInputInitialized()
 	prompt := strings.TrimSpace(m.promptValue())
-	if prompt == "" {
+	// A new session has its continuation prompt; the user's own instruction
+	// is optional.
+	if prompt == "" && m.draft.forTask == nil {
 		return m, nil
 	}
 
@@ -942,10 +967,26 @@ func (m model) submitPrompt() (model, tea.Cmd) {
 	if m.draft.inFolder {
 		workspace = core.WorkspaceKindFolder
 	}
+	forTask := m.draft.forTask
+	handoff := m.draft.handoff
 	m.transition(modeBrowse)
 	m.beginOp(opCreating)
-	m.create = createFlowState{}
+	m.create = createFlowState{newSession: forTask != nil}
 	m.rememberLaunchDefaults(provider, options)
+
+	if forTask != nil {
+		return m, tea.Batch(
+			newTaskSessionStreamCmd(m.statusContext, m.frontend, core.NewTaskSessionInput{
+				TaskID:   forTask.ID,
+				Prompt:   prompt,
+				Provider: provider,
+				Model:    options.Model,
+				Effort:   options.Effort,
+				Handoff:  handoff,
+			}),
+			shimmerTickCmd(),
+		)
+	}
 
 	return m, tea.Batch(
 		createTaskStreamCmd(m.statusContext, m.frontend, core.CreateTaskInput{
@@ -1009,14 +1050,25 @@ func (m model) updatePromptInput(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.cycleCreateEffort()
 			return m, nil
 		}
+		if typed.String() == "ctrl+g" {
+			if m.draft.forTask != nil && m.providerSupportsHandoff(m.effectiveCreateProvider()) {
+				m.draft.handoff = !m.draft.handoff
+			}
+			return m, nil
+		}
 		if typed.String() == "ctrl+o" {
-			// Outside Git the folder is the only workspace there is.
-			if !m.draft.outsideGit {
+			// Outside Git the folder is the only workspace there is, and a new
+			// session keeps its task's workspace.
+			if !m.draft.outsideGit && m.draft.forTask == nil {
 				m.draft.inFolder = !m.draft.inFolder
 			}
 			return m, nil
 		}
 		if typed.String() == "ctrl+p" {
+			if m.draft.forTask != nil {
+				// A new session belongs to its task; there is no source to pick.
+				return m, nil
+			}
 			if m.draft.outsideGit {
 				m.draft.err = errors.New("pull requests need a git repository")
 				return m, nil
@@ -1136,7 +1188,62 @@ func (m model) enterPromptInputMode(initialValue string) (tea.Model, tea.Cmd) {
 	m.applyLaunchDefaults(m.effectiveCreateProvider())
 	m.create.err = nil
 	m.create.fromPR = false
+	m.create.newSession = false
 	return m, m.draft.input.Focus()
+}
+
+// enterNewSessionMode opens the composer for a fresh provider session of the
+// selected task: a new conversation in the same workspace and tmux session,
+// so a long-running task keeps one row however many sessions it takes.
+func (m model) enterNewSessionMode() (tea.Model, tea.Cmd) {
+	if m.pending != opNone {
+		return m, nil
+	}
+	if m.providerSetup == nil {
+		return m.enterProviderSetupMode()
+	}
+	row := m.selectedRow()
+	if row == nil || row.task == nil {
+		return m, nil
+	}
+	task := row.task
+	if task.CreationStatus != core.TaskCreationStatusReady {
+		m.err = errors.New("the task is not ready: retry its creation first")
+		return m, nil
+	}
+	if !m.transition(modePromptInput) {
+		return m, nil
+	}
+
+	// The box takes the user's own instruction for the session; the
+	// continuation prompt (the task, its original ask, where to pick up) is
+	// composed around it and previewed above.
+	input := newPromptInput()
+	input.Placeholder = "What should this session do? Optional: the continuation prompt goes first."
+	m.draft = taskDraft{input: input, forTask: task, provider: task.Provider}
+	// The task's own last options win; a task without any takes the
+	// provider's last used ones.
+	m.draft.model, m.draft.effort = task.Launch().Model, task.Launch().Effort
+	if m.draft.model == "" && m.draft.effort == "" {
+		m.applyLaunchDefaults(m.effectiveCreateProvider())
+	}
+	m.draft.handoff = m.providerSupportsHandoff(m.effectiveCreateProvider())
+	m.create = createFlowState{}
+	m.err = nil
+	return m, m.draft.input.Focus()
+}
+
+// continuationPreview is the continuation prompt as the daemon will compose
+// it, before the user's own instruction, for the composer to show.
+func (m model) continuationPreview() string {
+	if m.draft.forTask == nil {
+		return ""
+	}
+	handoffPath := ""
+	if m.draft.handoff && m.providerSupportsHandoff(m.effectiveCreateProvider()) {
+		handoffPath = "(the note written when the session starts)"
+	}
+	return core.ContinuationPrompt(m.draft.forTask, "", handoffPath)
 }
 
 func (m model) promptValue() string {

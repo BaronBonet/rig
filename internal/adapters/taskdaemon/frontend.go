@@ -139,6 +139,21 @@ func (f *frontend) CreateTaskStream(
 	})
 }
 
+func (f *frontend) NewTaskSessionStream(
+	ctx context.Context,
+	input core.NewTaskSessionInput,
+) (<-chan core.TaskCreateEvent, error) {
+	payload, err := json.Marshal(input)
+	if err != nil {
+		return nil, fmt.Errorf("%s: encode request: %w", socketCommandNewTaskSession, err)
+	}
+
+	return f.taskCreateEventStream(ctx, socketRequest{
+		Command: socketCommandNewTaskSession,
+		Payload: payload,
+	})
+}
+
 func (f *frontend) GetLaunchSettings(ctx context.Context) (*core.LaunchSettings, error) {
 	return callUnary(ctx, f, opGetLaunchSettings, emptyResponse{})
 }

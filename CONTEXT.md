@@ -16,11 +16,21 @@ Use `rig` for the CLI command and Rig for the product or system.
   prepared task workspace and interactive provider session.
 - Task draft: The in-progress task the TUI user is assembling before
   submission: the prompt text, the chosen provider, its launch options, and
-  the optional pull request source. Discarded on cancel; cleared once creation
-  is submitted.
+  the optional pull request source; or, for a new session, the continuation
+  prompt and whether to write a handoff. Discarded on cancel; cleared once
+  submitted.
 - Launch options: The model and effort a Task's provider starts and resumes
   with, chosen when the Task or a new session is composed, kept on the Task,
   and remembered per provider as the preselection for the next launch.
+- New session: Starting a fresh provider session in an existing Task, in the
+  same workspace and tmux session, usually from a handoff note, instead of
+  compacting a long conversation or creating another Task.
+- Continuation prompt: What a new session is asked: the Task and its original
+  ask, where to pick up its state (the handoff note, or the workspace), then
+  the user's own instruction for that session.
+- Handoff note: A note the previous provider session writes, in print mode on
+  a fork that is not saved, for a new session to start from: goal, state,
+  decisions, where things are, gotchas, next step. Kept under Rig's data dir.
 - Creation status: The durable state of task setup: `creating`, `ready`, or
   `failed`.
 - Creation step: The retryable task setup milestone, such as suggesting a name,
@@ -123,7 +133,12 @@ Use `rig` for the CLI command and Rig for the product or system.
 - Provider setup produces the user's Configured providers.
 - Tasks remain visible even when their Active provider is not currently a
   Configured provider.
-- A Task may have many Provider sessions over time.
+- A Task may have many Provider sessions over time; a New session adds one
+  without changing the Task's identity, workspace, or tmux session.
+- A New session is refused while any Provider is running in the Task's
+  Session.
+- A Handoff note is written by the Task's latest Provider session of its
+  Active provider, and only by a Provider that supports it.
 - A Provider session belongs to exactly one Task and one Provider.
 - A Task's Runtime status is driven by the root agent of its Active provider,
   plus any subagent permission request that needs user action. Subagent work

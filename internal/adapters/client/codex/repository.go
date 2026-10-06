@@ -189,6 +189,17 @@ func (r *repository) LaunchOptions() core.ProviderLaunchOptions {
 	}
 }
 
+// WriteSessionHandoff is not supported: Codex has no print-mode resume that
+// leaves the session untouched.
+func (r *repository) WriteSessionHandoff(
+	context.Context,
+	*core.Task,
+	core.TaskProviderSession,
+	string,
+) (string, error) {
+	return "", core.ErrHandoffUnsupported
+}
+
 // launchArgs are the global flags a task's launch options add before any
 // codex subcommand.
 func launchArgs(task *core.Task) []string {

@@ -119,3 +119,151 @@ func TestLaunchOptionsText_NamesModelAndEffort(t *testing.T) {
 	require.Equal(t, "max effort", launchOptionsText(core.LaunchOptions{Effort: "max"}))
 	require.Equal(t, "opus · max effort", launchOptionsText(core.LaunchOptions{Model: "opus", Effort: "max"}))
 }
+
+func TestModel_KeyNOpensANewSessionComposerForTheSelectedTask(t *testing.T) {
+	frontend := newFrontendHarness()
+	frontend.listTasks = []*core.Task{{
+		ID:             "task-1",
+		DisplayName:    "billing retry",
+		Prompt:         "add billing retry flow",
+		Provider:       core.ProviderCodex,
+		CreationStatus: core.TaskCreationStatusReady,
+		Model:          "gpt-5",
+		Effort:         "low",
+	}}
+	m := newLoadedModel(frontend)
+	m.launchSettings = launchSettingsFixture()
+
+	m = pressKeys(t, m, tea.KeyPressMsg{Text: "N"})
+
+	require.Equal(t, modePromptInput, m.mode)
+	require.NotNil(t, m.draft.forTask)
+	require.Equal(t, "task-1", m.draft.forTask.ID)
+	require.Empty(t, m.draft.prompt, "the box takes the user's own instruction")
+	require.Equal(t, "gpt-5", m.draft.model, "the task's own options come first")
+	require.Equal(t, "low", m.draft.effort)
+	require.False(t, m.draft.handoff, "codex cannot write a handoff note")
+	view := stripANSI(m.View().Content)
+	require.Contains(t, view, "new session · billing retry")
+	require.Contains(t, view, "handoff   not available for this provider")
+	require.Contains(
+		t,
+		view,
+		"Continue the task \"billing retry\" in a fresh session.",
+		"the continuation is previewed",
+	)
+	require.Contains(t, view, "Original ask:")
+	require.Contains(t, view, "First recover")
+	require.Contains(t, view, "where the work stands")
+	require.NotContains(t, view, "workspace ")
+	require.Contains(t, view, "enter start session")
+
+	m = pressKeys(t, m, ctrl('o'), ctrl('p'))
+	require.Equal(t, modePromptInput, m.mode, "no workspace or pull request choice for a new session")
+	require.False(t, m.draft.inFolder)
+}
+
+func TestModel_NewSessionSubmitStartsASessionOfTheTaskWithAHandoff(t *testing.T) {
+	frontend := multiProviderFrontend()
+	frontend.listTasks = []*core.Task{{
+		ID:             "task-1",
+		DisplayName:    "billing retry",
+		Provider:       core.ProviderClaude,
+		CreationStatus: core.TaskCreationStatusReady,
+	}}
+	frontend.newSessionEvents = []core.TaskCreateEvent{
+		{Progress: &core.TaskCreateProgressEvent{Step: core.TaskCreateProgressWritingHandoff}},
+		{Task: &core.Task{
+			ID:             "task-1",
+			DisplayName:    "billing retry",
+			Provider:       core.ProviderClaude,
+			CreationStatus: core.TaskCreationStatusReady,
+			Model:          "opus",
+		}},
+	}
+	m := newLoadedModel(frontend)
+	m.providerSetup = frontend.providerSetup
+	m.launchSettings = launchSettingsFixture()
+
+	m = pressKeys(t, m, tea.KeyPressMsg{Text: "N"})
+	require.True(t, m.draft.handoff, "claude writes a handoff note by default")
+	view := stripANSI(m.View().Content)
+	require.Contains(t, view, "handoff   note from the previous session")
+	require.Contains(t, view, "Read the", "the preview follows the toggle")
+	require.Contains(t, view, "handoff note from the previous session before doing anything else:")
+	m = pressKeys(t, m, ctrl('g'))
+	require.False(t, m.draft.handoff)
+	require.Contains(t, stripANSI(m.View().Content), "First recover")
+	m = pressKeys(t, m, ctrl('g'), ctrl('t'))
+	require.Equal(t, "opus", m.draft.model)
+	m = pressKeys(t, m, typed("add the search page next")...)
+
+	next, cmd := m.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
+	submitted := asModel(t, next)
+	require.Equal(t, modeBrowse, submitted.mode)
+	require.Equal(t, opCreating, submitted.pending)
+	require.True(t, submitted.create.newSession)
+
+	msgs := runBatchCmd(t, cmd)
+	event := requireMsgType[taskCreateEventMsg](t, msgs)
+	require.Equal(t, core.NewTaskSessionInput{
+		TaskID:   "task-1",
+		Prompt:   "add the search page next",
+		Provider: core.ProviderClaude,
+		Model:    "opus",
+		Handoff:  true,
+	}, frontend.newSessionInput)
+	require.Zero(t, frontend.createTaskStreamCalls)
+
+	next, follow := submitted.Update(event)
+	got := asModel(t, next)
+	require.Contains(t, stripANSI(got.View().Content), "Writing handoff from the previous session")
+
+	next, _ = got.Update(runCmd(t, follow))
+	got = asModel(t, next)
+	require.Equal(t, opNone, got.pending)
+	require.Len(t, got.rows, 1)
+	require.Equal(t, "opus", got.rows[0].task.Model)
+	require.Contains(t, stripANSI(got.View().Content), "launch    opus")
+}
+
+func TestModel_KeyNRefusesATaskThatIsNotReady(t *testing.T) {
+	frontend := newFrontendHarness()
+	frontend.listTasks = []*core.Task{{
+		ID:             "task-1",
+		DisplayName:    "billing retry",
+		Provider:       core.ProviderCodex,
+		CreationStatus: core.TaskCreationStatusFailed,
+		CreationStep:   core.TaskCreateProgressStartingSession,
+	}}
+	m := newLoadedModel(frontend)
+
+	m = pressKeys(t, m, tea.KeyPressMsg{Text: "N"})
+
+	require.Equal(t, modeBrowse, m.mode)
+	require.ErrorContains(t, m.err, "not ready")
+}
+
+func TestModel_NewSessionWithoutAnInstructionStillStarts(t *testing.T) {
+	frontend := newFrontendHarness()
+	frontend.listTasks = []*core.Task{{
+		ID:             "task-1",
+		DisplayName:    "billing retry",
+		Provider:       core.ProviderCodex,
+		CreationStatus: core.TaskCreationStatusReady,
+	}}
+	frontend.newSessionEvents = []core.TaskCreateEvent{{Task: frontend.listTasks[0]}}
+	m := newLoadedModel(frontend)
+
+	m = pressKeys(t, m, tea.KeyPressMsg{Text: "N"})
+	next, cmd := m.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
+	submitted := asModel(t, next)
+	require.NotNil(t, cmd, "the continuation prompt alone is a prompt")
+	runBatchCmd(t, cmd)
+
+	require.Equal(t, opCreating, submitted.pending)
+	require.Equal(t, core.NewTaskSessionInput{
+		TaskID:   "task-1",
+		Provider: core.ProviderCodex,
+	}, frontend.newSessionInput)
+}

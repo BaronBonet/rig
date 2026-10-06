@@ -72,7 +72,7 @@ func TestModel_ViewRendersTaskMetadata(t *testing.T) {
 
 	view := stripANSI(got.View().Content)
 	require.Contains(t, view, "RIG dev")
-	require.Contains(t, view, "n new   i import   p provider   r refresh   space details   x clean   q quit")
+	require.Contains(t, view, "n new  N session  i import  p provider  r refresh  space details  x clean  q quit")
 	require.Contains(t, view, "first task")
 	require.Contains(t, view, "repo-a")
 	require.Contains(t, view, "feat/first-task")
@@ -2083,7 +2083,7 @@ func TestModel_PRPickerEnterCreatesTaskFromSelectedPR(t *testing.T) {
 	require.Equal(t, modeBrowse, pending.mode)
 	require.Equal(t, opCreating, pending.pending)
 	view := stripANSI(pending.View().Content)
-	require.Contains(t, view, "n new   i import   p provider   r refresh   space details   x clean   q quit")
+	require.Contains(t, view, "n new  N session  i import  p provider  r refresh  space details  x clean  q quit")
 	require.Contains(t, view, "Creating task from pull request")
 	require.NotContains(t, view, "Suggesting name")
 	require.Less(t, strings.Index(view, "existing task"), strings.Index(view, "Creating task from pull request"))
@@ -2155,7 +2155,7 @@ func TestModel_PRPickerCreateFailureReturnsToBrowseWithProgressAndError(t *testi
 	require.ErrorContains(t, got.create.err, "create failed")
 
 	view = stripANSI(got.View().Content)
-	require.Contains(t, view, "n new   i import   p provider   r refresh   space details   x clean   q quit")
+	require.Contains(t, view, "n new  N session  i import  p provider  r refresh  space details  x clean  q quit")
 	require.Contains(t, view, "Creating task from pull request")
 	require.NotContains(t, view, "Creating worktree")
 	require.Contains(t, view, "create failed")
@@ -2400,6 +2400,10 @@ type frontendHarness struct {
 	launchSettings              *core.LaunchSettings
 	launchSettingsErr           error
 	launchSettingsCalls         int
+	newSessionInput             core.NewTaskSessionInput
+	newSessionEvents            []core.TaskCreateEvent
+	newSessionStreamErr         error
+	newSessionStreamCalls       int
 }
 
 func newFrontendHarness() *frontendHarness {
@@ -2446,6 +2450,21 @@ func newFrontendHarness() *frontendHarness {
 				return nil, frontend.launchSettingsErr
 			}
 			return frontend.launchSettings, nil
+		},
+	).Maybe()
+	frontend.mock.EXPECT().NewTaskSessionStream(mock.Anything, mock.Anything).RunAndReturn(
+		func(_ context.Context, input core.NewTaskSessionInput) (<-chan core.TaskCreateEvent, error) {
+			frontend.newSessionStreamCalls++
+			frontend.newSessionInput = input
+			if frontend.newSessionStreamErr != nil {
+				return nil, frontend.newSessionStreamErr
+			}
+			events := make(chan core.TaskCreateEvent, len(frontend.newSessionEvents))
+			for _, event := range frontend.newSessionEvents {
+				events <- event
+			}
+			close(events)
+			return events, nil
 		},
 	).Maybe()
 	frontend.mock.EXPECT().SwitchTaskProvider(mock.Anything, mock.Anything, mock.Anything).RunAndReturn(

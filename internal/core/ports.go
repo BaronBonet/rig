@@ -56,6 +56,24 @@ func (i CreateTaskInput) Launch() LaunchOptions {
 	return LaunchOptions{Model: strings.TrimSpace(i.Model), Effort: strings.TrimSpace(i.Effort)}
 }
 
+// NewTaskSessionInput starts a fresh provider session in an existing Task: a
+// new conversation with a small context, in the same workspace and tmux
+// session, instead of compacting a long one. Prompt is typed into the new
+// session; with Handoff, a note written from the previous session is
+// referenced from it.
+type NewTaskSessionInput struct {
+	TaskID string `json:"task_id"`
+	Prompt string `json:"prompt"`
+	// Provider is the provider to start; empty keeps the Task's active one.
+	Provider Provider `json:"provider,omitempty"`
+	Model    string   `json:"model,omitempty"`
+	Effort   string   `json:"effort,omitempty"`
+	// Handoff asks the previous session of the Task's active provider for a
+	// handoff note before the new session starts. It is skipped quietly when
+	// the Task has no previous session.
+	Handoff bool `json:"handoff,omitempty"`
+}
+
 type TaskCreateProgressStep string
 
 const (
@@ -63,6 +81,9 @@ const (
 	TaskCreateProgressCreatingWorktree   TaskCreateProgressStep = "creating_worktree"
 	TaskCreateProgressPreparingWorkspace TaskCreateProgressStep = "preparing_workspace"
 	TaskCreateProgressStartingSession    TaskCreateProgressStep = "starting_session"
+	// TaskCreateProgressWritingHandoff is a new-session milestone: the
+	// previous session is writing its handoff note.
+	TaskCreateProgressWritingHandoff TaskCreateProgressStep = "writing_handoff"
 )
 
 type TaskCreateProgressEvent struct {
@@ -231,6 +252,11 @@ type TaskService interface {
 	// the current provider process is still running and only records the new
 	// active provider after the new provider launches successfully.
 	SwitchTaskProvider(ctx context.Context, taskID string, provider Provider) (*Task, error)
+	// NewTaskSessionStream starts a fresh provider session in an existing
+	// task, optionally after writing a handoff note from the previous one,
+	// and streams progress events followed by exactly one terminal result
+	// event. It refuses while a provider is still running in the task session.
+	NewTaskSessionStream(ctx context.Context, input NewTaskSessionInput) (<-chan TaskCreateEvent, error)
 	// GetLaunchSettings returns every configured provider's launch options and
 	// the options each was last launched with.
 	GetLaunchSettings(ctx context.Context) (*LaunchSettings, error)
@@ -335,6 +361,13 @@ type ProviderClient interface {
 	// LaunchOptions lists the models and efforts the provider's CLI accepts,
 	// and whether it can write a handoff note from a previous session.
 	LaunchOptions() ProviderLaunchOptions
+	// WriteSessionHandoff asks a previous provider session of the task, in
+	// print mode and without touching the task's interactive session, for a
+	// handoff note a fresh session can start from, and returns the path it
+	// wrote the note to. focus, when not empty, is what the next session will
+	// be asked to do, so the note covers what it needs for that.
+	// ErrHandoffUnsupported when the provider cannot.
+	WriteSessionHandoff(ctx context.Context, task *Task, session TaskProviderSession, focus string) (string, error)
 	// BuildTaskSessionLaunchSpec describes how the provider's CLI should be
 	// started inside the task's tmux session, with the task's ProviderEnv and
 	// launch options.

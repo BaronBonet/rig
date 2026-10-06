@@ -15,4 +15,7 @@ var (
 	// ErrProviderSessionActive reports that a provider switch was refused
 	// because the current provider process is still running in the task pane.
 	ErrProviderSessionActive = errors.New("provider session is still running")
+	// ErrHandoffUnsupported reports that a provider cannot write a handoff
+	// note from one of its sessions.
+	ErrHandoffUnsupported = errors.New("provider cannot write a handoff note")
 )

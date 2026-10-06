@@ -75,6 +75,16 @@ func createTaskStreamCmd(ctx context.Context, frontend core.TaskFrontend, input 
 	}
 }
 
+func newTaskSessionStreamCmd(ctx context.Context, frontend core.TaskFrontend, input core.NewTaskSessionInput) tea.Cmd {
+	return func() tea.Msg {
+		events, err := frontend.NewTaskSessionStream(ctx, input)
+		if err != nil {
+			return taskCreateStreamStartFailedMsg{err: err}
+		}
+		return waitForTaskCreateEventCmd(events)()
+	}
+}
+
 func getLaunchSettingsCmd(ctx context.Context, frontend core.TaskFrontend) tea.Cmd {
 	return func() tea.Msg {
 		settings, err := frontend.GetLaunchSettings(ctx)

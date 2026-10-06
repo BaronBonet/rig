@@ -549,11 +549,18 @@ func taskActivityPreview(events []core.TaskActivityEvent) (string, []string) {
 
 func (m model) promptInputView() string {
 	totalWidth := m.totalWidth()
+	newSession := m.draft.forTask != nil
+
+	title, intro := "new task", "Enter task prompt."
+	if newSession {
+		title = "new session · " + truncateStr(m.draft.forTask.DisplayName, 40)
+		intro = "A fresh session of this task. It starts with the continuation prompt, then your instruction."
+	}
 
 	var builder strings.Builder
-	builder.WriteString(m.screenHeader(mutedStyle.Render("new task")))
+	builder.WriteString(m.screenHeader(mutedStyle.Render(title)))
 	builder.WriteString(errorBlock(m.draft.err))
-	builder.WriteString(dimStyle.Render("Enter task prompt.") + "\n\n")
+	builder.WriteString(dimStyle.Render(intro) + "\n\n")
 	createProvider := string(m.effectiveCreateProvider())
 	providerLine := mutedStyle.Render("provider  ") + providerStyle(createProvider).Render(createProvider)
 	if len(m.configuredProviders()) > 1 {
@@ -562,7 +569,15 @@ func (m model) promptInputView() string {
 	builder.WriteString(providerLine + "\n")
 	builder.WriteString(m.draftLaunchLine("model", m.draft.model, "ctrl+t") + "\n")
 	builder.WriteString(m.draftLaunchLine("effort", m.draft.effort, "ctrl+r") + "\n")
-	builder.WriteString(m.draftWorkspaceLine() + "\n\n")
+	if newSession {
+		builder.WriteString(m.draftHandoffLine() + "\n\n")
+		for _, line := range wrapAndTruncate(m.continuationPreview(), totalWidth-4, 6) {
+			builder.WriteString("  " + dimStyle.Render(line) + "\n")
+		}
+		builder.WriteString("\n")
+	} else {
+		builder.WriteString(m.draftWorkspaceLine() + "\n\n")
+	}
 
 	promptBoxWidth := totalWidth - 4
 	if promptBoxWidth < 20 {
@@ -586,7 +601,10 @@ func (m model) promptInputView() string {
 
 	builder.WriteString("\n\n")
 	binds := [][2]string{{"enter", "submit"}, {"ctrl+p", "pull requests"}, {"esc", "cancel"}}
-	if m.draft.outsideGit {
+	switch {
+	case newSession:
+		binds = [][2]string{{"enter", "start session"}, {"esc", "cancel"}}
+	case m.draft.outsideGit:
 		// Pull requests need a repository to look them up in.
 		binds = [][2]string{{"enter", "submit"}, {"esc", "cancel"}}
 	}
@@ -606,15 +624,30 @@ func (m model) draftLaunchLine(label string, value string, key string) string {
 		mutedStyle.Render("  ·  ") + keybindStyle.Render(key) + mutedStyle.Render(" cycle")
 }
 
+// draftHandoffLine shows whether the new session starts from a handoff note
+// written by the previous session.
+func (m model) draftHandoffLine() string {
+	label := mutedStyle.Render("handoff   ")
+	if !m.providerSupportsHandoff(m.effectiveCreateProvider()) {
+		return label + dimStyle.Render("not available for this provider")
+	}
+	if m.draft.handoff {
+		return label + primaryStyle.Render("note from the previous session") +
+			mutedStyle.Render("  ·  ") + keybindStyle.Render("ctrl+g") + mutedStyle.Render(" skip")
+	}
+	return label + primaryStyle.Render("none") +
+		mutedStyle.Render("  ·  ") + keybindStyle.Render("ctrl+g") + mutedStyle.Render(" write a note")
+}
+
 func (m model) listKeybindText() string {
-	binds := [][2]string{{"n", "new"}, {"i", "import"}, {"p", "provider"}, {"r", "refresh"}}
+	binds := [][2]string{{"n", "new"}, {"N", "session"}, {"i", "import"}, {"p", "provider"}, {"r", "refresh"}}
 	if row := m.selectedRow(); row != nil && row.task != nil &&
 		row.task.CreationStatus == core.TaskCreationStatusFailed {
 		binds = append(binds, [2]string{"R", "retry"})
 	}
 	binds = append(binds, [2]string{"space", "details"}, [2]string{"x", "clean"}, [2]string{"q", "quit"})
 
-	return keybindBar("   ", binds...)
+	return keybindBar("  ", binds...)
 }
 
 func (m model) providerSetupView() string {
@@ -802,6 +835,15 @@ func (m model) renderCreateProgress() string {
 		core.TaskCreateProgressPreparingWorkspace,
 		core.TaskCreateProgressStartingSession,
 	}
+	if m.create.newSession {
+		// A new session has no workspace to make; the handoff step shows only
+		// once the daemon reports it.
+		steps = []core.TaskCreateProgressStep{core.TaskCreateProgressStartingSession}
+		if m.create.active == core.TaskCreateProgressWritingHandoff ||
+			containsCreateStep(m.create.done, core.TaskCreateProgressWritingHandoff) {
+			steps = append([]core.TaskCreateProgressStep{core.TaskCreateProgressWritingHandoff}, steps...)
+		}
+	}
 
 	var lines []string
 	for _, step := range steps {
@@ -845,6 +887,8 @@ func taskCreateProgressLabel(step core.TaskCreateProgressStep) string {
 		return "Preparing workspace"
 	case core.TaskCreateProgressStartingSession:
 		return "Starting session"
+	case core.TaskCreateProgressWritingHandoff:
+		return "Writing handoff from the previous session"
 	default:
 		return "Creating task"
 	}

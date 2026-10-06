@@ -367,6 +367,7 @@ func unexpectedResponseError(command string, resp socketEnvelope) error {
 const (
 	socketCommandCreateTask        = "create_task"
 	socketCommandRetryTaskCreation = "retry_task_creation"
+	socketCommandNewTaskSession    = "new_task_session"
 
 	socketEnvelopeTaskCreateProgress = "task_create_progress"
 	socketEnvelopeTaskCreated        = "task_created"

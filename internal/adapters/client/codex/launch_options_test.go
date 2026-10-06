@@ -1,6 +1,7 @@
 package codex
 
 import (
+	"context"
 	"testing"
 
 	"github.com/BaronBonet/rig/internal/core"
@@ -33,11 +34,15 @@ func TestRepositoryLaunchSpecs_PassTheTasksModelAndEffortBeforeAnySubcommand(t *
 	)
 }
 
-func TestRepositoryLaunchOptions_ListsModelsAndEfforts(t *testing.T) {
+func TestRepositoryLaunchOptions_ListsModelsAndEffortsWithoutHandoffs(t *testing.T) {
 	repo := New(subprocess.NewMockRunner(t), Config{Binary: "codex"}, HookForwardingConfig{}).(*repository)
 
 	options := repo.LaunchOptions()
 
 	require.Equal(t, []string{"gpt-5-codex", "gpt-5"}, options.Models)
 	require.Equal(t, []string{"low", "medium", "high"}, options.Efforts)
+	require.False(t, options.Handoff)
+
+	_, err := repo.WriteSessionHandoff(context.Background(), &core.Task{}, core.TaskProviderSession{}, "")
+	require.ErrorIs(t, err, core.ErrHandoffUnsupported)
 }
