@@ -30,11 +30,39 @@ func (m model) scopeTasks(tasks []*core.Task) ([]*core.Task, int) {
 	return inFolder, others
 }
 
-// scopeLine says that tasks of other folders exist and how f shows or hides
-// them; it is empty when every task belongs to the launch folder.
+// scopeLine says which list is shown and what else there is: the shelf, and
+// tasks of other folders with how f shows or hides them. It is empty when
+// the current list is all there is.
 func (m model) scopeLine(totalWidth int) []string {
+	var lines []string
+	if shelf := m.shelfText(); shelf != "" {
+		lines = append(lines, dimStyle.Render(truncateStr(shelf, totalWidth)))
+	}
+	if folders := m.otherFoldersText(); folders != "" {
+		lines = append(lines, dimStyle.Render(truncateStr(folders, totalWidth)))
+	}
+	return lines
+}
+
+// shelfText says that the shelf is shown, or how many tasks are on it.
+func (m model) shelfText() string {
+	switch {
+	case m.showShelf:
+		return "Shelf: tasks taken off the current list. Opening one puts it back. Press tab to return."
+	case m.shelvedTasks == 1:
+		return "1 task shelved. Press tab to see the shelf."
+	case m.shelvedTasks > 1:
+		return fmt.Sprintf("%d tasks shelved. Press tab to see the shelf.", m.shelvedTasks)
+	default:
+		return ""
+	}
+}
+
+// otherFoldersText says that tasks of other folders exist and how f shows or
+// hides them.
+func (m model) otherFoldersText() string {
 	if m.otherFolderTasks == 0 {
-		return nil
+		return ""
 	}
 	noun := "tasks"
 	if m.otherFolderTasks == 1 {
@@ -44,7 +72,7 @@ func (m model) scopeLine(totalWidth int) []string {
 	if m.allFolders {
 		text = "Showing all folders. Press f to show only " + homeRelativePath(m.launchCwd) + "."
 	}
-	return []string{dimStyle.Render(truncateStr(text, totalWidth))}
+	return text
 }
 
 // taskInFolder reports whether a task belongs to folder: its repository or

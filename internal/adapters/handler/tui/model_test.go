@@ -72,7 +72,11 @@ func TestModel_ViewRendersTaskMetadata(t *testing.T) {
 
 	view := stripANSI(got.View().Content)
 	require.Contains(t, view, "RIG dev")
-	require.Contains(t, view, "n new  N session  i import  p provider  r refresh  space details  x clean  q quit")
+	require.Contains(
+		t,
+		view,
+		"n new  N session  d shelve  tab shelf  i import  p provider  r refresh  space details  x clean  q quit",
+	)
 	require.Contains(t, view, "first task")
 	require.Contains(t, view, "repo-a")
 	require.Contains(t, view, "feat/first-task")
@@ -2083,7 +2087,11 @@ func TestModel_PRPickerEnterCreatesTaskFromSelectedPR(t *testing.T) {
 	require.Equal(t, modeBrowse, pending.mode)
 	require.Equal(t, opCreating, pending.pending)
 	view := stripANSI(pending.View().Content)
-	require.Contains(t, view, "n new  N session  i import  p provider  r refresh  space details  x clean  q quit")
+	require.Contains(
+		t,
+		view,
+		"n new  N session  d shelve  tab shelf  i import  p provider  r refresh  space details  x clean  q quit",
+	)
 	require.Contains(t, view, "Creating task from pull request")
 	require.NotContains(t, view, "Suggesting name")
 	require.Less(t, strings.Index(view, "existing task"), strings.Index(view, "Creating task from pull request"))
@@ -2155,7 +2163,11 @@ func TestModel_PRPickerCreateFailureReturnsToBrowseWithProgressAndError(t *testi
 	require.ErrorContains(t, got.create.err, "create failed")
 
 	view = stripANSI(got.View().Content)
-	require.Contains(t, view, "n new  N session  i import  p provider  r refresh  space details  x clean  q quit")
+	require.Contains(
+		t,
+		view,
+		"n new  N session  d shelve  tab shelf  i import  p provider  r refresh  space details  x clean  q quit",
+	)
 	require.Contains(t, view, "Creating task from pull request")
 	require.NotContains(t, view, "Creating worktree")
 	require.Contains(t, view, "create failed")
@@ -2362,6 +2374,9 @@ type frontendHarness struct {
 	retryTaskStreamCalls        int
 	deleteTaskErr               error
 	deleteTaskIDs               []string
+	shelveTaskIDs               []string
+	unshelveTaskIDs             []string
+	shelveTaskErr               error
 	latestTaskStatus            map[string]*core.TaskStatusUpdate
 	latestTaskStatusErr         map[string]error
 	latestTaskStatusCalls       []string
@@ -2531,6 +2546,31 @@ func newFrontendHarness() *frontendHarness {
 		func(_ context.Context, taskID string) error {
 			frontend.deleteTaskIDs = append(frontend.deleteTaskIDs, taskID)
 			return frontend.deleteTaskErr
+		},
+	).Maybe()
+	// Shelving moves the listed task, as the daemon would, so the reload that
+	// follows sees it on the shelf or back on the list.
+	setShelved := func(taskID string, at time.Time) {
+		for _, task := range frontend.listTasks {
+			if task != nil && task.ID == taskID {
+				task.ShelvedAt = at
+			}
+		}
+	}
+	frontend.mock.EXPECT().ShelveTask(mock.Anything, mock.Anything).RunAndReturn(
+		func(_ context.Context, taskID string) error {
+			frontend.shelveTaskIDs = append(frontend.shelveTaskIDs, taskID)
+			if frontend.shelveTaskErr == nil {
+				setShelved(taskID, time.Now().Add(-2*time.Hour))
+			}
+			return frontend.shelveTaskErr
+		},
+	).Maybe()
+	frontend.mock.EXPECT().UnshelveTask(mock.Anything, mock.Anything).RunAndReturn(
+		func(_ context.Context, taskID string) error {
+			frontend.unshelveTaskIDs = append(frontend.unshelveTaskIDs, taskID)
+			setShelved(taskID, time.Time{})
+			return nil
 		},
 	).Maybe()
 	frontend.mock.EXPECT().ListTasks(mock.Anything).RunAndReturn(

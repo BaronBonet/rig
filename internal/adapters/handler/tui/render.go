@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"math"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -30,7 +31,11 @@ func (m model) listView() string {
 	totalHeight := m.totalHeight()
 
 	lines := []string{
-		renderHeader(m.renderHeaderLabel(), m.listKeybindText(), totalWidth),
+		renderHeader(
+			m.renderHeaderLabel(),
+			m.listKeybindText(totalWidth-lipgloss.Width(m.renderHeaderLabel())-2),
+			totalWidth,
+		),
 		divider(totalWidth),
 	}
 
@@ -42,6 +47,9 @@ func (m model) listView() string {
 	switch {
 	case m.loading:
 		lines = append(lines, dimStyle.Render("Loading tasks..."))
+		lines = append(lines, sectionLines(m.listCreateStatusView(), totalWidth)...)
+	case len(m.rows) == 0 && m.showShelf:
+		lines = append(lines, dimStyle.Render("The shelf is empty. Press d on a task to shelve it."))
 		lines = append(lines, sectionLines(m.listCreateStatusView(), totalWidth)...)
 	case len(m.rows) == 0:
 		lines = append(lines, dimStyle.Render("No tasks found."))
@@ -313,6 +321,11 @@ func (m model) renderRow(index int, row taskRow, totalWidth int) (string, string
 	if failedText, failedStyle := taskCreationFailureStatusText(row.task); failedText != "" {
 		statusText = failedText
 		statusStyle = failedStyle
+	}
+	if row.task.IsShelved() {
+		statusText, statusStyle = iconStatusIdle+" shelved "+formatElapsed(
+			time.Since(row.task.ShelvedAt),
+		)+" ago", dimStyle
 	}
 	statusCell := padRightVisible(statusText, colWidthStatus)
 	timeCell := padLeftVisible(taskElapsed(row.task), colWidthElapsed)
@@ -662,15 +675,40 @@ func (m model) draftHandoffLine() string {
 		mutedStyle.Render("  ·  ") + keybindStyle.Render("ctrl+g") + mutedStyle.Render(" write a note")
 }
 
-func (m model) listKeybindText() string {
-	binds := [][2]string{{"n", "new"}, {"N", "session"}, {"i", "import"}, {"p", "provider"}, {"r", "refresh"}}
+// listKeybindText is the browse screen's key bar, at most width wide once the
+// window size is known: the keys needed least are left out first.
+func (m model) listKeybindText(width int) string {
+	if m.showShelf {
+		return m.fitKeybindBar(width, [][2]string{
+			{"enter", "open"}, {"d", "unshelve"}, {"tab", "current"},
+			{"space", "details"}, {"x", "clean"}, {"q", "quit"},
+		}, "space", "tab")
+	}
+	binds := [][2]string{
+		{"n", "new"}, {"N", "session"}, {"d", "shelve"}, {"tab", "shelf"},
+		{"i", "import"}, {"p", "provider"}, {"r", "refresh"},
+	}
 	if row := m.selectedRow(); row != nil && row.task != nil &&
 		row.task.CreationStatus == core.TaskCreationStatusFailed {
 		binds = append(binds, [2]string{"R", "retry"})
 	}
 	binds = append(binds, [2]string{"space", "details"}, [2]string{"x", "clean"}, [2]string{"q", "quit"})
 
-	return keybindBar("  ", binds...)
+	return m.fitKeybindBar(width, binds, "r", "p", "i", "space", "tab")
+}
+
+// fitKeybindBar renders binds as a key bar, leaving out the droppable keys,
+// in order, until it is no wider than width.
+func (m model) fitKeybindBar(width int, binds [][2]string, droppable ...string) string {
+	bar := keybindBar("  ", binds...)
+	for _, key := range droppable {
+		if m.width <= 0 || lipgloss.Width(bar) <= width {
+			break
+		}
+		binds = slices.DeleteFunc(binds, func(bind [2]string) bool { return bind[0] == key })
+		bar = keybindBar("  ", binds...)
+	}
+	return bar
 }
 
 func (m model) providerSetupView() string {
@@ -888,6 +926,13 @@ func (m model) renderCreateProgress() string {
 
 func (m model) listCreateStatusView() string {
 	var lines []string
+	if m.pending == opShelving {
+		label := "Shelving the task..."
+		if m.showShelf {
+			label = "Putting the task back..."
+		}
+		lines = append(lines, stepActiveLine(label, m.shimmerTick))
+	}
 	if m.opening {
 		lines = append(lines, stepActiveLine("Reconnecting session...", m.shimmerTick))
 	}

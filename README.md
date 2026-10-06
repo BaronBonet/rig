@@ -290,6 +290,8 @@ Common TUI keys:
 | `ctrl+p` | Pick a GitHub pull request while creating a task |
 | `ctrl+o` | Run the new task in this folder instead of a new worktree |
 | `enter` | Attach to the selected task's tmux session |
+| `d` | Shelve the selected task, or put it back from the shelf |
+| `tab` | Switch the list between the current tasks and the shelf |
 | `i` | Import a provider session started in this folder outside Rig |
 | `p` | Switch the selected task to another configured provider |
 | `r` | Refresh task data |
@@ -385,6 +387,26 @@ starts the new session there.
 You can also start a session by hand: exit the provider and run `claude` or
 `codex` in the task's tmux window. Rig adopts the new session into the same
 task, with its history and token usage, and reconnects resume the latest one.
+
+## Shelf
+
+The list is for what you are working on now. `d` takes the selected task off
+it and onto the shelf; `tab` switches the list between the current tasks and
+the shelf, and the line under the header says how many are shelved.
+
+Shelving closes the task's tmux session, ending its provider sessions and
+anything else running in its windows, which frees the memory they hold. It
+keeps everything else: the record and its sessions, the model and effort,
+activity, token usage, the branch and the worktree. Unlike `x`, nothing is
+removed. A task moves with the sessions listed under it, and `d` on a session
+row shelves only that session and closes its window. Rig refuses while any of
+them is in a turn, so no work is cut off.
+
+On the shelf, `enter` puts the task back on the current list and opens it,
+resuming its latest session, as a reconnect would; `d` puts it back without
+starting anything, so the session resumes when you next open it. Starting,
+importing or switching work happens on the current list, and `esc` returns to
+it.
 
 ## Switching Providers
 

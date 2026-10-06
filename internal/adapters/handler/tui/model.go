@@ -46,6 +46,7 @@ const (
 	opDeleting
 	opSwitching
 	opImporting
+	opShelving
 )
 
 const taskActivityPreviewLimit = 6
@@ -85,6 +86,10 @@ type model struct {
 	allFolders bool
 	// otherFolderTasks counts the tasks outside the launch folder, listed or not.
 	otherFolderTasks int
+	// showShelf lists the shelved tasks instead of the current ones.
+	showShelf bool
+	// shelvedTasks counts the shelved tasks in scope, listed or not.
+	shelvedTasks int
 
 	// adoptionReloads dampens the reload triggered by a status/record provider
 	// mismatch: one reload per observed mismatch. When the mismatch survives a
@@ -253,6 +258,14 @@ type taskCreateEventMsg struct {
 }
 
 type taskCreateStreamClosedMsg struct{}
+
+// taskShelvedMsg reports a task moved onto the shelf, or off it; open asks
+// for the task to be opened once it is back on the list.
+type taskShelvedMsg struct {
+	task *core.Task
+	err  error
+	open bool
+}
 
 type taskDeletedMsg struct {
 	err    error
@@ -531,9 +544,20 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// press; background refreshes must not clear it.
 		m.err = nil
 
+		if m.showShelf && !shelfKey(msg.String()) {
+			return m, nil
+		}
+
 		switch msg.String() {
 		case "esc":
+			if m.showShelf {
+				return m.toggleShelf()
+			}
 			return m.handleBack()
+		case "tab":
+			return m.toggleShelf()
+		case "d":
+			return m.moveSelectedTask(false)
 		case "a", "n":
 			if m.pending != opNone {
 				return m, nil
@@ -582,6 +606,9 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.transition(modeCleanupConfirm)
 			return m, nil
 		case "enter":
+			if m.showShelf {
+				return m.moveSelectedTask(true)
+			}
 			if len(m.rows) == 0 || m.opening || (m.pending != opNone && m.pending != opCreating) {
 				return m, nil
 			}
@@ -612,8 +639,15 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if row := m.selectedRow(); row != nil {
 			selectedTaskID = taskID(row.task)
 		}
-		visible, others := m.scopeTasks(msg.tasks)
+		current, shelved := splitShelved(msg.tasks)
+		listed := current
+		if m.showShelf {
+			listed = shelved
+		}
+		visible, others := m.scopeTasks(listed)
 		m.otherFolderTasks = others
+		shelvedHere, _ := m.scopeTasks(shelved)
+		m.shelvedTasks = len(shelvedHere)
 		nextRows := rowsFromTasks(visible)
 		preserveTaskStatuses(nextRows, m.rows)
 		m.reconcileTaskStatusTracking(nextRows)
@@ -849,6 +883,19 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		m.err = nil
 		return m, nil
+	case taskShelvedMsg:
+		m.endOp()
+		if msg.err != nil {
+			m.err = msg.err
+			return m, nil
+		}
+		cmds := []tea.Cmd{loadTasksCmd(m.statusContext, m.frontend)}
+		if msg.open {
+			m.showShelf = false
+			m.opening = true
+			cmds = append(cmds, openTaskSessionCmd(m.statusContext, m.frontend, msg.task), shimmerTickCmd())
+		}
+		return m, tea.Batch(cmds...)
 	case taskDeletedMsg:
 		m.endOp()
 		m.transition(modeBrowse)
@@ -910,6 +957,53 @@ func (m model) View() tea.View {
 	view := tea.NewView(body)
 	view.AltScreen = true
 	return view
+}
+
+// splitShelved separates the tasks on the current list from those on the
+// shelf.
+func splitShelved(tasks []*core.Task) ([]*core.Task, []*core.Task) {
+	var current, shelved []*core.Task
+	for _, task := range tasks {
+		if task.IsShelved() {
+			shelved = append(shelved, task)
+		} else {
+			current = append(current, task)
+		}
+	}
+	return current, shelved
+}
+
+// shelfKey reports whether a key does something on the shelf: browsing,
+// putting a task back, opening or cleaning it up. Starting, importing or
+// switching work happens on the current list.
+func shelfKey(key string) bool {
+	switch key {
+	case "a", "n", "N", "p", "i", "R":
+		return false
+	default:
+		return true
+	}
+}
+
+// toggleShelf switches the list between the current tasks and the shelf.
+func (m model) toggleShelf() (tea.Model, tea.Cmd) {
+	m.showShelf = !m.showShelf
+	m.selected = 0
+	return m, loadTasksCmd(m.statusContext, m.frontend)
+}
+
+// moveSelectedTask shelves the selected task, or, on the shelf, puts it back
+// on the current list; open then opens it, resuming its latest session.
+func (m model) moveSelectedTask(open bool) (tea.Model, tea.Cmd) {
+	row := m.selectedRow()
+	if row == nil || row.task == nil || m.opening || m.pending != opNone {
+		return m, nil
+	}
+	m.beginOp(opShelving)
+	return m, tea.Batch(
+		shelveTaskCmd(m.statusContext, m.frontend, row.task, !m.showShelf, open),
+		shimmerTickCmd(),
+	)
 }
 
 func rowsFromTasks(tasks []*core.Task) []taskRow {

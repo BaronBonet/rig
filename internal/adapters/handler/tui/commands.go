@@ -102,6 +102,18 @@ func retryTaskCreationStreamCmd(ctx context.Context, frontend core.TaskFrontend,
 	}
 }
 
+func shelveTaskCmd(ctx context.Context, frontend core.TaskFrontend, task *core.Task, shelve bool, open bool) tea.Cmd {
+	return func() tea.Msg {
+		var err error
+		if shelve {
+			err = frontend.ShelveTask(ctx, task.ID)
+		} else {
+			err = frontend.UnshelveTask(ctx, task.ID)
+		}
+		return taskShelvedMsg{task: task, open: open, err: err}
+	}
+}
+
 func deleteTaskCmd(ctx context.Context, frontend core.TaskFrontend, taskID string) tea.Cmd {
 	return func() tea.Msg {
 		err := frontend.DeleteTask(ctx, taskID)

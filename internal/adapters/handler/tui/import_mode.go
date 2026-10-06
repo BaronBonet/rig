@@ -36,7 +36,7 @@ func (m model) enterImportSessionMode() (tea.Model, tea.Cmd) {
 // them instead of looking empty. It never delays the task list.
 func (m model) importHintCmd() tea.Cmd {
 	folder := m.currentCreateCwd()
-	if len(m.rows) > 0 || folder == "" {
+	if len(m.rows) > 0 || folder == "" || m.showShelf {
 		return nil
 	}
 	return importableCountCmd(m.statusContext, m.frontend, folder, m.providerEnv)
