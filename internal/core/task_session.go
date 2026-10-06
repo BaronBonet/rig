@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -11,7 +12,8 @@ import (
 // NewTaskSessionStream starts a fresh provider session in an existing Task and
 // streams the same progress shape as task creation. A long conversation is
 // cheaper to continue in a new session that starts from a handoff note than to
-// compact and keep paying for its context, and the Task stays one row.
+// compact and keep paying for its context, and the Task stays one row; a
+// session started alongside becomes a child Task under it.
 func (s *service) NewTaskSessionStream(
 	ctx context.Context,
 	input NewTaskSessionInput,
@@ -58,10 +60,12 @@ func (s *service) newTaskSession(
 		return nil, err
 	}
 
-	// Never kill or type over an interactive session: a new session needs the
-	// pane idle, whichever provider is running there.
-	if err := s.refuseWhileProviderRuns(ctx, task, provider); err != nil {
-		return nil, err
+	if !input.NewWindow {
+		// Never kill or type over an interactive session: replacing it needs
+		// the pane idle, whichever provider is running there.
+		if err := s.refuseWhileProviderRuns(ctx, task, provider); err != nil {
+			return nil, err
+		}
 	}
 
 	custom := strings.TrimSpace(input.Prompt)
@@ -74,6 +78,10 @@ func (s *service) newTaskSession(
 	}
 	prompt := ContinuationPrompt(task, custom, handoffPath)
 	options := LaunchOptions{Model: input.Model, Effort: input.Effort}
+
+	if input.NewWindow {
+		return s.startSessionAlongside(ctx, task, provider, providerClient, custom, prompt, options, reporter)
+	}
 
 	if provider != task.Provider {
 		if err := providerClient.EnsureTaskSessionEnvironment(ctx, task.ProviderEnv); err != nil {
@@ -130,6 +138,112 @@ func (s *service) refuseWhileProviderRuns(ctx context.Context, task *Task, next 
 		}
 	}
 	return nil
+}
+
+// startSessionAlongside creates a child Task for a session that runs next to
+// the Task's others: same workspace, branch and tmux session, its own window
+// and record, so it has its own status, activity and token usage. A session
+// of a child joins the same group.
+func (s *service) startSessionAlongside(
+	ctx context.Context,
+	task *Task,
+	provider Provider,
+	providerClient ProviderClient,
+	custom string,
+	prompt string,
+	options LaunchOptions,
+	reporter TaskCreateProgressReporter,
+) (*Task, error) {
+	existing, err := s.tasks.ListTasks(ctx)
+	if err != nil {
+		return nil, err
+	}
+	root := task
+	if task.IsChild() {
+		if parent, parentErr := taskByID(ctx, s.tasks, task.ParentID); parentErr == nil {
+			root = parent
+		}
+	}
+	group := []*Task{root}
+	for _, candidate := range existing {
+		if candidate != nil && candidate.ParentID == root.ID {
+			group = append(group, candidate)
+		}
+	}
+
+	displayName := "session " + strconv.Itoa(len(group)+1)
+	if custom != "" {
+		reportTaskCreateProgress(reporter, TaskCreateProgressSuggestingName)
+		// The name is a label; a failed suggestion is not worth failing the
+		// session.
+		if suggestion, suggestErr := suggestTaskName(ctx, providerClient, custom, root.ProviderEnv); suggestErr == nil {
+			displayName = suggestion.Name
+		}
+	}
+
+	child := newChildTaskRecord(
+		root,
+		provider,
+		displayName,
+		uniqueTaskSlug(root.RepoRoot, displayName, existing),
+		nextSessionWindow(group),
+	)
+	// The composed prompt is the child's own ask: a retry types it again.
+	child.Prompt = prompt
+	child.ProviderEnv = root.ProviderEnv
+	child.SetLaunch(options)
+	if err := s.tasks.CreateTask(ctx, child); err != nil {
+		return nil, err
+	}
+	s.launcher.rememberLaunchDefaults(ctx, provider, child.Launch())
+
+	steps := s.creation.creationSteps(child, root.WorktreePath, nil)
+	if err := s.creation.runSteps(ctx, child, reporter, steps, taskCreationStepPersistenceReadyOnly); err != nil {
+		return child, err
+	}
+	return child, nil
+}
+
+// newChildTaskRecord builds a Task that is a session of root: it borrows
+// root's workspace, branch and tmux session, runs in its own window there,
+// and, as a folder Task, never has that workspace seeded or removed.
+func newChildTaskRecord(root *Task, provider Provider, displayName string, taskSlug string, window string) *Task {
+	now := time.Now().UTC()
+
+	return &Task{
+		ID:             fmt.Sprintf("%d", now.UnixNano()),
+		Slug:           taskSlug,
+		DisplayName:    displayName,
+		RepoRoot:       root.RepoRoot,
+		RepoName:       root.RepoName,
+		BranchName:     root.BranchName,
+		WorktreePath:   root.WorktreePath,
+		TmuxSession:    root.TmuxSession,
+		TmuxWindow:     window,
+		Provider:       provider,
+		CreationStatus: TaskCreationStatusCreating,
+		WorkspaceKind:  WorkspaceKindFolder,
+		ParentID:       root.ID,
+		CreatedAt:      now,
+		UpdatedAt:      now,
+	}
+}
+
+// nextSessionWindow names the next free window of a group's tmux session:
+// s2, s3, ... after the root's main window.
+func nextSessionWindow(group []*Task) string {
+	used := make(map[string]bool, len(group))
+	for _, task := range group {
+		if task != nil && task.TmuxWindow != "" {
+			used[task.TmuxWindow] = true
+		}
+	}
+	for n := 2; ; n++ {
+		window := "s" + strconv.Itoa(n)
+		if !used[window] {
+			return window
+		}
+	}
 }
 
 // writeSessionHandoff asks the Task's latest session of its active provider

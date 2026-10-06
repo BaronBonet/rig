@@ -103,23 +103,6 @@ func TestModel_TabToAnotherProviderPreselectsThatProvidersOptions(t *testing.T) 
 	require.Equal(t, "opus", m.draft.model, "cycling follows the selected provider's choices")
 }
 
-func TestNextChoice_WrapsAndRecoversFromUnknownValues(t *testing.T) {
-	choices := []string{"", "opus", "sonnet"}
-
-	require.Equal(t, "opus", nextChoice(choices, ""))
-	require.Equal(t, "sonnet", nextChoice(choices, "opus"))
-	require.Empty(t, nextChoice(choices, "sonnet"))
-	require.Empty(t, nextChoice(choices, "retired-model"))
-	require.Empty(t, nextChoice(nil, "opus"))
-}
-
-func TestLaunchOptionsText_NamesModelAndEffort(t *testing.T) {
-	require.Empty(t, launchOptionsText(core.LaunchOptions{}))
-	require.Equal(t, "opus", launchOptionsText(core.LaunchOptions{Model: "opus"}))
-	require.Equal(t, "max effort", launchOptionsText(core.LaunchOptions{Effort: "max"}))
-	require.Equal(t, "opus · max effort", launchOptionsText(core.LaunchOptions{Model: "opus", Effort: "max"}))
-}
-
 func TestModel_KeyNOpensANewSessionComposerForTheSelectedTask(t *testing.T) {
 	frontend := newFrontendHarness()
 	frontend.listTasks = []*core.Task{{
@@ -143,9 +126,11 @@ func TestModel_KeyNOpensANewSessionComposerForTheSelectedTask(t *testing.T) {
 	require.Equal(t, "gpt-5", m.draft.model, "the task's own options come first")
 	require.Equal(t, "low", m.draft.effort)
 	require.False(t, m.draft.handoff, "codex cannot write a handoff note")
+	require.True(t, m.draft.newWindow, "the running session is left alone")
 	view := stripANSI(m.View().Content)
 	require.Contains(t, view, "new session · billing retry")
 	require.Contains(t, view, "handoff   not available for this provider")
+	require.Contains(t, view, "where     new window, alongside the running session")
 	require.Contains(
 		t,
 		view,
@@ -161,6 +146,10 @@ func TestModel_KeyNOpensANewSessionComposerForTheSelectedTask(t *testing.T) {
 	m = pressKeys(t, m, ctrl('o'), ctrl('p'))
 	require.Equal(t, modePromptInput, m.mode, "no workspace or pull request choice for a new session")
 	require.False(t, m.draft.inFolder)
+
+	m = pressKeys(t, m, ctrl('w'))
+	require.False(t, m.draft.newWindow)
+	require.Contains(t, stripANSI(m.View().Content), "where     this window, after the provider exits")
 }
 
 func TestModel_NewSessionSubmitStartsASessionOfTheTaskWithAHandoff(t *testing.T) {
@@ -207,11 +196,12 @@ func TestModel_NewSessionSubmitStartsASessionOfTheTaskWithAHandoff(t *testing.T)
 	msgs := runBatchCmd(t, cmd)
 	event := requireMsgType[taskCreateEventMsg](t, msgs)
 	require.Equal(t, core.NewTaskSessionInput{
-		TaskID:   "task-1",
-		Prompt:   "add the search page next",
-		Provider: core.ProviderClaude,
-		Model:    "opus",
-		Handoff:  true,
+		TaskID:    "task-1",
+		Prompt:    "add the search page next",
+		Provider:  core.ProviderClaude,
+		Model:     "opus",
+		Handoff:   true,
+		NewWindow: true,
 	}, frontend.newSessionInput)
 	require.Zero(t, frontend.createTaskStreamCalls)
 
@@ -244,6 +234,23 @@ func TestModel_KeyNRefusesATaskThatIsNotReady(t *testing.T) {
 	require.ErrorContains(t, m.err, "not ready")
 }
 
+func TestNextChoice_WrapsAndRecoversFromUnknownValues(t *testing.T) {
+	choices := []string{"", "opus", "sonnet"}
+
+	require.Equal(t, "opus", nextChoice(choices, ""))
+	require.Equal(t, "sonnet", nextChoice(choices, "opus"))
+	require.Empty(t, nextChoice(choices, "sonnet"))
+	require.Empty(t, nextChoice(choices, "retired-model"))
+	require.Empty(t, nextChoice(nil, "opus"))
+}
+
+func TestLaunchOptionsText_NamesModelAndEffort(t *testing.T) {
+	require.Empty(t, launchOptionsText(core.LaunchOptions{}))
+	require.Equal(t, "opus", launchOptionsText(core.LaunchOptions{Model: "opus"}))
+	require.Equal(t, "max effort", launchOptionsText(core.LaunchOptions{Effort: "max"}))
+	require.Equal(t, "opus · max effort", launchOptionsText(core.LaunchOptions{Model: "opus", Effort: "max"}))
+}
+
 func TestModel_NewSessionWithoutAnInstructionStillStarts(t *testing.T) {
 	frontend := newFrontendHarness()
 	frontend.listTasks = []*core.Task{{
@@ -263,7 +270,78 @@ func TestModel_NewSessionWithoutAnInstructionStillStarts(t *testing.T) {
 
 	require.Equal(t, opCreating, submitted.pending)
 	require.Equal(t, core.NewTaskSessionInput{
-		TaskID:   "task-1",
-		Provider: core.ProviderCodex,
+		TaskID:    "task-1",
+		Provider:  core.ProviderCodex,
+		NewWindow: true,
 	}, frontend.newSessionInput)
+}
+
+func TestModel_SessionsOfATaskAreListedUnderItAndCreatedOnesJoinIt(t *testing.T) {
+	frontend := newFrontendHarness()
+	frontend.listTasks = []*core.Task{
+		{
+			ID:          "task-1",
+			DisplayName: "billing retry",
+			RepoRoot:    "/tmp/repo",
+			RepoName:    "repo",
+			Provider:    core.ProviderCodex,
+		},
+		{
+			ID:          "task-9",
+			DisplayName: "other work",
+			RepoRoot:    "/tmp/repo",
+			RepoName:    "repo",
+			Provider:    core.ProviderCodex,
+		},
+		{
+			ID: "task-2", DisplayName: "search page", RepoRoot: "/tmp/repo", RepoName: "repo",
+			Provider: core.ProviderCodex, ParentID: "task-1", TmuxWindow: "s2", TmuxSession: "repo_billing-retry",
+		},
+	}
+	m := newLoadedModel(frontend)
+
+	ids := make([]string, 0, len(m.rows))
+	for _, row := range m.rows {
+		ids = append(ids, row.task.ID)
+	}
+	require.Equal(t, []string{"task-1", "task-2", "task-9"}, ids, "a session sits under its task")
+	view := stripANSI(m.View().Content)
+	require.Contains(t, view, "↳ search page")
+	m.selected = 1
+	require.Contains(t, stripANSI(m.View().Content), "window    repo_billing-retry:s2")
+
+	next, _ := m.Update(taskCreatedMsg{task: &core.Task{
+		ID: "task-3", DisplayName: "session 3", RepoRoot: "/tmp/repo", RepoName: "repo",
+		Provider: core.ProviderCodex, ParentID: "task-1", TmuxWindow: "s3",
+	}})
+	got := asModel(t, next)
+	ids = ids[:0]
+	for _, row := range got.rows {
+		ids = append(ids, row.task.ID)
+	}
+	require.Equal(t, []string{"task-1", "task-2", "task-3", "task-9"}, ids)
+	require.Equal(t, 2, got.selected, "the new session is selected")
+}
+
+func TestModel_CleanupConfirmationNamesWhatGoes(t *testing.T) {
+	frontend := newFrontendHarness()
+	frontend.listTasks = []*core.Task{
+		{ID: "task-1", DisplayName: "billing retry", WorktreePath: "/tmp/repo_billing", Provider: core.ProviderCodex},
+		{ID: "task-2", DisplayName: "session 2", ParentID: "task-1", TmuxWindow: "s2", Provider: core.ProviderCodex,
+			WorkspaceKind: core.WorkspaceKindFolder},
+		{
+			ID:            "task-3",
+			DisplayName:   "folder work",
+			WorkspaceKind: core.WorkspaceKindFolder,
+			Provider:      core.ProviderCodex,
+		},
+	}
+	m := newLoadedModel(frontend)
+	m.mode = modeCleanupConfirm
+
+	require.Contains(t, stripANSI(m.View().Content), "The tmux session and worktree will be deleted.")
+	m.selected = 1
+	require.Contains(t, stripANSI(m.View().Content), "The session's tmux window will be closed. The workspace is kept.")
+	m.selected = 2
+	require.Contains(t, stripANSI(m.View().Content), "The tmux session will be closed. The folder is kept.")
 }

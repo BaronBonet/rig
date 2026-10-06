@@ -345,6 +345,14 @@ func (s *service) deleteTask(ctx context.Context, taskID string) error {
 	if err := s.tmuxSession.DeleteTaskSession(ctx, task); err != nil {
 		return fmt.Errorf("delete task session: %w", err)
 	}
+	// A child Task's window dies with its parent's tmux session; its record
+	// goes with it.
+	for _, child := range s.childTasks(ctx, task.ID) {
+		if err := s.tasks.DeleteTask(ctx, child.ID); err != nil {
+			return fmt.Errorf("delete task record %s: %w", child.ID, err)
+		}
+		s.observation.statusObserver.ForgetTask(child.ID)
+	}
 	// A folder Task's workspace is an existing folder other Tasks may share;
 	// only a worktree Rig created is removed.
 	if !task.UsesFolderWorkspace() {
@@ -441,6 +449,21 @@ func (s *service) SubscribeTaskStatus(
 
 func (s *service) HandleHookEvent(ctx context.Context, input HookEventInput) error {
 	return s.observation.HandleHookEvent(ctx, input)
+}
+
+// childTasks lists the Tasks that are sessions of the given Task.
+func (s *service) childTasks(ctx context.Context, taskID string) []*Task {
+	tasks, err := s.tasks.ListTasks(ctx)
+	if err != nil {
+		return nil
+	}
+	var children []*Task
+	for _, task := range tasks {
+		if task != nil && task.ParentID == taskID {
+			children = append(children, task)
+		}
+	}
+	return children
 }
 
 // taskByID resolves a task record by ID from the repository. Shared by the

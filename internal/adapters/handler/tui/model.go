@@ -135,6 +135,9 @@ type taskDraft struct {
 	// handoff asks the task's previous session for a handoff note before the
 	// new session starts.
 	handoff bool
+	// newWindow starts the session alongside the task's running one, in a new
+	// window of its tmux session, as a child task.
+	newWindow bool
 }
 
 // createFlowState is the progress of an in-flight or just-failed task
@@ -969,6 +972,7 @@ func (m model) submitPrompt() (model, tea.Cmd) {
 	}
 	forTask := m.draft.forTask
 	handoff := m.draft.handoff
+	newWindow := m.draft.newWindow
 	m.transition(modeBrowse)
 	m.beginOp(opCreating)
 	m.create = createFlowState{newSession: forTask != nil}
@@ -977,12 +981,13 @@ func (m model) submitPrompt() (model, tea.Cmd) {
 	if forTask != nil {
 		return m, tea.Batch(
 			newTaskSessionStreamCmd(m.statusContext, m.frontend, core.NewTaskSessionInput{
-				TaskID:   forTask.ID,
-				Prompt:   prompt,
-				Provider: provider,
-				Model:    options.Model,
-				Effort:   options.Effort,
-				Handoff:  handoff,
+				TaskID:    forTask.ID,
+				Prompt:    prompt,
+				Provider:  provider,
+				Model:     options.Model,
+				Effort:    options.Effort,
+				Handoff:   handoff,
+				NewWindow: newWindow,
 			}),
 			shimmerTickCmd(),
 		)
@@ -1053,6 +1058,12 @@ func (m model) updatePromptInput(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if typed.String() == "ctrl+g" {
 			if m.draft.forTask != nil && m.providerSupportsHandoff(m.effectiveCreateProvider()) {
 				m.draft.handoff = !m.draft.handoff
+			}
+			return m, nil
+		}
+		if typed.String() == "ctrl+w" {
+			if m.draft.forTask != nil {
+				m.draft.newWindow = !m.draft.newWindow
 			}
 			return m, nil
 		}
@@ -1228,6 +1239,8 @@ func (m model) enterNewSessionMode() (tea.Model, tea.Cmd) {
 		m.applyLaunchDefaults(m.effectiveCreateProvider())
 	}
 	m.draft.handoff = m.providerSupportsHandoff(m.effectiveCreateProvider())
+	// The running session is left as it is; the new one opens next to it.
+	m.draft.newWindow = true
 	m.create = createFlowState{}
 	m.err = nil
 	return m, m.draft.input.Focus()
@@ -1585,9 +1598,36 @@ func groupRowsByRepo(rows []taskRow) []taskRow {
 
 	grouped := make([]taskRow, 0, len(rows))
 	for _, key := range order {
-		grouped = append(grouped, groups[key]...)
+		grouped = append(grouped, nestChildRows(groups[key])...)
 	}
 	return grouped
+}
+
+// nestChildRows places each task's sessions right under it, in their own
+// order. A child whose parent is not listed stands on its own.
+func nestChildRows(rows []taskRow) []taskRow {
+	listed := make(map[string]bool, len(rows))
+	for _, row := range rows {
+		listed[taskID(row.task)] = true
+	}
+	children := make(map[string][]taskRow)
+	nested := make([]taskRow, 0, len(rows))
+	for _, row := range rows {
+		if row.task != nil && row.task.IsChild() && listed[row.task.ParentID] {
+			children[row.task.ParentID] = append(children[row.task.ParentID], row)
+			continue
+		}
+		nested = append(nested, row)
+	}
+	if len(children) == 0 {
+		return rows
+	}
+	withChildren := make([]taskRow, 0, len(rows))
+	for _, row := range nested {
+		withChildren = append(withChildren, row)
+		withChildren = append(withChildren, children[taskID(row.task)]...)
+	}
+	return withChildren
 }
 
 func repoGroupKey(task *core.Task) string {

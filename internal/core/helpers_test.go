@@ -62,6 +62,7 @@ type taskRepositoryState struct {
 	createdTask            *Task
 	updatedTask            *Task
 	deletedTaskID          string
+	deletedTaskIDs         []string
 	savedResumeMetadata    *TaskResumeMetadata
 	savedProviderSessions  []TaskProviderSession
 	latestResumeByTask     map[string]TaskResumeMetadata
@@ -770,6 +771,7 @@ func configureTaskRepositoryMock(repo *MockTaskRepository, state *taskRepository
 				return state.deleteErr
 			}
 			state.deletedTaskID = taskID
+			state.deletedTaskIDs = append(state.deletedTaskIDs, taskID)
 			filtered := state.listTasks[:0]
 			for _, task := range state.listTasks {
 				if task == nil || task.ID == taskID {

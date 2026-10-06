@@ -327,6 +327,10 @@ func (m model) renderRow(index int, row taskRow, totalWidth int) (string, string
 	if strings.TrimSpace(name) == "" {
 		name = row.task.ID
 	}
+	// A session of another task sits under it.
+	if row.task.IsChild() {
+		name = "  ↳ " + name
+	}
 	nameCell := padRightVisible(truncateStr(name, nameWidth), nameWidth)
 
 	provider := emptyFallback(string(row.task.Provider), "-")
@@ -428,6 +432,12 @@ func (m model) selectedTaskDetailView() string {
 		sessionLines = append(
 			sessionLines,
 			mutedStyle.Render("launch")+"    "+primaryStyle.Render(launch),
+		)
+	}
+	if window := strings.TrimSpace(task.TmuxWindow); window != "" {
+		sessionLines = append(
+			sessionLines,
+			mutedStyle.Render("window")+"    "+primaryStyle.Render(task.TmuxSession+":"+window),
 		)
 	}
 
@@ -570,7 +580,8 @@ func (m model) promptInputView() string {
 	builder.WriteString(m.draftLaunchLine("model", m.draft.model, "ctrl+t") + "\n")
 	builder.WriteString(m.draftLaunchLine("effort", m.draft.effort, "ctrl+r") + "\n")
 	if newSession {
-		builder.WriteString(m.draftHandoffLine() + "\n\n")
+		builder.WriteString(m.draftHandoffLine() + "\n")
+		builder.WriteString(m.draftWhereLine() + "\n\n")
 		for _, line := range wrapAndTruncate(m.continuationPreview(), totalWidth-4, 6) {
 			builder.WriteString("  " + dimStyle.Render(line) + "\n")
 		}
@@ -622,6 +633,18 @@ func (m model) draftLaunchLine(label string, value string, key string) string {
 	}
 	return mutedStyle.Render(padRightVisible(label, 10)) + primaryStyle.Render(shown) +
 		mutedStyle.Render("  ·  ") + keybindStyle.Render(key) + mutedStyle.Render(" cycle")
+}
+
+// draftWhereLine shows whether the new session replaces the task's session in
+// its window or runs alongside it in a new one.
+func (m model) draftWhereLine() string {
+	label := mutedStyle.Render("where     ")
+	if m.draft.newWindow {
+		return label + primaryStyle.Render("new window, alongside the running session") +
+			mutedStyle.Render("  ·  ") + keybindStyle.Render("ctrl+w") + mutedStyle.Render(" this window")
+	}
+	return label + primaryStyle.Render("this window, after the provider exits") +
+		mutedStyle.Render("  ·  ") + keybindStyle.Render("ctrl+w") + mutedStyle.Render(" new window")
 }
 
 // draftHandoffLine shows whether the new session starts from a handoff note
@@ -915,7 +938,7 @@ func (m model) confirmationView() string {
 		builder.WriteString(primaryStyle.Render(emptyFallback(row.task.DisplayName, row.task.ID)) + "\n\n")
 	}
 
-	builder.WriteString(dimStyle.Render("The tmux session and worktree will be deleted.") + "\n")
+	builder.WriteString(dimStyle.Render(m.cleanupEffectText()) + "\n")
 	builder.WriteString(dimStyle.Render("The branch will be kept.") + "\n\n")
 	if m.pending == opDeleting {
 		builder.WriteString(stepActiveLine("Cleaning up task...", m.shimmerTick) + "\n\n")
@@ -926,6 +949,22 @@ func (m model) confirmationView() string {
 	))
 
 	return builder.String()
+}
+
+// cleanupEffectText says what x removes for the selected task: a child task
+// owns only its window, a folder task only its tmux session.
+func (m model) cleanupEffectText() string {
+	row := m.selectedRow()
+	switch {
+	case row == nil || row.task == nil:
+		return "The tmux session and worktree will be deleted."
+	case row.task.IsChild():
+		return "The session's tmux window will be closed. The workspace is kept."
+	case row.task.UsesFolderWorkspace():
+		return "The tmux session will be closed. The folder is kept."
+	default:
+		return "The tmux session and worktree will be deleted."
+	}
 }
 
 func taskStatusText(update *core.TaskStatusUpdate) (string, lipgloss.Style) {

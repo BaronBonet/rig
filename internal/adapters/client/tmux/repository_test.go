@@ -630,6 +630,9 @@ func TestRepositoryStartTaskSession_LaunchesIntoExistingSessionWithoutRecreating
 		expectTmuxRun(runner, subprocess.Result{}, nil,
 			"has-session", "-t", "=repo_task",
 		),
+		expectTmuxRun(runner, subprocess.Result{Stdout: "task\neditor\n"}, nil,
+			"list-windows", "-t", "=repo_task", "-F", "#{window_name}",
+		),
 		expectTmuxRun(runner, subprocess.Result{}, nil,
 			"send-keys", "-t", "=repo_task:task", "claude", "C-m",
 		),
@@ -642,6 +645,37 @@ func TestRepositoryStartTaskSession_LaunchesIntoExistingSessionWithoutRecreating
 		Command:     []string{"claude"},
 		ReadyMarker: "❯",
 	})
+
+	require.NoError(t, err)
+}
+
+func TestRepositoryStartTaskSession_RecreatesAMissingTaskWindowInAnExistingSession(t *testing.T) {
+	runner := subprocess.NewMockRunner(t)
+	repo := New(runner).(*repository)
+	repo.sleep = func(time.Duration) {}
+
+	// A child task's window opened the session first; the parent's own
+	// window has to be added before its provider can start there.
+	mock.InOrder(
+		expectTmuxRun(runner, subprocess.Result{}, nil,
+			"has-session", "-t", "=repo_task",
+		),
+		expectTmuxRun(runner, subprocess.Result{Stdout: "s2\neditor\n"}, nil,
+			"list-windows", "-t", "=repo_task", "-F", "#{window_name}",
+		),
+		expectTmuxRun(runner, subprocess.Result{}, nil,
+			"new-window", "-d", "-t", "=repo_task", "-n", "task", "-c", "/tmp/repo-task", "-e", "RIG_TASK_ID=task-1",
+		),
+		expectTmuxRun(runner, subprocess.Result{}, nil,
+			"send-keys", "-t", "=repo_task:task", "claude", "C-m",
+		),
+	)
+
+	err := repo.StartTaskSession(context.Background(), &core.Task{
+		ID:           "task-1",
+		TmuxSession:  "repo_task",
+		WorktreePath: "/tmp/repo-task",
+	}, core.TaskSessionLaunchSpec{Command: []string{"claude"}, ReadyMarker: "❯"})
 
 	require.NoError(t, err)
 }
@@ -729,4 +763,112 @@ func expectTmuxRunWithStdin(
 	err error,
 ) *mock.Call {
 	return runner.On("RunWithStdin", mock.Anything, opts).Return(result, err).Once()
+}
+
+func TestRepositoryStartTaskSession_AddsAChildTasksWindowToItsParentsSession(t *testing.T) {
+	runner := subprocess.NewMockRunner(t)
+	repo := New(runner).(*repository)
+	repo.sleep = func(time.Duration) {}
+
+	mock.InOrder(
+		expectTmuxRun(runner, subprocess.Result{}, nil,
+			"has-session", "-t", "=repo_task",
+		),
+		expectTmuxRun(runner, subprocess.Result{Stdout: "task\neditor\n"}, nil,
+			"list-windows", "-t", "=repo_task", "-F", "#{window_name}",
+		),
+		expectTmuxRun(runner, subprocess.Result{}, nil,
+			"new-window", "-d", "-t", "=repo_task", "-n", "s2", "-c", "/tmp/repo-task",
+			"-e", "RIG_TASK_ID=task-2", "-e", "CLAUDE_CONFIG_DIR=/home/me/.claude-work",
+		),
+		expectTmuxRun(runner, subprocess.Result{}, nil,
+			"send-keys", "-t", "=repo_task:s2", "claude", "C-m",
+		),
+	)
+
+	err := repo.StartTaskSession(context.Background(), &core.Task{
+		ID:           "task-2",
+		ParentID:     "task-1",
+		TmuxSession:  "repo_task",
+		TmuxWindow:   "s2",
+		WorktreePath: "/tmp/repo-task",
+		ProviderEnv:  core.ProviderEnv{"CLAUDE_CONFIG_DIR": "/home/me/.claude-work"},
+	}, core.TaskSessionLaunchSpec{Command: []string{"claude"}, ReadyMarker: "❯"})
+
+	require.NoError(t, err, "the window carries the child's own task ID so its hooks are told apart")
+}
+
+func TestRepositoryStartTaskSession_ReusesAChildTasksExistingWindow(t *testing.T) {
+	runner := subprocess.NewMockRunner(t)
+	repo := New(runner).(*repository)
+	repo.sleep = func(time.Duration) {}
+
+	mock.InOrder(
+		expectTmuxRun(runner, subprocess.Result{}, nil,
+			"has-session", "-t", "=repo_task",
+		),
+		expectTmuxRun(runner, subprocess.Result{Stdout: "task\ns2\n"}, nil,
+			"list-windows", "-t", "=repo_task", "-F", "#{window_name}",
+		),
+		expectTmuxRun(runner, subprocess.Result{}, nil,
+			"send-keys", "-t", "=repo_task:s2", "claude --resume sess-2", "C-m",
+		),
+	)
+
+	err := repo.StartTaskSession(context.Background(), &core.Task{
+		TmuxSession:  "repo_task",
+		TmuxWindow:   "s2",
+		WorktreePath: "/tmp/repo-task",
+	}, core.TaskSessionLaunchSpec{Command: []string{"claude", "--resume", "sess-2"}})
+
+	require.NoError(t, err)
+}
+
+func TestRepositoryAttachAndDeleteTaskSession_TargetAChildTasksWindow(t *testing.T) {
+	runner := subprocess.NewMockRunner(t)
+	repo := New(runner).(*repository)
+	insideTmux(repo, nil)
+	child := &core.Task{TmuxSession: "repo_task", TmuxWindow: "s2"}
+
+	expectTmuxRun(runner, subprocess.Result{}, nil, "switch-client", "-t", "=repo_task:s2")
+	expectTmuxRun(runner, subprocess.Result{Stdout: "rig"}, nil, "display-message", "-p", "-t", "%3", "#{session_name}")
+	runner.On("Run", mock.Anything, "", "tmux", "set-option", mock.Anything, mock.Anything, mock.Anything, mock.Anything).
+		Return(subprocess.Result{}, nil).
+		Maybe()
+	runner.On("Run", mock.Anything, "", "tmux", "set-option", mock.Anything, mock.Anything, mock.Anything).
+		Return(subprocess.Result{}, nil).Maybe()
+	runner.On("Run", mock.Anything, "", "tmux", "bind-key", mock.Anything, mock.Anything, mock.Anything,
+		mock.Anything, mock.Anything, mock.Anything).Return(subprocess.Result{}, nil).Maybe()
+	require.NoError(t, repo.AttachTaskSession(context.Background(), child))
+
+	expectTmuxRun(runner, subprocess.Result{}, nil, "kill-window", "-t", "=repo_task:s2")
+	require.NoError(
+		t,
+		repo.DeleteTaskSession(context.Background(), child),
+		"only the window: the session is the parent's",
+	)
+}
+
+func TestRepositoryInspectTaskSessions_TellsAChildTasksWindowFromItsParents(t *testing.T) {
+	runner := subprocess.NewMockRunner(t)
+	repo := New(runner).(*repository)
+
+	expectTmuxRun(runner, subprocess.Result{
+		Stdout: "repo_task\ttask\tzsh\t100\nrepo_task\ts2\t2.1.291\t200\nrepo_task\teditor\tnvim\t300\n",
+	}, nil, "list-panes", "-a", "-F", "#{session_name}\t#{window_name}\t#{pane_current_command}\t#{pane_pid}")
+	runner.On("Run", mock.Anything, "", "ps", "-axo", "ppid=,comm=").
+		Return(subprocess.Result{Stdout: "200 claude\n300 nvim\n"}, nil).Once()
+
+	states, err := repo.InspectTaskSessions(context.Background(), []*core.Task{
+		{ID: "task-1", TmuxSession: "repo_task"},
+		{ID: "task-2", TmuxSession: "repo_task", TmuxWindow: "s2"},
+		{ID: "task-3", TmuxSession: "repo_task", TmuxWindow: "s3"},
+	})
+
+	require.NoError(t, err)
+	require.True(t, states["task-1"].Exists)
+	require.Equal(t, []string{"zsh"}, states["task-1"].ActiveCommands, "the parent's pane is idle")
+	require.True(t, states["task-2"].Exists)
+	require.Equal(t, []string{"2.1.291", "claude"}, states["task-2"].ActiveCommands, "the child's runs claude")
+	require.False(t, states["task-3"].Exists, "a window that is gone")
 }

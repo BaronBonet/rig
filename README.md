@@ -286,6 +286,7 @@ Common TUI keys:
 | `ctrl+t` | Cycle the model while composing |
 | `ctrl+r` | Cycle the effort while composing |
 | `ctrl+g` | Toggle the handoff note while composing a new session |
+| `ctrl+w` | Replace the running session in its window instead of opening a new one |
 | `ctrl+p` | Pick a GitHub pull request while creating a task |
 | `ctrl+o` | Run the new task in this folder instead of a new worktree |
 | `enter` | Attach to the selected task's tmux session |
@@ -359,9 +360,21 @@ session to recover the state from the workspace first. `ctrl+g` skips the
 handoff; a task without a previous session skips it on its own. Codex cannot
 write handoff notes yet.
 
-`N` refuses while a provider is still running in the task session; Rig never
-kills an interactive session. The task keeps its row, now with one more session
-behind it.
+`where` decides what happens to the running session:
+
+- **new window** (the default) leaves it as it is and starts the new session
+  alongside, in a new window of the task's tmux session. The new session
+  becomes a row listed under the task (`↳`), with its own status, activity
+  and token usage, and `enter` on it lands in its window. The previous
+  session keeps running in its own window whether or not you go back to it;
+  the handoff note is written from it while it is open. This also splits a
+  larger task across several sessions at once: each gets the same workspace
+  and branch, the handoff note, and its own instruction. A session started
+  from one of these rows joins the same group. `x` on a session row closes
+  only its window; cleaning up the task closes them all.
+- **this window** (`ctrl+w`) replaces it: exit the provider first, since Rig
+  never kills an interactive session. The task keeps its row, now with one
+  more session behind it.
 
 Choosing another provider with `tab` switches the task to it, as `p` does, and
 starts the new session there.

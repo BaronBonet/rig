@@ -72,6 +72,10 @@ type NewTaskSessionInput struct {
 	// handoff note before the new session starts. It is skipped quietly when
 	// the Task has no previous session.
 	Handoff bool `json:"handoff,omitempty"`
+	// NewWindow starts the session alongside the Task's running one, as a
+	// child Task in a new window of the Task's tmux session, instead of
+	// replacing it in the Task's own window.
+	NewWindow bool `json:"new_window,omitempty"`
 }
 
 type TaskCreateProgressStep string

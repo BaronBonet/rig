@@ -29,6 +29,8 @@ func createTaskParams(task *core.Task) generated.CreateTaskParams {
 		ProviderEnv:    encodeProviderEnv(task.ProviderEnv),
 		Model:          task.Launch().Model,
 		Effort:         task.Launch().Effort,
+		ParentID:       task.ParentID,
+		TmuxWindow:     task.TmuxWindow,
 	}
 }
 
@@ -52,6 +54,8 @@ func updateTaskParams(task *core.Task) generated.UpdateTaskParams {
 		ProviderEnv:    encodeProviderEnv(task.ProviderEnv),
 		Model:          task.Launch().Model,
 		Effort:         task.Launch().Effort,
+		ParentID:       task.ParentID,
+		TmuxWindow:     task.TmuxWindow,
 		ID:             task.ID,
 	}
 }
@@ -174,6 +178,8 @@ func taskFromRow(row generated.ListTasksRow) *core.Task {
 		ProviderEnv:    decodeProviderEnv(row.ProviderEnv),
 		Model:          row.Model,
 		Effort:         row.Effort,
+		ParentID:       row.ParentID,
+		TmuxWindow:     row.TmuxWindow,
 	}
 }
 

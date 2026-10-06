@@ -41,6 +41,18 @@ type Task struct {
 	// resumes with; empty means the provider's own default.
 	Model  string `json:"model,omitempty"`
 	Effort string `json:"effort,omitempty"`
+	// ParentID names the Task this one is a session of: a child Task shares
+	// its parent's workspace and tmux session and runs in TmuxWindow there,
+	// so a larger task can have several sessions side by side under one row.
+	ParentID string `json:"parent_id,omitempty"`
+	// TmuxWindow is the window of TmuxSession the Task's provider runs in;
+	// empty means the session's main task window.
+	TmuxWindow string `json:"tmux_window,omitempty"`
+}
+
+// IsChild reports whether the Task is a session of another Task.
+func (t *Task) IsChild() bool {
+	return t != nil && strings.TrimSpace(t.ParentID) != ""
 }
 
 // LaunchOptions are the provider launch choices kept on a Task: the model and

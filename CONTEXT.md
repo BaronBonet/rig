@@ -24,10 +24,15 @@ Use `rig` for the CLI command and Rig for the product or system.
   and remembered per provider as the preselection for the next launch.
 - New session: Starting a fresh provider session in an existing Task, in the
   same workspace and tmux session, usually from a handoff note, instead of
-  compacting a long conversation or creating another Task.
+  compacting a long conversation or creating another Task. It either replaces
+  the Task's session in its window or runs alongside it as a Child task.
 - Continuation prompt: What a new session is asked: the Task and its original
   ask, where to pick up its state (the handoff note, or the workspace), then
   the user's own instruction for that session.
+- Child task: A Task that is one session of another, its parent: it shares the
+  parent's workspace, branch and tmux session, runs in its own window there
+  with its own task ID, and has its own status, activity and token usage. It
+  is listed under its parent. A parent with its children is a task group.
 - Handoff note: A note the previous provider session writes, in print mode on
   a fork that is not saved, for a new session to start from: goal, state,
   decisions, where things are, gotchas, next step. Kept under Rig's data dir.
@@ -135,8 +140,14 @@ Use `rig` for the CLI command and Rig for the product or system.
   Configured provider.
 - A Task may have many Provider sessions over time; a New session adds one
   without changing the Task's identity, workspace, or tmux session.
-- A New session is refused while any Provider is running in the Task's
-  Session.
+- A New session that replaces the Task's session is refused while any
+  Provider is running in the Task's Session; one that runs alongside is not.
+- A Child task is a folder Task of its parent's workspace: never seeded, never
+  removed. Deleting a Child task closes only its window; deleting the parent
+  closes the Session and removes every Child task's record.
+- A Child task's hooks carry its own Task ID, set on its window, so they are
+  never attributed to the parent. A New session of a Child task joins the
+  parent's group.
 - A Handoff note is written by the Task's latest Provider session of its
   Active provider, and only by a Provider that supports it.
 - A Provider session belongs to exactly one Task and one Provider.

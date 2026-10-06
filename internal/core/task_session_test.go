@@ -141,6 +141,94 @@ func TestContinuationPrompt_ComposesTheTaskTheHandoffAndTheInstruction(t *testin
 		ContinuationPrompt(&Task{Slug: "billing-retry"}, "", ""), "an imported task has only a slug")
 }
 
+func TestTaskServiceNewTaskSession_InANewWindowCreatesAChildTaskAlongsideTheRunningOne(t *testing.T) {
+	svc := newTestTaskService(t)
+	svc.taskRepo.listTasks = []*Task{readyTaskFixture()}
+	// The parent's provider keeps running: nothing to exit.
+	svc.sessionClient.inspectState = TaskSessionRuntimeState{Exists: true, ActiveCommands: []string{"codex"}}
+	svc.providerRepo.suggestedName = "search page"
+
+	var steps []TaskCreateProgressStep
+	reporter := NewMockTaskCreateProgressReporter(t)
+	reporter.EXPECT().ReportTaskCreateProgress(mock.Anything).Run(func(step TaskCreateProgressStep) {
+		steps = append(steps, step)
+	}).Return()
+
+	child, err := svc.service.NewTaskSessionWithProgress(t.Context(), NewTaskSessionInput{
+		TaskID:    "task-1",
+		Prompt:    "add the search page",
+		Model:     "gpt-5",
+		NewWindow: true,
+	}, reporter)
+
+	require.NoError(t, err)
+	require.Equal(t, []TaskCreateProgressStep{
+		TaskCreateProgressSuggestingName,
+		TaskCreateProgressPreparingWorkspace,
+		TaskCreateProgressStartingSession,
+	}, steps)
+	require.NotEqual(t, "task-1", child.ID)
+	require.Equal(t, "task-1", child.ParentID)
+	require.Equal(t, "search page", child.DisplayName)
+	require.Equal(t, "search-page", child.Slug)
+	require.Equal(t, "s2", child.TmuxWindow)
+	require.Equal(t, "repo_billing-retry-flow", child.TmuxSession, "the parent's session")
+	require.Equal(t, "/tmp/repo_billing-retry-flow", child.WorktreePath, "the parent's workspace")
+	require.Equal(t, "feat/billing-retry-flow", child.BranchName)
+	require.Equal(t, WorkspaceKindFolder, child.WorkspaceKind, "never seeded or removed")
+	require.Equal(t, TaskCreationStatusReady, child.CreationStatus)
+	require.Equal(t, "gpt-5", child.Model)
+	require.Equal(t, ContinuationPrompt(readyTaskFixture(), "add the search page", ""), child.Prompt,
+		"the composed prompt is the child's own ask, so a retry types it again")
+	require.Equal(t, child.ID, svc.sessionClient.startedTask.ID)
+	require.Equal(t, []string{child.Prompt}, svc.sessionClient.prefilledLaunch.PrefillInput)
+	require.False(t, svc.workspace.setupCalled)
+	require.True(t, svc.workspace.bootstrapCalled)
+	require.Equal(t, child.ID, svc.taskRepo.createdTask.ID)
+	require.Equal(t, child.ID, svc.taskRepo.updatedTask.ID, "the parent record is untouched")
+}
+
+func TestTaskServiceNewTaskSession_InANewWindowNamesSessionsWithoutAnInstruction(t *testing.T) {
+	svc := newTestTaskService(t)
+	parent := readyTaskFixture()
+	sibling := newChildTaskRecord(parent, ProviderCodex, "session 2", "session-2", "s2")
+	sibling.ID = "task-2"
+	sibling.CreationStatus = TaskCreationStatusReady
+	svc.taskRepo.listTasks = []*Task{parent, sibling}
+	svc.sessionClient.inspectState = idlePane()
+
+	child, err := svc.service.NewTaskSessionWithProgress(t.Context(), NewTaskSessionInput{
+		TaskID:    "task-2",
+		NewWindow: true,
+	}, nil)
+
+	require.NoError(t, err)
+	require.Equal(t, "task-1", child.ParentID, "a session of a child joins the same group")
+	require.Equal(t, "session 3", child.DisplayName)
+	require.Equal(t, "s3", child.TmuxWindow)
+	require.NotContains(t, svc.events, "suggest_task_name")
+}
+
+func TestNextSessionWindow_SkipsWindowsInUse(t *testing.T) {
+	require.Equal(t, "s2", nextSessionWindow([]*Task{{}}))
+	require.Equal(t, "s4", nextSessionWindow([]*Task{{}, {TmuxWindow: "s2"}, {TmuxWindow: "s3"}}))
+	require.Equal(t, "s3", nextSessionWindow([]*Task{{}, {TmuxWindow: "s2"}, {TmuxWindow: "s4"}}))
+}
+
+func TestTaskServiceDeleteTask_RemovesAParentsChildRecords(t *testing.T) {
+	svc := newTestTaskService(t)
+	parent := readyTaskFixture()
+	child := newChildTaskRecord(parent, ProviderCodex, "session 2", "session-2", "s2")
+	child.ID = "task-2"
+	svc.taskRepo.listTasks = []*Task{parent, child}
+
+	err := svc.service.DeleteTask(t.Context(), "task-1")
+
+	require.NoError(t, err)
+	require.Equal(t, "task-1", svc.taskRepo.deletedTaskID)
+	require.Contains(t, svc.taskRepo.deletedTaskIDs, "task-2", "its window dies with the session")
+}
+
 func TestTaskServiceNewTaskSession_ReportsAProviderThatCannotWriteHandoffs(t *testing.T) {
 	svc := newTestTaskService(t)
 	svc.taskRepo.listTasks = []*Task{readyTaskFixture()}
