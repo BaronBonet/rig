@@ -11,10 +11,6 @@ import (
 	"time"
 )
 
-// importableSessionLimit caps how many recent sessions each provider offers
-// for import; older sessions are rarely worth resuming.
-const importableSessionLimit = 30
-
 func (s *service) ListImportableSessions(
 	ctx context.Context,
 	folder string,
@@ -43,7 +39,8 @@ func (s *service) ListImportableSessions(
 		if err != nil {
 			continue
 		}
-		found, err := providerClient.ListFolderSessions(ctx, folder, importableSessionLimit, env)
+		// Every session is listed, however old, so the picker can search them all.
+		found, err := providerClient.ListFolderSessions(ctx, folder, 0, env)
 		if err != nil {
 			return nil, fmt.Errorf("list %s sessions: %w", provider, err)
 		}

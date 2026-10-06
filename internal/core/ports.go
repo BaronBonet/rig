@@ -345,8 +345,9 @@ type ProviderClient interface {
 	// ReadSessionFileChanges reads the file edits one provider session made,
 	// including edits made by its subagents, as absolute paths.
 	ReadSessionFileChanges(ctx context.Context, session TaskProviderSession) ([]SessionFileChange, error)
-	// ListFolderSessions lists up to limit provider sessions started in folder
-	// or any folder below it, most recently active first, from the provider's
+	// ListFolderSessions lists up to limit (all when limit <= 0) provider
+	// sessions started in folder or any folder below it, most recently active
+	// first, from the provider's
 	// own session store, the one env points at. Each session's Cwd is the
 	// folder it was started in, where it must be resumed.
 	ListFolderSessions(ctx context.Context, folder string, limit int, env ProviderEnv) ([]ProviderSessionSummary, error)

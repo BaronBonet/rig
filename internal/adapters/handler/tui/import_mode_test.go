@@ -262,3 +262,135 @@ func TestEmptyDashboard_RecountsAfterTheLastTaskIsDeleted(t *testing.T) {
 	requireMsgType[importableCountLoadedMsg](t, []tea.Msg{runCmd(t, cmd)})
 	require.Equal(t, "/tmp/repo", frontend.importableSessionsFolder)
 }
+
+// openPicker loads the import picker over the harness's sessions.
+func openPicker(t *testing.T, frontend *frontendHarness) model {
+	t.Helper()
+	m := newLoadedModel(frontend)
+	next, cmd := m.Update(tea.KeyPressMsg{Code: 'i', Text: "i"})
+	m, _ = next.(model)
+	next, _ = m.Update(runCmd(t, cmd))
+	m, ok := next.(model)
+	require.True(t, ok)
+	return m
+}
+
+func pressKeys(t *testing.T, m model, keys ...tea.KeyPressMsg) model {
+	t.Helper()
+	for _, key := range keys {
+		next, _ := m.Update(key)
+		var ok bool
+		m, ok = next.(model)
+		require.True(t, ok)
+	}
+	return m
+}
+
+func typed(text string) []tea.KeyPressMsg {
+	keys := make([]tea.KeyPressMsg, 0, len(text))
+	for _, r := range text {
+		keys = append(keys, tea.KeyPressMsg{Code: r, Text: string(r)})
+	}
+	return keys
+}
+
+func olderSessionsFixture() []core.ProviderSessionSummary {
+	var sessions []core.ProviderSessionSummary
+	for index := range 40 {
+		sessions = append(sessions, core.ProviderSessionSummary{
+			Provider: core.ProviderClaude, SessionID: fmt.Sprintf("recent-%02d", index),
+			Title: fmt.Sprintf("session %02d", index), Cwd: "/tmp/repo",
+		})
+	}
+	return append(sessions,
+		core.ProviderSessionSummary{
+			Provider: core.ProviderClaude, SessionID: "search-follow-up", Title: "Search follow-up", Cwd: "/tmp/repo",
+		},
+		core.ProviderSessionSummary{
+			Provider: core.ProviderCodex, SessionID: "search-api", Title: "search integration", Cwd: "/tmp/repo/api-server",
+		},
+	)
+}
+
+func TestImportMode_SearchFindsOlderSessionsByTitleAndSubfolder(t *testing.T) {
+	frontend := newFrontendHarness()
+	frontend.importableSessions = olderSessionsFixture()
+	m := openPicker(t, frontend)
+	m.height = 20
+
+	m = pressKeys(t, m, typed("/SEARCH")...)
+	view := stripANSI(m.View().Content)
+	require.Contains(t, view, "search  SEARCH▏  2 of 42")
+	require.Contains(t, view, "> claude  Search follow-up")
+	require.Contains(t, view, "  codex   api-server · search integration")
+	require.NotContains(t, view, "session 00")
+
+	m = pressKeys(t, m, typed(" api")...)
+	view = stripANSI(m.View().Content)
+	require.Contains(t, view, "1 of 42", "every word must match, in the title or the subfolder")
+	require.Contains(t, view, "> codex   api-server · search integration")
+
+	next, cmd := m.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
+	m, _ = next.(model)
+	require.Equal(t, opImporting, m.pending)
+	runBatchCmd(t, cmd)
+	require.Equal(t, "search-api", frontend.importedSession.SessionID, "enter imports the highlighted match")
+}
+
+func TestImportMode_SearchTakesLettersThatAreKeysElsewhere(t *testing.T) {
+	frontend := newFrontendHarness()
+	frontend.importableSessions = olderSessionsFixture()
+	m := openPicker(t, frontend)
+
+	m = pressKeys(t, m, typed("/jq")...)
+
+	require.Equal(t, modeImportSession, m.mode)
+	require.Equal(t, "jq", m.sessionImport.query)
+	require.Contains(t, stripANSI(m.View().Content), `No session matches "jq".`)
+}
+
+func TestImportMode_EscClearsTheSearchBeforeLeaving(t *testing.T) {
+	frontend := newFrontendHarness()
+	frontend.importableSessions = olderSessionsFixture()
+	m := openPicker(t, frontend)
+	m = pressKeys(t, m, typed("/search")...)
+	m = pressKeys(t, m, tea.KeyPressMsg{Code: tea.KeyDown})
+	require.Equal(t, 1, m.sessionImport.selected)
+
+	m = pressKeys(t, m, tea.KeyPressMsg{Code: tea.KeyEscape})
+	require.Equal(t, modeImportSession, m.mode)
+	require.False(t, m.sessionImport.searching)
+	require.Empty(t, m.sessionImport.query)
+	require.Zero(t, m.sessionImport.selected)
+	require.Contains(t, stripANSI(m.View().Content), "session 00")
+
+	m = pressKeys(t, m, tea.KeyPressMsg{Code: tea.KeyEscape})
+	require.Equal(t, modeBrowse, m.mode)
+}
+
+func TestImportMode_BackspaceEditsTheQueryThenEndsTheSearch(t *testing.T) {
+	frontend := newFrontendHarness()
+	frontend.importableSessions = olderSessionsFixture()
+	m := openPicker(t, frontend)
+	m = pressKeys(t, m, typed("/pé")...)
+
+	m = pressKeys(t, m, tea.KeyPressMsg{Code: tea.KeyBackspace})
+	require.Equal(t, "p", m.sessionImport.query, "a multi-byte character goes in one keystroke")
+	m = pressKeys(t, m, tea.KeyPressMsg{Code: tea.KeyBackspace}, tea.KeyPressMsg{Code: tea.KeyBackspace})
+
+	require.False(t, m.sessionImport.searching)
+	require.Equal(t, modeImportSession, m.mode)
+}
+
+func TestImportMode_PasteGoesIntoTheSearch(t *testing.T) {
+	frontend := newFrontendHarness()
+	frontend.importableSessions = olderSessionsFixture()
+	m := openPicker(t, frontend)
+	m = pressKeys(t, m, typed("/")...)
+
+	next, _ := m.Update(tea.PasteMsg{Content: "search\nintegration"})
+	m, ok := next.(model)
+
+	require.True(t, ok)
+	require.Equal(t, "search integration", m.sessionImport.query)
+}

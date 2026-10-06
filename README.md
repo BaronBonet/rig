@@ -200,7 +200,9 @@ a task.
 Press `i` to list the Claude Code and Codex sessions that were started in the
 folder you launched `rig` from, or in any folder below it, and do not belong to
 a task yet, newest first, named the way the provider names them. A session
-started in a subfolder shows that subfolder before its name. Importing one
+started in a subfolder shows that subfolder before its name. Every session is
+listed however old; press `/` and type to narrow them to those whose name,
+subfolder or provider contains every word you type. Importing one
 creates a folder task in the folder the session was started in and resumes the
 session in the task's own tmux session (`claude --resume <id>` or
 `codex resume <id>`), with its history, token usage and worktrees already

@@ -145,13 +145,16 @@ type switchState struct {
 }
 
 // importState is the session import picker: provider sessions started in the
-// launch folder that no task owns yet.
+// launch folder that no task owns yet, narrowed by an optional search.
 type importState struct {
 	err      error
 	folder   string
+	query    string
 	sessions []core.ProviderSessionSummary
-	selected int
-	loading  bool
+	// selected indexes the sessions that match the query.
+	selected  int
+	loading   bool
+	searching bool
 }
 
 // providerSetupRow is one supported provider in the provider setup UI.
@@ -383,6 +386,9 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.height = msg.Height
 		return m, nil
 	case tea.PasteMsg:
+		if m.mode == modeImportSession {
+			return m.pasteImportQuery(msg)
+		}
 		return m.updatePromptPaste(msg)
 	case tea.KeyPressMsg:
 		if isForceQuitKey(msg) {

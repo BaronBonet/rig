@@ -149,6 +149,7 @@ type providerClientState struct {
 	suggestEnv    ProviderEnv
 	sessionEnvEnv ProviderEnv
 	listEnv       ProviderEnv
+	listLimit     int
 }
 
 func (s *providerClientState) mockCommandName() string {
@@ -601,8 +602,9 @@ func configureProviderClientMock(client *MockProviderClient, state *providerClie
 		},
 	).Maybe()
 	client.EXPECT().ListFolderSessions(mock.Anything, mock.Anything, mock.Anything, mock.Anything).RunAndReturn(
-		func(_ context.Context, folder string, _ int, env ProviderEnv) ([]ProviderSessionSummary, error) {
+		func(_ context.Context, folder string, limit int, env ProviderEnv) ([]ProviderSessionSummary, error) {
 			state.listEnv = env
+			state.listLimit = limit
 			var sessions []ProviderSessionSummary
 			for _, session := range state.folderSessions {
 				if session.Cwd == folder {

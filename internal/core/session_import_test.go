@@ -34,6 +34,7 @@ func TestTaskService_ListImportableSessionsMergesProvidersAndSkipsOwnedSessions(
 	require.NoError(t, err)
 	require.Equal(t, env, svc.claudeRepo.listEnv, "each provider lists from the window's configuration")
 	require.Equal(t, env, svc.providerRepo.listEnv)
+	require.Zero(t, svc.claudeRepo.listLimit, "every session is listed so the picker can search them all")
 	ids := make([]string, 0, len(sessions))
 	for _, session := range sessions {
 		ids = append(ids, session.SessionID)
