@@ -74,3 +74,36 @@ func TestRepositoryTasks_PersistParentAndWindow(t *testing.T) {
 	require.Equal(t, "s2", tasks[0].TmuxWindow)
 	require.True(t, tasks[0].IsChild())
 }
+
+func TestRepositoryTasks_PersistShelvedAt(t *testing.T) {
+	repo := newTestRepository(t)
+	ctx := context.Background()
+	now := time.Date(2026, time.October, 6, 12, 0, 0, 0, time.UTC)
+	task := &core.Task{
+		ID:            "task-1",
+		Slug:          "billing-retry",
+		DisplayName:   "billing retry",
+		RepoRoot:      "/tmp/repo",
+		RepoName:      "repo",
+		WorktreePath:  "/tmp/repo",
+		TmuxSession:   "repo_billing-retry",
+		Provider:      core.ProviderClaude,
+		WorkspaceKind: core.WorkspaceKindFolder,
+		CreatedAt:     now,
+		UpdatedAt:     now,
+	}
+	require.NoError(t, repo.CreateTask(ctx, task))
+
+	task.ShelvedAt = now.Add(time.Hour)
+	require.NoError(t, repo.UpdateTask(ctx, task))
+	tasks, err := repo.ListTasks(ctx)
+	require.NoError(t, err)
+	require.True(t, tasks[0].IsShelved())
+	require.True(t, now.Add(time.Hour).Equal(tasks[0].ShelvedAt))
+
+	task.ShelvedAt = time.Time{}
+	require.NoError(t, repo.UpdateTask(ctx, task))
+	tasks, err = repo.ListTasks(ctx)
+	require.NoError(t, err)
+	require.False(t, tasks[0].IsShelved())
+}

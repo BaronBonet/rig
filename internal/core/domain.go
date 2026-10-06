@@ -48,11 +48,20 @@ type Task struct {
 	// TmuxWindow is the window of TmuxSession the Task's provider runs in;
 	// empty means the session's main task window.
 	TmuxWindow string `json:"tmux_window,omitempty"`
+	// ShelvedAt is when the Task was taken off the current list; zero while
+	// it is on it.
+	ShelvedAt time.Time `json:"shelved_at,omitzero"`
 }
 
 // IsChild reports whether the Task is a session of another Task.
 func (t *Task) IsChild() bool {
 	return t != nil && strings.TrimSpace(t.ParentID) != ""
+}
+
+// IsShelved reports whether the Task is on the shelf rather than the current
+// list.
+func (t *Task) IsShelved() bool {
+	return t != nil && !t.ShelvedAt.IsZero()
 }
 
 // LaunchOptions are the provider launch choices kept on a Task: the model and

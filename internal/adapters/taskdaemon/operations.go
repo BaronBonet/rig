@@ -181,6 +181,30 @@ var opReconnectTaskSession = unaryOp[taskIDRequest, emptyResponse]{
 	},
 }
 
+var opShelveTask = unaryOp[taskIDRequest, emptyResponse]{
+	command:  "shelve_task",
+	envelope: "task_shelved",
+	call: func(ctx context.Context, svc core.TaskService, req taskIDRequest) (emptyResponse, error) {
+		taskID, err := requiredTaskID("shelve_task", req.TaskID)
+		if err != nil {
+			return emptyResponse{}, err
+		}
+		return emptyResponse{}, svc.ShelveTask(ctx, taskID)
+	},
+}
+
+var opUnshelveTask = unaryOp[taskIDRequest, emptyResponse]{
+	command:  "unshelve_task",
+	envelope: "task_unshelved",
+	call: func(ctx context.Context, svc core.TaskService, req taskIDRequest) (emptyResponse, error) {
+		taskID, err := requiredTaskID("unshelve_task", req.TaskID)
+		if err != nil {
+			return emptyResponse{}, err
+		}
+		return emptyResponse{}, svc.UnshelveTask(ctx, taskID)
+	},
+}
+
 var opGetProviderSetup = unaryOp[emptyResponse, *core.ProviderSetup]{
 	command:  "get_provider_setup",
 	envelope: "provider_setup",
@@ -300,6 +324,8 @@ var socketUnaryHandlers = map[string]unaryHandler{
 	opListRepoPullRequests.command:   serveUnary(opListRepoPullRequests),
 	opPullRequestStatus.command:      serveUnary(opPullRequestStatus),
 	opReconnectTaskSession.command:   serveUnary(opReconnectTaskSession),
+	opShelveTask.command:             serveUnary(opShelveTask),
+	opUnshelveTask.command:           serveUnary(opUnshelveTask),
 	opGetProviderSetup.command:       serveUnary(opGetProviderSetup),
 	opSaveProviderSetup.command:      serveUnary(opSaveProviderSetup),
 	opDetectProviders.command:        serveUnary(opDetectProviders),

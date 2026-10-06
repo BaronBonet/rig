@@ -90,6 +90,16 @@ func (f *frontend) ReconnectTaskSession(ctx context.Context, taskID string) erro
 	return err
 }
 
+func (f *frontend) ShelveTask(ctx context.Context, taskID string) error {
+	_, err := callUnary(ctx, f, opShelveTask, taskIDRequest{TaskID: taskID})
+	return err
+}
+
+func (f *frontend) UnshelveTask(ctx context.Context, taskID string) error {
+	_, err := callUnary(ctx, f, opUnshelveTask, taskIDRequest{TaskID: taskID})
+	return err
+}
+
 func (f *frontend) GetProviderSetup(ctx context.Context) (*core.ProviderSetup, error) {
 	return callUnary(ctx, f, opGetProviderSetup, emptyResponse{})
 }

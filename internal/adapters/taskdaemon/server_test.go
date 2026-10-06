@@ -54,6 +54,8 @@ type fakeTaskService struct {
 
 	deleted     []string
 	reconnected []string
+	shelved     []string
+	unshelved   []string
 
 	errByOp map[string]error
 }
@@ -240,6 +242,20 @@ func (f *fakeTaskService) ReconnectTaskSession(_ context.Context, taskID string)
 	defer f.mu.Unlock()
 	f.reconnected = append(f.reconnected, taskID)
 	return f.errByOp["reconnect_task_session"]
+}
+
+func (f *fakeTaskService) ShelveTask(_ context.Context, taskID string) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.shelved = append(f.shelved, taskID)
+	return f.errByOp["shelve_task"]
+}
+
+func (f *fakeTaskService) UnshelveTask(_ context.Context, taskID string) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.unshelved = append(f.unshelved, taskID)
+	return f.errByOp["unshelve_task"]
 }
 
 func (f *fakeTaskService) GetProviderSetup(context.Context) (*core.ProviderSetup, error) {
@@ -499,6 +515,26 @@ func TestUnaryOperationsRoundTrip(t *testing.T) {
 		svc.mu.Lock()
 		defer svc.mu.Unlock()
 		require.Equal(t, []string{"task-1"}, svc.reconnected)
+	})
+
+	t.Run("shelve and unshelve a task", func(t *testing.T) {
+		require.NoError(t, client.ShelveTask(ctx, "task-1"))
+		require.NoError(t, client.UnshelveTask(ctx, "task-1"))
+		require.ErrorContains(t, client.ShelveTask(ctx, " "), "task_id required")
+		svc.mu.Lock()
+		defer svc.mu.Unlock()
+		require.Equal(t, []string{"task-1"}, svc.shelved)
+		require.Equal(t, []string{"task-1"}, svc.unshelved)
+	})
+
+	t.Run("shelve surfaces a refusal", func(t *testing.T) {
+		svc.mu.Lock()
+		svc.errByOp["shelve_task"] = errors.New("provider session is still running: \"task-1\" is working")
+		svc.mu.Unlock()
+		require.ErrorContains(t, client.ShelveTask(ctx, "task-1"), "is working")
+		svc.mu.Lock()
+		delete(svc.errByOp, "shelve_task")
+		svc.mu.Unlock()
 	})
 
 	t.Run("delete task", func(t *testing.T) {

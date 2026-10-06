@@ -33,6 +33,11 @@ Use `rig` for the CLI command and Rig for the product or system.
   parent's workspace, branch and tmux session, runs in its own window there
   with its own task ID, and has its own status, activity and token usage. It
   is listed under its parent. A parent with its children is a task group.
+- Shelf: Where Tasks the user is not working on now are kept, off the current
+  list. Shelving a Task ends its provider sessions and keeps everything else:
+  its record, child tasks, launch options, history and workspace. A shelved
+  Task comes back when it is unshelved, and its latest session resumes when
+  it is opened.
 - Handoff note: A note the previous provider session writes, in print mode on
   a fork that is not saved, for a new session to start from: goal, state,
   decisions, where things are, gotchas, next step. Kept under Rig's data dir.
@@ -150,6 +155,9 @@ Use `rig` for the CLI command and Rig for the product or system.
 - A Child task's hooks carry its own Task ID, set on its window, so they are
   never attributed to the parent. A New session of a Child task joins the
   parent's group.
+- Shelving or unshelving a Task moves its Child tasks with it; a Child task
+  can also be shelved on its own, which closes only its window. Shelving is
+  refused while any of them is working.
 - A Handoff note is written by the Task's latest Provider session of its
   Active provider, and only by a Provider that supports it.
 - A Provider session belongs to exactly one Task and one Provider.

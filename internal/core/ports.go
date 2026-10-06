@@ -242,6 +242,14 @@ type TaskService interface {
 	// ReconnectTaskSession recreates a missing task runtime session from
 	// persisted provider resume metadata.
 	ReconnectTaskSession(ctx context.Context, taskID string) error
+	// ShelveTask takes the task and its child tasks off the current list. Their
+	// provider sessions end and everything else is kept, so opening the task
+	// later resumes its latest session. It refuses while any of them is
+	// working.
+	ShelveTask(ctx context.Context, taskID string) error
+	// UnshelveTask puts the task and its child tasks back on the current list.
+	// Their sessions start again when they are opened.
+	UnshelveTask(ctx context.Context, taskID string) error
 	// GetProviderSetup returns the user's provider setup, or nil when provider
 	// setup has never completed.
 	GetProviderSetup(ctx context.Context) (*ProviderSetup, error)

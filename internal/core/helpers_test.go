@@ -61,6 +61,7 @@ type taskRepositoryState struct {
 	listTasks              []*Task
 	createdTask            *Task
 	updatedTask            *Task
+	updatedTasks           []*Task
 	deletedTaskID          string
 	deletedTaskIDs         []string
 	savedResumeMetadata    *TaskResumeMetadata
@@ -788,6 +789,7 @@ func configureTaskRepositoryMock(repo *MockTaskRepository, state *taskRepository
 				return state.updateErr
 			}
 			state.updatedTask = cloneTask(task)
+			state.updatedTasks = append(state.updatedTasks, cloneTask(task))
 			return nil
 		},
 	).Maybe()
