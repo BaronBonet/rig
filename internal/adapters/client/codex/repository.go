@@ -20,7 +20,14 @@ const (
 	codexHookPath        = "/codex-hook"
 	legacyCodexHookPath  = "/hook"
 	defaultCodexHooksURL = "http://127.0.0.1:4124" + codexHookPath
+	// codexHomeEnvVar points Codex at a home other than ~/.codex, with its own
+	// login, sessions and hooks.
+	codexHomeEnvVar = "CODEX_HOME"
 )
+
+// ConfigEnvVars are the variables that choose which Codex home, and so which
+// account, sessions and hooks, a session uses.
+var ConfigEnvVars = []string{codexHomeEnvVar}
 
 // hookCatalog is Codex's hook event catalog: the one declaration of which
 // hook events Rig observes from Codex, how each is matched, and which
@@ -97,7 +104,11 @@ func (r *repository) Doctor(ctx context.Context) error {
 	return nil
 }
 
-func (r *repository) SuggestTaskName(ctx context.Context, prompt string) (core.TaskSuggestion, error) {
+func (r *repository) SuggestTaskName(
+	ctx context.Context,
+	prompt string,
+	env core.ProviderEnv,
+) (core.TaskSuggestion, error) {
 	tmpFile, err := os.CreateTemp("", "rig-codex-name-*.txt")
 	if err != nil {
 		return core.TaskSuggestion{}, err
@@ -108,16 +119,11 @@ func (r *repository) SuggestTaskName(ctx context.Context, prompt string) (core.T
 
 	fullPrompt := prompts.SuggestTaskPrompt + "\n\nTask description: " + prompt
 
-	result, err := r.runner.Run(
-		ctx,
-		"",
-		r.binary,
-		"exec",
-		"--skip-git-repo-check",
-		"--output-last-message",
-		tmpPath,
-		fullPrompt,
-	)
+	result, err := r.runner.RunWithStdin(ctx, subprocess.RunWithStdinOptions{
+		Env:  providerkit.EnvOverrides(env, ConfigEnvVars),
+		Name: r.binary,
+		Args: []string{"exec", "--skip-git-repo-check", "--output-last-message", tmpPath, fullPrompt},
+	})
 
 	fileOutput := readOutputFile(tmpPath)
 	if suggestion, ok := parsePreferredSuggestion(fileOutput, result.Stdout); ok {
@@ -130,8 +136,10 @@ func (r *repository) SuggestTaskName(ctx context.Context, prompt string) (core.T
 	return core.TaskSuggestion{}, fmt.Errorf("codex did not return a usable task title")
 }
 
-func (r *repository) EnsureTaskSessionEnvironment(context.Context) error {
-	codexHome, err := r.resolveCodexHomeDir()
+// EnsureTaskSessionEnvironment registers Rig's hooks in the Codex home the
+// session runs with, which is where Codex reads them.
+func (r *repository) EnsureTaskSessionEnvironment(_ context.Context, env core.ProviderEnv) error {
+	codexHome, err := r.resolveCodexHomeDir(env)
 	if err != nil {
 		return err
 	}
@@ -173,7 +181,7 @@ func (r *repository) BuildTaskSessionLaunchSpec(task *core.Task) (core.TaskSessi
 		prefillInput = []string{task.Prompt}
 	}
 
-	command, err := r.codexTaskCommand()
+	command, err := r.codexTaskCommand(task.ProviderEnv)
 	if err != nil {
 		return core.TaskSessionLaunchSpec{}, err
 	}
@@ -186,7 +194,7 @@ func (r *repository) BuildTaskSessionLaunchSpec(task *core.Task) (core.TaskSessi
 }
 
 func (r *repository) BuildReconnectTaskSessionLaunchSpec(
-	_ *core.Task,
+	task *core.Task,
 	sessionID string,
 ) (core.TaskSessionLaunchSpec, error) {
 	sessionID = strings.TrimSpace(sessionID)
@@ -194,7 +202,7 @@ func (r *repository) BuildReconnectTaskSessionLaunchSpec(
 		return core.TaskSessionLaunchSpec{}, fmt.Errorf("session ID is required")
 	}
 
-	command, err := r.codexTaskCommand("resume", sessionID)
+	command, err := r.codexTaskCommand(task.ProviderEnv, "resume", sessionID)
 	if err != nil {
 		return core.TaskSessionLaunchSpec{}, err
 	}
@@ -213,8 +221,8 @@ func (r *repository) TaskSessionCommandName() string {
 	return commandName
 }
 
-func (r *repository) codexTaskCommand(args ...string) ([]string, error) {
-	codexHome, err := r.resolveCodexHomeDir()
+func (r *repository) codexTaskCommand(env core.ProviderEnv, args ...string) ([]string, error) {
+	codexHome, err := r.resolveCodexHomeDir(env)
 	if err != nil {
 		return nil, err
 	}
@@ -283,7 +291,7 @@ func (r *repository) loadHookConfig(path string) (providerkit.HookConfig, error)
 }
 
 func (r *repository) healthCheckHookForwarding() error {
-	codexHome, err := r.resolveCodexHomeDir()
+	codexHome, err := r.resolveCodexHomeDir(nil)
 	if err != nil {
 		return err
 	}
@@ -331,7 +339,15 @@ func (r *repository) ensureRigHookRules(cfg *providerkit.HookConfig, scriptPath 
 	return nil
 }
 
-func (r *repository) resolveCodexHomeDir() (string, error) {
+// resolveCodexHomeDir returns the Codex home env selects, falling back to the
+// daemon's own when env does not decide it.
+func (r *repository) resolveCodexHomeDir(env core.ProviderEnv) (string, error) {
+	if home, decided := env.Lookup(codexHomeEnvVar); decided {
+		if home != "" {
+			return home, nil
+		}
+		return userCodexHomeDir()
+	}
 	if r.codexHomeDir == nil {
 		return defaultCodexHomeDir()
 	}
@@ -339,10 +355,14 @@ func (r *repository) resolveCodexHomeDir() (string, error) {
 }
 
 func defaultCodexHomeDir() (string, error) {
-	if custom := strings.TrimSpace(os.Getenv("CODEX_HOME")); custom != "" {
+	if custom := strings.TrimSpace(os.Getenv(codexHomeEnvVar)); custom != "" {
 		return custom, nil
 	}
+	return userCodexHomeDir()
+}
 
+// userCodexHomeDir is where Codex keeps its home when CODEX_HOME is unset.
+func userCodexHomeDir() (string, error) {
 	home, err := os.UserHomeDir()
 	if err != nil {
 		return "", fmt.Errorf("resolve codex home: %w", err)

@@ -15,7 +15,11 @@ import (
 // for import; older sessions are rarely worth resuming.
 const importableSessionLimit = 30
 
-func (s *service) ListImportableSessions(ctx context.Context, folder string) ([]ProviderSessionSummary, error) {
+func (s *service) ListImportableSessions(
+	ctx context.Context,
+	folder string,
+	env ProviderEnv,
+) ([]ProviderSessionSummary, error) {
 	folder = strings.TrimSpace(folder)
 	if folder == "" {
 		return nil, nil
@@ -39,7 +43,7 @@ func (s *service) ListImportableSessions(ctx context.Context, folder string) ([]
 		if err != nil {
 			continue
 		}
-		found, err := providerClient.ListFolderSessions(ctx, folder, importableSessionLimit)
+		found, err := providerClient.ListFolderSessions(ctx, folder, importableSessionLimit, env)
 		if err != nil {
 			return nil, fmt.Errorf("list %s sessions: %w", provider, err)
 		}
@@ -56,7 +60,7 @@ func (s *service) ListImportableSessions(ctx context.Context, folder string) ([]
 	return sessions, nil
 }
 
-func (s *service) ImportSession(ctx context.Context, session ProviderSessionSummary) (*Task, error) {
+func (s *service) ImportSession(ctx context.Context, session ProviderSessionSummary, env ProviderEnv) (*Task, error) {
 	session.SessionID = strings.TrimSpace(session.SessionID)
 	if session.SessionID == "" {
 		return nil, fmt.Errorf("import session: session ID is required")
@@ -91,6 +95,8 @@ func (s *service) ImportSession(ctx context.Context, session ProviderSessionSumm
 	task := newFolderTaskRecord(folder, label, session.Provider, title,
 		uniqueFolderTaskSlug(folder, label, title, existingTasks))
 	task.CreationStatus = TaskCreationStatusReady
+	// The session lives in the store it was listed from, so it resumes there.
+	task.ProviderEnv = env
 	if err := s.tasks.CreateTask(ctx, task); err != nil {
 		return nil, err
 	}

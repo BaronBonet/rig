@@ -1,6 +1,7 @@
 package sqlite
 
 import (
+	"encoding/json"
 	"time"
 
 	"github.com/BaronBonet/rig/internal/adapters/repository/sqlite/generated"
@@ -25,6 +26,7 @@ func createTaskParams(task *core.Task) generated.CreateTaskParams {
 		CreatedAt:      formatTime(task.CreatedAt),
 		UpdatedAt:      formatTime(task.UpdatedAt),
 		WorkspaceKind:  string(normalizeWorkspaceKind(task.WorkspaceKind)),
+		ProviderEnv:    encodeProviderEnv(task.ProviderEnv),
 	}
 }
 
@@ -45,6 +47,7 @@ func updateTaskParams(task *core.Task) generated.UpdateTaskParams {
 		CreatedAt:      formatTime(task.CreatedAt),
 		UpdatedAt:      formatTime(task.UpdatedAt),
 		WorkspaceKind:  string(normalizeWorkspaceKind(task.WorkspaceKind)),
+		ProviderEnv:    encodeProviderEnv(task.ProviderEnv),
 		ID:             task.ID,
 	}
 }
@@ -164,7 +167,30 @@ func taskFromRow(row generated.ListTasksRow) *core.Task {
 		CreatedAt:      parseTime(row.CreatedAt),
 		UpdatedAt:      parseTime(row.UpdatedAt),
 		WorkspaceKind:  normalizeWorkspaceKind(core.WorkspaceKind(row.WorkspaceKind)),
+		ProviderEnv:    decodeProviderEnv(row.ProviderEnv),
 	}
+}
+
+// encodeProviderEnv stores a task's provider configuration as a JSON object;
+// "" records a task created before rig captured it, which decodes to nil and
+// so defers to the daemon's environment.
+func encodeProviderEnv(env core.ProviderEnv) string {
+	if env == nil {
+		return ""
+	}
+	encoded, err := json.Marshal(env)
+	if err != nil {
+		return ""
+	}
+	return string(encoded)
+}
+
+func decodeProviderEnv(raw string) core.ProviderEnv {
+	var env core.ProviderEnv
+	if json.Unmarshal([]byte(raw), &env) != nil {
+		return nil
+	}
+	return env
 }
 
 func normalizeWorkspaceKind(kind core.WorkspaceKind) core.WorkspaceKind {

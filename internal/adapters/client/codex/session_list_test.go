@@ -51,7 +51,7 @@ func TestListFolderSessions_ListsRootCodexSessionsStartedInTheFolder(t *testing.
 	)
 
 	repo := &repository{codexHomeDir: func() (string, error) { return codexHome, nil }}
-	found, err := repo.ListFolderSessions(t.Context(), "/src/work/code", 10)
+	found, err := repo.ListFolderSessions(t.Context(), "/src/work/code", 10, nil)
 
 	require.NoError(t, err)
 	require.Len(t, found, 2)
@@ -79,7 +79,7 @@ func TestListFolderSessions_IncludesSessionsStartedBelowTheFolder(t *testing.T) 
 		sessionMeta("thread-relative", "service", `"cli"`), prompt)
 
 	repo := &repository{codexHomeDir: func() (string, error) { return codexHome, nil }}
-	found, err := repo.ListFolderSessions(t.Context(), "/src/work/code", 10)
+	found, err := repo.ListFolderSessions(t.Context(), "/src/work/code", 10, nil)
 
 	require.NoError(t, err)
 	require.Len(t, found, 1)
@@ -87,10 +87,28 @@ func TestListFolderSessions_IncludesSessionsStartedBelowTheFolder(t *testing.T) 
 	require.Equal(t, "/src/work/code/service", found[0].Cwd)
 }
 
+func TestListFolderSessions_ReadsTheHomeTheEnvSelects(t *testing.T) {
+	daemonHome, workHome := t.TempDir(), t.TempDir()
+	base := time.Date(2026, time.October, 2, 9, 0, 0, 0, time.UTC)
+	writeRollout(t, filepath.Join(workHome, "sessions", "2026", "10", "02", "rollout-work.jsonl"), base,
+		sessionMeta("thread-work", "/src/work/code", `"cli"`),
+		`{"type":"event_msg","payload":{"type":"user_message","message":"work"}}`)
+	repo := &repository{codexHomeDir: func() (string, error) { return daemonHome, nil }}
+
+	found, err := repo.ListFolderSessions(t.Context(), "/src/work/code", 10, core.ProviderEnv{"CODEX_HOME": workHome})
+	require.NoError(t, err)
+	require.Len(t, found, 1)
+	require.Equal(t, "thread-work", found[0].SessionID)
+
+	found, err = repo.ListFolderSessions(t.Context(), "/src/work/code", 10, nil)
+	require.NoError(t, err)
+	require.Empty(t, found)
+}
+
 func TestListFolderSessions_ToleratesAMissingSessionsFolder(t *testing.T) {
 	repo := &repository{codexHomeDir: func() (string, error) { return t.TempDir(), nil }}
 
-	found, err := repo.ListFolderSessions(t.Context(), "/src/work/code", 10)
+	found, err := repo.ListFolderSessions(t.Context(), "/src/work/code", 10, nil)
 
 	require.NoError(t, err)
 	require.Empty(t, found)

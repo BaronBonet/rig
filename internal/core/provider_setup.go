@@ -30,7 +30,7 @@ func (s *service) SaveProviderSetup(ctx context.Context, setup ProviderSetup) er
 		if err != nil {
 			return err
 		}
-		if err := providerClient.EnsureTaskSessionEnvironment(ctx); err != nil {
+		if err := providerClient.EnsureTaskSessionEnvironment(ctx, nil); err != nil {
 			return fmt.Errorf("install %s hooks: %w", provider, err)
 		}
 		if err := providerClient.Doctor(ctx); err != nil {
@@ -59,7 +59,7 @@ func (s *service) detectProvider(ctx context.Context, provider Provider) Provide
 	}
 	// Detection runs the provider's full setup path, not just a version probe:
 	// install or repair hook prerequisites, then run the provider doctor.
-	if err := providerClient.EnsureTaskSessionEnvironment(ctx); err != nil {
+	if err := providerClient.EnsureTaskSessionEnvironment(ctx, nil); err != nil {
 		detection.Detail = err.Error()
 		return detection
 	}
@@ -117,7 +117,7 @@ func (s *service) switchTaskProvider(ctx context.Context, taskID string, provide
 		}
 	}
 
-	if err := providerClient.EnsureTaskSessionEnvironment(ctx); err != nil {
+	if err := providerClient.EnsureTaskSessionEnvironment(ctx, task.ProviderEnv); err != nil {
 		return nil, fmt.Errorf("ensure task session environment: %w", err)
 	}
 

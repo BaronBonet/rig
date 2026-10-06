@@ -166,6 +166,40 @@ func TestRepositoryStartTaskSession_ExportsTaskIDToTheSessionEnvironment(t *test
 	require.NoError(t, err)
 }
 
+func TestRepositoryStartTaskSession_ExportsTheTaskProviderConfiguration(t *testing.T) {
+	runner := subprocess.NewMockRunner(t)
+	repo := New(runner).(*repository)
+	repo.sleep = func(time.Duration) {}
+
+	mock.InOrder(
+		expectTmuxRun(runner, subprocess.Result{}, errors.New("no session"),
+			"has-session", "-t", "=repo_task",
+		),
+		expectTmuxRun(runner, subprocess.Result{}, nil,
+			"new-session", "-d", "-s", "repo_task", "-n", "task", "-c", "/tmp/repo-task",
+			"-e", "RIG_TASK_ID=task-123",
+			"-e", "CLAUDE_CONFIG_DIR=/home/me/.claude-work",
+			"-e", "CODEX_HOME=/home/me/.codex-work",
+		),
+		expectTmuxRun(runner, subprocess.Result{}, nil,
+			"new-window", "-d", "-t", "=repo_task", "-n", "editor", "-c", "/tmp/repo-task",
+		),
+	)
+
+	err := repo.StartTaskSession(context.Background(), &core.Task{
+		ID:           "task-123",
+		TmuxSession:  "repo_task",
+		WorktreePath: "/tmp/repo-task",
+		ProviderEnv: core.ProviderEnv{
+			"CODEX_HOME":        "/home/me/.codex-work",
+			"CLAUDE_CONFIG_DIR": "/home/me/.claude-work",
+			"GEMINI_HOME":       "",
+		},
+	}, core.TaskSessionLaunchSpec{})
+
+	require.NoError(t, err)
+}
+
 func TestRepositoryStartTaskSession_CleansUpSessionWhenEditorWindowCreationFails(t *testing.T) {
 	runner := subprocess.NewMockRunner(t)
 	repo := New(runner).(*repository)

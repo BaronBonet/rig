@@ -192,7 +192,7 @@ func (l *sessionLauncher) startSession(ctx context.Context, task *Task) (*Task, 
 	if err != nil {
 		return task, err
 	}
-	if err := providerClient.EnsureTaskSessionEnvironment(ctx); err != nil {
+	if err := providerClient.EnsureTaskSessionEnvironment(ctx, task.ProviderEnv); err != nil {
 		return task, fmt.Errorf("ensure task session environment: %w", err)
 	}
 

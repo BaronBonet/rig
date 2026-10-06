@@ -1,6 +1,7 @@
 package claude
 
 import (
+	"context"
 	"encoding/json"
 	"os"
 	"path/filepath"
@@ -58,6 +59,28 @@ func TestRepositoryBuildReconnectTaskSessionLaunchSpec_ResumesByRecordedSessionI
 	}, launch)
 }
 
+func TestRepositoryLaunchSpecs_RunClaudeWithTheTasksConfiguration(t *testing.T) {
+	repo, _ := newTestRepository(t, subprocess.NewMockRunner(t))
+
+	resume, err := repo.BuildReconnectTaskSessionLaunchSpec(&core.Task{
+		ProviderEnv: core.ProviderEnv{"CLAUDE_CONFIG_DIR": "/home/me/.claude-work", "CODEX_HOME": ""},
+	}, "sess-1")
+	require.NoError(t, err)
+	require.Equal(t,
+		[]string{"env", "CLAUDE_CONFIG_DIR=/home/me/.claude-work", "claude", "--resume", "sess-1"},
+		resume.Command,
+		"the session is found in the configuration it was recorded in",
+	)
+
+	// A task from a window without CLAUDE_CONFIG_DIR uses ~/.claude even when
+	// the daemon, the tmux server or a direnv hook sets another.
+	start, err := repo.BuildTaskSessionLaunchSpec(&core.Task{
+		ProviderEnv: core.ProviderEnv{"CLAUDE_CONFIG_DIR": ""},
+	})
+	require.NoError(t, err)
+	require.Equal(t, []string{"env", "-u", "CLAUDE_CONFIG_DIR", "claude"}, start.Command)
+}
+
 func TestRepositoryBuildReconnectTaskSessionLaunchSpec_RequiresSessionID(t *testing.T) {
 	repo, _ := newTestRepository(t, subprocess.NewMockRunner(t))
 
@@ -81,7 +104,7 @@ func TestRepositoryEnsureTaskSessionEnvironment_InstallsSharedForwarderScriptOnl
 	userSettings := filepath.Join(dataDir, "claude-user-settings.json")
 	require.NoError(t, os.WriteFile(userSettings, []byte(`{"user":"untouched"}`), 0o600))
 
-	err := repo.EnsureTaskSessionEnvironment(t.Context())
+	err := repo.EnsureTaskSessionEnvironment(t.Context(), nil)
 
 	require.NoError(t, err)
 	scriptPath := filepath.Join(dataDir, "claude", "hooks", "forward-to-rig.sh")
@@ -149,34 +172,57 @@ func TestRepositoryDoctorAcceptsInstalledForwarderScript(t *testing.T) {
 	runner := subprocess.NewMockRunner(t)
 	runner.EXPECT().Run(mock.Anything, "", "claude", "--version").Return(subprocess.Result{}, nil)
 	repo, _ := newTestRepository(t, runner)
-	require.NoError(t, repo.EnsureTaskSessionEnvironment(t.Context()))
+	require.NoError(t, repo.EnsureTaskSessionEnvironment(t.Context(), nil))
 
 	require.NoError(t, repo.Doctor(t.Context()))
 }
 
+// expectPrintMode expects one `claude -p` run and returns what it received.
+func expectPrintMode(runner *subprocess.MockRunner, stdout string) *subprocess.RunWithStdinOptions {
+	var received subprocess.RunWithStdinOptions
+	runner.EXPECT().RunWithStdin(mock.Anything, mock.Anything).RunAndReturn(
+		func(_ context.Context, opts subprocess.RunWithStdinOptions) (subprocess.Result, error) {
+			received = opts
+			return subprocess.Result{Stdout: stdout}, nil
+		},
+	).Once()
+	return &received
+}
+
 func TestRepositorySuggestTaskName_ParsesSuggestionJSON(t *testing.T) {
 	runner := subprocess.NewMockRunner(t)
-	runner.EXPECT().Run(
-		mock.Anything, "", "claude", "-p", "--output-format", "text", mock.Anything,
-	).Return(subprocess.Result{
-		Stdout: "thinking...\n{\"name\": \"Billing retry flow\", \"branch_type\": \"fix\"}\n",
-	}, nil)
+	received := expectPrintMode(runner,
+		"thinking...\n{\"name\": \"Billing retry flow\", \"branch_type\": \"fix\"}\n")
 	repo, _ := newTestRepository(t, runner)
 
-	suggestion, err := repo.SuggestTaskName(t.Context(), "fix billing retries")
+	suggestion, err := repo.SuggestTaskName(t.Context(), "fix billing retries", nil)
 
 	require.NoError(t, err)
 	require.Equal(t, core.TaskSuggestion{Name: "Billing retry flow", BranchType: "fix"}, suggestion)
+	require.Equal(t, "claude", received.Name)
+	require.Empty(t, received.Cwd)
+	require.Equal(t, []string{"-p", "--output-format", "text"}, received.Args[:3])
+	require.Nil(t, received.Env, "without a task configuration claude runs as the daemon's account")
+}
+
+func TestRepositorySuggestTaskName_RunsAsTheTasksAccount(t *testing.T) {
+	runner := subprocess.NewMockRunner(t)
+	received := expectPrintMode(runner, "Billing retry flow\n")
+	repo, _ := newTestRepository(t, runner)
+
+	_, err := repo.SuggestTaskName(t.Context(), "fix billing retries",
+		core.ProviderEnv{"CLAUDE_CONFIG_DIR": "/home/me/.claude-work", "CODEX_HOME": "/home/me/.codex"})
+
+	require.NoError(t, err)
+	require.Equal(t, map[string]string{"CLAUDE_CONFIG_DIR": "/home/me/.claude-work"}, received.Env)
 }
 
 func TestRepositorySuggestTaskName_FallsBackToLastTextLine(t *testing.T) {
 	runner := subprocess.NewMockRunner(t)
-	runner.EXPECT().Run(
-		mock.Anything, "", "claude", "-p", "--output-format", "text", mock.Anything,
-	).Return(subprocess.Result{Stdout: "Billing retry flow\n"}, nil)
+	expectPrintMode(runner, "Billing retry flow\n")
 	repo, _ := newTestRepository(t, runner)
 
-	suggestion, err := repo.SuggestTaskName(t.Context(), "fix billing retries")
+	suggestion, err := repo.SuggestTaskName(t.Context(), "fix billing retries", nil)
 
 	require.NoError(t, err)
 	require.Equal(t, core.TaskSuggestion{Name: "Billing retry flow", BranchType: "feat"}, suggestion)

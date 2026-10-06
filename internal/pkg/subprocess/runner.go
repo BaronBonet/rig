@@ -2,7 +2,10 @@ package subprocess
 
 import (
 	"context"
+	"maps"
+	"os"
 	"os/exec"
+	"slices"
 	"strings"
 )
 
@@ -12,6 +15,9 @@ type Result struct {
 }
 
 type RunWithStdinOptions struct {
+	// Env overrides variables of the environment the command inherits; ""
+	// removes one.
+	Env   map[string]string
 	Cwd   string
 	Stdin string
 	Name  string
@@ -68,6 +74,9 @@ func (ExecRunner) Run(ctx context.Context, cwd string, name string, args ...stri
 func (ExecRunner) RunWithStdin(ctx context.Context, opts RunWithStdinOptions) (Result, error) {
 	cmd := exec.CommandContext(ctx, opts.Name, opts.Args...)
 	cmd.Dir = opts.Cwd
+	if len(opts.Env) > 0 {
+		cmd.Env = overrideEnv(os.Environ(), opts.Env)
+	}
 	if opts.Stdin != "" {
 		cmd.Stdin = strings.NewReader(opts.Stdin)
 	}
@@ -95,4 +104,22 @@ func (ExecRunner) RunWithStdin(ctx context.Context, opts RunWithStdinOptions) (R
 	}
 
 	return result, nil
+}
+
+// overrideEnv returns base, a list of NAME=value entries, with overrides
+// applied: a variable overridden with "" is removed.
+func overrideEnv(base []string, overrides map[string]string) []string {
+	env := make([]string, 0, len(base)+len(overrides))
+	for _, entry := range base {
+		name, _, _ := strings.Cut(entry, "=")
+		if _, overridden := overrides[name]; !overridden {
+			env = append(env, entry)
+		}
+	}
+	for _, name := range slices.Sorted(maps.Keys(overrides)) {
+		if value := overrides[name]; value != "" {
+			env = append(env, name+"="+value)
+		}
+	}
+	return env
 }

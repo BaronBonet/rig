@@ -43,6 +43,35 @@ func TestRepositoryBuildReconnectTaskSessionLaunchSpec_UsesCodexResume(t *testin
 	}, launch)
 }
 
+func TestRepositoryLaunchSpecs_RunCodexInTheTasksHome(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	repo := New(subprocess.NewMockRunner(t), Config{Binary: "codex"}, HookForwardingConfig{}).(*repository)
+	repo.codexHomeDir = func() (string, error) { return "/daemon/codex", nil }
+
+	resume, err := repo.BuildReconnectTaskSessionLaunchSpec(&core.Task{
+		ProviderEnv: core.ProviderEnv{"CODEX_HOME": "/home/me/.codex-work"},
+	}, "sess-1")
+	require.NoError(t, err)
+	require.Equal(t, []string{"env", "CODEX_HOME=/home/me/.codex-work", "codex", "resume", "sess-1"}, resume.Command)
+
+	start, err := repo.BuildTaskSessionLaunchSpec(&core.Task{ProviderEnv: core.ProviderEnv{"CODEX_HOME": ""}})
+	require.NoError(t, err)
+	require.Equal(t, []string{"env", "CODEX_HOME=" + filepath.Join(home, ".codex"), "codex"}, start.Command,
+		"a window without CODEX_HOME uses ~/.codex, not the daemon's home")
+}
+
+func TestRepositoryEnsureTaskSessionEnvironment_RegistersHooksInTheTasksHome(t *testing.T) {
+	daemonHome, taskHome := t.TempDir(), t.TempDir()
+	repo := New(subprocess.NewMockRunner(t), Config{Binary: "codex"}, HookForwardingConfig{}).(*repository)
+	repo.codexHomeDir = func() (string, error) { return daemonHome, nil }
+
+	require.NoError(t, repo.EnsureTaskSessionEnvironment(t.Context(), core.ProviderEnv{"CODEX_HOME": taskHome}))
+
+	require.FileExists(t, filepath.Join(taskHome, "hooks.json"), "codex reads hooks from the home it runs with")
+	require.NoFileExists(t, filepath.Join(daemonHome, "hooks.json"))
+}
+
 func TestRepositoryTaskSessionCommandNameUsesConfiguredBinaryBase(t *testing.T) {
 	repo := New(subprocess.NewMockRunner(t), Config{Binary: "/opt/homebrew/bin/codex-custom"}, HookForwardingConfig{})
 
@@ -69,7 +98,7 @@ func TestRepositoryEnsureTaskSessionEnvironment_InstallsRigHooksIntoCodexHome(t 
 	}).(*repository)
 	repo.codexHomeDir = func() (string, error) { return tempDir, nil }
 
-	err := repo.EnsureTaskSessionEnvironment(t.Context())
+	err := repo.EnsureTaskSessionEnvironment(t.Context(), nil)
 
 	require.NoError(t, err)
 
@@ -119,7 +148,7 @@ func TestRepositoryDoctorAcceptsInstalledRigHooks(t *testing.T) {
 	}).(*repository)
 	repo.codexHomeDir = func() (string, error) { return tempDir, nil }
 
-	require.NoError(t, repo.EnsureTaskSessionEnvironment(t.Context()))
+	require.NoError(t, repo.EnsureTaskSessionEnvironment(t.Context(), nil))
 
 	err := repo.Doctor(t.Context())
 
@@ -164,7 +193,7 @@ func TestRepositoryDoctorReportsStaleHookCollectorURL(t *testing.T) {
 		CollectorURL: "http://127.0.0.1:4124/codex-hook",
 	}).(*repository)
 	repo.codexHomeDir = func() (string, error) { return tempDir, nil }
-	require.NoError(t, repo.EnsureTaskSessionEnvironment(t.Context()))
+	require.NoError(t, repo.EnsureTaskSessionEnvironment(t.Context(), nil))
 
 	runner := subprocess.NewMockRunner(t)
 	runner.EXPECT().Run(mock.Anything, "", "codex", "--version").Return(subprocess.Result{}, nil)
@@ -201,9 +230,9 @@ func TestRepositoryEnsureTaskSessionEnvironment_MergesExistingHooks(t *testing.T
 	}).(*repository)
 	repo.codexHomeDir = func() (string, error) { return tempDir, nil }
 
-	err := repo.EnsureTaskSessionEnvironment(t.Context())
+	err := repo.EnsureTaskSessionEnvironment(t.Context(), nil)
 	require.NoError(t, err)
-	err = repo.EnsureTaskSessionEnvironment(t.Context())
+	err = repo.EnsureTaskSessionEnvironment(t.Context(), nil)
 	require.NoError(t, err)
 
 	hooksJSON, err := os.ReadFile(filepath.Join(tempDir, "hooks.json"))
@@ -250,7 +279,7 @@ func TestRepositoryEnsureTaskSessionEnvironment_ReplacesStaleRigHookRules(t *tes
   }
 }`), 0o644))
 
-	err := repo.EnsureTaskSessionEnvironment(t.Context())
+	err := repo.EnsureTaskSessionEnvironment(t.Context(), nil)
 	require.NoError(t, err)
 
 	hooksJSON, err := os.ReadFile(filepath.Join(tempDir, "hooks.json"))
@@ -266,30 +295,23 @@ func TestRepositoryEnsureTaskSessionEnvironment_ReplacesStaleRigHookRules(t *tes
 
 func TestRepositorySuggestTaskName_DelegatesToCodexProposal(t *testing.T) {
 	runner := subprocess.NewMockRunner(t)
-	runner.EXPECT().
-		Run(
-			mock.Anything,
-			"",
-			"codex",
-			"exec",
-			"--skip-git-repo-check",
-			"--output-last-message",
-			mock.Anything,
-			mock.Anything,
-		).
-		RunAndReturn(func(_ context.Context, cwd string, name string, args ...string) (subprocess.Result, error) {
-			require.Empty(t, cwd)
-			require.Equal(t, "codex", name)
+	runner.EXPECT().RunWithStdin(mock.Anything, mock.Anything).
+		RunAndReturn(func(_ context.Context, opts subprocess.RunWithStdinOptions) (subprocess.Result, error) {
+			require.Empty(t, opts.Cwd)
+			require.Equal(t, "codex", opts.Name)
 			require.Equal(
 				t,
-				[]string{"exec", "--skip-git-repo-check", "--output-last-message", args[3], args[4]},
-				args,
+				[]string{"exec", "--skip-git-repo-check", "--output-last-message", opts.Args[3], opts.Args[4]},
+				opts.Args,
 			)
+			require.Equal(t, map[string]string{"CODEX_HOME": "/home/me/.codex-work"}, opts.Env,
+				"the suggestion runs as the task's account")
 			return subprocess.Result{Stdout: "billing retry flow\n"}, nil
 		})
 	repo := New(runner, Config{Binary: "codex"}, HookForwardingConfig{})
 
-	suggestion, err := repo.SuggestTaskName(t.Context(), "add billing retry flow")
+	suggestion, err := repo.SuggestTaskName(t.Context(), "add billing retry flow",
+		core.ProviderEnv{"CODEX_HOME": "/home/me/.codex-work", "CLAUDE_CONFIG_DIR": ""})
 	require.NoError(t, err)
 	require.Equal(t, "billing retry flow", suggestion.Name)
 	require.Equal(t, "feat", suggestion.BranchType)
@@ -297,27 +319,17 @@ func TestRepositorySuggestTaskName_DelegatesToCodexProposal(t *testing.T) {
 
 func TestRepositorySuggestTaskName_PrefersOutputFileOverStdout(t *testing.T) {
 	runner := subprocess.NewMockRunner(t)
-	runner.EXPECT().
-		Run(
-			mock.Anything,
-			"",
-			"codex",
-			"exec",
-			"--skip-git-repo-check",
-			"--output-last-message",
-			mock.Anything,
-			mock.Anything,
-		).
-		RunAndReturn(func(_ context.Context, _ string, _ string, args ...string) (subprocess.Result, error) {
+	runner.EXPECT().RunWithStdin(mock.Anything, mock.Anything).
+		RunAndReturn(func(_ context.Context, opts subprocess.RunWithStdinOptions) (subprocess.Result, error) {
 			require.NoError(
 				t,
-				os.WriteFile(args[3], []byte("{\"name\":\"File Result\",\"branch_type\":\"feat\"}\n"), 0o600),
+				os.WriteFile(opts.Args[3], []byte("{\"name\":\"File Result\",\"branch_type\":\"feat\"}\n"), 0o600),
 			)
 			return subprocess.Result{Stdout: "stdout result\n"}, nil
 		})
 	repo := New(runner, Config{Binary: "codex"}, HookForwardingConfig{})
 
-	suggestion, err := repo.SuggestTaskName(t.Context(), "add billing retry flow")
+	suggestion, err := repo.SuggestTaskName(t.Context(), "add billing retry flow", nil)
 	require.NoError(t, err)
 	require.Equal(t, "File Result", suggestion.Name)
 	require.Equal(t, "feat", suggestion.BranchType)

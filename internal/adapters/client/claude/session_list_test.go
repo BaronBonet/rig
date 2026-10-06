@@ -42,7 +42,7 @@ func TestListFolderSessions_TitlesSessionsLikeClaudeCodeAndSortsByActivity(t *te
 	writeTranscriptAt(t, filepath.Join(projectDir, "custom", "subagents", "agent-a1.jsonl"), prompt("subagent"))
 
 	repo := &repository{claudeConfigDir: func() (string, error) { return configDir, nil }}
-	found, err := repo.ListFolderSessions(t.Context(), "/src/project/code", 10)
+	found, err := repo.ListFolderSessions(t.Context(), "/src/project/code", 10, nil)
 
 	require.NoError(t, err)
 	require.Equal(t, []core.ProviderSessionSummary{
@@ -62,7 +62,7 @@ func TestListFolderSessions_TitlesSessionsLikeClaudeCodeAndSortsByActivity(t *te
 		},
 	}, normalizeTimes(found))
 
-	limited, err := repo.ListFolderSessions(t.Context(), "/src/project/code", 1)
+	limited, err := repo.ListFolderSessions(t.Context(), "/src/project/code", 1, nil)
 	require.NoError(t, err)
 	require.Len(t, limited, 1)
 }
@@ -70,7 +70,7 @@ func TestListFolderSessions_TitlesSessionsLikeClaudeCodeAndSortsByActivity(t *te
 func TestListFolderSessions_ReturnsNothingForAFolderWithoutSessions(t *testing.T) {
 	repo := &repository{claudeConfigDir: func() (string, error) { return t.TempDir(), nil }}
 
-	found, err := repo.ListFolderSessions(t.Context(), "/src/never-used", 10)
+	found, err := repo.ListFolderSessions(t.Context(), "/src/never-used", 10, nil)
 
 	require.NoError(t, err)
 	require.Empty(t, found)
@@ -108,7 +108,7 @@ func TestListFolderSessions_IncludesSessionsStartedBelowTheFolder(t *testing.T) 
 		promptIn("/src/work/code/api", "fix the api"))
 
 	repo := &repository{claudeConfigDir: func() (string, error) { return configDir, nil }}
-	found, err := repo.ListFolderSessions(t.Context(), "/src/work/code", 10)
+	found, err := repo.ListFolderSessions(t.Context(), "/src/work/code", 10, nil)
 
 	require.NoError(t, err)
 	got := make(map[string]string, len(found))
@@ -130,10 +130,38 @@ func TestListFolderSessions_FromASubfolderSkipsItsParentsSessions(t *testing.T) 
 		`{"type":"user","cwd":"/src/work/code","message":{"role":"user","content":"parent work"}}`)
 	repo := &repository{claudeConfigDir: func() (string, error) { return configDir, nil }}
 
-	found, err := repo.ListFolderSessions(t.Context(), "/src/work/code/service", 10)
+	found, err := repo.ListFolderSessions(t.Context(), "/src/work/code/service", 10, nil)
 
 	require.NoError(t, err)
 	require.Empty(t, found)
+}
+
+func TestListFolderSessions_ReadsTheConfigurationTheEnvSelects(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	daemonDir, workDir := t.TempDir(), t.TempDir()
+	session := func(configDir string, id string) {
+		writeTranscriptAt(t, filepath.Join(configDir, "projects", "-src-work-code", id+".jsonl"),
+			`{"type":"user","cwd":"/src/work/code","message":{"role":"user","content":"work"}}`)
+	}
+	session(daemonDir, "daemon-account")
+	session(workDir, "work-account")
+	session(filepath.Join(home, ".claude"), "default-account")
+	repo := &repository{claudeConfigDir: func() (string, error) { return daemonDir, nil }}
+	listed := func(env core.ProviderEnv) []string {
+		found, err := repo.ListFolderSessions(t.Context(), "/src/work/code", 10, env)
+		require.NoError(t, err)
+		ids := make([]string, 0, len(found))
+		for _, session := range found {
+			ids = append(ids, session.SessionID)
+		}
+		return ids
+	}
+
+	require.Equal(t, []string{"work-account"}, listed(core.ProviderEnv{"CLAUDE_CONFIG_DIR": workDir}))
+	require.Equal(t, []string{"default-account"}, listed(core.ProviderEnv{"CLAUDE_CONFIG_DIR": ""}),
+		"a window without CLAUDE_CONFIG_DIR lists ~/.claude, not the daemon's configuration")
+	require.Equal(t, []string{"daemon-account"}, listed(nil))
 }
 
 func TestClaudeProjectDirName_ReplacesEveryNonAlphanumericCharacter(t *testing.T) {

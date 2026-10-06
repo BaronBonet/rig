@@ -28,9 +28,12 @@ func TestTaskService_ListImportableSessionsMergesProvidersAndSkipsOwnedSessions(
 		{TaskID: "task-1", Provider: ProviderClaude, ProviderSessionID: "claude-owned"},
 	}
 
-	sessions, err := svc.service.ListImportableSessions(t.Context(), "/src/code")
+	env := ProviderEnv{"CLAUDE_CONFIG_DIR": "/home/me/.claude-work", "CODEX_HOME": ""}
+	sessions, err := svc.service.ListImportableSessions(t.Context(), "/src/code", env)
 
 	require.NoError(t, err)
+	require.Equal(t, env, svc.claudeRepo.listEnv, "each provider lists from the window's configuration")
+	require.Equal(t, env, svc.providerRepo.listEnv)
 	ids := make([]string, 0, len(sessions))
 	for _, session := range sessions {
 		ids = append(ids, session.SessionID)
@@ -42,6 +45,7 @@ func TestTaskService_ImportSessionResumesItAsAFolderTask(t *testing.T) {
 	svc := newTestTaskService(t)
 	folder := t.TempDir()
 	lastActive := time.Date(2026, time.October, 2, 9, 0, 0, 0, time.UTC)
+	env := ProviderEnv{"CODEX_HOME": "/home/me/.codex-work"}
 
 	task, err := svc.service.ImportSession(t.Context(), ProviderSessionSummary{
 		LastActiveAt:   lastActive,
@@ -50,9 +54,12 @@ func TestTaskService_ImportSessionResumesItAsAFolderTask(t *testing.T) {
 		Title:          "search-integration",
 		Cwd:            folder,
 		TranscriptPath: "/codex/sessions/rollout-sess-42.jsonl",
-	})
+	}, env)
 
 	require.NoError(t, err)
+	require.Equal(t, env, svc.taskRepo.createdTask.ProviderEnv, "the task resumes from the store it was listed from")
+	require.Equal(t, env, svc.providerRepo.sessionEnvEnv)
+	require.Equal(t, env, svc.sessionClient.startedTask.ProviderEnv)
 	require.Equal(t, "search-integration", task.DisplayName)
 	require.True(t, task.UsesFolderWorkspace())
 	require.Equal(t, folder, task.WorktreePath)
@@ -87,7 +94,7 @@ func TestTaskService_ImportSessionRefusesASessionThatAlreadyBelongsToATask(t *te
 		Provider:  ProviderCodex,
 		SessionID: "sess-42",
 		Cwd:       t.TempDir(),
-	})
+	}, nil)
 
 	require.ErrorContains(t, err, "already belongs to a task")
 	require.Nil(t, svc.taskRepo.createdTask)
@@ -100,7 +107,7 @@ func TestTaskService_ImportSessionRefusesAMissingFolder(t *testing.T) {
 		Provider:  ProviderCodex,
 		SessionID: "sess-42",
 		Cwd:       "/nonexistent/folder",
-	})
+	}, nil)
 
 	require.ErrorContains(t, err, "not available")
 	require.Nil(t, svc.taskRepo.createdTask)
@@ -115,7 +122,7 @@ func TestTaskService_ImportSessionKeepsTheTaskWhenItsSessionFailsToStart(t *test
 		SessionID: "sess-42",
 		Title:     "search-integration",
 		Cwd:       t.TempDir(),
-	})
+	}, nil)
 
 	require.ErrorIs(t, err, errTestReconnect)
 	require.ErrorContains(t, err, "enter retries")

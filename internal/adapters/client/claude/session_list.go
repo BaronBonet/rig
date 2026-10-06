@@ -25,8 +25,9 @@ func (r *repository) ListFolderSessions(
 	ctx context.Context,
 	folder string,
 	limit int,
+	env core.ProviderEnv,
 ) ([]core.ProviderSessionSummary, error) {
-	configDir, err := r.resolveConfigDir()
+	configDir, err := r.resolveConfigDir(env)
 	if err != nil {
 		return nil, err
 	}
@@ -204,13 +205,27 @@ func claudeSessionTitle(path string) (string, error) {
 	return "", nil
 }
 
-func (r *repository) resolveConfigDir() (string, error) {
+// resolveConfigDir returns the configuration directory env selects, falling
+// back to the daemon's own when env does not decide it.
+func (r *repository) resolveConfigDir(env core.ProviderEnv) (string, error) {
+	if dir, decided := env.Lookup(configDirEnvVar); decided {
+		if dir != "" {
+			return dir, nil
+		}
+		return userConfigDir()
+	}
 	if r.claudeConfigDir != nil {
 		return r.claudeConfigDir()
 	}
-	if custom := strings.TrimSpace(os.Getenv("CLAUDE_CONFIG_DIR")); custom != "" {
+	if custom := strings.TrimSpace(os.Getenv(configDirEnvVar)); custom != "" {
 		return custom, nil
 	}
+	return userConfigDir()
+}
+
+// userConfigDir is where Claude Code keeps its configuration when
+// CLAUDE_CONFIG_DIR is unset.
+func userConfigDir() (string, error) {
 	home, err := os.UserHomeDir()
 	if err != nil {
 		return "", fmt.Errorf("resolve claude config dir: %w", err)

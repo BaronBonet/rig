@@ -44,10 +44,12 @@ type repoPullRequestsRequest struct {
 }
 
 type importableSessionsRequest struct {
-	Folder string `json:"folder"`
+	Env    core.ProviderEnv `json:"env,omitempty"`
+	Folder string           `json:"folder"`
 }
 
 type importSessionRequest struct {
+	Env     core.ProviderEnv            `json:"env,omitempty"`
 	Session core.ProviderSessionSummary `json:"session"`
 }
 
@@ -112,7 +114,7 @@ var opListImportableSessions = unaryOp[importableSessionsRequest, []core.Provide
 		svc core.TaskService,
 		req importableSessionsRequest,
 	) ([]core.ProviderSessionSummary, error) {
-		return svc.ListImportableSessions(ctx, req.Folder)
+		return svc.ListImportableSessions(ctx, req.Folder, req.Env)
 	},
 }
 
@@ -120,7 +122,7 @@ var opImportSession = unaryOp[importSessionRequest, importSessionResponse]{
 	command:  "import_session",
 	envelope: "session_imported",
 	call: func(ctx context.Context, svc core.TaskService, req importSessionRequest) (importSessionResponse, error) {
-		task, err := svc.ImportSession(ctx, req.Session)
+		task, err := svc.ImportSession(ctx, req.Session, req.Env)
 		if err != nil && task == nil {
 			return importSessionResponse{}, err
 		}

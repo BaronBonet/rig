@@ -168,23 +168,38 @@ func taskTokenUsageCmd(ctx context.Context, frontend core.TaskFrontend, taskID s
 	}
 }
 
-func listImportableSessionsCmd(ctx context.Context, frontend core.TaskFrontend, folder string) tea.Cmd {
+func listImportableSessionsCmd(
+	ctx context.Context,
+	frontend core.TaskFrontend,
+	folder string,
+	env core.ProviderEnv,
+) tea.Cmd {
 	return func() tea.Msg {
-		sessions, err := frontend.ListImportableSessions(ctx, folder)
+		sessions, err := frontend.ListImportableSessions(ctx, folder, env)
 		return importableSessionsLoadedMsg{err: err, sessions: sessions}
 	}
 }
 
-func importableCountCmd(ctx context.Context, frontend core.TaskFrontend, folder string) tea.Cmd {
+func importableCountCmd(
+	ctx context.Context,
+	frontend core.TaskFrontend,
+	folder string,
+	env core.ProviderEnv,
+) tea.Cmd {
 	return func() tea.Msg {
-		sessions, err := frontend.ListImportableSessions(ctx, folder)
+		sessions, err := frontend.ListImportableSessions(ctx, folder, env)
 		return importableCountLoadedMsg{err: err, count: len(sessions)}
 	}
 }
 
-func importSessionCmd(ctx context.Context, frontend core.TaskFrontend, session core.ProviderSessionSummary) tea.Cmd {
+func importSessionCmd(
+	ctx context.Context,
+	frontend core.TaskFrontend,
+	session core.ProviderSessionSummary,
+	env core.ProviderEnv,
+) tea.Cmd {
 	return func() tea.Msg {
-		task, err := frontend.ImportSession(ctx, session)
+		task, err := frontend.ImportSession(ctx, session, env)
 		return sessionImportedMsg{task: task, err: err}
 	}
 }

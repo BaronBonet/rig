@@ -4,7 +4,9 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"maps"
 	"os"
+	"slices"
 	"strings"
 	"time"
 
@@ -44,7 +46,7 @@ func (r *repository) StartTaskSession(ctx context.Context, task *core.Task, laun
 	// and fresh tasks need a new session created.
 	alreadyExists := r.sessionExists(ctx, task.TmuxSession)
 	if !alreadyExists {
-		if err := r.createSession(ctx, task.TmuxSession, task.WorktreePath, task.ID); err != nil {
+		if err := r.createSession(ctx, task.TmuxSession, task.WorktreePath, task.ID, task.ProviderEnv); err != nil {
 			return err
 		}
 	}
@@ -309,7 +311,11 @@ func (r *repository) DeleteTaskSession(ctx context.Context, task *core.Task) err
 	return err
 }
 
-func (r *repository) createSession(ctx context.Context, sessionName, workingDir, taskID string) error {
+func (r *repository) createSession(
+	ctx context.Context,
+	sessionName, workingDir, taskID string,
+	providerEnv core.ProviderEnv,
+) error {
 	sessionName = normalizedSessionName(sessionName)
 
 	args := []string{"new-session", "-d", "-s", sessionName, "-n", taskWindowName, "-c", workingDir}
@@ -317,6 +323,14 @@ func (r *repository) createSession(ctx context.Context, sessionName, workingDir,
 	// and through them the provider hooks that report back to Rig.
 	if taskID = strings.TrimSpace(taskID); taskID != "" {
 		args = append(args, "-e", core.TaskIDEnvVar+"="+taskID)
+	}
+	// So does the task's provider configuration, for providers started by
+	// hand in the session. tmux can only set variables, so one the task leaves
+	// unset is removed by the provider launch command instead.
+	for _, name := range slices.Sorted(maps.Keys(providerEnv)) {
+		if value, _ := providerEnv.Lookup(name); value != "" {
+			args = append(args, "-e", name+"="+value)
+		}
 	}
 
 	_, err := r.runner.Run(ctx, "", "tmux", args...)

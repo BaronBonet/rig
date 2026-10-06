@@ -30,13 +30,15 @@ type Dependencies struct {
 }
 
 // providerModule is one supported provider's composition entry: its client
-// constructor and its daemon hook routes. providerModules is the registry's
+// constructor, its daemon hook routes, and the environment variables that
+// choose its configuration. providerModules is the registry's
 // single provider list; adding a provider means adding one entry here (and to
 // core.SupportedProviders, which a registry test keeps in agreement).
 type providerModule struct {
-	provider core.Provider
-	client   func(Dependencies) core.ProviderClient
-	routes   func(core.HookEventHandler, func() time.Time, string) []core.TaskDaemonHookRoute
+	provider  core.Provider
+	client    func(Dependencies) core.ProviderClient
+	routes    func(core.HookEventHandler, func() time.Time, string) []core.TaskDaemonHookRoute
+	configEnv []string
 }
 
 var providerModules = []providerModule{
@@ -46,7 +48,8 @@ var providerModules = []providerModule{
 			hooks := codex.NewHookForwardingConfig(deps.HookListenAddr, deps.HookSecret)
 			return codex.New(deps.Runner, deps.Codex, hooks)
 		},
-		routes: codex.NewHookRoutes,
+		routes:    codex.NewHookRoutes,
+		configEnv: codex.ConfigEnvVars,
 	},
 	{
 		provider: core.ProviderClaude,
@@ -54,7 +57,8 @@ var providerModules = []providerModule{
 			hooks := claude.NewHookForwardingConfig(deps.HookListenAddr, deps.HookSecret)
 			return claude.New(deps.Runner, deps.Claude, hooks)
 		},
-		routes: claude.NewHookRoutes,
+		routes:    claude.NewHookRoutes,
+		configEnv: claude.ConfigEnvVars,
 	},
 }
 
@@ -68,6 +72,20 @@ func NewProviderClients(deps Dependencies) map[core.Provider]core.ProviderClient
 		clients[module.provider] = module.client(deps)
 	}
 	return clients
+}
+
+// CaptureProviderEnv reads every supported provider's configuration variables
+// through lookup, recording "" for an unset one, so the tasks a rig window
+// starts run with that window's provider accounts.
+func CaptureProviderEnv(lookup func(string) (string, bool)) core.ProviderEnv {
+	env := core.ProviderEnv{}
+	for _, module := range providerModules {
+		for _, name := range module.configEnv {
+			value, _ := lookup(name)
+			env[name] = strings.TrimSpace(value)
+		}
+	}
+	return env
 }
 
 // LoadOrCreateHookSecret returns the persistent secret provider hook
@@ -123,7 +141,7 @@ func RefreshProviderEnvironments(
 		if !ok {
 			continue
 		}
-		if err := providerClient.EnsureTaskSessionEnvironment(ctx); err != nil {
+		if err := providerClient.EnsureTaskSessionEnvironment(ctx, nil); err != nil {
 			errs = append(errs, fmt.Errorf("refresh %s session environment: %w", provider, err))
 		}
 	}

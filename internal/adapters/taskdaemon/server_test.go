@@ -30,6 +30,9 @@ type fakeTaskService struct {
 	worktrees  map[string][]core.TaskWorktree
 	importable []core.ProviderSessionSummary
 	imported   []core.ProviderSessionSummary
+	listEnv    core.ProviderEnv
+	importEnv  core.ProviderEnv
+	createEnv  core.ProviderEnv
 	importTask *core.Task
 	importErr  error
 	prs        map[string][]core.RepoPullRequest
@@ -90,6 +93,7 @@ func (f *fakeTaskService) CreateTaskStream(
 	input core.CreateTaskInput,
 ) (<-chan core.TaskCreateEvent, error) {
 	f.mu.Lock()
+	f.createEnv = input.ProviderEnv
 	f.tasks = append(f.tasks, f.createTask)
 	f.mu.Unlock()
 
@@ -142,9 +146,11 @@ func (f *fakeTaskService) GetTaskTokenUsage(_ context.Context, taskID string) (*
 func (f *fakeTaskService) ListImportableSessions(
 	_ context.Context,
 	folder string,
+	env core.ProviderEnv,
 ) ([]core.ProviderSessionSummary, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
+	f.listEnv = env
 	var sessions []core.ProviderSessionSummary
 	for _, session := range f.importable {
 		if session.Cwd == folder {
@@ -154,10 +160,15 @@ func (f *fakeTaskService) ListImportableSessions(
 	return sessions, f.errByOp["list_importable_sessions"]
 }
 
-func (f *fakeTaskService) ImportSession(_ context.Context, session core.ProviderSessionSummary) (*core.Task, error) {
+func (f *fakeTaskService) ImportSession(
+	_ context.Context,
+	session core.ProviderSessionSummary,
+	env core.ProviderEnv,
+) (*core.Task, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.imported = append(f.imported, session)
+	f.importEnv = env
 	return f.importTask, f.importErr
 }
 
@@ -361,9 +372,13 @@ func TestUnaryOperationsRoundTrip(t *testing.T) {
 	})
 
 	t.Run("list importable sessions", func(t *testing.T) {
-		sessions, err := client.ListImportableSessions(ctx, "/src/code")
+		env := core.ProviderEnv{"CLAUDE_CONFIG_DIR": "/home/me/.claude-work", "CODEX_HOME": ""}
+		sessions, err := client.ListImportableSessions(ctx, "/src/code", env)
 		require.NoError(t, err)
 		require.Equal(t, svc.importable, sessions)
+		svc.mu.Lock()
+		defer svc.mu.Unlock()
+		require.Equal(t, env, svc.listEnv, "an unset variable survives the socket")
 	})
 
 	t.Run("import session returns the task alongside a session start error", func(t *testing.T) {
@@ -372,12 +387,16 @@ func TestUnaryOperationsRoundTrip(t *testing.T) {
 		svc.importErr = errors.New("imported, but its session did not start")
 		svc.mu.Unlock()
 
-		task, err := client.ImportSession(ctx, svc.importable[0])
+		env := core.ProviderEnv{"CLAUDE_CONFIG_DIR": "/home/me/.claude-work"}
+		task, err := client.ImportSession(ctx, svc.importable[0], env)
 
 		require.ErrorContains(t, err, "session did not start")
 		require.NotNil(t, task)
 		require.Equal(t, "task-imported", task.ID)
 		require.Equal(t, svc.importable[0], svc.imported[0])
+		svc.mu.Lock()
+		defer svc.mu.Unlock()
+		require.Equal(t, env, svc.importEnv)
 	})
 
 	t.Run("list task worktrees requires task id", func(t *testing.T) {
@@ -499,9 +518,10 @@ func TestCreateTaskStreamRoundTrip(t *testing.T) {
 		client := startTestFrontend(t, svc)
 
 		events, err := client.CreateTaskStream(context.Background(), core.CreateTaskInput{
-			Cwd:      "/tmp/repo",
-			Prompt:   "add retries",
-			Provider: core.ProviderCodex,
+			Cwd:         "/tmp/repo",
+			Prompt:      "add retries",
+			Provider:    core.ProviderCodex,
+			ProviderEnv: core.ProviderEnv{"CODEX_HOME": "/home/me/.codex-work"},
 		})
 		require.NoError(t, err)
 
@@ -510,6 +530,9 @@ func TestCreateTaskStreamRoundTrip(t *testing.T) {
 			got = append(got, event)
 		}
 		require.Len(t, got, 3)
+		svc.mu.Lock()
+		require.Equal(t, core.ProviderEnv{"CODEX_HOME": "/home/me/.codex-work"}, svc.createEnv)
+		svc.mu.Unlock()
 		require.Equal(t, core.TaskCreateProgressSuggestingName, got[0].Progress.Step)
 		require.Equal(t, core.TaskCreateProgressCreatingWorktree, got[1].Progress.Step)
 		require.NotNil(t, got[2].Task)

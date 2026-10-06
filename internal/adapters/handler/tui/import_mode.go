@@ -26,7 +26,7 @@ func (m model) enterImportSessionMode() (tea.Model, tea.Cmd) {
 	}
 	m.err = nil
 	m.sessionImport = importState{folder: folder, loading: true}
-	return m, listImportableSessionsCmd(m.statusContext, m.frontend, folder)
+	return m, listImportableSessionsCmd(m.statusContext, m.frontend, folder, m.providerEnv)
 }
 
 // importHintCmd counts the importable sessions in the launch folder while the
@@ -37,7 +37,7 @@ func (m model) importHintCmd() tea.Cmd {
 	if len(m.rows) > 0 || folder == "" {
 		return nil
 	}
-	return importableCountCmd(m.statusContext, m.frontend, folder)
+	return importableCountCmd(m.statusContext, m.frontend, folder, m.providerEnv)
 }
 
 // importHintText invites importing the sessions an empty dashboard found.
@@ -71,7 +71,7 @@ func (m model) updateImportSession(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		}
 		m.beginOp(opImporting)
 		return m, tea.Batch(
-			importSessionCmd(m.statusContext, m.frontend, sessions[m.sessionImport.selected]),
+			importSessionCmd(m.statusContext, m.frontend, sessions[m.sessionImport.selected], m.providerEnv),
 			shimmerTickCmd(),
 		)
 	default:

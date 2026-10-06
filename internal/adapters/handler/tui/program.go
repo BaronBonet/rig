@@ -7,14 +7,18 @@ import (
 )
 
 // NewProgram creates the daemon-backed task TUI program backed by the task
-// frontend. It backs the bare `rig` command.
+// frontend. It backs the bare `rig` command. providerEnv is the provider
+// configuration of the terminal rig runs in, which its tasks inherit.
 func NewProgram(
 	frontend core.TaskFrontend,
 	launchCwd string,
 	buildVersion string,
+	providerEnv core.ProviderEnv,
 	opts ...tea.ProgramOption,
 ) *tea.Program {
-	return tea.NewProgram(newModel(frontend, launchCwd, buildVersion), opts...)
+	m := newModel(frontend, launchCwd, buildVersion)
+	m.providerEnv = providerEnv
+	return tea.NewProgram(m, opts...)
 }
 
 // NewSetupProgram creates a TUI program that runs only the provider setup

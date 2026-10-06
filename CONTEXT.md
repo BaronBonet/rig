@@ -29,6 +29,10 @@ Use `rig` for the CLI command and Rig for the product or system.
 - Session import: Making a provider session started outside Rig, in the launch
   folder or below it, a folder task in the folder the session was started in,
   and resuming it in the task's own Session through the reconnect path.
+- Provider configuration: The variables that choose a provider's account and
+  session store (CLAUDE_CONFIG_DIR, CODEX_HOME), captured from the rig window a
+  task came from and kept on the task, with an unset variable meaning the
+  provider's default.
 - Folder task: A task whose workspace is an existing folder, Git or not, used as
   it is. It has no branch of its own, may share its folder with other tasks,
   and is never seeded or removed by Rig.

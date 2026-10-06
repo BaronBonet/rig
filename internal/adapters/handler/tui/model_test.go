@@ -2378,7 +2378,9 @@ type frontendHarness struct {
 	listTaskWorktreesCalls      []string
 	importableSessions          []core.ProviderSessionSummary
 	importableSessionsFolder    string
+	importableSessionsEnv       core.ProviderEnv
 	importedSession             *core.ProviderSessionSummary
+	importEnv                   core.ProviderEnv
 	importTask                  *core.Task
 	importErr                   error
 	getTaskActivity             map[string][]core.TaskActivityEvent
@@ -2571,15 +2573,17 @@ func newFrontendHarness() *frontendHarness {
 			return frontend.getTaskTokenUsage[taskID], nil
 		},
 	).Maybe()
-	frontend.mock.EXPECT().ListImportableSessions(mock.Anything, mock.Anything).RunAndReturn(
-		func(_ context.Context, folder string) ([]core.ProviderSessionSummary, error) {
+	frontend.mock.EXPECT().ListImportableSessions(mock.Anything, mock.Anything, mock.Anything).RunAndReturn(
+		func(_ context.Context, folder string, env core.ProviderEnv) ([]core.ProviderSessionSummary, error) {
 			frontend.importableSessionsFolder = folder
+			frontend.importableSessionsEnv = env
 			return frontend.importableSessions, nil
 		},
 	).Maybe()
-	frontend.mock.EXPECT().ImportSession(mock.Anything, mock.Anything).RunAndReturn(
-		func(_ context.Context, session core.ProviderSessionSummary) (*core.Task, error) {
+	frontend.mock.EXPECT().ImportSession(mock.Anything, mock.Anything, mock.Anything).RunAndReturn(
+		func(_ context.Context, session core.ProviderSessionSummary, env core.ProviderEnv) (*core.Task, error) {
 			frontend.importedSession = &session
+			frontend.importEnv = env
 			return frontend.importTask, frontend.importErr
 		},
 	).Maybe()

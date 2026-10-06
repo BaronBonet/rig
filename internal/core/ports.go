@@ -41,6 +41,9 @@ type CreateTaskInput struct {
 	// Workspace requests a folder Task in Cwd. Empty creates a worktree Task
 	// when Cwd is inside a Git worktree and a folder Task otherwise.
 	Workspace WorkspaceKind `json:"workspace,omitempty"`
+	// ProviderEnv is the requesting rig window's provider configuration; the
+	// Task keeps it for every provider it launches.
+	ProviderEnv ProviderEnv `json:"provider_env,omitempty"`
 }
 
 type TaskCreateProgressStep string
@@ -181,13 +184,14 @@ type TaskService interface {
 	// has checked out now and the branch it had at the task's last edit there.
 	ListTaskWorktrees(ctx context.Context, taskID string) ([]TaskWorktree, error)
 	// ListImportableSessions returns the configured providers' sessions that
-	// were started in folder and do not belong to a task yet, most recently
-	// active first.
-	ListImportableSessions(ctx context.Context, folder string) ([]ProviderSessionSummary, error)
+	// were started in folder or below it and do not belong to a task yet, most
+	// recently active first, read from the session stores env points at.
+	ListImportableSessions(ctx context.Context, folder string, env ProviderEnv) ([]ProviderSessionSummary, error)
 	// ImportSession makes a provider session started outside Rig a folder task
-	// and resumes it in the task's own session. When the task is created but
-	// its session fails to start, both the task and the error are returned.
-	ImportSession(ctx context.Context, session ProviderSessionSummary) (*Task, error)
+	// that runs with env, the configuration the session was listed from, and
+	// resumes it in the task's own session. When the task is created but its
+	// session fails to start, both the task and the error are returned.
+	ImportSession(ctx context.Context, session ProviderSessionSummary, env ProviderEnv) (*Task, error)
 	// ListTasks returns all known tasks.
 	ListTasks(ctx context.Context) ([]*Task, error)
 	// LatestTaskStatus returns the latest published live status for a task, or
@@ -299,16 +303,18 @@ type ProviderClient interface {
 	// Doctor verifies that the provider dependency and provider-specific Rig
 	// integration are available.
 	Doctor(ctx context.Context) error
-	// SuggestTaskName derives a task display name and branch type from a prompt.
-	SuggestTaskName(ctx context.Context, prompt string) (TaskSuggestion, error)
+	// SuggestTaskName derives a task display name and branch type from a
+	// prompt, running the provider with env.
+	SuggestTaskName(ctx context.Context, prompt string, env ProviderEnv) (TaskSuggestion, error)
 	// EnsureTaskSessionEnvironment applies any provider-specific runtime
-	// configuration required before launching or resuming an interactive session.
-	EnsureTaskSessionEnvironment(ctx context.Context) error
+	// configuration required before launching or resuming an interactive
+	// session that runs with env.
+	EnsureTaskSessionEnvironment(ctx context.Context, env ProviderEnv) error
 	// BuildWorkspaceBootstrapSpec describes the provider-specific files that
 	// should be written into the task workspace before launch.
 	BuildWorkspaceBootstrapSpec(task *Task) (WorkspaceBootstrapSpec, error)
 	// BuildTaskSessionLaunchSpec describes how the provider's CLI should be
-	// started inside the task's tmux session.
+	// started inside the task's tmux session, with the task's ProviderEnv.
 	BuildTaskSessionLaunchSpec(task *Task) (TaskSessionLaunchSpec, error)
 	// BuildReconnectTaskSessionLaunchSpec describes how the provider's CLI
 	// should resume an existing logical session inside a recreated tmux session.
@@ -341,9 +347,9 @@ type ProviderClient interface {
 	ReadSessionFileChanges(ctx context.Context, session TaskProviderSession) ([]SessionFileChange, error)
 	// ListFolderSessions lists up to limit provider sessions started in folder
 	// or any folder below it, most recently active first, from the provider's
-	// own session store. Each session's Cwd is the folder it was started in,
-	// where it must be resumed.
-	ListFolderSessions(ctx context.Context, folder string, limit int) ([]ProviderSessionSummary, error)
+	// own session store, the one env points at. Each session's Cwd is the
+	// folder it was started in, where it must be resumed.
+	ListFolderSessions(ctx context.Context, folder string, limit int, env ProviderEnv) ([]ProviderSessionSummary, error)
 }
 
 // GitWorktreeClient manages the Git worktree operations needed by the new task

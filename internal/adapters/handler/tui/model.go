@@ -66,6 +66,10 @@ type model struct {
 	pending       pendingOp
 	opening       bool
 	launchCwd     string
+	// providerEnv is this rig window's provider configuration, sent with every
+	// request that lists sessions or starts a task so the shared daemon uses
+	// this window's accounts rather than its own.
+	providerEnv   core.ProviderEnv
 	buildVersion  string
 	loading       bool
 	detailsHidden bool
@@ -838,10 +842,11 @@ func (m model) submitPrompt() (model, tea.Cmd) {
 
 	return m, tea.Batch(
 		createTaskStreamCmd(m.statusContext, m.frontend, core.CreateTaskInput{
-			Cwd:       cwd,
-			Prompt:    prompt,
-			Provider:  provider,
-			Workspace: workspace,
+			Cwd:         cwd,
+			Prompt:      prompt,
+			Provider:    provider,
+			Workspace:   workspace,
+			ProviderEnv: m.providerEnv,
 		}),
 		shimmerTickCmd(),
 	)
@@ -991,6 +996,7 @@ func (m model) updatePRPicker(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 				Source: core.CreateTaskSource{
 					PullRequest: &selected,
 				},
+				ProviderEnv: m.providerEnv,
 			}),
 			shimmerTickCmd(),
 		)

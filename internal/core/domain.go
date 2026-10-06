@@ -35,6 +35,24 @@ type Task struct {
 	CreationStep   TaskCreateProgressStep `json:"creation_step"`
 	CreationError  string                 `json:"creation_error"`
 	WorkspaceKind  WorkspaceKind          `json:"workspace_kind"`
+	// ProviderEnv is the provider configuration the Task's providers run with.
+	ProviderEnv ProviderEnv `json:"provider_env,omitempty"`
+}
+
+// ProviderEnv is the provider configuration environment of the rig window a
+// Task came from: every variable the providers read their configuration
+// location from (CLAUDE_CONFIG_DIR, CODEX_HOME), with "" for one the window
+// left unset, so the provider's default applies. One daemon serves rig
+// windows started under different accounts, so a Task carries its own rather
+// than inheriting the daemon's. A variable the env does not name, and every
+// variable of a nil env, falls back to the daemon's environment.
+type ProviderEnv map[string]string
+
+// Lookup returns the value the env gives name and whether the env decides it;
+// "" with true means the variable must be unset.
+func (e ProviderEnv) Lookup(name string) (string, bool) {
+	value, ok := e[name]
+	return strings.TrimSpace(value), ok
 }
 
 // WorkspaceKind says how a Task's Workspace came to be, which decides what Rig

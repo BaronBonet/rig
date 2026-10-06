@@ -796,6 +796,7 @@ func TestRepositoryNew_MigratesDatabaseWithSquashedMigrationHistory(t *testing.T
 		"alter table task_status drop column background_other",
 		"drop table task_worktrees",
 		"alter table tasks drop column workspace_kind",
+		"alter table tasks drop column provider_env",
 		"delete from goose_db_version where version_id > 1",
 		"insert into goose_db_version (version_id, is_applied) values (2, 1), (3, 1), (4, 1), (5, 1)",
 	} {
@@ -918,6 +919,7 @@ func TestRepositoryNew_CreatesSchemaForTasksAndLatestStatuses(t *testing.T) {
 		"creation_step",
 		"creation_error",
 		"workspace_kind",
+		"provider_env",
 	}
 	if !reflect.DeepEqual(names, wantTasks) {
 		t.Fatalf("unexpected tasks columns:\n got: %#v\nwant: %#v", names, wantTasks)
@@ -1080,4 +1082,37 @@ func TestRepositoryTasks_PersistWorkspaceKind(t *testing.T) {
 		"task-folder":   core.WorkspaceKindFolder,
 		"task-worktree": core.WorkspaceKindWorktree,
 	}, kinds)
+}
+
+func TestRepositoryTasks_PersistProviderEnv(t *testing.T) {
+	repo := newTestRepository(t)
+	ctx := context.Background()
+	now := time.Date(2026, time.October, 2, 9, 0, 0, 0, time.UTC)
+	work := core.Task{
+		ID: "task-work", Slug: "work", RepoName: "code", Provider: core.ProviderClaude, CreatedAt: now, UpdatedAt: now,
+		ProviderEnv: core.ProviderEnv{"CLAUDE_CONFIG_DIR": "/home/me/.claude-work", "CODEX_HOME": ""},
+	}
+	legacy := core.Task{
+		ID: "task-legacy", Slug: "legacy", RepoName: "code", Provider: core.ProviderClaude, CreatedAt: now, UpdatedAt: now,
+	}
+	require.NoError(t, repo.CreateTask(ctx, &work))
+	require.NoError(t, repo.CreateTask(ctx, &legacy))
+
+	envs := func() map[string]core.ProviderEnv {
+		tasks, err := repo.ListTasks(ctx)
+		require.NoError(t, err)
+		byID := map[string]core.ProviderEnv{}
+		for _, task := range tasks {
+			byID[task.ID] = task.ProviderEnv
+		}
+		return byID
+	}
+	require.Equal(t, map[string]core.ProviderEnv{
+		"task-work":    {"CLAUDE_CONFIG_DIR": "/home/me/.claude-work", "CODEX_HOME": ""},
+		"task-legacy": nil,
+	}, envs(), "an unset variable is kept, and a task without an env still defers to the daemon")
+
+	work.ProviderEnv = core.ProviderEnv{"CLAUDE_CONFIG_DIR": ""}
+	require.NoError(t, repo.UpdateTask(ctx, &work))
+	require.Equal(t, core.ProviderEnv{"CLAUDE_CONFIG_DIR": ""}, envs()["task-work"])
 }

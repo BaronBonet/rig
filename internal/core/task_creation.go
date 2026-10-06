@@ -163,7 +163,7 @@ func (c *taskCreation) createTaskFromPrompt(
 	}
 
 	reportTaskCreateProgress(reporter, TaskCreateProgressSuggestingName)
-	suggestion, err := suggestTaskName(ctx, providerClient, input.Prompt)
+	suggestion, err := suggestTaskName(ctx, providerClient, input.Prompt, input.ProviderEnv)
 	if err != nil {
 		return nil, err
 	}
@@ -188,6 +188,7 @@ func (c *taskCreation) createTaskFromPrompt(
 		suggestion.BranchType,
 	)
 	task.Prompt = input.Prompt
+	task.ProviderEnv = input.ProviderEnv
 
 	if err := c.tasks.CreateTask(ctx, task); err != nil {
 		return nil, err
@@ -230,7 +231,7 @@ func (c *taskCreation) createFolderTask(
 	}
 
 	reportTaskCreateProgress(reporter, TaskCreateProgressSuggestingName)
-	suggestion, err := suggestTaskName(ctx, providerClient, input.Prompt)
+	suggestion, err := suggestTaskName(ctx, providerClient, input.Prompt, input.ProviderEnv)
 	if err != nil {
 		return nil, err
 	}
@@ -249,6 +250,7 @@ func (c *taskCreation) createFolderTask(
 		uniqueFolderTaskSlug(folder, label, suggestion.Name, existingTasks),
 	)
 	task.Prompt = input.Prompt
+	task.ProviderEnv = input.ProviderEnv
 
 	if err := c.tasks.CreateTask(ctx, task); err != nil {
 		return nil, err
@@ -307,6 +309,7 @@ func (c *taskCreation) createTaskFromPullRequest(
 		taskSlug,
 		pr.BranchName,
 	)
+	task.ProviderEnv = input.ProviderEnv
 	if err := c.tasks.CreateTask(ctx, task); err != nil {
 		return nil, err
 	}
@@ -438,8 +441,13 @@ func (c *taskCreation) taskCreateEventStream(
 	return events, nil
 }
 
-func suggestTaskName(ctx context.Context, providerClient ProviderClient, prompt string) (TaskSuggestion, error) {
-	suggestion, err := providerClient.SuggestTaskName(ctx, prompt)
+func suggestTaskName(
+	ctx context.Context,
+	providerClient ProviderClient,
+	prompt string,
+	env ProviderEnv,
+) (TaskSuggestion, error) {
+	suggestion, err := providerClient.SuggestTaskName(ctx, prompt, env)
 	if err != nil {
 		return TaskSuggestion{}, fmt.Errorf("suggest task name: %w", err)
 	}

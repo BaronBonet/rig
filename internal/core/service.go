@@ -395,7 +395,7 @@ func (s *service) reconnectTask(ctx context.Context, task *Task) error {
 		return err
 	}
 	_ = s.launcher.bootstrapConfiguredProviders(ctx, task, task.Provider)
-	if err := providerClient.EnsureTaskSessionEnvironment(ctx); err != nil {
+	if err := providerClient.EnsureTaskSessionEnvironment(ctx, task.ProviderEnv); err != nil {
 		return fmt.Errorf("ensure task session environment: %w", err)
 	}
 

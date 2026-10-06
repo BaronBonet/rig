@@ -35,12 +35,20 @@ func (f *frontend) GetTaskTokenUsage(ctx context.Context, taskID string) (*core.
 	return callUnary(ctx, f, opGetTaskTokenUsage, taskIDRequest{TaskID: taskID})
 }
 
-func (f *frontend) ListImportableSessions(ctx context.Context, folder string) ([]core.ProviderSessionSummary, error) {
-	return callUnary(ctx, f, opListImportableSessions, importableSessionsRequest{Folder: folder})
+func (f *frontend) ListImportableSessions(
+	ctx context.Context,
+	folder string,
+	env core.ProviderEnv,
+) ([]core.ProviderSessionSummary, error) {
+	return callUnary(ctx, f, opListImportableSessions, importableSessionsRequest{Env: env, Folder: folder})
 }
 
-func (f *frontend) ImportSession(ctx context.Context, session core.ProviderSessionSummary) (*core.Task, error) {
-	response, err := callUnary(ctx, f, opImportSession, importSessionRequest{Session: session})
+func (f *frontend) ImportSession(
+	ctx context.Context,
+	session core.ProviderSessionSummary,
+	env core.ProviderEnv,
+) (*core.Task, error) {
+	response, err := callUnary(ctx, f, opImportSession, importSessionRequest{Env: env, Session: session})
 	if err != nil {
 		return nil, err
 	}

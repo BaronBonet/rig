@@ -38,7 +38,14 @@ const (
 	claudeHookPath        = "/claude-hook"
 	defaultClaudeHooksURL = "http://127.0.0.1:4124" + claudeHookPath
 	workspaceSettingsPath = ".claude/settings.local.json"
+	// configDirEnvVar points Claude Code at a configuration directory other
+	// than ~/.claude, with its own login and sessions.
+	configDirEnvVar = "CLAUDE_CONFIG_DIR"
 )
+
+// ConfigEnvVars are the variables that choose which Claude Code
+// configuration, and so which account and sessions, a session uses.
+var ConfigEnvVars = []string{configDirEnvVar}
 
 // hookCatalog is Claude's hook event catalog: the one declaration of which
 // hook events Rig observes from Claude, how each is matched, and which
@@ -89,7 +96,7 @@ type repository struct {
 	hookSecret   string
 	fileChanges  transcriptEditCache
 	// claudeConfigDir overrides where Claude Code keeps its sessions; nil
-	// means CLAUDE_CONFIG_DIR or ~/.claude.
+	// means the task's CLAUDE_CONFIG_DIR, the daemon's, or ~/.claude.
 	claudeConfigDir func() (string, error)
 }
 
@@ -134,18 +141,18 @@ func (r *repository) Doctor(ctx context.Context) error {
 	return nil
 }
 
-func (r *repository) SuggestTaskName(ctx context.Context, prompt string) (core.TaskSuggestion, error) {
+func (r *repository) SuggestTaskName(
+	ctx context.Context,
+	prompt string,
+	env core.ProviderEnv,
+) (core.TaskSuggestion, error) {
 	fullPrompt := prompts.SuggestTaskPrompt + "\n\nTask description: " + prompt
 
-	result, err := r.runner.Run(
-		ctx,
-		"",
-		r.binary,
-		"-p",
-		"--output-format",
-		"text",
-		fullPrompt,
-	)
+	result, err := r.runner.RunWithStdin(ctx, subprocess.RunWithStdinOptions{
+		Env:  providerkit.EnvOverrides(env, ConfigEnvVars),
+		Name: r.binary,
+		Args: []string{"-p", "--output-format", "text", fullPrompt},
+	})
 	if suggestion, ok := providerkit.ParseSuggestion(result.Stdout, titleSkipPrefixes); ok {
 		return suggestion, nil
 	}
@@ -163,7 +170,7 @@ func (r *repository) SuggestTaskName(ctx context.Context, prompt string) (core.T
 // script. The script does not trigger by itself: hook registration is written
 // per task workspace by BuildWorkspaceBootstrapSpec, so Claude sessions
 // outside Rig workspaces never report to Rig.
-func (r *repository) EnsureTaskSessionEnvironment(context.Context) error {
+func (r *repository) EnsureTaskSessionEnvironment(context.Context, core.ProviderEnv) error {
 	scriptPath, err := r.forwarderScriptPath()
 	if err != nil {
 		return err
@@ -218,14 +225,14 @@ func (r *repository) BuildTaskSessionLaunchSpec(task *core.Task) (core.TaskSessi
 	}
 
 	return core.TaskSessionLaunchSpec{
-		Command:      []string{r.binary},
+		Command:      providerkit.EnvCommand(task.ProviderEnv, ConfigEnvVars, []string{r.binary}),
 		ReadyMarker:  readyMarker,
 		PrefillInput: prefillInput,
 	}, nil
 }
 
 func (r *repository) BuildReconnectTaskSessionLaunchSpec(
-	_ *core.Task,
+	task *core.Task,
 	sessionID string,
 ) (core.TaskSessionLaunchSpec, error) {
 	sessionID = strings.TrimSpace(sessionID)
@@ -233,8 +240,9 @@ func (r *repository) BuildReconnectTaskSessionLaunchSpec(
 		return core.TaskSessionLaunchSpec{}, fmt.Errorf("session ID is required")
 	}
 
+	// Claude Code finds a session in the configuration it was recorded in.
 	return core.TaskSessionLaunchSpec{
-		Command:     []string{r.binary, "--resume", sessionID},
+		Command:     providerkit.EnvCommand(task.ProviderEnv, ConfigEnvVars, []string{r.binary, "--resume", sessionID}),
 		ReadyMarker: readyMarker,
 	}, nil
 }

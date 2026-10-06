@@ -317,6 +317,7 @@ func runTUI(stdout io.Writer) error {
 		frontend,
 		sourceRoot,
 		displayVersion,
+		providerregistry.CaptureProviderEnv(os.LookupEnv),
 		tea.WithInput(os.Stdin),
 		tea.WithOutput(stdout),
 	)

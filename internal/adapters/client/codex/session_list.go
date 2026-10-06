@@ -23,8 +23,9 @@ func (r *repository) ListFolderSessions(
 	ctx context.Context,
 	folder string,
 	limit int,
+	env core.ProviderEnv,
 ) ([]core.ProviderSessionSummary, error) {
-	codexHome, err := r.resolveCodexHomeDir()
+	codexHome, err := r.resolveCodexHomeDir(env)
 	if err != nil {
 		return nil, err
 	}

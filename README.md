@@ -110,6 +110,22 @@ RIG_PROVIDER=claude rig
 not configured are ignored, so a missing `claude` binary never fails doctor
 unless you enabled Claude.
 
+### Several provider accounts
+
+Every `rig` window shares one daemon, but each window keeps the provider
+configuration of the terminal it was started in: `CLAUDE_CONFIG_DIR` for Claude
+Code and `CODEX_HOME` for Codex, for example as set by a direnv `.envrc` in a
+client's folder. The import picker lists sessions from that window's
+configuration, and every task it creates or imports runs its provider with it,
+including after a reconnect or a provider switch. A variable the window left
+unset gives the provider's default (`~/.claude`, `~/.codex`) even when the
+daemon, the tmux server or a direnv hook in the task's folder sets another.
+
+Rig starts the provider as `env CLAUDE_CONFIG_DIR=… claude` (or
+`env -u CLAUDE_CONFIG_DIR claude`) and also sets the variables on the task's
+tmux session, so a provider you start by hand there uses the same account.
+Tasks created before this existed keep using the daemon's environment.
+
 ## Provider Hooks
 
 Rig uses provider hooks to capture live task status, recent activity, provider

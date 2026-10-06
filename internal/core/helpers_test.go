@@ -144,6 +144,11 @@ type providerClientState struct {
 	tokenUsageCalls         []providerTokenUsageCall
 	builtLaunchSpecs        []TaskSessionLaunchSpec
 	folderSessions          []ProviderSessionSummary
+	// The provider env each call received, for asserting a task's
+	// configuration reaches its provider.
+	suggestEnv    ProviderEnv
+	sessionEnvEnv ProviderEnv
+	listEnv       ProviderEnv
 }
 
 func (s *providerClientState) mockCommandName() string {
@@ -461,8 +466,9 @@ func configureProviderClientMock(client *MockProviderClient, state *providerClie
 			return state.healthErr
 		},
 	).Maybe()
-	client.EXPECT().SuggestTaskName(mock.Anything, mock.Anything).RunAndReturn(
-		func(context.Context, string) (TaskSuggestion, error) {
+	client.EXPECT().SuggestTaskName(mock.Anything, mock.Anything, mock.Anything).RunAndReturn(
+		func(_ context.Context, _ string, env ProviderEnv) (TaskSuggestion, error) {
+			state.suggestEnv = env
 			if state.suggestErr != nil {
 				return TaskSuggestion{}, state.suggestErr
 			}
@@ -472,8 +478,9 @@ func configureProviderClientMock(client *MockProviderClient, state *providerClie
 			return TaskSuggestion{Name: state.suggestedName, BranchType: "feat"}, nil
 		},
 	).Maybe()
-	client.EXPECT().EnsureTaskSessionEnvironment(mock.Anything).RunAndReturn(
-		func(context.Context) error {
+	client.EXPECT().EnsureTaskSessionEnvironment(mock.Anything, mock.Anything).RunAndReturn(
+		func(_ context.Context, env ProviderEnv) error {
+			state.sessionEnvEnv = env
 			if state.events != nil {
 				*state.events = append(*state.events, "ensure_task_session_environment")
 			}
@@ -593,8 +600,9 @@ func configureProviderClientMock(client *MockProviderClient, state *providerClie
 			return append([]TaskActivityEvent(nil), events...), nil
 		},
 	).Maybe()
-	client.EXPECT().ListFolderSessions(mock.Anything, mock.Anything, mock.Anything).RunAndReturn(
-		func(_ context.Context, folder string, _ int) ([]ProviderSessionSummary, error) {
+	client.EXPECT().ListFolderSessions(mock.Anything, mock.Anything, mock.Anything, mock.Anything).RunAndReturn(
+		func(_ context.Context, folder string, _ int, env ProviderEnv) ([]ProviderSessionSummary, error) {
+			state.listEnv = env
 			var sessions []ProviderSessionSummary
 			for _, session := range state.folderSessions {
 				if session.Cwd == folder {
