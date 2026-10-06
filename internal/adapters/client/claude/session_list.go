@@ -16,9 +16,11 @@ import (
 	"github.com/BaronBonet/rig/internal/pkg/transcript"
 )
 
-// ListFolderSessions lists Claude Code sessions started in folder. Claude Code
-// keeps a folder's session transcripts in <config>/projects/<folder with every
-// non-alphanumeric character replaced by "-">/<session id>.jsonl.
+// ListFolderSessions lists Claude Code sessions started in folder or below it.
+// Claude Code keeps a folder's session transcripts in <config>/projects/<folder
+// with every non-alphanumeric character replaced by "-">/<session id>.jsonl.
+// That name is lossy ("/a/b-c" and "/a/b/c" share it, and so do siblings such
+// as "/a/b-old"), so each session's folder is read from its transcript.
 func (r *repository) ListFolderSessions(
 	ctx context.Context,
 	folder string,
@@ -29,35 +31,51 @@ func (r *repository) ListFolderSessions(
 		return nil, err
 	}
 	folder = filepath.Clean(strings.TrimSpace(folder))
-	projectDir := filepath.Join(configDir, "projects", claudeProjectDirName(folder))
-	entries, err := os.ReadDir(projectDir)
+	projectsDir := filepath.Join(configDir, "projects")
+	projects, err := os.ReadDir(projectsDir)
 	if err != nil {
 		if os.IsNotExist(err) {
 			return nil, nil
 		}
-		return nil, fmt.Errorf("list claude sessions in %q: %w", projectDir, err)
+		return nil, fmt.Errorf("list claude projects in %q: %w", projectsDir, err)
 	}
 
+	folderDir := claudeProjectDirName(folder)
+	belowDir := claudeProjectDirName(
+		strings.TrimSuffix(folder, string(filepath.Separator)) + string(filepath.Separator),
+	)
 	type candidate struct {
-		modTime time.Time
-		path    string
-		id      string
+		modTime    time.Time
+		path       string
+		id         string
+		projectDir string
 	}
-	candidates := make([]candidate, 0, len(entries))
-	for _, entry := range entries {
-		id, ok := strings.CutSuffix(entry.Name(), ".jsonl")
-		if entry.IsDir() || !ok {
+	var candidates []candidate
+	for _, project := range projects {
+		name := project.Name()
+		if !project.IsDir() || (name != folderDir && !strings.HasPrefix(name, belowDir)) {
 			continue
 		}
-		info, err := entry.Info()
+		entries, err := os.ReadDir(filepath.Join(projectsDir, name))
 		if err != nil {
 			continue
 		}
-		candidates = append(
-			candidates,
-			candidate{modTime: info.ModTime(), path: filepath.Join(projectDir, entry.Name()),
-				id: id},
-		)
+		for _, entry := range entries {
+			id, ok := strings.CutSuffix(entry.Name(), ".jsonl")
+			if entry.IsDir() || !ok {
+				continue
+			}
+			info, err := entry.Info()
+			if err != nil {
+				continue
+			}
+			candidates = append(candidates, candidate{
+				modTime:    info.ModTime(),
+				path:       filepath.Join(projectsDir, name, entry.Name()),
+				id:         id,
+				projectDir: name,
+			})
+		}
 	}
 	slices.SortFunc(candidates, func(a, b candidate) int { return b.modTime.Compare(a.modTime) })
 
@@ -68,6 +86,18 @@ func (r *repository) ListFolderSessions(
 		}
 		if err := ctx.Err(); err != nil {
 			return nil, err
+		}
+		cwd, err := claudeSessionCwd(candidate.path, candidate.projectDir)
+		if err != nil {
+			return nil, err
+		}
+		// A transcript that never recorded its folder can only be placed by an
+		// exact project match.
+		if cwd == "" && candidate.projectDir == folderDir {
+			cwd = folder
+		}
+		if cwd == "" || !core.FolderContains(folder, cwd) {
+			continue
 		}
 		title, err := claudeSessionTitle(candidate.path)
 		if err != nil {
@@ -82,11 +112,38 @@ func (r *repository) ListFolderSessions(
 			Provider:       core.ProviderClaude,
 			SessionID:      candidate.id,
 			Title:          title,
-			Cwd:            folder,
+			Cwd:            cwd,
 			TranscriptPath: candidate.path,
 		})
 	}
 	return sessions, nil
+}
+
+// claudeSessionCwd returns the folder a session was started in, which is where
+// `claude --resume` finds it. Transcript lines record the working directory at
+// the time, and a session can move into other folders, so the first one that
+// names the session's project directory wins; failing that, the first one
+// recorded. It returns "" when the transcript's start records no folder.
+func claudeSessionCwd(path string, projectDir string) (string, error) {
+	head, err := transcript.Head(path)
+	if err != nil {
+		return "", err
+	}
+	first := ""
+	for _, line := range head {
+		var record struct {
+			Cwd string `json:"cwd"`
+		}
+		if json.Unmarshal(line, &record) != nil || !filepath.IsAbs(record.Cwd) {
+			continue
+		}
+		cwd := filepath.Clean(record.Cwd)
+		if claudeProjectDirName(cwd) == projectDir {
+			return cwd, nil
+		}
+		first = cmp.Or(first, cwd)
+	}
+	return first, nil
 }
 
 var nonAlphanumeric = regexp.MustCompile(`[^a-zA-Z0-9]`)

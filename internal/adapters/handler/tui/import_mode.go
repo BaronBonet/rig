@@ -2,14 +2,17 @@ package tui
 
 import (
 	"fmt"
+	"path/filepath"
 	"strings"
 	"time"
+
+	"charm.land/lipgloss/v2"
 
 	tea "charm.land/bubbletea/v2"
 )
 
-// enterImportSessionMode opens the picker of provider sessions started in the
-// launch folder outside Rig, so they can be resumed as tasks.
+// enterImportSessionMode opens the picker of provider sessions started outside
+// Rig in the launch folder or below it, so they can be resumed as tasks.
 func (m model) enterImportSessionMode() (tea.Model, tea.Cmd) {
 	if m.pending != opNone {
 		return m, nil
@@ -92,7 +95,8 @@ func (m model) importSessionView() string {
 	case m.sessionImport.err != nil:
 		builder.WriteString(errorBlock(m.sessionImport.err))
 	case len(m.sessionImport.sessions) == 0:
-		builder.WriteString(dimStyle.Render("No sessions started in this folder are left to import.") + "\n")
+		builder.WriteString(dimStyle.Render("No sessions started in this folder or below it are left to import.") +
+			"\n")
 	default:
 		builder.WriteString(dimStyle.Render("Resume a session as a task. Close its old pane first: one "+
 			"conversation must not run in two places.") + "\n\n")
@@ -111,8 +115,14 @@ func (m model) importSessionView() string {
 				titleStyle = primaryStyle
 			}
 			provider := padRightVisible(string(session.Provider), 8)
+			location := ""
+			if subfolder := sessionSubfolder(m.sessionImport.folder, session.Cwd); subfolder != "" {
+				location = truncateStr(subfolder, width/2) + " · "
+			}
+			titleWidth := max(width-lipgloss.Width(location), 0)
 			builder.WriteString(cursor + providerStyle(string(session.Provider)).Render(provider) +
-				titleStyle.Render(padRightVisible(truncateStr(session.Title, width), width)) +
+				dimStyle.Render(location) +
+				titleStyle.Render(padRightVisible(truncateStr(session.Title, titleWidth), titleWidth)) +
 				mutedStyle.Render(sessionAgeText(session.LastActiveAt)) + "\n")
 		}
 		if end < len(sessions) {
@@ -126,6 +136,19 @@ func (m model) importSessionView() string {
 		[2]string{"esc", "cancel"},
 	))
 	return builder.String()
+}
+
+// sessionSubfolder names the folder below the launch folder a session was
+// started in, where importing resumes it; "" for the launch folder itself.
+func sessionSubfolder(folder string, cwd string) string {
+	if cwd == "" {
+		return ""
+	}
+	rel, err := filepath.Rel(folder, cwd)
+	if err != nil || rel == "." {
+		return ""
+	}
+	return rel
 }
 
 // importListRows is how many sessions fit between the picker's header and

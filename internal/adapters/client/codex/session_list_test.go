@@ -64,6 +64,29 @@ func TestListFolderSessions_ListsRootCodexSessionsStartedInTheFolder(t *testing.
 	require.Equal(t, "review the service endpoints", found[1].Title)
 }
 
+func TestListFolderSessions_IncludesSessionsStartedBelowTheFolder(t *testing.T) {
+	codexHome := t.TempDir()
+	day := filepath.Join(codexHome, "sessions", "2026", "10", "02")
+	base := time.Date(2026, time.October, 2, 9, 0, 0, 0, time.UTC)
+	prompt := `{"type":"event_msg","payload":{"type":"user_message","message":"work"}}`
+	writeRollout(t, filepath.Join(day, "rollout-below.jsonl"), base,
+		sessionMeta("thread-below", "/src/work/code/service", `"cli"`), prompt)
+	writeRollout(t, filepath.Join(day, "rollout-sibling.jsonl"), base.Add(time.Minute),
+		sessionMeta("thread-sibling", "/src/work/code-old", `"cli"`), prompt)
+	writeRollout(t, filepath.Join(day, "rollout-parent.jsonl"), base.Add(2*time.Minute),
+		sessionMeta("thread-parent", "/src/work", `"cli"`), prompt)
+	writeRollout(t, filepath.Join(day, "rollout-relative.jsonl"), base.Add(3*time.Minute),
+		sessionMeta("thread-relative", "service", `"cli"`), prompt)
+
+	repo := &repository{codexHomeDir: func() (string, error) { return codexHome, nil }}
+	found, err := repo.ListFolderSessions(t.Context(), "/src/work/code", 10)
+
+	require.NoError(t, err)
+	require.Len(t, found, 1)
+	require.Equal(t, "thread-below", found[0].SessionID)
+	require.Equal(t, "/src/work/code/service", found[0].Cwd)
+}
+
 func TestListFolderSessions_ToleratesAMissingSessionsFolder(t *testing.T) {
 	repo := &repository{codexHomeDir: func() (string, error) { return t.TempDir(), nil }}
 

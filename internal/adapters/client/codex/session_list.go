@@ -15,10 +15,10 @@ import (
 	"github.com/BaronBonet/rig/internal/pkg/transcript"
 )
 
-// ListFolderSessions lists Codex sessions started in folder. Codex keeps one
-// rollout per session under <codex home>/sessions/YYYY/MM/DD/, and the first
-// line of each names its folder. Subagent rollouts are skipped: they resume
-// through their parent.
+// ListFolderSessions lists Codex sessions started in folder or below it. Codex
+// keeps one rollout per session under <codex home>/sessions/YYYY/MM/DD/, and
+// the first line of each names its folder. Subagent rollouts are skipped: they
+// resume through their parent.
 func (r *repository) ListFolderSessions(
 	ctx context.Context,
 	folder string,
@@ -71,7 +71,7 @@ func (r *repository) ListFolderSessions(
 		if err != nil {
 			return nil, err
 		}
-		id, ok := codexRootSessionIn(head, folder)
+		id, cwd, ok := codexRootSessionIn(head, folder)
 		if !ok {
 			continue
 		}
@@ -84,18 +84,19 @@ func (r *repository) ListFolderSessions(
 			Provider:       core.ProviderCodex,
 			SessionID:      id,
 			Title:          title,
-			Cwd:            folder,
+			Cwd:            cwd,
 			TranscriptPath: candidate.path,
 		})
 	}
 	return sessions, nil
 }
 
-// codexRootSessionIn returns the session ID from a rollout's session_meta line
-// when the session was started in folder and is not a subagent.
-func codexRootSessionIn(head [][]byte, folder string) (string, bool) {
+// codexRootSessionIn returns the session ID and folder from a rollout's
+// session_meta line when the session was started in folder or below it and is
+// not a subagent.
+func codexRootSessionIn(head [][]byte, folder string) (string, string, bool) {
 	if len(head) == 0 {
-		return "", false
+		return "", "", false
 	}
 	var meta struct {
 		Type    string `json:"type"`
@@ -106,18 +107,19 @@ func codexRootSessionIn(head [][]byte, folder string) (string, bool) {
 		} `json:"payload"`
 	}
 	if json.Unmarshal(head[0], &meta) != nil || meta.Type != "session_meta" {
-		return "", false
+		return "", "", false
 	}
 	// Interactive sessions record their source as a string ("cli", "vscode");
 	// subagents record an object naming their parent.
 	var source string
 	if len(meta.Payload.Source) > 0 && json.Unmarshal(meta.Payload.Source, &source) != nil {
-		return "", false
+		return "", "", false
 	}
-	if filepath.Clean(meta.Payload.Cwd) != folder || strings.TrimSpace(meta.Payload.ID) == "" {
-		return "", false
+	cwd := filepath.Clean(meta.Payload.Cwd)
+	if !core.FolderContains(folder, cwd) || strings.TrimSpace(meta.Payload.ID) == "" {
+		return "", "", false
 	}
-	return strings.TrimSpace(meta.Payload.ID), true
+	return strings.TrimSpace(meta.Payload.ID), cwd, true
 }
 
 // codexFirstPrompt returns the session's first user prompt as a title. Codex

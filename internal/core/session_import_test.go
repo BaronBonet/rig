@@ -123,6 +123,16 @@ func TestTaskService_ImportSessionKeepsTheTaskWhenItsSessionFailsToStart(t *test
 	require.NotNil(t, svc.taskRepo.createdTask)
 }
 
+func TestFolderContains_MatchesTheFolderAndEverythingBelowIt(t *testing.T) {
+	require.True(t, FolderContains("/src/code", "/src/code"))
+	require.True(t, FolderContains("/src/code", "/src/code/api"))
+	require.True(t, FolderContains("/src/code", "/src/code/..hidden"))
+	require.True(t, FolderContains("/", "/src"))
+	require.False(t, FolderContains("/src/code", "/src/code-old"))
+	require.False(t, FolderContains("/src/code", "/src"))
+	require.False(t, FolderContains("/src/code", "/elsewhere"))
+}
+
 var errTestReconnect = testError("resume command unavailable")
 
 type testError string

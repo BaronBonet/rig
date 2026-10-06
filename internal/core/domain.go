@@ -3,6 +3,8 @@ package core
 import (
 	"fmt"
 	"os"
+	"path/filepath"
+	"strings"
 	"time"
 )
 
@@ -266,6 +268,13 @@ type ProviderSessionSummary struct {
 	Title          string    `json:"title"`
 	Cwd            string    `json:"cwd"`
 	TranscriptPath string    `json:"transcript_path"`
+}
+
+// FolderContains reports whether path is folder itself or lies below it. Both
+// are clean absolute paths.
+func FolderContains(folder string, path string) bool {
+	rel, err := filepath.Rel(folder, path)
+	return err == nil && rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator))
 }
 
 // SessionFileChange is one file edit a Provider session made, recovered from

@@ -182,9 +182,11 @@ a task.
 ### Importing sessions
 
 Press `i` to list the Claude Code and Codex sessions that were started in the
-folder you launched `rig` from and do not belong to a task yet, newest first,
-named the way the provider names them. Importing one creates a folder task and
-resumes the session in the task's own tmux session (`claude --resume <id>` or
+folder you launched `rig` from, or in any folder below it, and do not belong to
+a task yet, newest first, named the way the provider names them. A session
+started in a subfolder shows that subfolder before its name. Importing one
+creates a folder task in the folder the session was started in and resumes the
+session in the task's own tmux session (`claude --resume <id>` or
 `codex resume <id>`), with its history, token usage and worktrees already
 known. Close the session where it was running first: one conversation must not
 run in two places. If the session fails to start, the task is still created and

@@ -88,6 +88,25 @@ func TestImportMode_ShowsTheImportedTaskEvenWhenItsSessionDidNotStart(t *testing
 	require.Equal(t, "task-imported", taskID(m.rows[m.selected].task))
 }
 
+func TestImportMode_NamesTheSubfolderASessionWasStartedIn(t *testing.T) {
+	frontend := newFrontendHarness()
+	frontend.importableSessions = []core.ProviderSessionSummary{
+		{Provider: core.ProviderClaude, SessionID: "sess-1", Title: "review the service", Cwd: "/tmp/repo/service"},
+		{Provider: core.ProviderClaude, SessionID: "sess-2", Title: "plan the quarter", Cwd: "/tmp/repo"},
+	}
+	m := newLoadedModel(frontend)
+
+	next, cmd := m.Update(tea.KeyPressMsg{Code: 'i', Text: "i"})
+	m, _ = next.(model)
+	next, _ = m.Update(runCmd(t, cmd))
+	m, ok := next.(model)
+	require.True(t, ok)
+
+	view := stripANSI(m.View().Content)
+	require.Contains(t, view, "> claude  service · review the service")
+	require.Contains(t, view, "  claude  plan the quarter")
+}
+
 func TestImportMode_EscReturnsToTheTaskList(t *testing.T) {
 	frontend := newFrontendHarness()
 	m := newLoadedModel(frontend)

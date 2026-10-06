@@ -26,7 +26,8 @@ Use `rig` for the CLI command and Rig for the product or system.
   Task operation may run for a Task at a time; unrelated Tasks remain independent.
 - Workspace: The local filesystem environment where a task runs.
 - Worktree: A git worktree used to isolate task changes from the main checkout.
-- Session import: Making a provider session started outside Rig a folder task
+- Session import: Making a provider session started outside Rig, in the launch
+  folder or below it, a folder task in the folder the session was started in,
   and resuming it in the task's own Session through the reconnect path.
 - Folder task: A task whose workspace is an existing folder, Git or not, used as
   it is. It has no branch of its own, may share its folder with other tasks,
