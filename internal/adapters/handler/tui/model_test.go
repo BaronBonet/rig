@@ -1008,6 +1008,7 @@ func TestModel_TokenUsageLoadedRendersInSelectedTaskDetail(t *testing.T) {
 		taskID: "task-1",
 		usage: &core.TaskTokenUsage{
 			SessionCount:             2,
+			ContextTokens:            45,
 			InputTokens:              130,
 			OutputTokens:             60,
 			CachedInputTokens:        30,
@@ -1021,18 +1022,10 @@ func TestModel_TokenUsageLoadedRendersInSelectedTaskDetail(t *testing.T) {
 	require.True(t, ok)
 	view := stripANSI(got.selectedTaskDetailView())
 	require.Contains(t, view, "TOKENS")
-	require.Contains(t, view, "total 190")
-	require.Contains(t, view, "input 130")
-	require.Contains(t, view, "output 60")
-	require.Contains(t, view, "cached 30")
-	require.Contains(t, view, "cache created 15")
-	require.Contains(t, view, "reasoning 10")
-	require.Contains(t, view, "190")
-	require.Contains(t, view, "2 sessions")
 	require.Contains(
 		t,
 		view,
-		"total 190   input 130   output 60   cached 30   cache created 15   reasoning 10   2 sessions",
+		"context 45   output 60   input 130   cache reads 30   cache writes 15   reasoning 10   processed 190   2 sessions",
 	)
 	require.Less(t, strings.Index(view, "SESSION"), strings.Index(view, "TOKENS"))
 	require.Less(t, strings.Index(view, "TOKENS"), strings.Index(view, "INITIAL PROMPT"))
@@ -2610,4 +2603,14 @@ func newFrontendHarness() *frontendHarness {
 		},
 	).Maybe()
 	return frontend
+}
+
+func TestTaskRow_ShowsContextSizeAndOutputInsteadOfTheProcessedTotal(t *testing.T) {
+	text := stripANSI(taskTokenUsageRowText(&core.TaskTokenUsage{
+		ContextTokens: 428_000, OutputTokens: 1_700_000, CachedInputTokens: 597_000_000, TotalTokens: 612_100_000,
+	}))
+
+	require.Equal(t, "ctx 428.0k · out 1.7m", text)
+	require.Equal(t, "out 2.0k", stripANSI(taskTokenUsageRowText(&core.TaskTokenUsage{OutputTokens: 2000})),
+		"a session that has not reported its context yet")
 }

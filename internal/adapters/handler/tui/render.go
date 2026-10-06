@@ -1023,12 +1023,22 @@ func taskWorktreesDetailLines(worktrees []core.TaskWorktree, width int) []string
 	return lines
 }
 
+// taskTokenUsageRowText shows how full the task's context is and how much
+// its provider wrote. The summed total is left to the detail view: every
+// request re-reads the whole cached conversation, so it runs to hundreds of
+// millions and says little about the session.
 func taskTokenUsageRowText(usage *core.TaskTokenUsage) string {
-	if usage == nil || usage.TotalTokens <= 0 {
+	if usage == nil {
 		return ""
 	}
-
-	return mutedStyle.Render(formatTokenCount(usage.TotalTokens) + " tok")
+	var parts []string
+	if usage.ContextTokens > 0 {
+		parts = append(parts, "ctx "+formatTokenCount(usage.ContextTokens))
+	}
+	if usage.OutputTokens > 0 {
+		parts = append(parts, "out "+formatTokenCount(usage.OutputTokens))
+	}
+	return mutedStyle.Render(strings.Join(parts, " · "))
 }
 
 func taskTokenUsageDetailLines(usage *core.TaskTokenUsage) []string {
@@ -1041,14 +1051,14 @@ func taskTokenUsageDetailLines(usage *core.TaskTokenUsage) []string {
 		sessionLabel = "sessions"
 	}
 
-	fields := []string{
-		tokenUsageField("total", usage.TotalTokens),
-	}
-	fields = appendPositiveTokenUsageField(fields, "input", usage.InputTokens)
+	var fields []string
+	fields = appendPositiveTokenUsageField(fields, "context", usage.ContextTokens)
 	fields = appendPositiveTokenUsageField(fields, "output", usage.OutputTokens)
-	fields = appendPositiveTokenUsageField(fields, "cached", usage.CachedInputTokens)
-	fields = appendPositiveTokenUsageField(fields, "cache created", usage.CacheCreationInputTokens)
+	fields = appendPositiveTokenUsageField(fields, "input", usage.InputTokens)
+	fields = appendPositiveTokenUsageField(fields, "cache reads", usage.CachedInputTokens)
+	fields = appendPositiveTokenUsageField(fields, "cache writes", usage.CacheCreationInputTokens)
 	fields = appendPositiveTokenUsageField(fields, "reasoning", usage.ReasoningOutputTokens)
+	fields = append(fields, tokenUsageField("processed", usage.TotalTokens))
 	fields = append(fields, mutedStyle.Render(strconv.Itoa(usage.SessionCount)+" "+sessionLabel))
 
 	return []string{

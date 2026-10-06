@@ -216,6 +216,14 @@ run in two places. If the session fails to start, the task is still created and
 Rig never imports on its own, but an empty dashboard says how many sessions in
 the launch folder can be imported.
 
+### Tokens per task
+
+A task row shows how full the context of its most recently active session is
+(`ctx`) and how many tokens its provider has written (`out`). The detail view
+adds the summed counts: every request re-reads the whole cached conversation,
+so the processed total runs to hundreds of millions on a long session and is
+mostly cache reads.
+
 ### Worktrees per task
 
 A task row lists the worktrees its provider sessions have edited, most recently

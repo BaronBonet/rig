@@ -336,6 +336,7 @@ func codexTranscriptEnvelopeTokenUsage(envelope codexTranscriptEnvelope) *core.S
 		return nil
 	}
 	return &core.SessionTokenUsage{
+		ContextTokens:            payload.Info.LastTokenUsage.InputTokens,
 		InputTokens:              total.InputTokens,
 		OutputTokens:             total.OutputTokens,
 		CachedInputTokens:        total.CachedInputTokens,

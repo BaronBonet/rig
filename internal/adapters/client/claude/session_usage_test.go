@@ -35,12 +35,30 @@ func TestReadSessionTokenUsage_SumsUsageAcrossAssistantMessages(t *testing.T) {
 
 	require.NoError(t, err)
 	require.Equal(t, &core.SessionTokenUsage{
+		ContextTokens:            735,
 		InputTokens:              130,
 		OutputTokens:             100,
 		CachedInputTokens:        1200,
 		CacheCreationInputTokens: 15,
 		TotalTokens:              1445,
 	}, usage)
+}
+
+func TestReadSessionTokenUsage_ContextIsTheLatestMainConversationRequest(t *testing.T) {
+	repo, _ := newTestRepository(t, subprocess.NewMockRunner(t))
+	transcript := writeTranscript(t,
+		`{"type":"assistant","message":{"id":"msg_1","usage":{"input_tokens":2,"output_tokens":40,`+
+			`"cache_creation_input_tokens":8000,"cache_read_input_tokens":420000}}}`,
+		// A sidechain request runs in its own, smaller context.
+		`{"type":"assistant","isSidechain":true,"message":{"id":"msg_2","usage":{"input_tokens":3,`+
+			`"output_tokens":10,"cache_creation_input_tokens":0,"cache_read_input_tokens":15000}}}`,
+	)
+
+	usage, err := repo.ReadSessionTokenUsage(t.Context(), transcript)
+
+	require.NoError(t, err)
+	require.Equal(t, 428002, usage.ContextTokens)
+	require.Equal(t, 50, usage.OutputTokens)
 }
 
 func TestReadSessionTokenUsage_CountsRepeatedMessageIDsOnce(t *testing.T) {

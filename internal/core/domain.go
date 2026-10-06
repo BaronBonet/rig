@@ -229,6 +229,9 @@ type TaskProviderSession struct {
 }
 
 type SessionTokenUsage struct {
+	// ContextTokens is the size of the session's latest request: how full its
+	// context window is now. The other counts add up every request.
+	ContextTokens            int `json:"context_tokens"`
 	InputTokens              int `json:"input_tokens"`
 	OutputTokens             int `json:"output_tokens"`
 	CachedInputTokens        int `json:"cached_input_tokens"`
@@ -238,7 +241,8 @@ type SessionTokenUsage struct {
 }
 
 func (u SessionTokenUsage) IsZero() bool {
-	return u.InputTokens == 0 &&
+	return u.ContextTokens == 0 &&
+		u.InputTokens == 0 &&
 		u.OutputTokens == 0 &&
 		u.CachedInputTokens == 0 &&
 		u.CacheCreationInputTokens == 0 &&
@@ -247,7 +251,10 @@ func (u SessionTokenUsage) IsZero() bool {
 }
 
 type TaskTokenUsage struct {
-	SessionCount             int `json:"session_count"`
+	SessionCount int `json:"session_count"`
+	// ContextTokens is the context size of the task's most recently active
+	// session; the other counts add up all its sessions.
+	ContextTokens            int `json:"context_tokens"`
 	InputTokens              int `json:"input_tokens"`
 	OutputTokens             int `json:"output_tokens"`
 	CachedInputTokens        int `json:"cached_input_tokens"`
@@ -258,6 +265,7 @@ type TaskTokenUsage struct {
 
 func (u TaskTokenUsage) IsZero() bool {
 	return u.SessionCount == 0 &&
+		u.ContextTokens == 0 &&
 		u.InputTokens == 0 &&
 		u.OutputTokens == 0 &&
 		u.CachedInputTokens == 0 &&

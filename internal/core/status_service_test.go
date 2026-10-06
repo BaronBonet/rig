@@ -150,6 +150,7 @@ func TestTaskStatusService_GetTaskTokenUsageSumsLatestTranscriptPerProviderSessi
 			TotalTokens:  100,
 		},
 		"/tmp/codex-a-resumed.jsonl": {
+			ContextTokens:            900,
 			InputTokens:              100,
 			CachedInputTokens:        25,
 			CacheCreationInputTokens: 15,
@@ -158,6 +159,7 @@ func TestTaskStatusService_GetTaskTokenUsageSumsLatestTranscriptPerProviderSessi
 			TotalTokens:              140,
 		},
 		"/tmp/codex-b.jsonl": {
+			ContextTokens:            300,
 			InputTokens:              30,
 			CachedInputTokens:        5,
 			CacheCreationInputTokens: 10,
@@ -170,6 +172,7 @@ func TestTaskStatusService_GetTaskTokenUsageSumsLatestTranscriptPerProviderSessi
 	require.NoError(t, err)
 	require.Equal(t, &TaskTokenUsage{
 		SessionCount:             2,
+		ContextTokens:            900, // the most recently active session's
 		InputTokens:              130,
 		CachedInputTokens:        30,
 		CacheCreationInputTokens: 25,

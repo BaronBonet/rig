@@ -17,7 +17,8 @@ import (
 // ReadSessionTokenUsage sums per-request token usage from a Claude Code
 // transcript. Each assistant API request reports its own usage; one logical
 // message spans multiple transcript lines that repeat identical usage, so
-// usage is counted once per message ID.
+// usage is counted once per message ID. The context size is the prompt of the
+// latest main-conversation request, which re-sends the whole conversation.
 func (r *repository) ReadSessionTokenUsage(
 	ctx context.Context,
 	transcriptPath string,
@@ -50,6 +51,9 @@ func (r *repository) ReadSessionTokenUsage(
 		seen[key] = true
 
 		usage := entry.Message.Usage
+		if !entry.IsSidechain {
+			total.ContextTokens = usage.InputTokens + usage.CacheReadInputTokens + usage.CacheCreationInputTokens
+		}
 		total.InputTokens += usage.InputTokens
 		total.OutputTokens += usage.OutputTokens
 		total.CachedInputTokens += usage.CacheReadInputTokens
@@ -70,9 +74,10 @@ func (r *repository) ReadSessionTokenUsage(
 }
 
 type claudeTranscriptLine struct {
-	Type      string `json:"type"`
-	RequestID string `json:"requestId"`
-	Message   struct {
+	Type        string `json:"type"`
+	RequestID   string `json:"requestId"`
+	IsSidechain bool   `json:"isSidechain"`
+	Message     struct {
 		ID    string       `json:"id"`
 		Usage *claudeUsage `json:"usage"`
 	} `json:"message"`

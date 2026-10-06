@@ -36,6 +36,24 @@ func TestRepositoryReadSessionTokenUsage_ReturnsLatestTotals(t *testing.T) {
 	}, usage)
 }
 
+func TestRepositoryReadSessionTokenUsage_ContextIsTheLatestRequestsInput(t *testing.T) {
+	repo := &repository{}
+	path := writeJSONL(t, []string{
+		`{"type":"event_msg","payload":{"type":"token_count","info":{` +
+			`"total_token_usage":{"input_tokens":13461,"cached_input_tokens":6528,"output_tokens":157,"total_tokens":13618},` +
+			`"last_token_usage":{"input_tokens":13461,"cached_input_tokens":6528,"output_tokens":157,"total_tokens":13618}}}}`,
+		`{"type":"event_msg","payload":{"type":"token_count","info":{` +
+			`"total_token_usage":{"input_tokens":40000,"cached_input_tokens":30000,"output_tokens":900,"total_tokens":40900},` +
+			`"last_token_usage":{"input_tokens":26539,"cached_input_tokens":13400,"output_tokens":743,"total_tokens":27282}}}}`,
+	})
+
+	usage, err := repo.ReadSessionTokenUsage(t.Context(), path)
+
+	require.NoError(t, err)
+	require.Equal(t, 26539, usage.ContextTokens, "codex counts cached input inside input")
+	require.Equal(t, 900, usage.OutputTokens)
+}
+
 func TestRepositoryReadSessionTokenUsage_SkipsLargeNonTokenLines(t *testing.T) {
 	repo := &repository{}
 	path := writeJSONL(t, []string{
