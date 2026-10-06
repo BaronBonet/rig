@@ -369,6 +369,11 @@ func (r *repository) BuildReconnectTaskSessionLaunchSpec(
 	}, nil
 }
 
+// ExitCommand ends an idle Claude Code session; Enter on the suggestion runs it.
+func (r *repository) ExitCommand() string {
+	return "/exit"
+}
+
 func (r *repository) TaskSessionCommandName() string {
 	commandName := filepath.Base(strings.TrimSpace(r.binary))
 	if commandName == "." {

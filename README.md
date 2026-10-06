@@ -372,9 +372,12 @@ write handoff notes yet.
   and branch, the handoff note, and its own instruction. A session started
   from one of these rows joins the same group. `x` on a session row closes
   only its window; cleaning up the task closes them all.
-- **this window** (`ctrl+w`) replaces it: exit the provider first, since Rig
-  never kills an interactive session. The task keeps its row, now with one
-  more session behind it.
+- **this window** (`ctrl+w`) replaces it: Rig types the provider's own exit
+  command (`/exit` for Claude Code, `/quit` for Codex) into the session once
+  the handoff note is written, waits for it to leave, and starts the new
+  session in its place. The task keeps its row, now with one more session
+  behind it. A session still in a turn is never cut off: Rig refuses and
+  says so, so wait for it to finish or use a new window.
 
 Choosing another provider with `tab` switches the task to it, as `p` does, and
 starts the new session there.

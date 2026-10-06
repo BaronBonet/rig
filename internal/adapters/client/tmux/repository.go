@@ -111,6 +111,22 @@ func (r *repository) PrefillTaskSession(
 	return r.typeInWindow(ctx, task.TmuxSession, window, launch.PrefillInput)
 }
 
+// SubmitTaskInput types text literally into the task's window and presses
+// Enter after a short settle, so a provider's command suggestion has appeared
+// and Enter runs the command rather than only accepting the suggestion.
+func (r *repository) SubmitTaskInput(ctx context.Context, task *core.Task, text string) error {
+	if task == nil || strings.TrimSpace(task.TmuxSession) == "" {
+		return fmt.Errorf("task tmux session is required")
+	}
+	target := exactWindowTarget(task.TmuxSession, windowOf(task))
+	if _, err := r.runner.Run(ctx, "", "tmux", "send-keys", "-t", target, "-l", text); err != nil {
+		return err
+	}
+	r.sleep(promptInputSettleDelay)
+	_, err := r.runner.Run(ctx, "", "tmux", "send-keys", "-t", target, "Enter")
+	return err
+}
+
 func (r *repository) sessionExists(ctx context.Context, sessionName string) bool {
 	_, err := r.runner.Run(
 		ctx,

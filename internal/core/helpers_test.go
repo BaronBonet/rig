@@ -106,7 +106,12 @@ type sessionClientState struct {
 	prefillErr      error
 	// onStart runs when a session is started, for example to record the
 	// provider session its hooks would report.
-	onStart             func(*Task)
+	onStart func(*Task)
+	// submittedInputs are the texts submitted into the task window; onSubmit
+	// runs for each, for example to make the provider leave the pane.
+	submittedInputs     []string
+	submitErr           error
+	onSubmit            func(*Task, string)
 	inspectState        TaskSessionRuntimeState
 	batchInspectCalls   int
 	batchInspectActive  int
@@ -118,6 +123,7 @@ type sessionClientState struct {
 type providerClientState struct {
 	mu                      sync.Mutex
 	commandName             string
+	exitCommand             string
 	healthErr               error
 	suggestErr              error
 	suggestedName           string
@@ -279,6 +285,8 @@ func newTestTaskService(t *testing.T) *testTaskServiceHarness {
 	// session-start wait.
 	h.launcher.providerSessionWait = 0
 	h.launcher.providerSessionLateWait = 0
+	h.service.sessionExitWait = 50 * time.Millisecond
+	h.service.sessionExitPoll = time.Millisecond
 
 	return h
 }
@@ -456,6 +464,18 @@ func configureTmuxSessionMock(client *MockTmuxSessionClient, state *sessionClien
 			return state.prefillErr
 		},
 	).Maybe()
+	client.EXPECT().SubmitTaskInput(mock.Anything, mock.Anything, mock.Anything).RunAndReturn(
+		func(_ context.Context, task *Task, text string) error {
+			if state.events != nil {
+				*state.events = append(*state.events, "submit_task_input")
+			}
+			state.submittedInputs = append(state.submittedInputs, text)
+			if state.onSubmit != nil {
+				state.onSubmit(task, text)
+			}
+			return state.submitErr
+		},
+	).Maybe()
 	client.EXPECT().AttachTaskSession(mock.Anything, mock.Anything).Return(nil).Maybe()
 	client.EXPECT().InspectTaskSession(mock.Anything, mock.Anything).RunAndReturn(
 		func(_ context.Context, _ *Task) (TaskSessionRuntimeState, error) {
@@ -581,6 +601,12 @@ func configureProviderClientMock(client *MockProviderClient, state *providerClie
 		},
 	).Maybe()
 	client.EXPECT().TaskSessionCommandName().RunAndReturn(state.mockCommandName).Maybe()
+	client.EXPECT().ExitCommand().RunAndReturn(func() string {
+		if state.exitCommand != "" {
+			return state.exitCommand
+		}
+		return "/exit"
+	}).Maybe()
 	client.EXPECT().LaunchOptions().RunAndReturn(func() ProviderLaunchOptions {
 		return state.launchOptions
 	}).Maybe()

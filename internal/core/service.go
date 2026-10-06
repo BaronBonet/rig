@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"time"
 )
 
 type TaskServiceDependencies struct {
@@ -38,6 +39,11 @@ type service struct {
 	observation    *taskObservation
 	worktrees      *taskWorktrees
 	operations     *taskOperationCoordinator
+	// sessionExitWait bounds how long replacing a session waits for the
+	// provider to leave the pane after being told to exit; sessionExitPoll
+	// paces the wait.
+	sessionExitWait time.Duration
+	sessionExitPoll time.Duration
 }
 
 // The concrete service must satisfy every port it is wired into. These
@@ -84,16 +90,18 @@ func NewTaskService(deps TaskServiceDependencies) *service {
 	)
 
 	return &service{
-		tasks:          deps.Tasks,
-		gitWorktree:    deps.GitWorktree,
-		tmuxSession:    deps.TmuxSession,
-		pullRequests:   deps.PullRequests,
-		providers:      deps.Providers,
-		providerConfig: deps.ProviderConfig,
-		launcher:       launcher,
-		creation:       newTaskCreation(deps.Tasks, deps.GitWorktree, launcher, operations),
-		worktrees:      newTaskWorktrees(deps.Tasks, deps.GitWorktree, deps.Providers),
-		operations:     operations,
+		tasks:           deps.Tasks,
+		gitWorktree:     deps.GitWorktree,
+		tmuxSession:     deps.TmuxSession,
+		pullRequests:    deps.PullRequests,
+		providers:       deps.Providers,
+		providerConfig:  deps.ProviderConfig,
+		launcher:        launcher,
+		creation:        newTaskCreation(deps.Tasks, deps.GitWorktree, launcher, operations),
+		worktrees:       newTaskWorktrees(deps.Tasks, deps.GitWorktree, deps.Providers),
+		operations:      operations,
+		sessionExitWait: 15 * time.Second,
+		sessionExitPoll: 250 * time.Millisecond,
 		observation: newTaskObservation(
 			deps.Tasks,
 			deps.TmuxSession,

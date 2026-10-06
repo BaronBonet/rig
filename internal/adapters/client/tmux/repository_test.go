@@ -849,6 +849,24 @@ func TestRepositoryAttachAndDeleteTaskSession_TargetAChildTasksWindow(t *testing
 	)
 }
 
+func TestRepositorySubmitTaskInput_TypesTheTextThenPressesEnterAfterASettle(t *testing.T) {
+	runner := subprocess.NewMockRunner(t)
+	repo := New(runner).(*repository)
+	var slept []time.Duration
+	repo.sleep = func(d time.Duration) { slept = append(slept, d) }
+
+	mock.InOrder(
+		expectTmuxRun(runner, subprocess.Result{}, nil, "send-keys", "-t", "=repo_task:s2", "-l", "/exit"),
+		expectTmuxRun(runner, subprocess.Result{}, nil, "send-keys", "-t", "=repo_task:s2", "Enter"),
+	)
+
+	err := repo.SubmitTaskInput(context.Background(), &core.Task{TmuxSession: "repo_task", TmuxWindow: "s2"}, "/exit")
+
+	require.NoError(t, err)
+	require.Equal(t, []time.Duration{promptInputSettleDelay}, slept,
+		"the provider's command suggestion must be up before Enter runs it")
+}
+
 func TestRepositoryInspectTaskSessions_TellsAChildTasksWindowFromItsParents(t *testing.T) {
 	runner := subprocess.NewMockRunner(t)
 	repo := New(runner).(*repository)

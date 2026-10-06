@@ -60,11 +60,22 @@ func (s *service) newTaskSession(
 		return nil, err
 	}
 
+	// Replacing the session ends the provider in the pane first, which is
+	// only done while it sits idle at its prompt: a provider mid-turn is
+	// never cut off.
+	var occupant Provider
 	if !input.NewWindow {
-		// Never kill or type over an interactive session: replacing it needs
-		// the pane idle, whichever provider is running there.
-		if err := s.refuseWhileProviderRuns(ctx, task, provider); err != nil {
+		occupant, err = s.sessionOccupant(ctx, task, provider)
+		if err != nil {
 			return nil, err
+		}
+		if occupant != "" && s.taskIsWorking(ctx, task.ID) {
+			return nil, fmt.Errorf(
+				"%w: %s is still working in the task's window; "+
+					"wait for it to finish, or start the session in a new window instead",
+				ErrProviderSessionActive,
+				occupant,
+			)
 		}
 	}
 
@@ -81,6 +92,14 @@ func (s *service) newTaskSession(
 
 	if input.NewWindow {
 		return s.startSessionAlongside(ctx, task, provider, providerClient, custom, prompt, options, reporter)
+	}
+
+	// The handoff is written first, from the session's transcript, so the
+	// session is ended only once there is something to continue from.
+	if occupant != "" {
+		if err := s.endProviderSession(ctx, task, occupant); err != nil {
+			return nil, err
+		}
 	}
 
 	if provider != task.Provider {
@@ -117,28 +136,73 @@ func (s *service) newTaskSession(
 	return task, nil
 }
 
-// refuseWhileProviderRuns returns ErrProviderSessionActive when the Task's
-// pane is running its provider or the one about to start.
-func (s *service) refuseWhileProviderRuns(ctx context.Context, task *Task, next Provider) error {
+// sessionOccupant names the provider running in the Task's pane, the active
+// one or the one about to start, or "" when the pane is idle or gone.
+func (s *service) sessionOccupant(ctx context.Context, task *Task, next Provider) (Provider, error) {
 	runtime, err := s.tmuxSession.InspectTaskSession(ctx, task)
 	if err != nil {
-		return fmt.Errorf("inspect task session: %w", err)
+		return "", fmt.Errorf("inspect task session: %w", err)
 	}
 	if !runtime.Exists {
-		return nil
+		return "", nil
 	}
 	for _, candidate := range []Provider{task.Provider, next} {
 		client, clientErr := supportedProviderClient(s.providers, candidate)
 		if clientErr == nil && taskSessionRunningProvider(runtime, client.TaskSessionCommandName()) {
-			return fmt.Errorf(
-				"%w: %s is still open in the task's window, idle or not; "+
-					"exit it there, or start the session in a new window instead",
-				ErrProviderSessionActive,
-				candidate,
-			)
+			return candidate, nil
 		}
 	}
-	return nil
+	return "", nil
+}
+
+// taskIsWorking reports whether the Task's latest status says its provider is
+// in a turn, has background work in flight, or is still starting. Without a
+// status the provider is taken to be idle.
+func (s *service) taskIsWorking(ctx context.Context, taskID string) bool {
+	status, err := s.tasks.LatestTaskStatus(ctx, taskID)
+	if err != nil || status == nil {
+		return false
+	}
+	switch status.Phase {
+	case TaskStatusPhaseWorking, TaskStatusPhaseWorkingInBackground, TaskStatusPhaseStarting:
+		return true
+	default:
+		return false
+	}
+}
+
+// endProviderSession asks the provider idle in the Task's pane to exit, with
+// its own exit command, and waits for it to leave the pane.
+func (s *service) endProviderSession(ctx context.Context, task *Task, provider Provider) error {
+	client, err := supportedProviderClient(s.providers, provider)
+	if err != nil {
+		return err
+	}
+	exitCommand := client.ExitCommand()
+	if err := s.tmuxSession.SubmitTaskInput(ctx, task, exitCommand); err != nil {
+		return fmt.Errorf("end %s session: %w", provider, err)
+	}
+
+	deadline := time.Now().Add(s.sessionExitWait)
+	for {
+		runtime, err := s.tmuxSession.InspectTaskSession(ctx, task)
+		if err == nil && !taskSessionRunningProvider(runtime, client.TaskSessionCommandName()) {
+			return nil
+		}
+		if !time.Now().Before(deadline) {
+			return fmt.Errorf(
+				"%w: %s did not exit after %s; exit it in the task's window, or start the session in a new window",
+				ErrProviderSessionActive,
+				provider,
+				exitCommand,
+			)
+		}
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-time.After(s.sessionExitPoll):
+		}
+	}
 }
 
 // startSessionAlongside creates a child Task for a session that runs next to

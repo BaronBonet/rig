@@ -140,8 +140,10 @@ Use `rig` for the CLI command and Rig for the product or system.
   Configured provider.
 - A Task may have many Provider sessions over time; a New session adds one
   without changing the Task's identity, workspace, or tmux session.
-- A New session that replaces the Task's session is refused while any
-  Provider is running in the Task's Session; one that runs alongside is not.
+- A New session that replaces the Task's session ends the Provider in the
+  Task's Session first, with the Provider's own exit command, once it sits
+  idle at its prompt; it is refused while the Provider is working. One that
+  runs alongside leaves the running Provider alone.
 - A Child task is a folder Task of its parent's workspace: never seeded, never
   removed. Deleting a Child task closes only its window; deleting the parent
   closes the Session and removes every Child task's record.

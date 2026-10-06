@@ -42,6 +42,7 @@ func TestRepositoryLaunchOptions_ListsModelAliasesAndEffortsAndCanWriteHandoffs(
 	require.Equal(t, []string{"fable", "opus", "sonnet", "haiku"}, options.Models)
 	require.Equal(t, []string{"low", "medium", "high", "xhigh", "max"}, options.Efforts)
 	require.True(t, options.Handoff)
+	require.Equal(t, "/exit", repo.ExitCommand())
 }
 
 func TestRepositoryWriteSessionHandoff_ForksThePreviousSessionInPrintModeAndSavesTheNote(t *testing.T) {

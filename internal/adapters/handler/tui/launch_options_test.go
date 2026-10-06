@@ -149,7 +149,7 @@ func TestModel_KeyNOpensANewSessionComposerForTheSelectedTask(t *testing.T) {
 
 	m = pressKeys(t, m, ctrl('w'))
 	require.False(t, m.draft.newWindow)
-	require.Contains(t, stripANSI(m.View().Content), "where     this window, after the provider exits")
+	require.Contains(t, stripANSI(m.View().Content), "where     this window, replacing the running session")
 }
 
 func TestModel_NewSessionSubmitStartsASessionOfTheTaskWithAHandoff(t *testing.T) {

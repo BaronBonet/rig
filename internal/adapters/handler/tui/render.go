@@ -643,7 +643,7 @@ func (m model) draftWhereLine() string {
 		return label + primaryStyle.Render("new window, alongside the running session") +
 			mutedStyle.Render("  ·  ") + keybindStyle.Render("ctrl+w") + mutedStyle.Render(" this window")
 	}
-	return label + primaryStyle.Render("this window, after the provider exits") +
+	return label + primaryStyle.Render("this window, replacing the running session") +
 		mutedStyle.Render("  ·  ") + keybindStyle.Render("ctrl+w") + mutedStyle.Render(" new window")
 }
 

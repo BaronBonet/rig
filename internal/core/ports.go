@@ -382,6 +382,9 @@ type ProviderClient interface {
 	// TaskSessionCommandName returns the foreground process name expected while
 	// the provider is running in the task tmux pane.
 	TaskSessionCommandName() string
+	// ExitCommand is the command that, typed at the provider's idle prompt,
+	// ends its interactive session.
+	ExitCommand() string
 	// HookEventToTaskStatus normalizes a provider hook event into a task status
 	// update when the event contributes to the live task status stream.
 	HookEventToTaskStatus(input HookEventInput) (*TaskStatusUpdate, error)
@@ -475,6 +478,9 @@ type TmuxSessionClient interface {
 	// PrefillTaskSession waits for the provider's ready marker in the task
 	// session and types the launch spec's PrefillInput without submitting it.
 	PrefillTaskSession(ctx context.Context, task *Task, launch TaskSessionLaunchSpec) error
+	// SubmitTaskInput types text into the task's window and submits it with
+	// Enter, for a command the provider running there should run.
+	SubmitTaskInput(ctx context.Context, task *Task, text string) error
 	// AttachTaskSession attaches to an existing task session.
 	AttachTaskSession(ctx context.Context, task *Task) error
 	// InspectTaskSession returns the current tmux-side runtime state for the

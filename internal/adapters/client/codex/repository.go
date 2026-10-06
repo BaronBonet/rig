@@ -252,6 +252,11 @@ func (r *repository) BuildReconnectTaskSessionLaunchSpec(
 	}, nil
 }
 
+// ExitCommand ends an idle Codex session.
+func (r *repository) ExitCommand() string {
+	return "/quit"
+}
+
 func (r *repository) TaskSessionCommandName() string {
 	commandName := filepath.Base(strings.TrimSpace(r.binary))
 	if commandName == "." {

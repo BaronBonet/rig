@@ -42,6 +42,7 @@ func TestRepositoryLaunchOptions_ListsModelsAndEffortsWithoutHandoffs(t *testing
 	require.Equal(t, []string{"gpt-5-codex", "gpt-5"}, options.Models)
 	require.Equal(t, []string{"low", "medium", "high"}, options.Efforts)
 	require.False(t, options.Handoff)
+	require.Equal(t, "/quit", repo.ExitCommand())
 
 	_, err := repo.WriteSessionHandoff(context.Background(), &core.Task{}, core.TaskProviderSession{}, "")
 	require.ErrorIs(t, err, core.ErrHandoffUnsupported)

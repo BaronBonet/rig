@@ -89,9 +89,41 @@ func TestTaskServiceNewTaskSession_StartsAFreshSessionFromAHandoffNote(t *testin
 	)
 }
 
-func TestTaskServiceNewTaskSession_RefusesWhileTheProviderIsRunning(t *testing.T) {
+func TestTaskServiceNewTaskSession_ReplacesAnIdleSessionByEndingItFirst(t *testing.T) {
 	svc := newTestTaskService(t)
 	svc.taskRepo.listTasks = []*Task{readyTaskFixture()}
+	svc.taskRepo.latestByTask["task-1"] = TaskStatusUpdate{TaskID: "task-1", Phase: TaskStatusPhaseWaitingForInput}
+	svc.taskRepo.providerSessionsByTask["task-1"] = []TaskProviderSession{
+		{TaskID: "task-1", Provider: ProviderCodex, ProviderSessionID: "sess-1", LastObservedAt: time.Unix(100, 0)},
+	}
+	svc.providerRepo.handoffPath = "/data/rig/handoffs/task-1/note.md"
+	svc.providerRepo.exitCommand = "/quit"
+	// The provider sits idle at its prompt and leaves once told to.
+	svc.sessionClient.inspectState = TaskSessionRuntimeState{Exists: true, ActiveCommands: []string{"codex"}}
+	svc.sessionClient.onSubmit = func(*Task, string) {
+		svc.sessionClient.inspectState = idlePane()
+	}
+
+	task, err := svc.service.NewTaskSessionWithProgress(t.Context(), NewTaskSessionInput{
+		TaskID:  "task-1",
+		Prompt:  "continue",
+		Handoff: true,
+	}, nil)
+
+	require.NoError(t, err)
+	require.Equal(t, []string{"/quit"}, svc.sessionClient.submittedInputs, "the provider's own exit command")
+	require.Less(t, indexOf(svc.events, "write_session_handoff"), indexOf(svc.events, "submit_task_input"),
+		"the handoff is written before the session is ended")
+	require.Less(t, indexOf(svc.events, "submit_task_input"), indexOf(svc.events, "start_task_session"))
+	require.Equal(t, "task-1", task.ID)
+	require.Equal(t, []string{ContinuationPrompt(readyTaskFixture(), "continue", "/data/rig/handoffs/task-1/note.md")},
+		svc.sessionClient.prefilledLaunch.PrefillInput)
+}
+
+func TestTaskServiceNewTaskSession_RefusesToReplaceASessionThatIsStillWorking(t *testing.T) {
+	svc := newTestTaskService(t)
+	svc.taskRepo.listTasks = []*Task{readyTaskFixture()}
+	svc.taskRepo.latestByTask["task-1"] = TaskStatusUpdate{TaskID: "task-1", Phase: TaskStatusPhaseWorking}
 	svc.sessionClient.inspectState = TaskSessionRuntimeState{Exists: true, ActiveCommands: []string{"codex"}}
 
 	_, err := svc.service.NewTaskSessionWithProgress(t.Context(), NewTaskSessionInput{
@@ -100,10 +132,45 @@ func TestTaskServiceNewTaskSession_RefusesWhileTheProviderIsRunning(t *testing.T
 	}, nil)
 
 	require.ErrorIs(t, err, ErrProviderSessionActive)
-	require.ErrorContains(t, err, "codex is still open in the task's window, idle or not")
+	require.ErrorContains(t, err, "codex is still working in the task's window")
 	require.ErrorContains(t, err, "start the session in a new window instead")
+	require.Empty(t, svc.sessionClient.submittedInputs, "a working provider is never told to exit")
 	require.Nil(t, svc.sessionClient.startedTask)
 	require.Nil(t, svc.taskRepo.updatedTask)
+}
+
+func TestTaskServiceNewTaskSession_ReportsAProviderThatDoesNotExit(t *testing.T) {
+	svc := newTestTaskService(t)
+	svc.taskRepo.listTasks = []*Task{readyTaskFixture()}
+	// Idle by status, but it stays in the pane after /exit (a dialog, say).
+	svc.sessionClient.inspectState = TaskSessionRuntimeState{Exists: true, ActiveCommands: []string{"codex"}}
+
+	_, err := svc.service.NewTaskSessionWithProgress(t.Context(), NewTaskSessionInput{
+		TaskID: "task-1",
+		Prompt: "continue",
+	}, nil)
+
+	require.ErrorIs(t, err, ErrProviderSessionActive)
+	require.ErrorContains(t, err, "codex did not exit after /exit")
+	require.Equal(t, []string{"/exit"}, svc.sessionClient.submittedInputs)
+	require.Nil(t, svc.sessionClient.startedTask)
+	require.Nil(t, svc.taskRepo.updatedTask)
+}
+
+func TestTaskServiceNewTaskSession_InANewWindowLeavesTheRunningSessionAlone(t *testing.T) {
+	svc := newTestTaskService(t)
+	svc.taskRepo.listTasks = []*Task{readyTaskFixture()}
+	svc.taskRepo.latestByTask["task-1"] = TaskStatusUpdate{TaskID: "task-1", Phase: TaskStatusPhaseWorking}
+	svc.sessionClient.inspectState = TaskSessionRuntimeState{Exists: true, ActiveCommands: []string{"codex"}}
+
+	child, err := svc.service.NewTaskSessionWithProgress(t.Context(), NewTaskSessionInput{
+		TaskID:    "task-1",
+		NewWindow: true,
+	}, nil)
+
+	require.NoError(t, err)
+	require.Equal(t, "task-1", child.ParentID)
+	require.Empty(t, svc.sessionClient.submittedInputs)
 }
 
 func TestTaskServiceNewTaskSession_SkipsTheHandoffWithoutAPreviousSession(t *testing.T) {
