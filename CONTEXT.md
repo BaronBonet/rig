@@ -88,6 +88,10 @@ Use `rig` for the CLI command and Rig for the product or system.
   recent user prompts and assistant actions.
 - Resume metadata: The minimal provider state needed to reconnect a task session
   after its tmux session has been lost.
+- Session readiness: The point at which a freshly launched provider can take
+  the task prompt: its session-start hook has been observed and its ready
+  marker is on screen on a line other than the shell's echo of the launch
+  command. The prompt is typed then, never on the marker alone.
 - Token usage: The summed provider token counts observed across a task's
   provider sessions.
 - Touched worktree: A Git worktree a task's provider sessions have edited, shown

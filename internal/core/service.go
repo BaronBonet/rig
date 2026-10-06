@@ -75,6 +75,7 @@ func healthCheckError(checks []HealthCheck) error {
 func NewTaskService(deps TaskServiceDependencies) *service {
 	operations := newTaskOperationCoordinator()
 	launcher := newSessionLauncher(
+		deps.Tasks,
 		deps.Providers,
 		deps.ProviderConfig,
 		deps.Workspace,

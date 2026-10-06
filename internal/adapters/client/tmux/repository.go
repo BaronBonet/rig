@@ -67,26 +67,28 @@ func (r *repository) StartTaskSession(ctx context.Context, task *core.Task, laun
 		return r.cleanupStartedSession(ctx, task.TmuxSession, err)
 	}
 
+	return nil
+}
+
+// PrefillTaskSession types the launch spec's PrefillInput into the task
+// window once the provider shows its ready marker, without submitting it. A
+// session that fails to take the prompt is left running: the provider is up
+// and the prompt is still on the task record.
+func (r *repository) PrefillTaskSession(
+	ctx context.Context,
+	task *core.Task,
+	launch core.TaskSessionLaunchSpec,
+) error {
 	if len(launch.PrefillInput) == 0 {
 		return nil
 	}
 
-	if err := r.waitForPrompt(ctx, task.TmuxSession, taskWindowName, launch.ReadyMarker); err != nil {
-		if alreadyExists {
-			return err
-		}
-		return r.cleanupStartedSession(ctx, task.TmuxSession, err)
+	if err := r.waitForPrompt(ctx, task.TmuxSession, taskWindowName, launch.ReadyMarker, launch.Command); err != nil {
+		return err
 	}
 	r.sleep(promptInputSettleDelay)
 
-	if err := r.typeInWindow(ctx, task.TmuxSession, taskWindowName, launch.PrefillInput); err != nil {
-		if alreadyExists {
-			return err
-		}
-		return r.cleanupStartedSession(ctx, task.TmuxSession, err)
-	}
-
-	return nil
+	return r.typeInWindow(ctx, task.TmuxSession, taskWindowName, launch.PrefillInput)
 }
 
 func (r *repository) sessionExists(ctx context.Context, sessionName string) bool {
@@ -419,15 +421,6 @@ func (r *repository) cleanupStartedSession(ctx context.Context, sessionName stri
 }
 
 func (r *repository) sendKeysToWindow(ctx context.Context, session, window string, command []string) error {
-	quoted := make([]string, 0, len(command))
-	for _, part := range command {
-		if strings.ContainsRune(part, ' ') {
-			quoted = append(quoted, "'"+strings.ReplaceAll(part, "'", "'\\''")+"'")
-			continue
-		}
-		quoted = append(quoted, part)
-	}
-
 	_, err := r.runner.Run(
 		ctx,
 		"",
@@ -435,10 +428,23 @@ func (r *repository) sendKeysToWindow(ctx context.Context, session, window strin
 		"send-keys",
 		"-t",
 		exactWindowTarget(session, window),
-		strings.Join(quoted, " "),
+		strings.Join(quoteShellCommand(command), " "),
 		"C-m",
 	)
 	return err
+}
+
+// quoteShellCommand quotes the command words that need it for the shell.
+func quoteShellCommand(command []string) []string {
+	quoted := make([]string, 0, len(command))
+	for _, part := range command {
+		if part == "" || strings.ContainsRune(part, ' ') {
+			quoted = append(quoted, "'"+strings.ReplaceAll(part, "'", "'\\''")+"'")
+			continue
+		}
+		quoted = append(quoted, part)
+	}
+	return quoted
 }
 
 func (r *repository) capturePaneContent(ctx context.Context, session, window string) (string, error) {
@@ -495,7 +501,7 @@ func (r *repository) typeInWindow(ctx context.Context, session, window string, c
 	return deleteErr
 }
 
-func (r *repository) waitForPrompt(ctx context.Context, session, window, marker string) error {
+func (r *repository) waitForPrompt(ctx context.Context, session, window, marker string, command []string) error {
 	const (
 		pollInterval = 500 * time.Millisecond
 		timeout      = 30 * time.Second
@@ -510,7 +516,7 @@ func (r *repository) waitForPrompt(ctx context.Context, session, window, marker 
 		}
 
 		content, err := r.capturePaneContent(ctx, session, window)
-		if err == nil && strings.Contains(content, marker) {
+		if err == nil && promptReady(content, marker, shellCommandText(command)) {
 			return nil
 		}
 
@@ -518,6 +524,37 @@ func (r *repository) waitForPrompt(ctx context.Context, session, window, marker 
 	}
 
 	return errors.New("timed out waiting for " + marker + " prompt")
+}
+
+// promptReady reports whether the pane shows the provider's ready marker on
+// a line of its own. The shell's echo of the launch command is not it: a
+// shell prompt may use the same character, and `❯ claude` is on screen before
+// the provider has started, so a marker followed by the command, or by the
+// start of a command too long for one line, is skipped.
+func promptReady(content string, marker string, commandText string) bool {
+	if marker == "" {
+		return true
+	}
+	for _, line := range strings.Split(content, "\n") {
+		_, rest, found := strings.Cut(line, marker)
+		if !found {
+			continue
+		}
+		rest = strings.TrimSpace(rest)
+		if rest == "" || commandText == "" {
+			return true
+		}
+		if strings.HasPrefix(commandText, rest) || strings.HasPrefix(rest, commandText) {
+			continue
+		}
+		return true
+	}
+	return false
+}
+
+// shellCommandText is the launch command as the shell echoes it.
+func shellCommandText(command []string) string {
+	return strings.TrimSpace(strings.Join(quoteShellCommand(command), " "))
 }
 
 func exactSessionTarget(session string) string {

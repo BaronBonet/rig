@@ -89,16 +89,21 @@ type repoClientState struct {
 }
 
 type sessionClientState struct {
-	mu                  sync.Mutex
-	healthErr           error
-	startErr            error
-	deleteErr           error
-	inspectErr          error
-	batchInspectErr     error
-	events              *[]string
-	startedTask         *Task
-	deletedTask         *Task
-	startedLaunch       TaskSessionLaunchSpec
+	mu              sync.Mutex
+	healthErr       error
+	startErr        error
+	deleteErr       error
+	inspectErr      error
+	batchInspectErr error
+	events          *[]string
+	startedTask     *Task
+	deletedTask     *Task
+	startedLaunch   TaskSessionLaunchSpec
+	prefilledLaunch TaskSessionLaunchSpec
+	prefillErr      error
+	// onStart runs when a session is started, for example to record the
+	// provider session its hooks would report.
+	onStart             func(*Task)
 	inspectState        TaskSessionRuntimeState
 	batchInspectCalls   int
 	batchInspectActive  int
@@ -262,6 +267,10 @@ func newTestTaskService(t *testing.T) *testTaskServiceHarness {
 	h.creation = h.service.creation
 	h.launcher = h.service.launcher
 	h.observation = h.service.observation
+	// Prompts are typed on the ready marker alone unless a test opts into the
+	// session-start wait.
+	h.launcher.providerSessionWait = 0
+	h.launcher.providerSessionLateWait = 0
 
 	return h
 }
@@ -404,7 +413,19 @@ func configureTmuxSessionMock(client *MockTmuxSessionClient, state *sessionClien
 			}
 			state.startedTask = cloneTask(task)
 			state.startedLaunch = launch
+			if state.onStart != nil {
+				state.onStart(task)
+			}
 			return state.startErr
+		},
+	).Maybe()
+	client.EXPECT().PrefillTaskSession(mock.Anything, mock.Anything, mock.Anything).RunAndReturn(
+		func(_ context.Context, _ *Task, launch TaskSessionLaunchSpec) error {
+			if state.events != nil {
+				*state.events = append(*state.events, "prefill_task_session")
+			}
+			state.prefilledLaunch = launch
+			return state.prefillErr
 		},
 	).Maybe()
 	client.EXPECT().AttachTaskSession(mock.Anything, mock.Anything).Return(nil).Maybe()
@@ -811,6 +832,8 @@ func configureTaskRepositoryMock(repo *MockTaskRepository, state *taskRepository
 	).Maybe()
 	repo.EXPECT().ListTaskProviderSessions(mock.Anything, mock.Anything).RunAndReturn(
 		func(_ context.Context, taskID string) ([]TaskProviderSession, error) {
+			state.mu.Lock()
+			defer state.mu.Unlock()
 			return append([]TaskProviderSession(nil), state.providerSessionsByTask[taskID]...), nil
 		},
 	).Maybe()

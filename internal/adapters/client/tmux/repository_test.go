@@ -14,7 +14,7 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func TestRepositoryStartTaskSession_LaunchesCommandAndPrefillsInputWithoutSubmitting(t *testing.T) {
+func TestRepositoryStartTaskSession_LaunchesTheCommandWithoutTypingThePrompt(t *testing.T) {
 	runner := subprocess.NewMockRunner(t)
 	repo := New(runner).(*repository)
 	repo.now = func() time.Time { return time.Unix(0, 0) }
@@ -34,7 +34,39 @@ func TestRepositoryStartTaskSession_LaunchesCommandAndPrefillsInputWithoutSubmit
 		expectTmuxRun(runner, subprocess.Result{}, nil,
 			"send-keys", "-t", "=repo_task:task", "codex", "C-m",
 		),
-		expectTmuxRun(runner, subprocess.Result{Stdout: "›"}, nil,
+	)
+
+	// No capture-pane or paste-buffer expectation: the prompt is typed by
+	// PrefillTaskSession, once the provider is known to be ready.
+	err := repo.StartTaskSession(context.Background(), &core.Task{
+		TmuxSession:  "repo_task",
+		WorktreePath: "/tmp/repo-task",
+	}, core.TaskSessionLaunchSpec{
+		Command:      []string{"codex"},
+		ReadyMarker:  "›",
+		PrefillInput: []string{"fix billing retry flow"},
+	})
+
+	require.NoError(t, err)
+	require.Equal(t, []time.Duration{promptSubmitDelay}, slept)
+}
+
+func TestRepositoryPrefillTaskSession_TypesThePromptOnTheProvidersPromptNotTheShellsEcho(t *testing.T) {
+	runner := subprocess.NewMockRunner(t)
+	repo := New(runner).(*repository)
+	repo.now = func() time.Time { return time.Unix(0, 0) }
+	var slept []time.Duration
+	repo.sleep = func(d time.Duration) { slept = append(slept, d) }
+
+	// A shell prompt that uses the provider's marker shows it next to the
+	// launch command before the provider has started.
+	shellEcho := "~/repo-task via v2\n❯ claude --model opus\n"
+	providerPrompt := shellEcho + "\n Claude Code v2.1\n\n❯ Try \"how do I log an error?\"\n"
+	mock.InOrder(
+		expectTmuxRun(runner, subprocess.Result{Stdout: shellEcho}, nil,
+			"capture-pane", "-t", "=repo_task:task", "-p",
+		),
+		expectTmuxRun(runner, subprocess.Result{Stdout: providerPrompt}, nil,
 			"capture-pane", "-t", "=repo_task:task", "-p",
 		),
 		expectTmuxRunWithStdin(runner, subprocess.RunWithStdinOptions{
@@ -51,20 +83,21 @@ func TestRepositoryStartTaskSession_LaunchesCommandAndPrefillsInputWithoutSubmit
 		),
 	)
 
-	err := repo.StartTaskSession(context.Background(), &core.Task{
+	err := repo.PrefillTaskSession(context.Background(), &core.Task{
 		TmuxSession:  "repo_task",
 		WorktreePath: "/tmp/repo-task",
 	}, core.TaskSessionLaunchSpec{
-		Command:      []string{"codex"},
-		ReadyMarker:  "›",
+		Command:      []string{"claude", "--model", "opus"},
+		ReadyMarker:  "❯",
 		PrefillInput: []string{"fix billing retry flow"},
 	})
 
 	require.NoError(t, err)
-	require.Equal(t, []time.Duration{promptSubmitDelay, promptInputSettleDelay}, slept)
+	require.Equal(t, []time.Duration{500 * time.Millisecond, promptInputSettleDelay}, slept,
+		"one poll while only the shell's echo is up, then the settle delay")
 }
 
-func TestRepositoryStartTaskSession_PrefillsLargeInputThroughTmuxBuffer(t *testing.T) {
+func TestRepositoryPrefillTaskSession_PrefillsLargeInputThroughTmuxBuffer(t *testing.T) {
 	runner := subprocess.NewMockRunner(t)
 	repo := New(runner).(*repository)
 	repo.now = func() time.Time { return time.Unix(0, 0) }
@@ -73,18 +106,6 @@ func TestRepositoryStartTaskSession_PrefillsLargeInputThroughTmuxBuffer(t *testi
 	prompt := strings.Repeat("debug output\n", 5000)
 
 	mock.InOrder(
-		expectTmuxRun(runner, subprocess.Result{}, errors.New("no session"),
-			"has-session", "-t", "=repo_task",
-		),
-		expectTmuxRun(runner, subprocess.Result{}, nil,
-			"new-session", "-d", "-s", "repo_task", "-n", "task", "-c", "/tmp/repo-task",
-		),
-		expectTmuxRun(runner, subprocess.Result{}, nil,
-			"new-window", "-d", "-t", "=repo_task", "-n", "editor", "-c", "/tmp/repo-task",
-		),
-		expectTmuxRun(runner, subprocess.Result{}, nil,
-			"send-keys", "-t", "=repo_task:task", "codex", "C-m",
-		),
 		expectTmuxRun(runner, subprocess.Result{Stdout: "›"}, nil,
 			"capture-pane", "-t", "=repo_task:task", "-p",
 		),
@@ -102,7 +123,7 @@ func TestRepositoryStartTaskSession_PrefillsLargeInputThroughTmuxBuffer(t *testi
 		),
 	)
 
-	err := repo.StartTaskSession(context.Background(), &core.Task{
+	err := repo.PrefillTaskSession(context.Background(), &core.Task{
 		TmuxSession:  "repo_task",
 		WorktreePath: "/tmp/repo-task",
 	}, core.TaskSessionLaunchSpec{
@@ -112,6 +133,48 @@ func TestRepositoryStartTaskSession_PrefillsLargeInputThroughTmuxBuffer(t *testi
 	})
 
 	require.NoError(t, err)
+}
+
+func TestRepositoryPrefillTaskSession_TimesOutWhileOnlyTheShellEchoIsUp(t *testing.T) {
+	runner := subprocess.NewMockRunner(t)
+	repo := New(runner).(*repository)
+	clock := time.Unix(0, 0)
+	repo.now = func() time.Time { return clock }
+	repo.sleep = func(d time.Duration) { clock = clock.Add(31 * time.Second) }
+
+	expectTmuxRun(runner, subprocess.Result{Stdout: "❯ claude\n"}, nil,
+		"capture-pane", "-t", "=repo_task:task", "-p",
+	)
+
+	err := repo.PrefillTaskSession(context.Background(), &core.Task{
+		TmuxSession:  "repo_task",
+		WorktreePath: "/tmp/repo-task",
+	}, core.TaskSessionLaunchSpec{
+		Command:      []string{"claude"},
+		ReadyMarker:  "❯",
+		PrefillInput: []string{"fix billing retry flow"},
+	})
+
+	require.EqualError(t, err, "timed out waiting for ❯ prompt")
+}
+
+func TestPromptReady_SkipsTheShellsEchoOfTheLaunchCommand(t *testing.T) {
+	command := shellCommandText([]string{"env", "CLAUDE_CONFIG_DIR=/home/me/.claude-work", "claude", "--model", "opus"})
+
+	require.False(t, promptReady("❯ env CLAUDE_CONFIG_DIR=/home/me/.claude-work claude --model opus\n", "❯", command),
+		"the shell's echo of the command")
+	require.False(
+		t,
+		promptReady("❯ env CLAUDE_CONFIG_DIR=/home/me/.claude-work claude --model opus   ✔ 14:22\n", "❯", command),
+		"a right prompt after the echo",
+	)
+	require.False(t, promptReady("❯ env CLAUDE_CONFIG_DIR=/home/me/.cla\nude-work claude --model opus\n", "❯", command),
+		"an echo wrapped onto a second line")
+	require.False(t, promptReady("no marker here\n", "❯", command))
+	require.True(t, promptReady("❯ \n", "❯", command), "an empty input box")
+	require.True(t, promptReady("❯ Try \"how do I log an error?\"\n", "❯", command), "a placeholder in the input box")
+	require.True(t, promptReady("❯ claude\n\n❯ \n", "❯", command), "the input box below the echo")
+	require.True(t, promptReady("anything", "", command), "no marker to wait for")
 }
 
 func TestRepositoryStartTaskSession_LeavesShellIdleWhenLaunchCommandIsEmpty(t *testing.T) {
@@ -229,25 +292,15 @@ func TestRepositoryStartTaskSession_CleansUpSessionWhenEditorWindowCreationFails
 	require.EqualError(t, err, "new-window failed")
 }
 
-func TestRepositoryStartTaskSession_CleansUpSessionWhenPrefillFails(t *testing.T) {
+func TestRepositoryPrefillTaskSession_LeavesTheSessionRunningWhenTypingFails(t *testing.T) {
 	runner := subprocess.NewMockRunner(t)
 	repo := New(runner).(*repository)
 	repo.now = func() time.Time { return time.Unix(0, 0) }
 	repo.sleep = func(time.Duration) {}
 
+	// No kill-session expectation: the provider is up, only the prompt is
+	// missing, and it stays on the task record.
 	mock.InOrder(
-		expectTmuxRun(runner, subprocess.Result{}, errors.New("no session"),
-			"has-session", "-t", "=repo_task",
-		),
-		expectTmuxRun(runner, subprocess.Result{}, nil,
-			"new-session", "-d", "-s", "repo_task", "-n", "task", "-c", "/tmp/repo-task",
-		),
-		expectTmuxRun(runner, subprocess.Result{}, nil,
-			"new-window", "-d", "-t", "=repo_task", "-n", "editor", "-c", "/tmp/repo-task",
-		),
-		expectTmuxRun(runner, subprocess.Result{}, nil,
-			"send-keys", "-t", "=repo_task:task", "codex", "C-m",
-		),
 		expectTmuxRun(runner, subprocess.Result{Stdout: "›"}, nil,
 			"capture-pane", "-t", "=repo_task:task", "-p",
 		),
@@ -257,12 +310,9 @@ func TestRepositoryStartTaskSession_CleansUpSessionWhenPrefillFails(t *testing.T
 			Args:  []string{"load-buffer", "-b", "rig-prefill-repo_task-task", "-"},
 			Stdin: "fix billing retry flow",
 		}, subprocess.Result{}, errors.New("load-buffer failed")),
-		expectTmuxRun(runner, subprocess.Result{}, nil,
-			"kill-session", "-t", "=repo_task",
-		),
 	)
 
-	err := repo.StartTaskSession(context.Background(), &core.Task{
+	err := repo.PrefillTaskSession(context.Background(), &core.Task{
 		TmuxSession:  "repo_task",
 		WorktreePath: "/tmp/repo-task",
 	}, core.TaskSessionLaunchSpec{

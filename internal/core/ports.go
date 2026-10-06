@@ -409,8 +409,12 @@ type TmuxSessionClient interface {
 	// HealthCheck verifies that tmux is available for task sessions.
 	HealthCheck(ctx context.Context) error
 	// StartTaskSession starts the runtime session for a task using the provider's
-	// task session launch spec.
+	// task session launch spec. It launches the command only; PrefillInput is
+	// typed by PrefillTaskSession once the provider is ready.
 	StartTaskSession(ctx context.Context, task *Task, launch TaskSessionLaunchSpec) error
+	// PrefillTaskSession waits for the provider's ready marker in the task
+	// session and types the launch spec's PrefillInput without submitting it.
+	PrefillTaskSession(ctx context.Context, task *Task, launch TaskSessionLaunchSpec) error
 	// AttachTaskSession attaches to an existing task session.
 	AttachTaskSession(ctx context.Context, task *Task) error
 	// InspectTaskSession returns the current tmux-side runtime state for the

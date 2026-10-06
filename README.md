@@ -262,6 +262,13 @@ is configured); the selected provider owns the task name suggestion, branch
 type, and session. Use `ctrl+p` from the prompt view to create from a GitHub
 pull request instead — PR-backed tasks use the selected provider too.
 
+The prompt is typed into the provider's input, not submitted, once the
+provider reports that its session has started (its session-start hook), so a
+shell prompt that happens to use the same `❯` character, or a folder trust
+dialog, cannot swallow it. If the provider is still held up by a dialog after
+twenty seconds, the task is created anyway and the prompt is typed as soon as
+the session starts; it also stays on the task's detail view.
+
 Common TUI keys:
 
 | Key | Action |

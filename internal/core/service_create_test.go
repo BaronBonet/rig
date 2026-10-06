@@ -70,10 +70,14 @@ func TestTaskServiceCreateTask_CreatesWorkspaceSessionAndPersistsTask(t *testing
 	require.Equal(t, task.WorktreePath, svc.providerRepo.bootstrapRequest.WorktreePath)
 	require.Equal(t, task.BranchName, svc.providerRepo.bootstrapRequest.BranchName)
 	require.Equal(t, TaskSessionLaunchSpec{
+		Command:     []string{"codex"},
+		ReadyMarker: "›",
+	}, svc.sessionClient.startedLaunch, "the prompt is typed only once the provider is ready")
+	require.Equal(t, TaskSessionLaunchSpec{
 		Command:      []string{"codex"},
 		ReadyMarker:  "›",
 		PrefillInput: []string{"add billing retry flow"},
-	}, svc.sessionClient.startedLaunch)
+	}, svc.sessionClient.prefilledLaunch)
 }
 
 func TestTaskServiceCreateTask_EnsuresProviderSessionEnvironmentBeforeStartingSession(t *testing.T) {
@@ -249,6 +253,8 @@ func TestTaskServiceRetryTaskCreationWithProgress_ResumesPreparingWorkspaceFailu
 		Content:  []byte("hooks"),
 		FileMode: 0o644,
 	}}}
+	// The failed attempt left the pane idle.
+	svc.sessionClient.inspectState = TaskSessionRuntimeState{Exists: true, ActiveCommands: []string{"zsh"}}
 
 	var steps []TaskCreateProgressStep
 	reporter := NewMockTaskCreateProgressReporter(t)
@@ -291,6 +297,8 @@ func TestTaskServiceCreateTask_BootstrapsWorkspaceWhenRepoSetupIsDisabled(t *tes
 		EnableWorkspaceSetup: false,
 		ProviderConfig:       svc.providerConfigMock,
 	})
+	svc.service.launcher.providerSessionWait = 0
+	svc.service.launcher.providerSessionLateWait = 0
 
 	task, err := svc.service.CreateTaskWithProgress(t.Context(), CreateTaskInput{
 		Cwd:    "/tmp/repo",

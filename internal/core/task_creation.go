@@ -130,7 +130,7 @@ func (c *taskCreation) retryTaskCreationWithProgress(
 		return nil, fmt.Errorf("task creation is not failed")
 	}
 
-	steps, ok := taskCreationStepsFrom(c.creationSteps(
+	steps, ok := taskCreationStepsFrom(c.creationStepsWith(
 		task,
 		task.RepoRoot,
 		func(ctx context.Context) error {
@@ -140,6 +140,7 @@ func (c *taskCreation) retryTaskCreationWithProgress(
 			}
 			return c.createTaskWorktree(ctx, task, settings)
 		},
+		c.launcher.resumeStartSession,
 	), task.CreationStep)
 	if !ok {
 		return nil, fmt.Errorf("task creation failed step %q is not retryable", task.CreationStep)
@@ -332,6 +333,15 @@ func (c *taskCreation) creationSteps(
 	repoRoot string,
 	createWorktree func(context.Context) error,
 ) []taskCreationStepAction {
+	return c.creationStepsWith(task, repoRoot, createWorktree, c.launcher.startSession)
+}
+
+func (c *taskCreation) creationStepsWith(
+	task *Task,
+	repoRoot string,
+	createWorktree func(context.Context) error,
+	startSession func(context.Context, *Task) (*Task, error),
+) []taskCreationStepAction {
 	var steps []taskCreationStepAction
 	// A folder Task runs where it was created; there is no worktree to make.
 	if !task.UsesFolderWorkspace() {
@@ -355,7 +365,7 @@ func (c *taskCreation) creationSteps(
 		{
 			step: TaskCreateProgressStartingSession,
 			run: func(ctx context.Context) error {
-				_, err := c.launcher.startSession(ctx, task)
+				_, err := startSession(ctx, task)
 				return err
 			},
 		},
