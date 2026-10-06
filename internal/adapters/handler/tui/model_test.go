@@ -1572,6 +1572,7 @@ func TestModel_CreateTaskReloadsAuthoritativeTaskSnapshotWhenCreateResponseIsPar
 			DisplayName:  "verify new rig behavior",
 			Prompt:       "testing if new rig things work",
 			RepoName:     "rig",
+			RepoRoot:     "/tmp/repo",
 			BranchName:   "feat/verify-new-rig-behavior",
 			WorktreePath: "/tmp/rig-verify-new-rig-behavior",
 			Provider:     core.ProviderCodex,

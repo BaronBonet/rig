@@ -37,6 +37,7 @@ func (m model) listView() string {
 	if m.err != nil {
 		lines = append(lines, errorStyle.Render("Error: "+m.err.Error()), "")
 	}
+	lines = append(lines, m.scopeLine(totalWidth)...)
 
 	switch {
 	case m.loading:
@@ -108,7 +109,7 @@ func (m model) taskListRowBudget(totalWidth int, totalHeight int) int {
 		return 0
 	}
 
-	baseLineCount := 2
+	baseLineCount := 2 + len(m.scopeLine(totalWidth))
 	if m.err != nil {
 		baseLineCount += 2
 	}

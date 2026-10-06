@@ -77,6 +77,11 @@ type model struct {
 	// importableHere counts the sessions in the launch folder an empty
 	// dashboard offers to import.
 	importableHere int
+	// allFolders lists every task; by default a window lists only the tasks
+	// of the folder it was launched in, so one rig per client stays apart.
+	allFolders bool
+	// otherFolderTasks counts the tasks outside the launch folder, listed or not.
+	otherFolderTasks int
 
 	// adoptionReloads dampens the reload triggered by a status/record provider
 	// mismatch: one reload per observed mismatch. When the mismatch survives a
@@ -445,6 +450,12 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		case "r":
 			m.loading = true
 			return m, loadTasksCmd(m.statusContext, m.frontend)
+		case "f":
+			if m.launchCwd == "" {
+				return m, nil
+			}
+			m.allFolders = !m.allFolders
+			return m, loadTasksCmd(m.statusContext, m.frontend)
 		case "R":
 			return m.retrySelectedTaskCreation()
 		case "g", "home":
@@ -498,7 +509,9 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if row := m.selectedRow(); row != nil {
 			selectedTaskID = taskID(row.task)
 		}
-		nextRows := rowsFromTasks(msg.tasks)
+		visible, others := m.scopeTasks(msg.tasks)
+		m.otherFolderTasks = others
+		nextRows := rowsFromTasks(visible)
 		preserveTaskStatuses(nextRows, m.rows)
 		m.reconcileTaskStatusTracking(nextRows)
 		m.rows = nextRows

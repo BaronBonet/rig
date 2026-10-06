@@ -239,6 +239,12 @@ Launch the terminal UI from a git repository:
 rig
 ```
 
+Every `rig` window shares one task list, but a window shows only the tasks of
+the folder it was launched in: those whose repository or folder is that folder,
+lies below it, or contains it. A line under the header counts the tasks of
+other folders, and `f` shows or hides them, so a `rig` per client folder stays
+separate.
+
 Create a task with `n`, enter a prompt, and press `enter`. While composing,
 press `tab` to cycle through your configured providers (a no-op when only one
 is configured); the selected provider owns the task name suggestion, branch
@@ -257,6 +263,7 @@ Common TUI keys:
 | `i` | Import a provider session started in this folder outside Rig |
 | `p` | Switch the selected task to another configured provider |
 | `r` | Refresh task data |
+| `f` | Show the tasks of every folder, or only this folder's |
 | `R` | Retry a failed task creation |
 | `x` | Clean up the selected task's tmux session and worktree |
 | `q` | Quit |
