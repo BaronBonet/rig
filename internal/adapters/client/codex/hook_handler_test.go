@@ -140,6 +140,21 @@ func TestRepositoryHookEventToTaskStatus_MapsCodexEvent(t *testing.T) {
 	}, update)
 }
 
+func TestRepositoryHookEventToTaskStatus_AResumedSessionWaitsForTheUser(t *testing.T) {
+	repo := New(nil, Config{Binary: "codex"}, HookForwardingConfig{})
+
+	update, err := repo.HookEventToTaskStatus(core.HookEventInput{
+		TaskID:      "task-123",
+		OccurredAt:  time.Date(2026, time.April, 20, 11, 2, 0, 0, time.UTC),
+		EventName:   "SessionStart",
+		StartSource: "resume",
+		Provider:    core.ProviderCodex,
+	})
+
+	require.NoError(t, err)
+	require.Equal(t, core.TaskStatusPhaseWaitingForInput, update.Phase)
+}
+
 func TestRepositoryHookEventToTaskStatus_MapsPermissionRequestToWaitingForInput(t *testing.T) {
 	repo := New(nil, Config{Binary: "codex"}, HookForwardingConfig{})
 

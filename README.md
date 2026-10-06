@@ -181,6 +181,9 @@ the next turn end updates the status. Monitor watches appear as shells, and a
 backgrounded long-running process such as a dev server keeps the task working
 until it exits.
 
+A session Rig resumes, on import or reconnect, shows `needs input` once the
+provider reports it has started: it reopens idle at its prompt, waiting for you.
+
 Use `rig doctor` to verify that your configured providers are available and
 that Rig's hook forwarding is installed correctly.
 

@@ -106,10 +106,16 @@ func (c Catalog) StatusUpdate(
 		if binding.Event != eventName {
 			continue
 		}
+		phase := binding.Phase
+		// A resumed session reopens idle at its prompt: its last turn is over
+		// and the next move is the user's, as after a Stop.
+		if eventName == core.HookEventSessionStart && strings.TrimSpace(input.StartSource) == "resume" {
+			phase = core.TaskStatusPhaseWaitingForInput
+		}
 		return &core.TaskStatusUpdate{
 			TaskID:       taskID,
 			Provider:     provider,
-			Phase:        binding.Phase,
+			Phase:        phase,
 			RawEventName: eventName,
 			ObservedAt:   input.OccurredAt,
 		}, nil
