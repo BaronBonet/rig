@@ -18,6 +18,11 @@ const (
 	promptSubmitDelay      = 500 * time.Millisecond
 	promptInputSettleDelay = 500 * time.Millisecond
 	taskWindowName         = "task"
+	// returnKeyEnvVar names the tmux prefix key that returns to rig from a
+	// task session; "none" leaves tmux's key bindings alone.
+	returnKeyEnvVar  = "RIG_TMUX_RETURN_KEY"
+	defaultReturnKey = "b"
+	rigSessionOption = "@rig_session"
 )
 
 type repository struct {
@@ -101,8 +106,9 @@ func (r *repository) AttachTaskSession(ctx context.Context, task *core.Task) err
 		return fmt.Errorf("task tmux session is required")
 	}
 
+	insideTmux := strings.TrimSpace(r.env("TMUX")) != ""
 	command := "attach-session"
-	if r.getenv != nil && strings.TrimSpace(r.getenv("TMUX")) != "" {
+	if insideTmux {
 		command = "switch-client"
 	}
 
@@ -117,7 +123,45 @@ func (r *repository) AttachTaskSession(ctx context.Context, task *core.Task) err
 	if isMissingSessionError(err, result) {
 		return core.ErrTaskSessionNotFound
 	}
+	if err == nil && insideTmux {
+		r.rememberReturnToRig(ctx, task.TmuxSession)
+	}
 	return err
+}
+
+// rememberReturnToRig lets one key bring the user back from a task to the
+// rig that opened it: the session rig runs in is recorded on the task's
+// session, and globally as the fallback for any other session, and the key
+// switches to whichever applies. Failures only lose the shortcut.
+func (r *repository) rememberReturnToRig(ctx context.Context, taskSession string) {
+	key := strings.TrimSpace(r.env(returnKeyEnvVar))
+	if key == "" {
+		key = defaultReturnKey
+	}
+	if key == "none" {
+		return
+	}
+	args := []string{"display-message", "-p"}
+	if pane := strings.TrimSpace(r.env("TMUX_PANE")); pane != "" {
+		args = append(args, "-t", pane)
+	}
+	result, err := r.runner.Run(ctx, "", "tmux", append(args, "#{session_name}")...)
+	rigSession := strings.TrimSpace(result.Stdout)
+	if err != nil || rigSession == "" {
+		return
+	}
+	_, _ = r.runner.Run(ctx, "", "tmux", "set-option", "-t", exactSessionTarget(taskSession)+":",
+		rigSessionOption, rigSession)
+	_, _ = r.runner.Run(ctx, "", "tmux", "set-option", "-g", rigSessionOption, rigSession)
+	_, _ = r.runner.Run(ctx, "", "tmux", "bind-key", "-T", "prefix", key,
+		"run-shell", "-C", "switch-client -t '=#{"+rigSessionOption+"}'")
+}
+
+func (r *repository) env(key string) string {
+	if r.getenv == nil {
+		return ""
+	}
+	return r.getenv(key)
 }
 
 func (r *repository) InspectTaskSession(ctx context.Context, task *core.Task) (core.TaskSessionRuntimeState, error) {

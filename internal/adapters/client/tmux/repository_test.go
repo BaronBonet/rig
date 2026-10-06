@@ -274,23 +274,93 @@ func TestRepositoryStartTaskSession_CleansUpSessionWhenPrefillFails(t *testing.T
 	require.EqualError(t, err, "load task input into tmux buffer: load-buffer failed")
 }
 
-func TestRepositoryAttachTaskSession_SwitchesClientWhenInsideTmux(t *testing.T) {
+// insideTmux runs rig in pane %3 of a tmux client, with env overriding the
+// rest of its environment.
+func insideTmux(repo *repository, env map[string]string) {
+	repo.getenv = func(key string) string {
+		switch key {
+		case "TMUX":
+			return "/tmp/tmux-1000/default,123,0"
+		case "TMUX_PANE":
+			return "%3"
+		}
+		return env[key]
+	}
+}
+
+func TestRepositoryAttachTaskSession_SwitchesClientAndBindsAKeyBackToRig(t *testing.T) {
 	runner := subprocess.NewMockRunner(t)
 	repo := New(runner).(*repository)
-	repo.getenv = func(key string) string {
-		if key == "TMUX" {
-			return "/tmp/tmux-1000/default,123,0"
-		}
-		return ""
-	}
+	insideTmux(repo, nil)
 
-	expectTmuxRun(runner, subprocess.Result{}, nil, "switch-client", "-t", "=repo_task")
+	mock.InOrder(
+		expectTmuxRun(runner, subprocess.Result{}, nil, "switch-client", "-t", "=repo_task"),
+		expectTmuxRun(runner, subprocess.Result{Stdout: "project\n"}, nil,
+			"display-message", "-p", "-t", "%3", "#{session_name}"),
+		expectTmuxRun(runner, subprocess.Result{}, nil, "set-option", "-t", "=repo_task:", "@rig_session", "project"),
+		expectTmuxRun(runner, subprocess.Result{}, nil, "set-option", "-g", "@rig_session", "project"),
+		expectTmuxRun(runner, subprocess.Result{}, nil,
+			"bind-key", "-T", "prefix", "b", "run-shell", "-C", "switch-client -t '=#{@rig_session}'"),
+	)
 
-	err := repo.AttachTaskSession(context.Background(), &core.Task{
-		TmuxSession: "repo_task",
-	})
+	err := repo.AttachTaskSession(context.Background(), &core.Task{TmuxSession: "repo_task"})
 
 	require.NoError(t, err)
+}
+
+func TestRepositoryAttachTaskSession_TheReturnKeyCanBeChangedOrTurnedOff(t *testing.T) {
+	runner := subprocess.NewMockRunner(t)
+	repo := New(runner).(*repository)
+	insideTmux(repo, map[string]string{"RIG_TMUX_RETURN_KEY": "e"})
+	expectTmuxRun(runner, subprocess.Result{}, nil, "switch-client", "-t", "=repo_task")
+	expectTmuxRun(runner, subprocess.Result{Stdout: "project"}, nil,
+		"display-message", "-p", "-t", "%3", "#{session_name}")
+	expectTmuxRun(runner, subprocess.Result{}, nil, "set-option", "-t", "=repo_task:", "@rig_session", "project")
+	expectTmuxRun(runner, subprocess.Result{}, nil, "set-option", "-g", "@rig_session", "project")
+	expectTmuxRun(runner, subprocess.Result{}, nil,
+		"bind-key", "-T", "prefix", "e", "run-shell", "-C", "switch-client -t '=#{@rig_session}'")
+	require.NoError(t, repo.AttachTaskSession(context.Background(), &core.Task{TmuxSession: "repo_task"}))
+
+	off := subprocess.NewMockRunner(t)
+	repo = New(off).(*repository)
+	insideTmux(repo, map[string]string{"RIG_TMUX_RETURN_KEY": "none"})
+	expectTmuxRun(off, subprocess.Result{}, nil, "switch-client", "-t", "=repo_task")
+	require.NoError(t, repo.AttachTaskSession(context.Background(), &core.Task{TmuxSession: "repo_task"}))
+}
+
+func TestRepositoryAttachTaskSession_BindsNothingWhenRigCannotNameItsSession(t *testing.T) {
+	runner := subprocess.NewMockRunner(t)
+	repo := New(runner).(*repository)
+	insideTmux(repo, nil)
+	expectTmuxRun(runner, subprocess.Result{}, nil, "switch-client", "-t", "=repo_task")
+	expectTmuxRun(runner, subprocess.Result{}, errors.New("no server"),
+		"display-message", "-p", "-t", "%3", "#{session_name}")
+
+	require.NoError(t, repo.AttachTaskSession(context.Background(), &core.Task{TmuxSession: "repo_task"}))
+}
+
+func TestRepositoryAttachTaskSession_AFailedSwitchBindsNothing(t *testing.T) {
+	runner := subprocess.NewMockRunner(t)
+	repo := New(runner).(*repository)
+	insideTmux(repo, nil)
+	expectTmuxRun(runner, subprocess.Result{Stderr: "no current client"}, errors.New("exit status 1"),
+		"switch-client", "-t", "=repo_task")
+
+	err := repo.AttachTaskSession(context.Background(), &core.Task{TmuxSession: "repo_task"})
+
+	require.ErrorContains(t, err, "exit status 1")
+}
+
+func TestRepositoryAttachTaskSession_MissingSessionBindsNothing(t *testing.T) {
+	runner := subprocess.NewMockRunner(t)
+	repo := New(runner).(*repository)
+	insideTmux(repo, nil)
+	expectTmuxRun(runner, subprocess.Result{Stderr: "can't find session: =repo_task"}, errors.New("exit status 1"),
+		"switch-client", "-t", "=repo_task")
+
+	err := repo.AttachTaskSession(context.Background(), &core.Task{TmuxSession: "repo_task"})
+
+	require.ErrorIs(t, err, core.ErrTaskSessionNotFound)
 }
 
 func TestRepositoryAttachTaskSession_AttachesWhenOutsideTmux(t *testing.T) {

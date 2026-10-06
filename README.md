@@ -279,6 +279,13 @@ Common TUI keys:
 | `x` | Clean up the selected task's tmux session and worktree |
 | `q` | Quit |
 
+Run `rig` inside tmux: `enter` moves your tmux client to the task's session.
+To come back, press your tmux prefix and then `b`. Rig binds that key the
+first time it opens a task, and it returns to the rig window that opened the
+task you are in, or to the rig you used last from any other session. Set
+`RIG_TMUX_RETURN_KEY` to use another key, or to `none` to leave your tmux key
+bindings alone.
+
 Check environment health:
 
 ```bash
