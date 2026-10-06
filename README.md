@@ -190,6 +190,9 @@ known. Close the session where it was running first: one conversation must not
 run in two places. If the session fails to start, the task is still created and
 `enter` retries.
 
+Rig never imports on its own, but an empty dashboard says how many sessions in
+the launch folder can be imported.
+
 ### Worktrees per task
 
 A task row lists the worktrees its provider sessions have edited, most recently

@@ -70,6 +70,9 @@ type model struct {
 	loading       bool
 	detailsHidden bool
 	setupOnly     bool
+	// importableHere counts the sessions in the launch folder an empty
+	// dashboard offers to import.
+	importableHere int
 
 	// adoptionReloads dampens the reload triggered by a status/record provider
 	// mismatch: one reload per observed mismatch. When the mismatch survives a
@@ -260,6 +263,11 @@ type importableSessionsLoadedMsg struct {
 type sessionImportedMsg struct {
 	task *core.Task
 	err  error
+}
+
+type importableCountLoadedMsg struct {
+	err   error
+	count int
 }
 
 type shimmerTickMsg struct{}
@@ -486,7 +494,11 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.rows = nextRows
 		m.clampSelection()
 		m.selectTask(selectedTaskID)
-		return m, tea.Batch(m.afterTasksLoadedCmds()...)
+		cmds := m.afterTasksLoadedCmds()
+		if cmd := m.importHintCmd(); cmd != nil {
+			cmds = append(cmds, cmd)
+		}
+		return m, tea.Batch(cmds...)
 	case pullRequestStatusLoadedMsg:
 		if msg.err != nil {
 			return m, nil
@@ -596,6 +608,13 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.sessionImport.err = msg.err
 		m.sessionImport.sessions = msg.sessions
 		m.sessionImport.selected = 0
+		return m, nil
+	case importableCountLoadedMsg:
+		// The hint is optional: a failed count only hides it.
+		m.importableHere = 0
+		if msg.err == nil {
+			m.importableHere = msg.count
+		}
 		return m, nil
 	case sessionImportedMsg:
 		m.endOp()
@@ -708,7 +727,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.cancelTaskStatusTracking(msg.taskID)
 		delete(m.adoptionReloads, msg.taskID)
 		m.clampSelection()
-		return m, nil
+		return m, m.importHintCmd()
 	case activityRefreshTickMsg:
 		cmds := []tea.Cmd{activityRefreshTickCmd()}
 		if row := m.selectedRow(); row != nil && row.task != nil && taskID(row.task) != "" {

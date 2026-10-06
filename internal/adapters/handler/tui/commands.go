@@ -175,6 +175,13 @@ func listImportableSessionsCmd(ctx context.Context, frontend core.TaskFrontend, 
 	}
 }
 
+func importableCountCmd(ctx context.Context, frontend core.TaskFrontend, folder string) tea.Cmd {
+	return func() tea.Msg {
+		sessions, err := frontend.ListImportableSessions(ctx, folder)
+		return importableCountLoadedMsg{err: err, count: len(sessions)}
+	}
+}
+
 func importSessionCmd(ctx context.Context, frontend core.TaskFrontend, session core.ProviderSessionSummary) tea.Cmd {
 	return func() tea.Msg {
 		task, err := frontend.ImportSession(ctx, session)

@@ -144,3 +144,102 @@ func TestImportMode_ScrollsLongListsInShortTerminals(t *testing.T) {
 	require.Contains(t, view, "↑ 20 more")
 	require.NotContains(t, view, "↓", "no marker below the last page")
 }
+
+// loadDashboard starts the TUI in /tmp/repo, lets the task list load, and
+// returns the model plus every message the load triggered.
+func loadDashboard(t *testing.T, frontend *frontendHarness) (model, []tea.Msg) {
+	t.Helper()
+	m, loadMsg := initModel(t, newModel(frontend.mock, "/tmp/repo", ""))
+	next, cmd := m.Update(loadMsg)
+	m, ok := next.(model)
+	require.True(t, ok)
+	if cmd == nil {
+		return m, nil
+	}
+	msg := cmd()
+	if batch, isBatch := msg.(tea.BatchMsg); isBatch {
+		msgs := make([]tea.Msg, 0, len(batch))
+		for _, batchCmd := range batch {
+			msgs = append(msgs, runCmd(t, batchCmd))
+		}
+		return m, msgs
+	}
+	return m, []tea.Msg{msg}
+}
+
+func TestEmptyDashboard_PointsToSessionsThatCanBeImported(t *testing.T) {
+	frontend := newFrontendHarness()
+	frontend.importableSessions = []core.ProviderSessionSummary{
+		{Provider: core.ProviderClaude, SessionID: "sess-1", Cwd: "/tmp/repo"},
+		{Provider: core.ProviderClaude, SessionID: "sess-2", Cwd: "/tmp/repo"},
+		{Provider: core.ProviderCodex, SessionID: "sess-3", Cwd: "/tmp/repo"},
+	}
+
+	m, msgs := loadDashboard(t, frontend)
+	view := stripANSI(m.View().Content)
+	require.Contains(t, view, "No tasks found.", "the list renders before the count arrives")
+	require.NotContains(t, view, "can be imported")
+
+	next, _ := m.Update(requireMsgType[importableCountLoadedMsg](t, msgs))
+	m, ok := next.(model)
+	require.True(t, ok)
+
+	require.Equal(t, "/tmp/repo", frontend.importableSessionsFolder)
+	view = stripANSI(m.View().Content)
+	require.Contains(t, view, "3 sessions started in /tmp/repo can be imported. Press i to pick one.")
+	require.Contains(t, view, "Press n to create one.")
+}
+
+func TestEmptyDashboard_KeepsTheCreateHintWhenNothingCanBeImported(t *testing.T) {
+	frontend := newFrontendHarness()
+
+	m, msgs := loadDashboard(t, frontend)
+	next, _ := m.Update(requireMsgType[importableCountLoadedMsg](t, msgs))
+	m, ok := next.(model)
+	require.True(t, ok)
+
+	view := stripANSI(m.View().Content)
+	require.NotContains(t, view, "can be imported")
+	require.Contains(t, view, "No tasks found.\nPress n to create one.")
+}
+
+func TestEmptyDashboard_HidesTheHintWhenTheCountFails(t *testing.T) {
+	frontend := newFrontendHarness()
+	m := newLoadedModel(frontend)
+	m.importableHere = 2
+
+	next, _ := m.Update(importableCountLoadedMsg{err: errors.New("daemon busy"), count: 0})
+	m, ok := next.(model)
+	require.True(t, ok)
+
+	require.NotContains(t, stripANSI(m.View().Content), "can be imported")
+}
+
+func TestDashboard_DoesNotLookForSessionsWhileItHasTasks(t *testing.T) {
+	frontend := newFrontendHarness()
+	frontend.listTasks = []*core.Task{{ID: "task-1", RepoName: "repo", DisplayName: "first task"}}
+	frontend.importableSessions = []core.ProviderSessionSummary{
+		{Provider: core.ProviderClaude, SessionID: "sess-1", Cwd: "/tmp/repo"},
+	}
+
+	_, msgs := loadDashboard(t, frontend)
+
+	require.Empty(t, frontend.importableSessionsFolder)
+	for _, msg := range msgs {
+		_, counted := msg.(importableCountLoadedMsg)
+		require.False(t, counted)
+	}
+}
+
+func TestEmptyDashboard_RecountsAfterTheLastTaskIsDeleted(t *testing.T) {
+	frontend := newFrontendHarness()
+	frontend.listTasks = []*core.Task{{ID: "task-1", RepoName: "repo", DisplayName: "first task"}}
+	m := newLoadedModel(frontend)
+
+	next, cmd := m.Update(taskDeletedMsg{taskID: "task-1"})
+	_, ok := next.(model)
+	require.True(t, ok)
+
+	requireMsgType[importableCountLoadedMsg](t, []tea.Msg{runCmd(t, cmd)})
+	require.Equal(t, "/tmp/repo", frontend.importableSessionsFolder)
+}

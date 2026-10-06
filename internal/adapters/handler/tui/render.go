@@ -43,7 +43,11 @@ func (m model) listView() string {
 		lines = append(lines, dimStyle.Render("Loading tasks..."))
 		lines = append(lines, sectionLines(m.listCreateStatusView(), totalWidth)...)
 	case len(m.rows) == 0:
-		lines = append(lines, dimStyle.Render("No tasks found."), dimStyle.Render("Press n to create one."))
+		lines = append(lines, dimStyle.Render("No tasks found."))
+		if m.importableHere > 0 {
+			lines = append(lines, primaryStyle.Render(m.importHintText()))
+		}
+		lines = append(lines, dimStyle.Render("Press n to create one."))
 		lines = append(lines, sectionLines(m.listCreateStatusView(), totalWidth)...)
 	default:
 		createSection := sectionLines(m.listCreateStatusView(), totalWidth)

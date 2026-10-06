@@ -26,6 +26,27 @@ func (m model) enterImportSessionMode() (tea.Model, tea.Cmd) {
 	return m, listImportableSessionsCmd(m.statusContext, m.frontend, folder)
 }
 
+// importHintCmd counts the importable sessions in the launch folder while the
+// dashboard has no tasks, so a first run beside existing sessions points at
+// them instead of looking empty. It never delays the task list.
+func (m model) importHintCmd() tea.Cmd {
+	folder := m.currentCreateCwd()
+	if len(m.rows) > 0 || folder == "" {
+		return nil
+	}
+	return importableCountCmd(m.statusContext, m.frontend, folder)
+}
+
+// importHintText invites importing the sessions an empty dashboard found.
+func (m model) importHintText() string {
+	noun := "sessions"
+	if m.importableHere == 1 {
+		noun = "session"
+	}
+	return fmt.Sprintf("%d %s started in %s can be imported. Press i to pick one.",
+		m.importableHere, noun, homeRelativePath(m.currentCreateCwd()))
+}
+
 func (m model) updateImportSession(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	if m.pending != opNone {
 		return m, nil
