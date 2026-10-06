@@ -27,6 +27,8 @@ func createTaskParams(task *core.Task) generated.CreateTaskParams {
 		UpdatedAt:      formatTime(task.UpdatedAt),
 		WorkspaceKind:  string(normalizeWorkspaceKind(task.WorkspaceKind)),
 		ProviderEnv:    encodeProviderEnv(task.ProviderEnv),
+		Model:          task.Launch().Model,
+		Effort:         task.Launch().Effort,
 	}
 }
 
@@ -48,6 +50,8 @@ func updateTaskParams(task *core.Task) generated.UpdateTaskParams {
 		UpdatedAt:      formatTime(task.UpdatedAt),
 		WorkspaceKind:  string(normalizeWorkspaceKind(task.WorkspaceKind)),
 		ProviderEnv:    encodeProviderEnv(task.ProviderEnv),
+		Model:          task.Launch().Model,
+		Effort:         task.Launch().Effort,
 		ID:             task.ID,
 	}
 }
@@ -168,6 +172,8 @@ func taskFromRow(row generated.ListTasksRow) *core.Task {
 		UpdatedAt:      parseTime(row.UpdatedAt),
 		WorkspaceKind:  normalizeWorkspaceKind(core.WorkspaceKind(row.WorkspaceKind)),
 		ProviderEnv:    decodeProviderEnv(row.ProviderEnv),
+		Model:          row.Model,
+		Effort:         row.Effort,
 	}
 }
 

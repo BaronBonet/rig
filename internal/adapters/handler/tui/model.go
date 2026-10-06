@@ -58,14 +58,17 @@ type model struct {
 	cancelStatus  context.CancelFunc
 	rows          []taskRow
 	providerSetup *core.ProviderSetup
-	selected      int
-	width         int
-	height        int
-	shimmerTick   int
-	mode          modelMode
-	pending       pendingOp
-	opening       bool
-	launchCwd     string
+	// launchSettings are the configured providers' launch options and the
+	// options each was last launched with; nil until loaded.
+	launchSettings *core.LaunchSettings
+	selected       int
+	width          int
+	height         int
+	shimmerTick    int
+	mode           modelMode
+	pending        pendingOp
+	opening        bool
+	launchCwd      string
 	// providerEnv is this rig window's provider configuration, sent with every
 	// request that lists sessions or starts a task so the shared daemon uses
 	// this window's accounts rather than its own.
@@ -122,6 +125,10 @@ type taskDraft struct {
 	// new worktree; it is the only choice outside a Git worktree.
 	inFolder   bool
 	outsideGit bool
+	// model and effort are the launch options for the provider; "" means the
+	// provider's own default.
+	model  string
+	effort string
 }
 
 // createFlowState is the progress of an in-flight or just-failed task
@@ -262,6 +269,11 @@ type providerSetupSavedMsg struct {
 	setup core.ProviderSetup
 }
 
+type launchSettingsLoadedMsg struct {
+	settings *core.LaunchSettings
+	err      error
+}
+
 type taskProviderSwitchedMsg struct {
 	task *core.Task
 	err  error
@@ -313,6 +325,7 @@ func newModel(frontend core.TaskFrontend, launchCwd string, buildVersion string)
 func (m model) Init() tea.Cmd {
 	return tea.Batch(
 		getProviderSetupCmd(m.statusContext, m.frontend),
+		getLaunchSettingsCmd(m.statusContext, m.frontend),
 		loadTasksCmd(m.statusContext, m.frontend),
 		activityRefreshTickCmd(),
 	)
@@ -347,7 +360,8 @@ func (m model) effectiveCreateProvider() core.Provider {
 }
 
 // cycleCreateProvider advances the create-flow provider selection to the next
-// configured provider. With a single configured provider it is a no-op.
+// configured provider, preselecting that provider's last launch options.
+// With a single configured provider it is a no-op.
 func (m *model) cycleCreateProvider() {
 	providers := m.configuredProviders()
 	if len(providers) < 2 {
@@ -355,13 +369,76 @@ func (m *model) cycleCreateProvider() {
 	}
 
 	current := m.effectiveCreateProvider()
+	m.draft.provider = providers[0]
 	for index, provider := range providers {
 		if provider == current {
 			m.draft.provider = providers[(index+1)%len(providers)]
-			return
+			break
 		}
 	}
-	m.draft.provider = providers[0]
+	m.applyLaunchDefaults(m.draft.provider)
+}
+
+// launchChoices lists the models and efforts provider accepts, each led by
+// "" for the provider's own default.
+func (m model) launchChoices(provider core.Provider) ([]string, []string) {
+	models, efforts := []string{""}, []string{""}
+	if m.launchSettings == nil {
+		return models, efforts
+	}
+	options, ok := m.launchSettings.Options[provider]
+	if !ok {
+		return models, efforts
+	}
+	return append(models, options.Models...), append(efforts, options.Efforts...)
+}
+
+// cycleCreateModel advances the draft's model through the provider's choices.
+func (m *model) cycleCreateModel() {
+	models, _ := m.launchChoices(m.effectiveCreateProvider())
+	m.draft.model = nextChoice(models, m.draft.model)
+}
+
+// cycleCreateEffort advances the draft's effort through the provider's choices.
+func (m *model) cycleCreateEffort() {
+	_, efforts := m.launchChoices(m.effectiveCreateProvider())
+	m.draft.effort = nextChoice(efforts, m.draft.effort)
+}
+
+// nextChoice is the choice after current, wrapping around; an unknown current
+// leads to the first choice.
+func nextChoice(choices []string, current string) string {
+	if len(choices) == 0 {
+		return ""
+	}
+	for index, choice := range choices {
+		if choice == current {
+			return choices[(index+1)%len(choices)]
+		}
+	}
+	return choices[0]
+}
+
+// applyLaunchDefaults preselects the options provider was last launched with.
+func (m *model) applyLaunchDefaults(provider core.Provider) {
+	m.draft.model, m.draft.effort = "", ""
+	if m.launchSettings == nil {
+		return
+	}
+	defaults := m.launchSettings.Defaults[provider]
+	m.draft.model, m.draft.effort = defaults.Model, defaults.Effort
+}
+
+// rememberLaunchDefaults mirrors what the daemon records on launch, so the
+// next draft preselects the same options without a reload.
+func (m *model) rememberLaunchDefaults(provider core.Provider, options core.LaunchOptions) {
+	if m.launchSettings == nil {
+		return
+	}
+	if m.launchSettings.Defaults == nil {
+		m.launchSettings.Defaults = make(map[core.Provider]core.LaunchOptions)
+	}
+	m.launchSettings.Defaults[provider] = options
 }
 
 // quit cancels the background status context before exiting the program.
@@ -622,7 +699,16 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		m.transition(modeBrowse)
 		m.loading = true
-		return m, loadTasksCmd(m.statusContext, m.frontend)
+		return m, tea.Batch(
+			loadTasksCmd(m.statusContext, m.frontend),
+			getLaunchSettingsCmd(m.statusContext, m.frontend),
+		)
+	case launchSettingsLoadedMsg:
+		// Without settings the composer simply offers no options to cycle.
+		if msg.err == nil && msg.settings != nil {
+			m.launchSettings = msg.settings
+		}
+		return m, nil
 	case importableSessionsLoadedMsg:
 		if m.mode != modeImportSession {
 			return m, nil
@@ -851,6 +937,7 @@ func (m model) submitPrompt() (model, tea.Cmd) {
 	// Capture the draft's inputs before the transition discards it.
 	cwd := m.currentCreateCwd()
 	provider := m.effectiveCreateProvider()
+	options := core.LaunchOptions{Model: m.draft.model, Effort: m.draft.effort}
 	var workspace core.WorkspaceKind
 	if m.draft.inFolder {
 		workspace = core.WorkspaceKindFolder
@@ -858,6 +945,7 @@ func (m model) submitPrompt() (model, tea.Cmd) {
 	m.transition(modeBrowse)
 	m.beginOp(opCreating)
 	m.create = createFlowState{}
+	m.rememberLaunchDefaults(provider, options)
 
 	return m, tea.Batch(
 		createTaskStreamCmd(m.statusContext, m.frontend, core.CreateTaskInput{
@@ -866,6 +954,8 @@ func (m model) submitPrompt() (model, tea.Cmd) {
 			Provider:    provider,
 			Workspace:   workspace,
 			ProviderEnv: m.providerEnv,
+			Model:       options.Model,
+			Effort:      options.Effort,
 		}),
 		shimmerTickCmd(),
 	)
@@ -909,6 +999,14 @@ func (m model) updatePromptInput(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if typed.String() == "tab" {
 			// Tab cycles through configured providers for the new task.
 			m.cycleCreateProvider()
+			return m, nil
+		}
+		if typed.String() == "ctrl+t" {
+			m.cycleCreateModel()
+			return m, nil
+		}
+		if typed.String() == "ctrl+r" {
+			m.cycleCreateEffort()
 			return m, nil
 		}
 		if typed.String() == "ctrl+o" {
@@ -1035,6 +1133,7 @@ func (m model) enterPromptInputMode(initialValue string) (tea.Model, tea.Cmd) {
 	input.SetValue(initialValue)
 	outsideGit := !insideGitWorktree(m.currentCreateCwd())
 	m.draft = taskDraft{prompt: initialValue, input: input, inFolder: outsideGit, outsideGit: outsideGit}
+	m.applyLaunchDefaults(m.effectiveCreateProvider())
 	m.create.err = nil
 	m.create.fromPR = false
 	return m, m.draft.input.Focus()

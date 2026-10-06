@@ -16,7 +16,8 @@ a background daemon handles longer running orchestration.
   repository, with live status, PR state, elapsed time, and token usage.
 - **Prompt-backed task creation**: start a new task from a prompt; the selected
   provider suggests a task name, then Rig creates the branch and worktree,
-  prepares the workspace, and starts the tmux session.
+  prepares the workspace, and starts the tmux session with the model and
+  effort you picked.
 - **Multi-provider support**: enable Codex and Claude Code through `rig setup`,
   pick a default provider, cycle providers with `tab` while creating a task, and
   switch an existing task to another configured provider.
@@ -259,8 +260,10 @@ separate.
 Create a task with `n`, enter a prompt, and press `enter`. While composing,
 press `tab` to cycle through your configured providers (a no-op when only one
 is configured); the selected provider owns the task name suggestion, branch
-type, and session. Use `ctrl+p` from the prompt view to create from a GitHub
-pull request instead — PR-backed tasks use the selected provider too.
+type, and session. `ctrl+t` cycles the model and `ctrl+r` the effort the
+provider starts with (see [Model and effort](#model-and-effort)). Use `ctrl+p`
+from the prompt view to create from a GitHub pull request instead — PR-backed
+tasks use the selected provider too.
 
 The prompt is typed into the provider's input, not submitted, once the
 provider reports that its session has started (its session-start hook), so a
@@ -275,6 +278,8 @@ Common TUI keys:
 |-----|--------|
 | `n` | Create a task from a prompt |
 | `tab` | Cycle configured providers while composing a task |
+| `ctrl+t` | Cycle the model while composing |
+| `ctrl+r` | Cycle the effort while composing |
 | `ctrl+p` | Pick a GitHub pull request while creating a task |
 | `ctrl+o` | Run the new task in this folder instead of a new worktree |
 | `enter` | Attach to the selected task's tmux session |
@@ -307,6 +312,20 @@ rig daemon start
 rig daemon stop
 rig daemon restart
 ```
+
+## Model and effort
+
+While composing a task, `ctrl+t` cycles the model and `ctrl+r` the effort the
+provider starts with; `default` leaves the choice to the provider. Claude Code
+offers its model aliases (`fable`, `opus`, `sonnet`, `haiku`) and efforts
+(`low` to `max`), passed as `claude --model` and `--effort`; Codex offers its
+models and reasoning efforts, passed as `codex -m` and
+`-c model_reasoning_effort=…`. The choice is kept on the task, so a reconnect
+resumes the session with the same options, and shown in the detail view.
+
+The options a provider was last launched with are preselected the next time
+you compose with it; they live in `~/.config/rig/config.json` under
+`launch_defaults`, next to provider setup.
 
 ## Switching Providers
 

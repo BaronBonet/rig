@@ -190,10 +190,12 @@ func (c *taskCreation) createTaskFromPrompt(
 	)
 	task.Prompt = input.Prompt
 	task.ProviderEnv = input.ProviderEnv
+	task.SetLaunch(input.Launch())
 
 	if err := c.tasks.CreateTask(ctx, task); err != nil {
 		return nil, err
 	}
+	c.launcher.rememberLaunchDefaults(ctx, provider, task.Launch())
 
 	steps := c.creationSteps(
 		task,
@@ -252,10 +254,12 @@ func (c *taskCreation) createFolderTask(
 	)
 	task.Prompt = input.Prompt
 	task.ProviderEnv = input.ProviderEnv
+	task.SetLaunch(input.Launch())
 
 	if err := c.tasks.CreateTask(ctx, task); err != nil {
 		return nil, err
 	}
+	c.launcher.rememberLaunchDefaults(ctx, provider, task.Launch())
 
 	steps := c.creationSteps(task, folder, nil)
 	if err := c.runSteps(ctx, task, reporter, steps, taskCreationStepPersistenceReadyOnly); err != nil {
@@ -311,9 +315,11 @@ func (c *taskCreation) createTaskFromPullRequest(
 		pr.BranchName,
 	)
 	task.ProviderEnv = input.ProviderEnv
+	task.SetLaunch(input.Launch())
 	if err := c.tasks.CreateTask(ctx, task); err != nil {
 		return nil, err
 	}
+	c.launcher.rememberLaunchDefaults(ctx, provider, task.Launch())
 
 	steps := c.creationSteps(
 		task,

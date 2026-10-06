@@ -224,6 +224,14 @@ var opSwitchTaskProvider = unaryOp[switchTaskProviderRequest, *core.Task]{
 	},
 }
 
+var opGetLaunchSettings = unaryOp[emptyResponse, *core.LaunchSettings]{
+	command:  "get_launch_settings",
+	envelope: "launch_settings",
+	call: func(ctx context.Context, svc core.TaskService, _ emptyResponse) (*core.LaunchSettings, error) {
+		return svc.GetLaunchSettings(ctx)
+	},
+}
+
 var opDeleteTask = unaryOp[taskIDRequest, emptyResponse]{
 	command:  "delete_task",
 	envelope: "task_deleted",
@@ -296,6 +304,7 @@ var socketUnaryHandlers = map[string]unaryHandler{
 	opSaveProviderSetup.command:      serveUnary(opSaveProviderSetup),
 	opDetectProviders.command:        serveUnary(opDetectProviders),
 	opSwitchTaskProvider.command:     serveUnary(opSwitchTaskProvider),
+	opGetLaunchSettings.command:      serveUnary(opGetLaunchSettings),
 	opDeleteTask.command:             serveUnary(opDeleteTask),
 	opListTasks.command:              serveUnary(opListTasks),
 	opLatestTaskStatus.command:       serveUnary(opLatestTaskStatus),

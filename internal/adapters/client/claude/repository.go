@@ -88,6 +88,14 @@ var needsInputNotificationTypes = []string{
 // title suggestions (common CLI noise is rejected by providerkit).
 var titleSkipPrefixes = []string(nil)
 
+// launchOptions are the model aliases and effort levels `claude --model` and
+// `claude --effort` accept, in display order. An alias always means the
+// latest model of that family, so the list does not age with releases.
+var launchOptions = core.ProviderLaunchOptions{
+	Models:  []string{"fable", "opus", "sonnet", "haiku"},
+	Efforts: []string{"low", "medium", "high", "xhigh", "max"},
+}
+
 type repository struct {
 	runner       subprocess.Runner
 	rigDataDir   func() (string, error)
@@ -218,14 +226,36 @@ func (r *repository) BuildWorkspaceBootstrapSpec(_ *core.Task) (core.WorkspaceBo
 	}, nil
 }
 
+func (r *repository) LaunchOptions() core.ProviderLaunchOptions {
+	return core.ProviderLaunchOptions{
+		Models:  append([]string(nil), launchOptions.Models...),
+		Efforts: append([]string(nil), launchOptions.Efforts...),
+	}
+}
+
+// launchArgs are the flags a task's launch options add to every claude
+// launch, fresh or resumed.
+func launchArgs(task *core.Task) []string {
+	var args []string
+	options := task.Launch()
+	if options.Model != "" {
+		args = append(args, "--model", options.Model)
+	}
+	if options.Effort != "" {
+		args = append(args, "--effort", options.Effort)
+	}
+	return args
+}
+
 func (r *repository) BuildTaskSessionLaunchSpec(task *core.Task) (core.TaskSessionLaunchSpec, error) {
 	var prefillInput []string
 	if strings.TrimSpace(task.Prompt) != "" {
 		prefillInput = []string{task.Prompt}
 	}
 
+	command := append([]string{r.binary}, launchArgs(task)...)
 	return core.TaskSessionLaunchSpec{
-		Command:      providerkit.EnvCommand(task.ProviderEnv, ConfigEnvVars, []string{r.binary}),
+		Command:      providerkit.EnvCommand(task.ProviderEnv, ConfigEnvVars, command),
 		ReadyMarker:  readyMarker,
 		PrefillInput: prefillInput,
 	}, nil
@@ -241,8 +271,9 @@ func (r *repository) BuildReconnectTaskSessionLaunchSpec(
 	}
 
 	// Claude Code finds a session in the configuration it was recorded in.
+	command := append([]string{r.binary, "--resume", sessionID}, launchArgs(task)...)
 	return core.TaskSessionLaunchSpec{
-		Command:     providerkit.EnvCommand(task.ProviderEnv, ConfigEnvVars, []string{r.binary, "--resume", sessionID}),
+		Command:     providerkit.EnvCommand(task.ProviderEnv, ConfigEnvVars, command),
 		ReadyMarker: readyMarker,
 	}, nil
 }

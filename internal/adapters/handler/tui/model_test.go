@@ -2397,6 +2397,9 @@ type frontendHarness struct {
 	switchTaskResult            *core.Task
 	switchTaskErr               error
 	switchTaskCalls             int
+	launchSettings              *core.LaunchSettings
+	launchSettingsErr           error
+	launchSettingsCalls         int
 }
 
 func newFrontendHarness() *frontendHarness {
@@ -2434,6 +2437,15 @@ func newFrontendHarness() *frontendHarness {
 				return nil, frontend.detectProvidersErr
 			}
 			return append([]core.ProviderDetection(nil), frontend.detections...), nil
+		},
+	).Maybe()
+	frontend.mock.EXPECT().GetLaunchSettings(mock.Anything).RunAndReturn(
+		func(context.Context) (*core.LaunchSettings, error) {
+			frontend.launchSettingsCalls++
+			if frontend.launchSettingsErr != nil {
+				return nil, frontend.launchSettingsErr
+			}
+			return frontend.launchSettings, nil
 		},
 	).Maybe()
 	frontend.mock.EXPECT().SwitchTaskProvider(mock.Anything, mock.Anything, mock.Anything).RunAndReturn(

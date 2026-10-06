@@ -424,6 +424,12 @@ func (m model) selectedTaskDetailView() string {
 			mutedStyle.Render("provider")+"  "+providerStyle(provider).Render(provider),
 		)
 	}
+	if launch := launchOptionsText(task.Launch()); launch != "" {
+		sessionLines = append(
+			sessionLines,
+			mutedStyle.Render("launch")+"    "+primaryStyle.Render(launch),
+		)
+	}
 
 	var builder strings.Builder
 	for _, line := range zipColumns(workspaceLines, sessionLines, detailColWidth) {
@@ -554,6 +560,8 @@ func (m model) promptInputView() string {
 		providerLine += mutedStyle.Render("  ·  ") + keybindStyle.Render("tab") + mutedStyle.Render(" cycle")
 	}
 	builder.WriteString(providerLine + "\n")
+	builder.WriteString(m.draftLaunchLine("model", m.draft.model, "ctrl+t") + "\n")
+	builder.WriteString(m.draftLaunchLine("effort", m.draft.effort, "ctrl+r") + "\n")
 	builder.WriteString(m.draftWorkspaceLine() + "\n\n")
 
 	promptBoxWidth := totalWidth - 4
@@ -585,6 +593,17 @@ func (m model) promptInputView() string {
 	builder.WriteString(footerKeybinds(binds...))
 
 	return builder.String()
+}
+
+// draftLaunchLine shows one launch option of the draft and the key that
+// cycles it.
+func (m model) draftLaunchLine(label string, value string, key string) string {
+	shown := value
+	if shown == "" {
+		shown = "default"
+	}
+	return mutedStyle.Render(padRightVisible(label, 10)) + primaryStyle.Render(shown) +
+		mutedStyle.Render("  ·  ") + keybindStyle.Render(key) + mutedStyle.Render(" cycle")
 }
 
 func (m model) listKeybindText() string {
@@ -829,6 +848,19 @@ func taskCreateProgressLabel(step core.TaskCreateProgressStep) string {
 	default:
 		return "Creating task"
 	}
+}
+
+// launchOptionsText names a task's launch options, or "" for the provider's
+// defaults.
+func launchOptionsText(options core.LaunchOptions) string {
+	var parts []string
+	if options.Model != "" {
+		parts = append(parts, options.Model)
+	}
+	if options.Effort != "" {
+		parts = append(parts, options.Effort+" effort")
+	}
+	return strings.Join(parts, " · ")
 }
 
 func (m model) confirmationView() string {

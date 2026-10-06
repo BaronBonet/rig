@@ -58,20 +58,35 @@ type configFile struct {
 	Version             int             `json:"version"`
 	ConfiguredProviders []core.Provider `json:"configured_providers"`
 	DefaultProvider     core.Provider   `json:"default_provider"`
+	// LaunchDefaults are the options each provider was last launched with,
+	// preselected for its next launch.
+	LaunchDefaults map[core.Provider]core.LaunchOptions `json:"launch_defaults,omitempty"`
 }
 
-func (s *store) GetProviderSetup(_ context.Context) (*core.ProviderSetup, error) {
+// readConfigFile returns the persisted config, or false when none exists yet.
+func (s *store) readConfigFile() (configFile, bool, error) {
 	raw, err := os.ReadFile(s.path)
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) {
-			return nil, nil
+			return configFile{}, false, nil
 		}
-		return nil, fmt.Errorf("read user config %s: %w", s.path, err)
+		return configFile{}, false, fmt.Errorf("read user config %s: %w", s.path, err)
 	}
 
 	var file configFile
 	if err := json.Unmarshal(raw, &file); err != nil {
-		return nil, fmt.Errorf("decode user config %s: %w", s.path, err)
+		return configFile{}, false, fmt.Errorf("decode user config %s: %w", s.path, err)
+	}
+	return file, true, nil
+}
+
+func (s *store) GetProviderSetup(_ context.Context) (*core.ProviderSetup, error) {
+	file, exists, err := s.readConfigFile()
+	if err != nil {
+		return nil, err
+	}
+	if !exists {
+		return nil, nil
 	}
 
 	setup := core.ProviderSetup{
@@ -100,11 +115,60 @@ func (s *store) SaveProviderSetup(_ context.Context, setup core.ProviderSetup) e
 		return err
 	}
 
-	payload, err := json.MarshalIndent(configFile{
+	// Launch defaults survive a rerun of provider setup.
+	current, _, err := s.readConfigFile()
+	if err != nil {
+		return err
+	}
+	return s.writeConfigFile(configFile{
 		Version:             currentConfigVersion,
 		ConfiguredProviders: setup.Configured,
 		DefaultProvider:     setup.Default,
-	}, "", "  ")
+		LaunchDefaults:      current.LaunchDefaults,
+	})
+}
+
+func (s *store) GetLaunchDefaults(_ context.Context) (map[core.Provider]core.LaunchOptions, error) {
+	file, _, err := s.readConfigFile()
+	if err != nil {
+		return nil, err
+	}
+	return file.LaunchDefaults, nil
+}
+
+// SaveLaunchDefaults records one provider's last launch options. Provider
+// setup must exist first: launch defaults never create a config on their own.
+func (s *store) SaveLaunchDefaults(
+	_ context.Context,
+	provider core.Provider,
+	options core.LaunchOptions,
+) error {
+	file, exists, err := s.readConfigFile()
+	if err != nil {
+		return err
+	}
+	if !exists {
+		return core.ErrProviderSetupRequired
+	}
+	if file.LaunchDefaults == nil {
+		file.LaunchDefaults = make(map[core.Provider]core.LaunchOptions)
+	}
+	options.Model = strings.TrimSpace(options.Model)
+	options.Effort = strings.TrimSpace(options.Effort)
+	if options == (core.LaunchOptions{}) {
+		delete(file.LaunchDefaults, provider)
+	} else {
+		file.LaunchDefaults[provider] = options
+	}
+	if len(file.LaunchDefaults) == 0 {
+		file.LaunchDefaults = nil
+	}
+	return s.writeConfigFile(file)
+}
+
+// writeConfigFile atomically replaces the config file.
+func (s *store) writeConfigFile(file configFile) error {
+	payload, err := json.MarshalIndent(file, "", "  ")
 	if err != nil {
 		return fmt.Errorf("encode user config: %w", err)
 	}

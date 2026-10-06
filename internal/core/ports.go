@@ -3,6 +3,7 @@ package core
 import (
 	"context"
 	"net/http"
+	"strings"
 	"time"
 )
 
@@ -44,6 +45,15 @@ type CreateTaskInput struct {
 	// ProviderEnv is the requesting rig window's provider configuration; the
 	// Task keeps it for every provider it launches.
 	ProviderEnv ProviderEnv `json:"provider_env,omitempty"`
+	// Model and Effort are the launch options the new Task's provider starts
+	// with; empty means the provider's default.
+	Model  string `json:"model,omitempty"`
+	Effort string `json:"effort,omitempty"`
+}
+
+// Launch returns the launch options the input asks for.
+func (i CreateTaskInput) Launch() LaunchOptions {
+	return LaunchOptions{Model: strings.TrimSpace(i.Model), Effort: strings.TrimSpace(i.Effort)}
 }
 
 type TaskCreateProgressStep string
@@ -221,6 +231,9 @@ type TaskService interface {
 	// the current provider process is still running and only records the new
 	// active provider after the new provider launches successfully.
 	SwitchTaskProvider(ctx context.Context, taskID string, provider Provider) (*Task, error)
+	// GetLaunchSettings returns every configured provider's launch options and
+	// the options each was last launched with.
+	GetLaunchSettings(ctx context.Context) (*LaunchSettings, error)
 }
 
 // HookEventHandler consumes provider hook events inside the daemon process.
@@ -250,6 +263,12 @@ type ProviderConfigStore interface {
 	GetProviderSetup(ctx context.Context) (*ProviderSetup, error)
 	// SaveProviderSetup validates and atomically persists the provider setup.
 	SaveProviderSetup(ctx context.Context, setup ProviderSetup) error
+	// GetLaunchDefaults returns the launch options each provider was last
+	// launched with; nil when none were recorded.
+	GetLaunchDefaults(ctx context.Context) (map[Provider]LaunchOptions, error)
+	// SaveLaunchDefaults records the launch options a provider was last
+	// launched with, keeping the rest of the config.
+	SaveLaunchDefaults(ctx context.Context, provider Provider, options LaunchOptions) error
 }
 
 // TaskRepository persists task records and returns their durable state.
@@ -313,8 +332,12 @@ type ProviderClient interface {
 	// BuildWorkspaceBootstrapSpec describes the provider-specific files that
 	// should be written into the task workspace before launch.
 	BuildWorkspaceBootstrapSpec(task *Task) (WorkspaceBootstrapSpec, error)
+	// LaunchOptions lists the models and efforts the provider's CLI accepts,
+	// and whether it can write a handoff note from a previous session.
+	LaunchOptions() ProviderLaunchOptions
 	// BuildTaskSessionLaunchSpec describes how the provider's CLI should be
-	// started inside the task's tmux session, with the task's ProviderEnv.
+	// started inside the task's tmux session, with the task's ProviderEnv and
+	// launch options.
 	BuildTaskSessionLaunchSpec(task *Task) (TaskSessionLaunchSpec, error)
 	// BuildReconnectTaskSessionLaunchSpec describes how the provider's CLI
 	// should resume an existing logical session inside a recreated tmux session.

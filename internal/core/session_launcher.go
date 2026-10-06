@@ -353,3 +353,13 @@ func (l *sessionLauncher) awaitProviderSession(
 		}
 	}
 }
+
+// rememberLaunchDefaults records the options a provider was just launched
+// with as the preselection for its next launch. Losing the preference is not
+// worth failing the launch.
+func (l *sessionLauncher) rememberLaunchDefaults(ctx context.Context, provider Provider, options LaunchOptions) {
+	if l.providerConfig == nil {
+		return
+	}
+	_ = l.providerConfig.SaveLaunchDefaults(ctx, provider, options)
+}

@@ -45,6 +45,8 @@ type fakeTaskService struct {
 	createTask  *core.Task
 	createErr   error
 
+	launchSettings *core.LaunchSettings
+
 	updates      chan core.TaskStatusUpdate
 	subscribeErr error
 	subscribeCtx chan context.Context
@@ -105,6 +107,12 @@ func (f *fakeTaskService) RetryTaskCreationStream(
 	taskID string,
 ) (<-chan core.TaskCreateEvent, error) {
 	return f.taskCreateResult()
+}
+
+func (f *fakeTaskService) GetLaunchSettings(context.Context) (*core.LaunchSettings, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.launchSettings, f.errByOp["get_launch_settings"]
 }
 
 func (f *fakeTaskService) ListRepoPullRequests(_ context.Context, cwd string) ([]core.RepoPullRequest, error) {

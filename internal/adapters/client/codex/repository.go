@@ -49,6 +49,13 @@ var hookCatalog = providerkit.Catalog{
 // suggestions (common CLI noise is rejected by providerkit).
 var titleSkipPrefixes = []string{"tokens used", "openai codex"}
 
+// launchOptions are the models `codex -m` accepts and the reasoning efforts
+// its model_reasoning_effort config takes, in display order.
+var launchOptions = core.ProviderLaunchOptions{
+	Models:  []string{"gpt-5-codex", "gpt-5"},
+	Efforts: []string{"low", "medium", "high"},
+}
+
 type repository struct {
 	runner              subprocess.Runner
 	codexHomeDir        func() (string, error)
@@ -175,13 +182,34 @@ func (r *repository) BuildWorkspaceBootstrapSpec(_ *core.Task) (core.WorkspaceBo
 	return core.WorkspaceBootstrapSpec{}, nil
 }
 
+func (r *repository) LaunchOptions() core.ProviderLaunchOptions {
+	return core.ProviderLaunchOptions{
+		Models:  append([]string(nil), launchOptions.Models...),
+		Efforts: append([]string(nil), launchOptions.Efforts...),
+	}
+}
+
+// launchArgs are the global flags a task's launch options add before any
+// codex subcommand.
+func launchArgs(task *core.Task) []string {
+	var args []string
+	options := task.Launch()
+	if options.Model != "" {
+		args = append(args, "-m", options.Model)
+	}
+	if options.Effort != "" {
+		args = append(args, "-c", "model_reasoning_effort="+options.Effort)
+	}
+	return args
+}
+
 func (r *repository) BuildTaskSessionLaunchSpec(task *core.Task) (core.TaskSessionLaunchSpec, error) {
 	var prefillInput []string
 	if strings.TrimSpace(task.Prompt) != "" {
 		prefillInput = []string{task.Prompt}
 	}
 
-	command, err := r.codexTaskCommand(task.ProviderEnv)
+	command, err := r.codexTaskCommand(task.ProviderEnv, launchArgs(task)...)
 	if err != nil {
 		return core.TaskSessionLaunchSpec{}, err
 	}
@@ -202,7 +230,7 @@ func (r *repository) BuildReconnectTaskSessionLaunchSpec(
 		return core.TaskSessionLaunchSpec{}, fmt.Errorf("session ID is required")
 	}
 
-	command, err := r.codexTaskCommand(task.ProviderEnv, "resume", sessionID)
+	command, err := r.codexTaskCommand(task.ProviderEnv, append(launchArgs(task), "resume", sessionID)...)
 	if err != nil {
 		return core.TaskSessionLaunchSpec{}, err
 	}

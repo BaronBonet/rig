@@ -41,10 +41,12 @@ type testTaskServiceHarness struct {
 }
 
 type providerConfigState struct {
-	getErr     error
-	saveErr    error
-	setup      *ProviderSetup
-	savedSetup *ProviderSetup
+	getErr              error
+	saveErr             error
+	setup               *ProviderSetup
+	savedSetup          *ProviderSetup
+	launchDefaults      map[Provider]LaunchOptions
+	savedLaunchDefaults map[Provider]LaunchOptions
 }
 
 type taskRepositoryState struct {
@@ -127,6 +129,7 @@ type providerClientState struct {
 	bootstrapRequest        *Task
 	launchErr               error
 	launchRequest           TaskSessionLaunchSpec
+	launchOptions           ProviderLaunchOptions
 	reconnectLaunchErr      error
 	reconnectLaunch         TaskSessionLaunchSpec
 	hookErr                 error
@@ -287,6 +290,26 @@ func configureProviderConfigMock(store *MockProviderConfigStore, state *provider
 			setup := *state.setup
 			setup.Configured = append([]Provider(nil), state.setup.Configured...)
 			return &setup, nil
+		},
+	).Maybe()
+	store.EXPECT().GetLaunchDefaults(mock.Anything).RunAndReturn(
+		func(context.Context) (map[Provider]LaunchOptions, error) {
+			if state.getErr != nil {
+				return nil, state.getErr
+			}
+			return state.launchDefaults, nil
+		},
+	).Maybe()
+	store.EXPECT().SaveLaunchDefaults(mock.Anything, mock.Anything, mock.Anything).RunAndReturn(
+		func(_ context.Context, provider Provider, options LaunchOptions) error {
+			if state.saveErr != nil {
+				return state.saveErr
+			}
+			if state.savedLaunchDefaults == nil {
+				state.savedLaunchDefaults = make(map[Provider]LaunchOptions)
+			}
+			state.savedLaunchDefaults[provider] = options
+			return nil
 		},
 	).Maybe()
 	store.EXPECT().SaveProviderSetup(mock.Anything, mock.Anything).RunAndReturn(
@@ -553,6 +576,9 @@ func configureProviderClientMock(client *MockProviderClient, state *providerClie
 		},
 	).Maybe()
 	client.EXPECT().TaskSessionCommandName().RunAndReturn(state.mockCommandName).Maybe()
+	client.EXPECT().LaunchOptions().RunAndReturn(func() ProviderLaunchOptions {
+		return state.launchOptions
+	}).Maybe()
 	client.EXPECT().HookEventToTaskStatus(mock.Anything).RunAndReturn(
 		func(input HookEventInput) (*TaskStatusUpdate, error) {
 			state.hookInput = input

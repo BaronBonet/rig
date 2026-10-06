@@ -2,8 +2,9 @@
 insert into tasks (
   id, slug, prompt, display_name, repo_root, repo_name, branch_name,
   worktree_path, tmux_session, provider, creation_status, creation_step,
-  creation_error, created_at, updated_at, workspace_kind, provider_env
-) values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
+  creation_error, created_at, updated_at, workspace_kind, provider_env,
+  model, effort
+) values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
 
 -- name: DeleteTask :exec
 delete from tasks
@@ -26,13 +27,16 @@ update tasks set
   created_at = ?,
   updated_at = ?,
   workspace_kind = ?,
-  provider_env = ?
+  provider_env = ?,
+  model = ?,
+  effort = ?
 where id = ?;
 
 -- name: ListTasks :many
 select
   id, slug, prompt, display_name, repo_root, repo_name, branch_name,
   worktree_path, tmux_session, provider, creation_status, creation_step,
-  creation_error, created_at, updated_at, workspace_kind, provider_env
+  creation_error, created_at, updated_at, workspace_kind, provider_env,
+  model, effort
 from tasks
 order by created_at asc;

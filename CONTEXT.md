@@ -15,8 +15,12 @@ Use `rig` for the CLI command and Rig for the product or system.
 - Task creation: The workflow that turns a prompt or pull request source into a
   prepared task workspace and interactive provider session.
 - Task draft: The in-progress task the TUI user is assembling before
-  submission: the prompt text, the chosen provider, and the optional pull
-  request source. Discarded on cancel; cleared once creation is submitted.
+  submission: the prompt text, the chosen provider, its launch options, and
+  the optional pull request source. Discarded on cancel; cleared once creation
+  is submitted.
+- Launch options: The model and effort a Task's provider starts and resumes
+  with, chosen when the Task or a new session is composed, kept on the Task,
+  and remembered per provider as the preselection for the next launch.
 - Creation status: The durable state of task setup: `creating`, `ready`, or
   `failed`.
 - Creation step: The retryable task setup milestone, such as suggesting a name,

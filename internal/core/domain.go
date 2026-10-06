@@ -37,6 +37,52 @@ type Task struct {
 	WorkspaceKind  WorkspaceKind          `json:"workspace_kind"`
 	// ProviderEnv is the provider configuration the Task's providers run with.
 	ProviderEnv ProviderEnv `json:"provider_env,omitempty"`
+	// Model and Effort are the launch options the Task's provider starts and
+	// resumes with; empty means the provider's own default.
+	Model  string `json:"model,omitempty"`
+	Effort string `json:"effort,omitempty"`
+}
+
+// LaunchOptions are the provider launch choices kept on a Task: the model and
+// effort its provider starts and resumes with. Empty means the provider's own
+// default.
+type LaunchOptions struct {
+	Model  string `json:"model,omitempty"`
+	Effort string `json:"effort,omitempty"`
+}
+
+// Launch returns the Task's launch options.
+func (t *Task) Launch() LaunchOptions {
+	if t == nil {
+		return LaunchOptions{}
+	}
+	return LaunchOptions{Model: strings.TrimSpace(t.Model), Effort: strings.TrimSpace(t.Effort)}
+}
+
+// SetLaunch records launch options on the Task.
+func (t *Task) SetLaunch(options LaunchOptions) {
+	if t == nil {
+		return
+	}
+	t.Model = strings.TrimSpace(options.Model)
+	t.Effort = strings.TrimSpace(options.Effort)
+}
+
+// ProviderLaunchOptions lists the launch choices one provider accepts, in
+// display order, and whether it can write a handoff note from a previous
+// session for a new one.
+type ProviderLaunchOptions struct {
+	Models  []string `json:"models"`
+	Efforts []string `json:"efforts"`
+	Handoff bool     `json:"handoff"`
+}
+
+// LaunchSettings is what the task composer needs to offer launch options:
+// each configured provider's choices and the options the user last launched
+// each provider with.
+type LaunchSettings struct {
+	Options  map[Provider]ProviderLaunchOptions `json:"options"`
+	Defaults map[Provider]LaunchOptions         `json:"defaults"`
 }
 
 // ProviderEnv is the provider configuration environment of the rig window a
