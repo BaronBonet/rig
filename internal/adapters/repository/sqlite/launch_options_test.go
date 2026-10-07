@@ -107,3 +107,33 @@ func TestRepositoryTasks_PersistShelvedAt(t *testing.T) {
 	require.NoError(t, err)
 	require.False(t, tasks[0].IsShelved())
 }
+
+func TestRepositoryTasks_PersistSessionTitle(t *testing.T) {
+	repo := newTestRepository(t)
+	ctx := context.Background()
+	now := time.Date(2026, time.October, 7, 12, 0, 0, 0, time.UTC)
+	task := &core.Task{
+		ID:            "task-1",
+		Slug:          "connect-slack-and-jira-mcps",
+		DisplayName:   "Set up the linter",
+		RepoRoot:      "/tmp/repo",
+		RepoName:      "repo",
+		WorktreePath:  "/tmp/repo",
+		TmuxSession:   "repo_connect-slack-and-jira-mcps",
+		Provider:      core.ProviderClaude,
+		WorkspaceKind: core.WorkspaceKindFolder,
+		SessionTitle:  "mcp-setup",
+		CreatedAt:     now,
+		UpdatedAt:     now,
+	}
+	require.NoError(t, repo.CreateTask(ctx, task))
+	tasks, err := repo.ListTasks(ctx)
+	require.NoError(t, err)
+	require.Equal(t, "mcp-setup", tasks[0].SessionTitle)
+
+	task.SessionTitle = "flaky-test-investigation"
+	require.NoError(t, repo.UpdateTask(ctx, task))
+	tasks, err = repo.ListTasks(ctx)
+	require.NoError(t, err)
+	require.Equal(t, "flaky-test-investigation", tasks[0].SessionTitle)
+}

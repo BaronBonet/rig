@@ -153,6 +153,48 @@ func claudeProjectDirName(folder string) string {
 	return nonAlphanumeric.ReplaceAllString(folder, "-")
 }
 
+// ReadSessionTitle reads the title the user gave the session with /rename.
+func (r *repository) ReadSessionTitle(_ context.Context, transcriptPath string) (string, error) {
+	tail, err := transcript.Tail(transcriptPath)
+	if err != nil {
+		return "", err
+	}
+	if title := claudeTranscriptTitles(tail).custom; title != "" {
+		return transcript.Title(title), nil
+	}
+	return "", nil
+}
+
+// claudeTitles are the newest title records of a transcript window: the one
+// the user gave, the one Claude Code generated, and an older-style summary.
+type claudeTitles struct {
+	custom, ai, summary string
+}
+
+func claudeTranscriptTitles(lines [][]byte) claudeTitles {
+	var titles claudeTitles
+	for index := len(lines) - 1; index >= 0; index-- {
+		var record struct {
+			Type        string `json:"type"`
+			CustomTitle string `json:"customTitle"`
+			AITitle     string `json:"aiTitle"`
+			Summary     string `json:"summary"`
+		}
+		if json.Unmarshal(lines[index], &record) != nil {
+			continue
+		}
+		switch record.Type {
+		case "custom-title":
+			titles.custom = cmp.Or(titles.custom, strings.TrimSpace(record.CustomTitle))
+		case "ai-title":
+			titles.ai = cmp.Or(titles.ai, strings.TrimSpace(record.AITitle))
+		case "summary":
+			titles.summary = cmp.Or(titles.summary, strings.TrimSpace(record.Summary))
+		}
+	}
+	return titles
+}
+
 // claudeSessionTitle names a session the way Claude Code does: by the title the
 // user gave it, else the title Claude Code generated, else an older-style
 // summary, else its first prompt. Title records are rewritten throughout a
@@ -163,27 +205,8 @@ func claudeSessionTitle(path string) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	var customTitle, aiTitle, summary string
-	for index := len(tail) - 1; index >= 0; index-- {
-		var record struct {
-			Type        string `json:"type"`
-			CustomTitle string `json:"customTitle"`
-			AITitle     string `json:"aiTitle"`
-			Summary     string `json:"summary"`
-		}
-		if json.Unmarshal(tail[index], &record) != nil {
-			continue
-		}
-		switch record.Type {
-		case "custom-title":
-			customTitle = cmp.Or(customTitle, strings.TrimSpace(record.CustomTitle))
-		case "ai-title":
-			aiTitle = cmp.Or(aiTitle, strings.TrimSpace(record.AITitle))
-		case "summary":
-			summary = cmp.Or(summary, strings.TrimSpace(record.Summary))
-		}
-	}
-	if title := cmp.Or(customTitle, aiTitle, summary); title != "" {
+	titles := claudeTranscriptTitles(tail)
+	if title := cmp.Or(titles.custom, titles.ai, titles.summary); title != "" {
 		return transcript.Title(title), nil
 	}
 

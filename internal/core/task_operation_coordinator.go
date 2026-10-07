@@ -17,6 +17,7 @@ const (
 	taskOperationNewSession    taskOperation = "new session"
 	taskOperationShelve        taskOperation = "shelve"
 	taskOperationUnshelve      taskOperation = "unshelve"
+	taskOperationRename        taskOperation = "rename"
 )
 
 func (o taskOperation) progressLabel() string {
@@ -35,6 +36,8 @@ func (o taskOperation) progressLabel() string {
 		return "being shelved"
 	case taskOperationUnshelve:
 		return "being put back on the list"
+	case taskOperationRename:
+		return "being renamed"
 	default:
 		return "running another operation"
 	}

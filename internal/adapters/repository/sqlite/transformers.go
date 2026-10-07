@@ -32,6 +32,7 @@ func createTaskParams(task *core.Task) generated.CreateTaskParams {
 		ParentID:       task.ParentID,
 		TmuxWindow:     task.TmuxWindow,
 		ShelvedAt:      formatTime(task.ShelvedAt),
+		SessionTitle:   task.SessionTitle,
 	}
 }
 
@@ -58,6 +59,7 @@ func updateTaskParams(task *core.Task) generated.UpdateTaskParams {
 		ParentID:       task.ParentID,
 		TmuxWindow:     task.TmuxWindow,
 		ShelvedAt:      formatTime(task.ShelvedAt),
+		SessionTitle:   task.SessionTitle,
 		ID:             task.ID,
 	}
 }
@@ -183,6 +185,7 @@ func taskFromRow(row generated.ListTasksRow) *core.Task {
 		ParentID:       row.ParentID,
 		TmuxWindow:     row.TmuxWindow,
 		ShelvedAt:      parseTime(row.ShelvedAt),
+		SessionTitle:   row.SessionTitle,
 	}
 }
 

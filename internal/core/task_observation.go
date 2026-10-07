@@ -264,6 +264,9 @@ func (o *taskObservation) HandleHookEvent(ctx context.Context, input HookEventIn
 	if !drivesRuntimeStatus {
 		return nil
 	}
+	if err := o.adoptSessionTitle(ctx, providerClient, input); err != nil {
+		return err
+	}
 
 	update, err := providerClient.HookEventToTaskStatus(input)
 	if err != nil {

@@ -38,6 +38,10 @@ Use `rig` for the CLI command and Rig for the product or system.
   its record, child tasks, launch options, history and workspace. A shelved
   Task comes back when it is unshelved, and its latest session resumes when
   it is opened.
+- Rename: Giving a Task a new name, usually because it is being reused for
+  another purpose. It happens in Rig, or by renaming the Task's provider
+  session, whose new title the Task takes. A rename drops the Task's original
+  ask, so new sessions are not briefed on what it was first for.
 - Handoff note: A note the previous provider session writes, in print mode on
   a fork that is not saved, for a new session to start from: goal, state,
   decisions, where things are, gotchas, next step. Kept under Rig's data dir.
@@ -158,6 +162,11 @@ Use `rig` for the CLI command and Rig for the product or system.
 - Shelving or unshelving a Task moves its Child tasks with it; a Child task
   can also be shelved on its own, which closes only its window. Shelving is
   refused while any of them is working.
+- A Rename changes only the Task's display name and original ask; its slug,
+  and so its workspace, branch and tmux session, stays. A provider session
+  renames its Task only when the title the user gave it changes, so a Rename
+  made in Rig stands until the session is renamed again. Only the Active
+  provider's sessions rename the Task.
 - A Handoff note is written by the Task's latest Provider session of its
   Active provider, and only by a Provider that supports it.
 - A Provider session belongs to exactly one Task and one Provider.

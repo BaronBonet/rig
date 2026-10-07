@@ -100,6 +100,11 @@ func (f *frontend) UnshelveTask(ctx context.Context, taskID string) error {
 	return err
 }
 
+func (f *frontend) RenameTask(ctx context.Context, taskID string, name string) error {
+	_, err := callUnary(ctx, f, opRenameTask, renameTaskRequest{TaskID: taskID, Name: name})
+	return err
+}
+
 func (f *frontend) GetProviderSetup(ctx context.Context) (*core.ProviderSetup, error) {
 	return callUnary(ctx, f, opGetProviderSetup, emptyResponse{})
 }

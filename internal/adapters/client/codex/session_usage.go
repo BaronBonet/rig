@@ -23,6 +23,12 @@ func (r *repository) ReadSessionTokenUsage(
 	return snapshot.usage, err
 }
 
+// ReadSessionTitle reports no title: Rig reads none the user gives a Codex
+// session.
+func (r *repository) ReadSessionTitle(context.Context, string) (string, error) {
+	return "", nil
+}
+
 type codexTranscriptEnvelope struct {
 	Timestamp time.Time       `json:"timestamp"`
 	Type      string          `json:"type"`

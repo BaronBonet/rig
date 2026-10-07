@@ -51,6 +51,24 @@ type Task struct {
 	// ShelvedAt is when the Task was taken off the current list; zero while
 	// it is on it.
 	ShelvedAt time.Time `json:"shelved_at,omitzero"`
+	// SessionTitle is the title the user last gave one of the Task's provider
+	// sessions, which became its DisplayName. A session renames its Task only
+	// when that title changes, so a rename made in Rig is not undone.
+	SessionTitle string `json:"session_title,omitempty"`
+}
+
+// Rename gives the Task a new name, for the new purpose it is being reused
+// for, and drops its original ask, which would brief new sessions on the old
+// one. It reports whether the name changed.
+func (t *Task) Rename(name string) bool {
+	name = strings.TrimSpace(name)
+	if name == "" || name == t.DisplayName {
+		return false
+	}
+	t.DisplayName = name
+	t.Prompt = ""
+	t.UpdatedAt = time.Now().UTC()
+	return true
 }
 
 // IsChild reports whether the Task is a session of another Task.

@@ -802,6 +802,7 @@ func TestRepositoryNew_MigratesDatabaseWithSquashedMigrationHistory(t *testing.T
 		"alter table tasks drop column parent_id",
 		"alter table tasks drop column tmux_window",
 		"alter table tasks drop column shelved_at",
+		"alter table tasks drop column session_title",
 		"delete from goose_db_version where version_id > 1",
 		"insert into goose_db_version (version_id, is_applied) values (2, 1), (3, 1), (4, 1), (5, 1)",
 	} {
@@ -930,6 +931,7 @@ func TestRepositoryNew_CreatesSchemaForTasksAndLatestStatuses(t *testing.T) {
 		"parent_id",
 		"tmux_window",
 		"shelved_at",
+		"session_title",
 	}
 	if !reflect.DeepEqual(names, wantTasks) {
 		t.Fatalf("unexpected tasks columns:\n got: %#v\nwant: %#v", names, wantTasks)

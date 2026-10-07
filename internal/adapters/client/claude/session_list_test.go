@@ -9,6 +9,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/BaronBonet/rig/internal/core"
+	"github.com/BaronBonet/rig/internal/pkg/subprocess"
 )
 
 func TestListFolderSessions_TitlesSessionsLikeClaudeCodeAndSortsByActivity(t *testing.T) {
@@ -178,4 +179,27 @@ func normalizeTimes(sessions []core.ProviderSessionSummary) []core.ProviderSessi
 		sessions[index].LastActiveAt = sessions[index].LastActiveAt.UTC()
 	}
 	return sessions
+}
+
+func TestReadSessionTitle_ReadsTheNewestTitleTheUserGave(t *testing.T) {
+	repo, _ := newTestRepository(t, subprocess.NewMockRunner(t))
+
+	renamed := writeTranscript(t,
+		`{"type":"custom-title","customTitle":"mcp-setup","sessionId":"s1"}`,
+		`{"type":"user","message":{"role":"user","content":"look at the flaky tests"}}`,
+		`{"type":"custom-title","customTitle":"flaky-test-investigation","sessionId":"s1"}`,
+		`{"type":"ai-title","aiTitle":"Investigate flaky tests","sessionId":"s1"}`,
+	)
+	title, err := repo.ReadSessionTitle(t.Context(), renamed)
+	require.NoError(t, err)
+	require.Equal(t, "flaky-test-investigation", title)
+
+	// A title Claude Code generated is not one the user gave.
+	generated := writeTranscript(t,
+		`{"type":"user","message":{"role":"user","content":"set up the linter"}}`,
+		`{"type":"ai-title","aiTitle":"Set up the linter","sessionId":"s2"}`,
+	)
+	title, err = repo.ReadSessionTitle(t.Context(), generated)
+	require.NoError(t, err)
+	require.Empty(t, title)
 }

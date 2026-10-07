@@ -162,8 +162,11 @@ type providerClientState struct {
 	errByTranscript         map[string]error
 	usageByTranscript       map[string]*SessionTokenUsage
 	tokenUsageCalls         []providerTokenUsageCall
-	builtLaunchSpecs        []TaskSessionLaunchSpec
-	folderSessions          []ProviderSessionSummary
+	// sessionTitles is the title the user gave each transcript's session.
+	sessionTitles     map[string]string
+	sessionTitleReads []string
+	builtLaunchSpecs  []TaskSessionLaunchSpec
+	folderSessions    []ProviderSessionSummary
 	// The provider env each call received, for asserting a task's
 	// configuration reaches its provider.
 	suggestEnv    ProviderEnv
@@ -705,6 +708,12 @@ func configureProviderClientMock(client *MockProviderClient, state *providerClie
 				}
 			}
 			return sessions, nil
+		},
+	).Maybe()
+	client.EXPECT().ReadSessionTitle(mock.Anything, mock.Anything).RunAndReturn(
+		func(_ context.Context, transcriptPath string) (string, error) {
+			state.sessionTitleReads = append(state.sessionTitleReads, transcriptPath)
+			return state.sessionTitles[transcriptPath], nil
 		},
 	).Maybe()
 	client.EXPECT().ReadSessionTokenUsage(mock.Anything, mock.Anything).RunAndReturn(

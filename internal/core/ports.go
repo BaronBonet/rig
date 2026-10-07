@@ -250,6 +250,9 @@ type TaskService interface {
 	// UnshelveTask puts the task and its child tasks back on the current list.
 	// Their sessions start again when they are opened.
 	UnshelveTask(ctx context.Context, taskID string) error
+	// RenameTask gives the task a new name and drops its original ask, so new
+	// sessions are not briefed on what it was first for.
+	RenameTask(ctx context.Context, taskID string, name string) error
 	// GetProviderSetup returns the user's provider setup, or nil when provider
 	// setup has never completed.
 	GetProviderSetup(ctx context.Context) (*ProviderSetup, error)
@@ -413,6 +416,9 @@ type ProviderClient interface {
 	// ReadSessionTokenUsage reads provider-specific token usage from one
 	// provider transcript.
 	ReadSessionTokenUsage(ctx context.Context, transcriptPath string) (*SessionTokenUsage, error)
+	// ReadSessionTitle reads the title the user gave one provider session,
+	// empty when they gave none. A title the provider generated is not one.
+	ReadSessionTitle(ctx context.Context, transcriptPath string) (string, error)
 	// ReadSessionFileChanges reads the file edits one provider session made,
 	// including edits made by its subagents, as absolute paths.
 	ReadSessionFileChanges(ctx context.Context, session TaskProviderSession) ([]SessionFileChange, error)

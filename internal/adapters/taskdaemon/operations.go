@@ -69,6 +69,11 @@ type saveProviderSetupRequest struct {
 	ProviderSetup *core.ProviderSetup `json:"provider_setup"`
 }
 
+type renameTaskRequest struct {
+	TaskID string `json:"task_id"`
+	Name   string `json:"name"`
+}
+
 type switchTaskProviderRequest struct {
 	TaskID   string        `json:"task_id"`
 	Provider core.Provider `json:"provider"`
@@ -205,6 +210,18 @@ var opUnshelveTask = unaryOp[taskIDRequest, emptyResponse]{
 	},
 }
 
+var opRenameTask = unaryOp[renameTaskRequest, emptyResponse]{
+	command:  "rename_task",
+	envelope: "task_renamed",
+	call: func(ctx context.Context, svc core.TaskService, req renameTaskRequest) (emptyResponse, error) {
+		taskID, err := requiredTaskID("rename_task", req.TaskID)
+		if err != nil {
+			return emptyResponse{}, err
+		}
+		return emptyResponse{}, svc.RenameTask(ctx, taskID, req.Name)
+	},
+}
+
 var opGetProviderSetup = unaryOp[emptyResponse, *core.ProviderSetup]{
 	command:  "get_provider_setup",
 	envelope: "provider_setup",
@@ -326,6 +343,7 @@ var socketUnaryHandlers = map[string]unaryHandler{
 	opReconnectTaskSession.command:   serveUnary(opReconnectTaskSession),
 	opShelveTask.command:             serveUnary(opShelveTask),
 	opUnshelveTask.command:           serveUnary(opUnshelveTask),
+	opRenameTask.command:             serveUnary(opRenameTask),
 	opGetProviderSetup.command:       serveUnary(opGetProviderSetup),
 	opSaveProviderSetup.command:      serveUnary(opSaveProviderSetup),
 	opDetectProviders.command:        serveUnary(opDetectProviders),

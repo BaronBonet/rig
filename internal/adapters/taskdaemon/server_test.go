@@ -56,6 +56,7 @@ type fakeTaskService struct {
 	reconnected []string
 	shelved     []string
 	unshelved   []string
+	renamed     map[string]string
 
 	errByOp map[string]error
 }
@@ -256,6 +257,16 @@ func (f *fakeTaskService) UnshelveTask(_ context.Context, taskID string) error {
 	defer f.mu.Unlock()
 	f.unshelved = append(f.unshelved, taskID)
 	return f.errByOp["unshelve_task"]
+}
+
+func (f *fakeTaskService) RenameTask(_ context.Context, taskID string, name string) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.renamed == nil {
+		f.renamed = map[string]string{}
+	}
+	f.renamed[taskID] = name
+	return f.errByOp["rename_task"]
 }
 
 func (f *fakeTaskService) GetProviderSetup(context.Context) (*core.ProviderSetup, error) {
@@ -525,6 +536,14 @@ func TestUnaryOperationsRoundTrip(t *testing.T) {
 		defer svc.mu.Unlock()
 		require.Equal(t, []string{"task-1"}, svc.shelved)
 		require.Equal(t, []string{"task-1"}, svc.unshelved)
+	})
+
+	t.Run("rename a task", func(t *testing.T) {
+		require.NoError(t, client.RenameTask(ctx, "task-1", "flaky test investigation"))
+		require.ErrorContains(t, client.RenameTask(ctx, " ", "anything"), "task_id required")
+		svc.mu.Lock()
+		defer svc.mu.Unlock()
+		require.Equal(t, map[string]string{"task-1": "flaky test investigation"}, svc.renamed)
 	})
 
 	t.Run("shelve surfaces a refusal", func(t *testing.T) {
