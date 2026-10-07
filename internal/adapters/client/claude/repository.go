@@ -388,6 +388,7 @@ func (r *repository) RecoverLatestTaskStatus(
 	context.Context,
 	core.TaskStatusUpdate,
 	[]core.TaskProviderSession,
+	time.Time,
 ) (*core.TaskStatusUpdate, error) {
 	return nil, nil
 }

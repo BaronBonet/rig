@@ -36,6 +36,11 @@ var ConfigEnvVars = []string{codexHomeEnvVar}
 //
 // Tool hooks match Bash only: Codex reports shell commands through Bash tool
 // events, and those are the tool signals Rig ingests for activity and status.
+//
+// SubagentStart drives no phase. It records a thread-spawned subagent's
+// transcript in provider session history as soon as the subagent is spawned,
+// so status recovery can count subagents still running after the root agent's
+// turn ends.
 var hookCatalog = providerkit.Catalog{
 	{Event: core.HookEventSessionStart, Matcher: "startup|resume", Phase: core.TaskStatusPhaseStarting},
 	{Event: core.HookEventUserPromptSubmit, Phase: core.TaskStatusPhaseWorking},
@@ -43,6 +48,7 @@ var hookCatalog = providerkit.Catalog{
 	{Event: core.HookEventPostToolUse, Matcher: "Bash", Phase: core.TaskStatusPhaseWorking},
 	{Event: core.HookEventPermissionRequest, Phase: core.TaskStatusPhaseWaitingForInput},
 	{Event: core.HookEventStop, Phase: core.TaskStatusPhaseWaitingForInput},
+	{Event: core.HookEventSubagentStart},
 }
 
 // titleSkipPrefixes rejects Codex-specific CLI noise when parsing task title

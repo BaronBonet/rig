@@ -596,7 +596,12 @@ func (o *taskStatusObserver) recoverCurrentStatus(
 		if listErr != nil {
 			return result
 		}
-		recovered, recoverErr := providerClient.RecoverLatestTaskStatus(ctx, *update, sessions)
+		recovered, recoverErr := providerClient.RecoverLatestTaskStatus(
+			ctx,
+			*update,
+			sessions,
+			taskSessionProviderStartedAt(input.runtime, providerClient.TaskSessionCommandName()),
+		)
 		if recoverErr != nil || recovered == nil {
 			return result
 		}

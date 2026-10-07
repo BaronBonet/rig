@@ -12,6 +12,7 @@ import (
 	"strings"
 	"sync"
 	"sync/atomic"
+	"time"
 
 	"github.com/BaronBonet/rig/internal/core"
 )
@@ -61,6 +62,7 @@ type codexTranscriptEntry struct {
 	usage       *core.SessionTokenUsage
 	activities  []core.TaskActivityEvent
 	fileChanges []core.SessionFileChange
+	turn        codexTranscriptTurn
 }
 
 type codexTranscriptSnapshot struct {
@@ -68,6 +70,21 @@ type codexTranscriptSnapshot struct {
 	usage       *core.SessionTokenUsage
 	activities  []core.TaskActivityEvent
 	fileChanges []core.SessionFileChange
+	turn        codexTranscriptTurn
+}
+
+// codexTranscriptTurn is a transcript's latest turn-lifecycle record, in file
+// order: a turn is open from its task_started until a task_complete or
+// turn_aborted closes it.
+type codexTranscriptTurn struct {
+	startedAt time.Time
+	open      bool
+}
+
+// openSince reports whether the turn is still open and started no earlier
+// than cutoff. A zero cutoff accepts every open turn.
+func (t codexTranscriptTurn) openSince(cutoff time.Time) bool {
+	return t.open && !t.startedAt.Before(cutoff)
 }
 
 func newCodexTranscriptIndex(maxBytes int64) *codexTranscriptIndex {
@@ -206,6 +223,7 @@ func (i *codexTranscriptIndex) refreshLocked(ctx context.Context, entry *codexTr
 	usage := cloneSessionTokenUsage(entry.usage)
 	activities := append([]core.TaskActivityEvent(nil), entry.activities...)
 	fileChanges := append([]core.SessionFileChange(nil), entry.fileChanges...)
+	turn := entry.turn
 	if rebuild {
 		offset = 0
 		trailing = nil
@@ -213,6 +231,7 @@ func (i *codexTranscriptIndex) refreshLocked(ctx context.Context, entry *codexTr
 		usage = nil
 		activities = nil
 		fileChanges = nil
+		turn = codexTranscriptTurn{}
 	}
 
 	readOffset := offset + int64(len(trailing))
@@ -235,7 +254,7 @@ func (i *codexTranscriptIndex) refreshLocked(ctx context.Context, entry *codexTr
 			return err
 		}
 		lineEnd += consumed
-		parseCodexTranscriptRecord(pending[consumed:lineEnd], &status, &usage, &activities, &fileChanges)
+		parseCodexTranscriptRecord(pending[consumed:lineEnd], &status, &usage, &activities, &fileChanges, &turn)
 		consumed = lineEnd + 1
 	}
 
@@ -248,6 +267,7 @@ func (i *codexTranscriptIndex) refreshLocked(ctx context.Context, entry *codexTr
 	entry.usage = usage
 	entry.activities = activities
 	entry.fileChanges = fileChanges
+	entry.turn = turn
 	if rebuild {
 		i.metrics.rebuilds.Add(1)
 	}
@@ -287,6 +307,7 @@ func parseCodexTranscriptRecord(
 	usage **core.SessionTokenUsage,
 	activities *[]core.TaskActivityEvent,
 	fileChanges *[]core.SessionFileChange,
+	turn *codexTranscriptTurn,
 ) {
 	var envelope codexTranscriptEnvelope
 	if err := jsonUnmarshalTranscriptLine(line, &envelope); err != nil {
@@ -304,6 +325,9 @@ func parseCodexTranscriptRecord(
 		*activities = append(*activities, *activity)
 	}
 	*fileChanges = append(*fileChanges, codexTranscriptFileChanges(envelope)...)
+	if candidate, ok := codexTranscriptEnvelopeTurn(envelope); ok {
+		*turn = candidate
+	}
 }
 
 func jsonUnmarshalTranscriptLine(line []byte, target any) error {
@@ -320,6 +344,26 @@ func codexTranscriptEnvelopeStatus(envelope codexTranscriptEnvelope) *codexTrans
 		return nil
 	}
 	return codexEventMessageStatus(envelope.Timestamp, payload.Type)
+}
+
+func codexTranscriptEnvelopeTurn(envelope codexTranscriptEnvelope) (codexTranscriptTurn, bool) {
+	if envelope.Type != "event_msg" || len(envelope.Payload) == 0 {
+		return codexTranscriptTurn{}, false
+	}
+	var payload struct {
+		Type string `json:"type"`
+	}
+	if err := json.Unmarshal(envelope.Payload, &payload); err != nil {
+		return codexTranscriptTurn{}, false
+	}
+	switch strings.TrimSpace(payload.Type) {
+	case "task_started":
+		return codexTranscriptTurn{startedAt: envelope.Timestamp, open: true}, true
+	case "task_complete", "turn_aborted":
+		return codexTranscriptTurn{}, true
+	default:
+		return codexTranscriptTurn{}, false
+	}
 }
 
 func codexTranscriptEnvelopeTokenUsage(envelope codexTranscriptEnvelope) *core.SessionTokenUsage {
@@ -352,6 +396,7 @@ func snapshotTranscriptEntry(entry *codexTranscriptEntry) codexTranscriptSnapsho
 		usage:       cloneSessionTokenUsage(entry.usage),
 		activities:  append([]core.TaskActivityEvent(nil), entry.activities...),
 		fileChanges: append([]core.SessionFileChange(nil), entry.fileChanges...),
+		turn:        entry.turn,
 	}
 }
 

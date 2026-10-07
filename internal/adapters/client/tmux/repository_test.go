@@ -467,8 +467,8 @@ func TestRepositoryInspectTaskSession_ReturnsActiveTaskWindowCommands(t *testing
 		"-F",
 		"#{pane_current_command}\t#{pane_pid}",
 	)
-	runner.On("Run", mock.Anything, "", "ps", "-axo", "ppid=,comm=").
-		Return(subprocess.Result{Stdout: "  100 codex\n  999 vim\n"}, nil).Once()
+	runner.On("Run", mock.Anything, "", "ps", "-axo", "ppid=,etime=,comm=").
+		Return(subprocess.Result{Stdout: "  100 01:30 codex\n  999 00:10 vim\n"}, nil).Once()
 
 	state, err := repo.InspectTaskSession(context.Background(), &core.Task{
 		TmuxSession: "repo_task",
@@ -482,6 +482,8 @@ func TestRepositoryInspectTaskSession_ReturnsActiveTaskWindowCommands(t *testing
 func TestRepositoryInspectTaskSessions_SixTasksUseOneTmuxAndOneProcessInventory(t *testing.T) {
 	runner := subprocess.NewMockRunner(t)
 	repo := New(runner).(*repository)
+	now := time.Date(2026, time.October, 1, 12, 0, 0, 0, time.UTC)
+	repo.now = func() time.Time { return now }
 
 	expectTmuxRun(
 		runner,
@@ -492,8 +494,8 @@ func TestRepositoryInspectTaskSessions_SixTasksUseOneTmuxAndOneProcessInventory(
 		"-F",
 		"#{session_name}\t#{window_name}\t#{pane_current_command}\t#{pane_pid}",
 	)
-	runner.On("Run", mock.Anything, "", "ps", "-axo", "ppid=,comm=").
-		Return(subprocess.Result{Stdout: "  100 codex\n  999 vim\n"}, nil).Once()
+	runner.On("Run", mock.Anything, "", "ps", "-axo", "ppid=,etime=,comm=").
+		Return(subprocess.Result{Stdout: "  100 01:30 codex\n  999 00:10 vim\n"}, nil).Once()
 
 	states, err := repo.InspectTaskSessions(context.Background(), []*core.Task{
 		{ID: "task-1", TmuxSession: "repo_one"},
@@ -506,13 +508,53 @@ func TestRepositoryInspectTaskSessions_SixTasksUseOneTmuxAndOneProcessInventory(
 
 	require.NoError(t, err)
 	require.Equal(t, map[string]core.TaskSessionRuntimeState{
-		"task-1": {Exists: true, ActiveCommands: []string{"zsh", "codex"}},
+		"task-1": {
+			Exists:           true,
+			ActiveCommands:   []string{"zsh", "codex"},
+			CommandStartedAt: map[string]time.Time{"codex": now.Add(-90 * time.Second)},
+		},
 		"task-2": {Exists: true, ActiveCommands: []string{"codex"}},
 		"task-3": {},
 		"task-4": {},
 		"task-5": {},
 		"task-6": {},
 	}, states)
+}
+
+func TestRepositoryInspectTaskSessions_ReportsPaneChildProcessStartTimes(t *testing.T) {
+	runner := subprocess.NewMockRunner(t)
+	repo := New(runner).(*repository)
+	now := time.Date(2026, time.October, 1, 12, 0, 0, 0, time.UTC)
+	repo.now = func() time.Time { return now }
+
+	expectTmuxRun(
+		runner,
+		subprocess.Result{Stdout: "repo_one\ttask\tzsh\t100\n"},
+		nil,
+		"list-panes",
+		"-a",
+		"-F",
+		"#{session_name}\t#{window_name}\t#{pane_current_command}\t#{pane_pid}",
+	)
+	runner.On("Run", mock.Anything, "", "ps", "-axo", "ppid=,etime=,comm=").
+		Return(subprocess.Result{Stdout: "  100 1-02:03:04 codex\n" +
+			"  100 00:05 codex\n" +
+			"  100 12:00 ChatGPT Helper\n" +
+			"  100 not-elapsed tail\n"}, nil).Once()
+
+	states, err := repo.InspectTaskSessions(context.Background(), []*core.Task{
+		{ID: "task-1", TmuxSession: "repo_one"},
+	})
+
+	require.NoError(t, err)
+	require.Equal(t, core.TaskSessionRuntimeState{
+		Exists:         true,
+		ActiveCommands: []string{"zsh", "codex", "codex", "ChatGPT Helper", "tail"},
+		CommandStartedAt: map[string]time.Time{
+			"codex":          now.Add(-5 * time.Second),
+			"ChatGPT Helper": now.Add(-12 * time.Minute),
+		},
+	}, states["task-1"])
 }
 
 func TestRepositoryInspectTaskSessions_PreservesDirectCommandsWhenProcessInventoryFails(t *testing.T) {
@@ -528,7 +570,7 @@ func TestRepositoryInspectTaskSessions_PreservesDirectCommandsWhenProcessInvento
 		"-F",
 		"#{session_name}\t#{window_name}\t#{pane_current_command}\t#{pane_pid}",
 	)
-	runner.On("Run", mock.Anything, "", "ps", "-axo", "ppid=,comm=").
+	runner.On("Run", mock.Anything, "", "ps", "-axo", "ppid=,etime=,comm=").
 		Return(subprocess.Result{}, errors.New("ps unavailable")).Once()
 
 	states, err := repo.InspectTaskSessions(context.Background(), []*core.Task{
@@ -609,8 +651,8 @@ func TestRepositoryInspectTaskSession_ReportsPaneChildCommandsWhenProviderRewrit
 		"-F",
 		"#{pane_current_command}\t#{pane_pid}",
 	)
-	runner.On("Run", mock.Anything, "", "ps", "-axo", "ppid=,comm=").
-		Return(subprocess.Result{Stdout: "  100 claude\n  100 tail\n  999 vim\n"}, nil).Once()
+	runner.On("Run", mock.Anything, "", "ps", "-axo", "ppid=,etime=,comm=").
+		Return(subprocess.Result{Stdout: "  100 02:00 claude\n  100 00:30 tail\n  999 00:10 vim\n"}, nil).Once()
 
 	state, err := repo.InspectTaskSession(context.Background(), &core.Task{
 		TmuxSession: "repo_task",
@@ -874,8 +916,8 @@ func TestRepositoryInspectTaskSessions_TellsAChildTasksWindowFromItsParents(t *t
 	expectTmuxRun(runner, subprocess.Result{
 		Stdout: "repo_task\ttask\tzsh\t100\nrepo_task\ts2\t2.1.291\t200\nrepo_task\teditor\tnvim\t300\n",
 	}, nil, "list-panes", "-a", "-F", "#{session_name}\t#{window_name}\t#{pane_current_command}\t#{pane_pid}")
-	runner.On("Run", mock.Anything, "", "ps", "-axo", "ppid=,comm=").
-		Return(subprocess.Result{Stdout: "200 claude\n300 nvim\n"}, nil).Once()
+	runner.On("Run", mock.Anything, "", "ps", "-axo", "ppid=,etime=,comm=").
+		Return(subprocess.Result{Stdout: "200 01:30 claude\n300 00:10 nvim\n"}, nil).Once()
 
 	states, err := repo.InspectTaskSessions(context.Background(), []*core.Task{
 		{ID: "task-1", TmuxSession: "repo_task"},
@@ -888,5 +930,7 @@ func TestRepositoryInspectTaskSessions_TellsAChildTasksWindowFromItsParents(t *t
 	require.Equal(t, []string{"zsh"}, states["task-1"].ActiveCommands, "the parent's pane is idle")
 	require.True(t, states["task-2"].Exists)
 	require.Equal(t, []string{"2.1.291", "claude"}, states["task-2"].ActiveCommands, "the child's runs claude")
+	require.Contains(t, states["task-2"].CommandStartedAt, "claude", "its provider's start time stays with its window")
+	require.Empty(t, states["task-1"].CommandStartedAt)
 	require.False(t, states["task-3"].Exists, "a window that is gone")
 }
