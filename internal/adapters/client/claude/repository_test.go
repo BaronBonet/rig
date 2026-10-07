@@ -289,6 +289,38 @@ func TestRepositoryBuildWorkspaceBootstrapSpec_MergePreservesUserSettings(t *tes
 	}
 }
 
+func TestRepositoryBuildWorkspaceBootstrapSpec_MergeReplacesRigRulesFromAnotherDataDir(t *testing.T) {
+	repo, dataDir := newTestRepository(t, subprocess.NewMockRunner(t))
+	scriptPath := filepath.Join(dataDir, "claude", "hooks", "forward-to-rig.sh")
+	// A Rig run under another HOME registered its forwarder in this shared
+	// workspace; that script is gone, so its rules would fail on every event.
+	otherScriptPath := filepath.Join(t.TempDir(), "claude", "hooks", "forward-to-rig.sh")
+
+	spec, err := repo.BuildWorkspaceBootstrapSpec(&core.Task{})
+	require.NoError(t, err)
+
+	existing := `{
+		"hooks": {
+			"Stop": [
+				{"hooks": [{"type": "command", "command": "/bin/sh '` + otherScriptPath + `' 'Stop'"}]},
+				{"hooks": [{"type": "command", "command": "/usr/local/bin/my-own-hook"}]}
+			]
+		}
+	}`
+
+	merged, err := spec.Files[0].Merge([]byte(existing))
+	require.NoError(t, err)
+	require.NotContains(t, string(merged), otherScriptPath)
+
+	var settings struct {
+		Hooks map[string][]providerkit.HookRule `json:"hooks"`
+	}
+	require.NoError(t, json.Unmarshal(merged, &settings))
+	require.Len(t, settings.Hooks["Stop"], 2)
+	require.Contains(t, settings.Hooks["Stop"][0].Hooks[0].Command, "my-own-hook")
+	require.Contains(t, settings.Hooks["Stop"][1].Hooks[0].Command, scriptPath)
+}
+
 func TestRepositoryBuildWorkspaceBootstrapSpec_MergeRejectsUnreadableSettings(t *testing.T) {
 	repo, _ := newTestRepository(t, subprocess.NewMockRunner(t))
 

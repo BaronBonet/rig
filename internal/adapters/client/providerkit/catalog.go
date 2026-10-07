@@ -125,17 +125,17 @@ func (c Catalog) StatusUpdate(
 }
 
 // MergeRigHookRules replaces Rig's own hook rules — identified by commands
-// referencing scriptPath — with the given rig rules, preserving every foreign
-// rule. Stale Rig registrations for events no longer in the catalog are
-// removed.
+// invoking a forwarder script — with the given rig rules, preserving every
+// foreign rule. Stale Rig registrations are removed: those for events no
+// longer in the catalog, and those whose script lives under another data dir,
+// as a Rig run under another HOME leaves in a shared workspace.
 func MergeRigHookRules(
 	existing map[string][]HookRule,
 	rig map[string][]HookRule,
-	scriptPath string,
 ) map[string][]HookRule {
 	merged := make(map[string][]HookRule, len(existing)+len(rig))
 	for eventName, rules := range existing {
-		if kept := rulesWithoutScriptCommand(rules, scriptPath); len(kept) > 0 {
+		if kept := rulesWithoutForwarder(rules); len(kept) > 0 {
 			merged[eventName] = kept
 		}
 	}
@@ -149,10 +149,10 @@ func MergeRigHookRules(
 	return merged
 }
 
-func rulesWithoutScriptCommand(rules []HookRule, scriptPath string) []HookRule {
+func rulesWithoutForwarder(rules []HookRule) []HookRule {
 	var filtered []HookRule
 	for _, rule := range rules {
-		if HookRuleHasScriptCommand(rule, scriptPath) {
+		if HookRuleHasScriptCommand(rule, "/"+ForwarderScriptName) {
 			continue
 		}
 		filtered = append(filtered, rule)

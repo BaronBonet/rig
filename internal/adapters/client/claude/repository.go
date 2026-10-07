@@ -411,7 +411,7 @@ func (r *repository) forwarderScriptPath() (string, error) {
 		return "", fmt.Errorf("rig data dir is required")
 	}
 
-	return filepath.Join(dataDir, "claude", "hooks", "forward-to-rig.sh"), nil
+	return filepath.Join(dataDir, "claude", "hooks", providerkit.ForwarderScriptName), nil
 }
 
 func (r *repository) resolveRigDataDir() (string, error) {
@@ -467,7 +467,7 @@ func mergeWorkspaceHookSettings(existing []byte, scriptPath string) ([]byte, err
 		}
 	}
 
-	merged := providerkit.MergeRigHookRules(hooks, hookCatalog.HookRules(hookCommandRenderer(scriptPath)), scriptPath)
+	merged := providerkit.MergeRigHookRules(hooks, hookCatalog.HookRules(hookCommandRenderer(scriptPath)))
 	encodedHooks, err := json.Marshal(merged)
 	if err != nil {
 		return nil, fmt.Errorf("encode merged claude workspace hooks: %w", err)

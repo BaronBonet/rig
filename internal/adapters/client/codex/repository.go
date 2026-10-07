@@ -151,7 +151,7 @@ func (r *repository) EnsureTaskSessionEnvironment(_ context.Context, env core.Pr
 		return err
 	}
 
-	scriptPath := filepath.Join(codexHome, "hooks", "forward-to-rig.sh")
+	scriptPath := filepath.Join(codexHome, "hooks", providerkit.ForwarderScriptName)
 	if err := r.forwarder().WriteScript(scriptPath); err != nil {
 		return err
 	}
@@ -344,7 +344,7 @@ func (r *repository) healthCheckHookForwarding() error {
 		return fmt.Errorf("codex home is required")
 	}
 
-	scriptPath := filepath.Join(codexHome, "hooks", "forward-to-rig.sh")
+	scriptPath := filepath.Join(codexHome, "hooks", providerkit.ForwarderScriptName)
 	if err := providerkit.HealthCheckScript(scriptPath, r.collectorURL); err != nil {
 		return err
 	}
@@ -378,7 +378,7 @@ func (r *repository) ensureRigHookRules(cfg *providerkit.HookConfig, scriptPath 
 
 	cfg.Hooks = providerkit.MergeRigHookRules(cfg.Hooks, hookCatalog.HookRules(func(eventName string) string {
 		return r.commandForEvent(scriptPath, eventName)
-	}), scriptPath)
+	}))
 
 	return nil
 }

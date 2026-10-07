@@ -15,7 +15,12 @@ import (
 //go:embed forward-to-rig.sh.tmpl
 var forwarderScriptTemplateText string
 
-var forwarderScriptTemplate = template.Must(template.New("forward-to-rig.sh").Parse(forwarderScriptTemplateText))
+// ForwarderScriptName is the file name of every provider's forwarder script.
+// A hook command invoking a script of this name is Rig's, whichever data dir
+// the script lives in.
+const ForwarderScriptName = "forward-to-rig.sh"
+
+var forwarderScriptTemplate = template.Must(template.New(ForwarderScriptName).Parse(forwarderScriptTemplateText))
 
 // TaskIDHeader carries the Task ID from the hook's environment
 // (core.TaskIDEnvVar) to the collector. It is empty for provider sessions Rig
