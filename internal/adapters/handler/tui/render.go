@@ -1184,22 +1184,46 @@ func taskWorktreesDetailLines(worktrees []core.TaskWorktree, width int) []string
 	return lines
 }
 
-// taskTokenUsageRowText shows how full the task's context is and how much
-// its provider wrote. The summed total is left to the detail view: every
-// request re-reads the whole cached conversation, so it runs to hundreds of
-// millions and says little about the session.
+// Every request re-reads the session's whole context, so past these sizes each
+// turn costs several fresh sessions' worth and a handoff (N) is due.
+const (
+	handoffSoonContextTokens = 200_000
+	handoffNowContextTokens  = 400_000
+)
+
+// taskTokenUsageRowText shows the latest session: how full its context is,
+// what it wrote, and every token it processed, cache reads included. The
+// context turns amber, then red, as a handoff gets due.
 func taskTokenUsageRowText(usage *core.TaskTokenUsage) string {
 	if usage == nil {
 		return ""
 	}
+	session := usage.Latest
 	var parts []string
-	if usage.ContextTokens > 0 {
-		parts = append(parts, "ctx "+formatTokenCount(usage.ContextTokens))
+	if session.ContextTokens > 0 {
+		parts = append(
+			parts,
+			contextTokensStyle(session.ContextTokens).Render("ctx "+formatTokenCount(session.ContextTokens)),
+		)
 	}
-	if usage.OutputTokens > 0 {
-		parts = append(parts, "out "+formatTokenCount(usage.OutputTokens))
+	if session.OutputTokens > 0 {
+		parts = append(parts, mutedStyle.Render("out "+formatTokenCount(session.OutputTokens)))
 	}
-	return mutedStyle.Render(strings.Join(parts, " · "))
+	if session.TotalTokens > 0 {
+		parts = append(parts, mutedStyle.Render("total "+formatTokenCount(session.TotalTokens)))
+	}
+	return strings.Join(parts, mutedStyle.Render(" · "))
+}
+
+func contextTokensStyle(tokens int) lipgloss.Style {
+	switch {
+	case tokens >= handoffNowContextTokens:
+		return errorStyle
+	case tokens >= handoffSoonContextTokens:
+		return warningStyle
+	default:
+		return mutedStyle
+	}
 }
 
 func taskTokenUsageDetailLines(usage *core.TaskTokenUsage) []string {
@@ -1213,7 +1237,7 @@ func taskTokenUsageDetailLines(usage *core.TaskTokenUsage) []string {
 	}
 
 	var fields []string
-	fields = appendPositiveTokenUsageField(fields, "context", usage.ContextTokens)
+	fields = appendPositiveTokenUsageField(fields, "context", usage.Latest.ContextTokens)
 	fields = appendPositiveTokenUsageField(fields, "output", usage.OutputTokens)
 	fields = appendPositiveTokenUsageField(fields, "input", usage.InputTokens)
 	fields = appendPositiveTokenUsageField(fields, "cache reads", usage.CachedInputTokens)

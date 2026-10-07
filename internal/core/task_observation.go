@@ -178,10 +178,9 @@ func (o *taskObservation) GetTaskTokenUsage(ctx context.Context, taskID string) 
 		}
 
 		total.SessionCount++
-		// Sessions come oldest first, so the most recently active one's
-		// context size wins.
+		// Sessions come oldest first, so the most recently active one wins.
 		if usage.ContextTokens > 0 {
-			total.ContextTokens = usage.ContextTokens
+			total.Latest = *usage
 		}
 		total.InputTokens += usage.InputTokens
 		total.OutputTokens += usage.OutputTokens

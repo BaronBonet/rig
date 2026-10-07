@@ -337,20 +337,21 @@ func (u SessionTokenUsage) IsZero() bool {
 
 type TaskTokenUsage struct {
 	SessionCount int `json:"session_count"`
-	// ContextTokens is the context size of the task's most recently active
-	// session; the other counts add up all its sessions.
-	ContextTokens            int `json:"context_tokens"`
-	InputTokens              int `json:"input_tokens"`
-	OutputTokens             int `json:"output_tokens"`
-	CachedInputTokens        int `json:"cached_input_tokens"`
-	CacheCreationInputTokens int `json:"cache_creation_input_tokens"`
-	ReasoningOutputTokens    int `json:"reasoning_output_tokens"`
-	TotalTokens              int `json:"total_tokens"`
+	// Latest is the usage of the task's most recently active session, the one
+	// a new session would take over from. The counts below add up all its
+	// sessions.
+	Latest                   SessionTokenUsage `json:"latest"`
+	InputTokens              int               `json:"input_tokens"`
+	OutputTokens             int               `json:"output_tokens"`
+	CachedInputTokens        int               `json:"cached_input_tokens"`
+	CacheCreationInputTokens int               `json:"cache_creation_input_tokens"`
+	ReasoningOutputTokens    int               `json:"reasoning_output_tokens"`
+	TotalTokens              int               `json:"total_tokens"`
 }
 
 func (u TaskTokenUsage) IsZero() bool {
 	return u.SessionCount == 0 &&
-		u.ContextTokens == 0 &&
+		u.Latest.IsZero() &&
 		u.InputTokens == 0 &&
 		u.OutputTokens == 0 &&
 		u.CachedInputTokens == 0 &&

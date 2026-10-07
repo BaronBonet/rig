@@ -223,11 +223,14 @@ the launch folder can be imported.
 
 ### Tokens per task
 
-A task row shows how full the context of its most recently active session is
-(`ctx`) and how many tokens its provider has written (`out`). The detail view
-adds the summed counts: every request re-reads the whole cached conversation,
-so the processed total runs to hundreds of millions on a long session and is
-mostly cache reads.
+A task row shows its most recently active session: how full its context is
+(`ctx`), how many tokens it has written (`out`), and every token it has
+processed, cache reads included (`total`). Every request re-reads the whole
+cached conversation, so the total grows with the square of the session's
+length and is mostly cache reads. The context is what the next request costs:
+it turns amber at 200k, when a fresh session from a handoff note (`N`) is worth
+it at the next break, and red at 400k. The detail view sums the counts over all
+of the task's sessions.
 
 ### Worktrees per task
 

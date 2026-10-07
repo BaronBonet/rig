@@ -1012,7 +1012,7 @@ func TestModel_TokenUsageLoadedRendersInSelectedTaskDetail(t *testing.T) {
 		taskID: "task-1",
 		usage: &core.TaskTokenUsage{
 			SessionCount:             2,
-			ContextTokens:            45,
+			Latest:                   core.SessionTokenUsage{ContextTokens: 45},
 			InputTokens:              130,
 			OutputTokens:             60,
 			CachedInputTokens:        30,
@@ -2697,12 +2697,28 @@ func newFrontendHarness() *frontendHarness {
 	return frontend
 }
 
-func TestTaskRow_ShowsContextSizeAndOutputInsteadOfTheProcessedTotal(t *testing.T) {
-	text := stripANSI(taskTokenUsageRowText(&core.TaskTokenUsage{
-		ContextTokens: 428_000, OutputTokens: 1_700_000, CachedInputTokens: 597_000_000, TotalTokens: 612_100_000,
-	}))
+func TestTaskRow_ShowsTheLatestSessionsContextOutputAndProcessedTotal(t *testing.T) {
+	usage := &core.TaskTokenUsage{
+		SessionCount: 2,
+		Latest: core.SessionTokenUsage{
+			ContextTokens: 229_100, OutputTokens: 61_900, CachedInputTokens: 13_100_000, TotalTokens: 13_400_000,
+		},
+		OutputTokens: 1_700_000, CachedInputTokens: 597_000_000, TotalTokens: 612_100_000,
+	}
 
-	require.Equal(t, "ctx 428.0k · out 1.7m", text)
-	require.Equal(t, "out 2.0k", stripANSI(taskTokenUsageRowText(&core.TaskTokenUsage{OutputTokens: 2000})),
-		"a session that has not reported its context yet")
+	require.Equal(t, "ctx 229.1k · out 61.9k · total 13.4m", stripANSI(taskTokenUsageRowText(usage)),
+		"the session a handoff would replace, not the task's earlier sessions")
+	require.Equal(t, "out 2.0k · total 9.0k", stripANSI(taskTokenUsageRowText(&core.TaskTokenUsage{
+		Latest: core.SessionTokenUsage{OutputTokens: 2000, TotalTokens: 9000},
+	})), "a session that has not reported its context yet")
+}
+
+func TestTaskRow_ContextTurnsAmberThenRedAsAHandoffGetsDue(t *testing.T) {
+	rowWithContext := func(tokens int) string {
+		return taskTokenUsageRowText(&core.TaskTokenUsage{Latest: core.SessionTokenUsage{ContextTokens: tokens}})
+	}
+
+	require.Equal(t, mutedStyle.Render("ctx 199.9k"), rowWithContext(199_900))
+	require.Equal(t, warningStyle.Render("ctx 200.0k"), rowWithContext(handoffSoonContextTokens))
+	require.Equal(t, errorStyle.Render("ctx 400.0k"), rowWithContext(handoffNowContextTokens))
 }

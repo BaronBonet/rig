@@ -171,8 +171,16 @@ func TestTaskStatusService_GetTaskTokenUsageSumsLatestTranscriptPerProviderSessi
 	usage, err := svc.service.GetTaskTokenUsage(t.Context(), "task-123")
 	require.NoError(t, err)
 	require.Equal(t, &TaskTokenUsage{
-		SessionCount:             2,
-		ContextTokens:            900, // the most recently active session's
+		SessionCount: 2,
+		Latest: SessionTokenUsage{ // the most recently active session's
+			ContextTokens:            900,
+			InputTokens:              100,
+			CachedInputTokens:        25,
+			CacheCreationInputTokens: 15,
+			OutputTokens:             40,
+			ReasoningOutputTokens:    10,
+			TotalTokens:              140,
+		},
 		InputTokens:              130,
 		CachedInputTokens:        30,
 		CacheCreationInputTokens: 25,
