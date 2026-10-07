@@ -43,7 +43,7 @@ func backTarget(mode modelMode, hasSetup bool, setupOnly bool) backDest {
 	case modePRPicker:
 		// Back to the prompt: both modes edit the same task draft.
 		return backDest{to: modePromptInput}
-	case modeCleanupConfirm, modeSwitchProvider, modeImportSession:
+	case modeCleanupConfirm, modeSwitchProvider, modeImportSession, modeRenameTask:
 		return backDest{to: modeBrowse}
 	case modeProviderSetup:
 		// Provider setup is mandatory: without a valid setup the only way out
@@ -67,6 +67,7 @@ const (
 	familySetup
 	familySwitch
 	familyImport
+	familyRename
 )
 
 func familyOf(mode modelMode) modeFamily {
@@ -79,6 +80,8 @@ func familyOf(mode modelMode) modeFamily {
 		return familySwitch
 	case modeImportSession:
 		return familyImport
+	case modeRenameTask:
+		return familyRename
 	default: // browse and cleanup confirm own no mode state
 		return familyBrowse
 	}
@@ -108,6 +111,8 @@ func (m *model) clearFamilyState(family modeFamily) {
 		m.providerSwitch = switchState{}
 	case familyImport:
 		m.sessionImport = importState{}
+	case familyRename:
+		m.rename = renameState{}
 	}
 }
 

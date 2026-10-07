@@ -31,6 +31,7 @@ const (
 	modeProviderSetup
 	modeSwitchProvider
 	modeImportSession
+	modeRenameTask
 )
 
 const defaultBuildVersion = "dev"
@@ -47,6 +48,7 @@ const (
 	opSwitching
 	opImporting
 	opShelving
+	opRenaming
 )
 
 const taskActivityPreviewLimit = 6
@@ -108,6 +110,7 @@ type model struct {
 	setupForm      setupFormState
 	providerSwitch switchState
 	sessionImport  importState
+	rename         renameState
 
 	// In-flight creation progress; outlives the draft and renders in browse.
 	create createFlowState
@@ -508,6 +511,9 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if m.mode == modeImportSession {
 			return m.pasteImportQuery(msg)
 		}
+		if m.mode == modeRenameTask {
+			return m.updateRename(msg)
+		}
 		return m.updatePromptPaste(msg)
 	case tea.KeyPressMsg:
 		if isForceQuitKey(msg) {
@@ -534,6 +540,9 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		if m.mode == modeImportSession {
 			return m.updateImportSession(msg)
+		}
+		if m.mode == modeRenameTask {
+			return m.updateRename(msg)
 		}
 
 		if isQuitKey(msg) {
@@ -568,6 +577,8 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m.enterPromptInputMode("")
 		case "N":
 			return m.enterNewSessionMode()
+		case "e":
+			return m.enterRenameMode()
 		case "p":
 			return m.enterSwitchProviderMode()
 		case "i":
@@ -896,6 +907,15 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			cmds = append(cmds, openTaskSessionCmd(m.statusContext, m.frontend, msg.task), shimmerTickCmd())
 		}
 		return m, tea.Batch(cmds...)
+	case taskRenamedMsg:
+		m.endOp()
+		if msg.err != nil {
+			// The typed name stays, so it can be fixed and sent again.
+			m.err = msg.err
+			return m, nil
+		}
+		m.transition(modeBrowse)
+		return m, loadTasksCmd(m.statusContext, m.frontend)
 	case taskDeletedMsg:
 		m.endOp()
 		m.transition(modeBrowse)
@@ -931,6 +951,9 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if m.mode == modePromptInput {
 			return m.updatePromptInput(msg)
 		}
+		if m.mode == modeRenameTask {
+			return m.updateRename(msg)
+		}
 		return m, nil
 	}
 }
@@ -950,6 +973,8 @@ func (m model) View() tea.View {
 		body = m.switchProviderView()
 	case modeImportSession:
 		body = m.importSessionView()
+	case modeRenameTask:
+		body = m.renameTaskView()
 	default:
 		body = m.listView()
 	}

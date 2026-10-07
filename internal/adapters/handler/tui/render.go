@@ -680,12 +680,12 @@ func (m model) draftHandoffLine() string {
 func (m model) listKeybindText(width int) string {
 	if m.showShelf {
 		return m.fitKeybindBar(width, [][2]string{
-			{"enter", "open"}, {"d", "unshelve"}, {"tab", "current"},
+			{"enter", "open"}, {"d", "unshelve"}, {"e", "rename"}, {"tab", "current"},
 			{"space", "details"}, {"x", "clean"}, {"q", "quit"},
-		}, "space", "tab")
+		}, "e", "space", "tab")
 	}
 	binds := [][2]string{
-		{"n", "new"}, {"N", "session"}, {"d", "shelve"}, {"tab", "shelf"},
+		{"n", "new"}, {"N", "session"}, {"d", "shelve"}, {"e", "rename"}, {"tab", "shelf"},
 		{"i", "import"}, {"p", "provider"}, {"r", "refresh"},
 	}
 	if row := m.selectedRow(); row != nil && row.task != nil &&
@@ -694,7 +694,7 @@ func (m model) listKeybindText(width int) string {
 	}
 	binds = append(binds, [2]string{"space", "details"}, [2]string{"x", "clean"}, [2]string{"q", "quit"})
 
-	return m.fitKeybindBar(width, binds, "r", "p", "i", "space", "tab")
+	return m.fitKeybindBar(width, binds, "r", "p", "i", "e", "space", "tab")
 }
 
 // fitKeybindBar renders binds as a key bar, leaving out the droppable keys,

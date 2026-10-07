@@ -291,6 +291,7 @@ Common TUI keys:
 | `ctrl+o` | Run the new task in this folder instead of a new worktree |
 | `enter` | Attach to the selected task's tmux session |
 | `d` | Shelve the selected task, or put it back from the shelf |
+| `e` | Rename the selected task |
 | `tab` | Switch the list between the current tasks and the shelf |
 | `i` | Import a provider session started in this folder outside Rig |
 | `p` | Switch the selected task to another configured provider |
@@ -407,6 +408,19 @@ resuming its latest session, as a reconnect would; `d` puts it back without
 starting anything, so the session resumes when you next open it. Starting,
 importing or switching work happens on the current list, and `esc` returns to
 it.
+
+## Renaming
+
+When you reuse a task for something else, give it a new name: `e` edits the
+selected task's name in place, on the list or the shelf. Renaming the task's
+Claude session with `/rename` does the same, and the task takes the new title
+at the session's next prompt or turn end. A session renames its task only when
+its title changes, so a name you give in Rig is not undone by an older title.
+
+A rename drops the task's original ask, which every new session (`N`) quotes,
+so new sessions are not briefed on what the task was first for; they start
+from the handoff note and the workspace. Only the name changes: the branch,
+worktree and tmux session keep theirs.
 
 ## Switching Providers
 

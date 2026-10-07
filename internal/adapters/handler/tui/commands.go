@@ -114,6 +114,12 @@ func shelveTaskCmd(ctx context.Context, frontend core.TaskFrontend, task *core.T
 	}
 }
 
+func renameTaskCmd(ctx context.Context, frontend core.TaskFrontend, taskID string, name string) tea.Cmd {
+	return func() tea.Msg {
+		return taskRenamedMsg{err: frontend.RenameTask(ctx, taskID, name)}
+	}
+}
+
 func deleteTaskCmd(ctx context.Context, frontend core.TaskFrontend, taskID string) tea.Cmd {
 	return func() tea.Msg {
 		err := frontend.DeleteTask(ctx, taskID)

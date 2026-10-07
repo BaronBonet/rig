@@ -50,7 +50,7 @@ func settle(t *testing.T, m model, cmd tea.Cmd) model {
 	}
 	for _, msg := range msgs {
 		switch msg.(type) {
-		case tasksLoadedMsg, taskShelvedMsg, taskOpenedMsg:
+		case tasksLoadedMsg, taskShelvedMsg, taskOpenedMsg, taskRenamedMsg:
 			next, follow := m.Update(msg)
 			m, _ = next.(model)
 			m = settle(t, m, follow)
@@ -87,7 +87,7 @@ func TestShelf_TabShowsTheShelfAndEnterPutsATaskBackAndOpensIt(t *testing.T) {
 	view := stripANSI(m.View().Content)
 	require.Contains(t, view, "Shelf: tasks taken off the current list. Opening one puts it back.")
 	require.Contains(t, view, "shelved 3h 0m ago")
-	require.Contains(t, view, "enter open  d unshelve  tab current")
+	require.Contains(t, view, "enter open  d unshelve  e rename  tab current")
 
 	m = press(t, m, tea.KeyPressMsg{Code: tea.KeyEnter})
 

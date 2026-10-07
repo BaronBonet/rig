@@ -75,7 +75,7 @@ func TestModel_ViewRendersTaskMetadata(t *testing.T) {
 	require.Contains(
 		t,
 		view,
-		"n new  N session  d shelve  tab shelf  i import  p provider  r refresh  space details  x clean  q quit",
+		"n new  N session  d shelve  e rename  tab shelf  i import  p provider  r refresh  space details  x clean  q quit",
 	)
 	require.Contains(t, view, "first task")
 	require.Contains(t, view, "repo-a")
@@ -2090,7 +2090,7 @@ func TestModel_PRPickerEnterCreatesTaskFromSelectedPR(t *testing.T) {
 	require.Contains(
 		t,
 		view,
-		"n new  N session  d shelve  tab shelf  i import  p provider  r refresh  space details  x clean  q quit",
+		"n new  N session  d shelve  e rename  tab shelf  i import  p provider  r refresh  space details  x clean  q quit",
 	)
 	require.Contains(t, view, "Creating task from pull request")
 	require.NotContains(t, view, "Suggesting name")
@@ -2166,7 +2166,7 @@ func TestModel_PRPickerCreateFailureReturnsToBrowseWithProgressAndError(t *testi
 	require.Contains(
 		t,
 		view,
-		"n new  N session  d shelve  tab shelf  i import  p provider  r refresh  space details  x clean  q quit",
+		"n new  N session  d shelve  e rename  tab shelf  i import  p provider  r refresh  space details  x clean  q quit",
 	)
 	require.Contains(t, view, "Creating task from pull request")
 	require.NotContains(t, view, "Creating worktree")
@@ -2377,6 +2377,8 @@ type frontendHarness struct {
 	shelveTaskIDs               []string
 	unshelveTaskIDs             []string
 	shelveTaskErr               error
+	renamedTasks                map[string]string
+	renameTaskErr               error
 	latestTaskStatus            map[string]*core.TaskStatusUpdate
 	latestTaskStatusErr         map[string]error
 	latestTaskStatusCalls       []string
@@ -2570,6 +2572,25 @@ func newFrontendHarness() *frontendHarness {
 		func(_ context.Context, taskID string) error {
 			frontend.unshelveTaskIDs = append(frontend.unshelveTaskIDs, taskID)
 			setShelved(taskID, time.Time{})
+			return nil
+		},
+	).Maybe()
+	// Renaming renames the listed task, as the daemon would, so the reload
+	// that follows shows the new name.
+	frontend.mock.EXPECT().RenameTask(mock.Anything, mock.Anything, mock.Anything).RunAndReturn(
+		func(_ context.Context, taskID string, name string) error {
+			if frontend.renameTaskErr != nil {
+				return frontend.renameTaskErr
+			}
+			if frontend.renamedTasks == nil {
+				frontend.renamedTasks = map[string]string{}
+			}
+			frontend.renamedTasks[taskID] = name
+			for _, task := range frontend.listTasks {
+				if task != nil && task.ID == taskID {
+					task.DisplayName = name
+				}
+			}
 			return nil
 		},
 	).Maybe()
