@@ -2697,20 +2697,24 @@ func newFrontendHarness() *frontendHarness {
 	return frontend
 }
 
-func TestTaskRow_ShowsTheLatestSessionsContextOutputAndProcessedTotal(t *testing.T) {
+func TestTaskRow_ShowsTheLatestSessionsContextOutputCompactionsAndProcessedTotal(t *testing.T) {
 	usage := &core.TaskTokenUsage{
 		SessionCount: 2,
 		Latest: core.SessionTokenUsage{
-			ContextTokens: 229_100, OutputTokens: 61_900, CachedInputTokens: 13_100_000, TotalTokens: 13_400_000,
+			ContextTokens: 229_100, Compactions: 3, OutputTokens: 61_900, CachedInputTokens: 13_100_000,
+			TotalTokens: 13_400_000,
 		},
 		OutputTokens: 1_700_000, CachedInputTokens: 597_000_000, TotalTokens: 612_100_000,
 	}
 
-	require.Equal(t, "ctx 229.1k · out 61.9k · total 13.4m", stripANSI(taskTokenUsageRowText(usage)),
+	require.Equal(t, "ctx 229.1k · out 61.9k · 3 compacts · total 13.4m", stripANSI(taskTokenUsageRowText(usage)),
 		"the session a handoff would replace, not the task's earlier sessions")
 	require.Equal(t, "out 2.0k · total 9.0k", stripANSI(taskTokenUsageRowText(&core.TaskTokenUsage{
 		Latest: core.SessionTokenUsage{OutputTokens: 2000, TotalTokens: 9000},
-	})), "a session that has not reported its context yet")
+	})), "a session that has not reported its context yet, nor been compacted")
+	require.Equal(t, "ctx 70.0k · 1 compact", stripANSI(taskTokenUsageRowText(&core.TaskTokenUsage{
+		Latest: core.SessionTokenUsage{ContextTokens: 70_000, Compactions: 1},
+	})))
 }
 
 func TestTaskRow_ContextTurnsAmberThenRedAsAHandoffGetsDue(t *testing.T) {
@@ -2719,6 +2723,6 @@ func TestTaskRow_ContextTurnsAmberThenRedAsAHandoffGetsDue(t *testing.T) {
 	}
 
 	require.Equal(t, mutedStyle.Render("ctx 199.9k"), rowWithContext(199_900))
-	require.Equal(t, warningStyle.Render("ctx 200.0k"), rowWithContext(handoffSoonContextTokens))
-	require.Equal(t, errorStyle.Render("ctx 400.0k"), rowWithContext(handoffNowContextTokens))
+	require.Equal(t, warningStyle.Render("ctx 200.0k"), rowWithContext(resetSoonContextTokens))
+	require.Equal(t, errorStyle.Render("ctx 400.0k"), rowWithContext(resetNowContextTokens))
 }

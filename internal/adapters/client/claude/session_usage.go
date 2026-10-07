@@ -19,12 +19,14 @@ import (
 // message spans multiple transcript lines that repeat identical usage, so
 // usage is counted once per message ID. The context size is the prompt of the
 // latest main-conversation request, which re-sends the whole conversation.
+// Each compaction leaves a compact_boundary line in the same transcript.
 func (r *repository) ReadSessionTokenUsage(
 	ctx context.Context,
 	transcriptPath string,
 ) (*core.SessionTokenUsage, error) {
 	var total core.SessionTokenUsage
 	seen := make(map[string]bool)
+	compactions := make(map[string]bool)
 	lineNumber := 0
 
 	err := scanTranscriptLines(ctx, transcriptPath, func(line []byte) {
@@ -32,6 +34,17 @@ func (r *repository) ReadSessionTokenUsage(
 
 		var entry claudeTranscriptLine
 		if err := json.Unmarshal(line, &entry); err != nil {
+			return
+		}
+		if entry.Type == "system" && entry.Subtype == "compact_boundary" && !entry.IsSidechain {
+			key := strings.TrimSpace(entry.UUID)
+			if key == "" {
+				key = "line-" + strconv.Itoa(lineNumber)
+			}
+			if !compactions[key] {
+				compactions[key] = true
+				total.Compactions++
+			}
 			return
 		}
 		if entry.Type != "assistant" || entry.Message.Usage == nil {
@@ -75,6 +88,8 @@ func (r *repository) ReadSessionTokenUsage(
 
 type claudeTranscriptLine struct {
 	Type        string `json:"type"`
+	Subtype     string `json:"subtype"`
+	UUID        string `json:"uuid"`
 	RequestID   string `json:"requestId"`
 	IsSidechain bool   `json:"isSidechain"`
 	Message     struct {

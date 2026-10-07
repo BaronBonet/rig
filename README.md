@@ -224,13 +224,18 @@ the launch folder can be imported.
 ### Tokens per task
 
 A task row shows its most recently active session: how full its context is
-(`ctx`), how many tokens it has written (`out`), and every token it has
-processed, cache reads included (`total`). Every request re-reads the whole
-cached conversation, so the total grows with the square of the session's
-length and is mostly cache reads. The context is what the next request costs:
-it turns amber at 200k, when a fresh session from a handoff note (`N`) is worth
-it at the next break, and red at 400k. The detail view sums the counts over all
-of the task's sessions.
+(`ctx`), how many tokens it has written (`out`), how many times it has been
+compacted, and every token it has processed, cache reads included (`total`).
+`/compact` keeps the session, so the total runs across compactions.
+
+Every request re-reads the whole cached conversation, so the context is what
+the next request costs. It turns amber at 200k, when a reset is worth it at the
+next break, and red at 400k. `/compact` and a new session from a handoff note
+(`N`) both bring it back to about a fresh session's size, so they cost about
+the same. What tells them apart is the compaction count: each compaction
+summarises the last one, so a session compacted many times is due for a new
+session with a deliberate note. The detail view sums the counts over all of
+the task's sessions.
 
 ### Worktrees per task
 

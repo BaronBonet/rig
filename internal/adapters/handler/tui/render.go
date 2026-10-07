@@ -1185,15 +1185,17 @@ func taskWorktreesDetailLines(worktrees []core.TaskWorktree, width int) []string
 }
 
 // Every request re-reads the session's whole context, so past these sizes each
-// turn costs several fresh sessions' worth and a handoff (N) is due.
+// turn costs several fresh sessions' worth and a reset is due: /compact or a
+// new session (N) bring it back to a fresh session's size.
 const (
-	handoffSoonContextTokens = 200_000
-	handoffNowContextTokens  = 400_000
+	resetSoonContextTokens = 200_000
+	resetNowContextTokens  = 400_000
 )
 
 // taskTokenUsageRowText shows the latest session: how full its context is,
-// what it wrote, and every token it processed, cache reads included. The
-// context turns amber, then red, as a handoff gets due.
+// what it wrote, how often it was compacted, and every token it processed,
+// cache reads included. The context turns amber, then red, as a reset gets
+// due.
 func taskTokenUsageRowText(usage *core.TaskTokenUsage) string {
 	if usage == nil {
 		return ""
@@ -1209,17 +1211,27 @@ func taskTokenUsageRowText(usage *core.TaskTokenUsage) string {
 	if session.OutputTokens > 0 {
 		parts = append(parts, mutedStyle.Render("out "+formatTokenCount(session.OutputTokens)))
 	}
+	if session.Compactions > 0 {
+		parts = append(parts, mutedStyle.Render(compactionsText(session.Compactions)))
+	}
 	if session.TotalTokens > 0 {
 		parts = append(parts, mutedStyle.Render("total "+formatTokenCount(session.TotalTokens)))
 	}
 	return strings.Join(parts, mutedStyle.Render(" · "))
 }
 
+func compactionsText(count int) string {
+	if count == 1 {
+		return "1 compact"
+	}
+	return strconv.Itoa(count) + " compacts"
+}
+
 func contextTokensStyle(tokens int) lipgloss.Style {
 	switch {
-	case tokens >= handoffNowContextTokens:
+	case tokens >= resetNowContextTokens:
 		return errorStyle
-	case tokens >= handoffSoonContextTokens:
+	case tokens >= resetSoonContextTokens:
 		return warningStyle
 	default:
 		return mutedStyle

@@ -151,6 +151,7 @@ func TestTaskStatusService_GetTaskTokenUsageSumsLatestTranscriptPerProviderSessi
 		},
 		"/tmp/codex-a-resumed.jsonl": {
 			ContextTokens:            900,
+			Compactions:              2,
 			InputTokens:              100,
 			CachedInputTokens:        25,
 			CacheCreationInputTokens: 15,
@@ -174,6 +175,7 @@ func TestTaskStatusService_GetTaskTokenUsageSumsLatestTranscriptPerProviderSessi
 		SessionCount: 2,
 		Latest: SessionTokenUsage{ // the most recently active session's
 			ContextTokens:            900,
+			Compactions:              2,
 			InputTokens:              100,
 			CachedInputTokens:        25,
 			CacheCreationInputTokens: 15,

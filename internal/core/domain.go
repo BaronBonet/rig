@@ -316,7 +316,10 @@ type TaskProviderSession struct {
 type SessionTokenUsage struct {
 	// ContextTokens is the size of the session's latest request: how full its
 	// context window is now. The other counts add up every request.
-	ContextTokens            int `json:"context_tokens"`
+	ContextTokens int `json:"context_tokens"`
+	// Compactions is how many times the conversation was compacted. Each one
+	// summarises the last, so a high count calls for a new session instead.
+	Compactions              int `json:"compactions"`
 	InputTokens              int `json:"input_tokens"`
 	OutputTokens             int `json:"output_tokens"`
 	CachedInputTokens        int `json:"cached_input_tokens"`
@@ -327,6 +330,7 @@ type SessionTokenUsage struct {
 
 func (u SessionTokenUsage) IsZero() bool {
 	return u.ContextTokens == 0 &&
+		u.Compactions == 0 &&
 		u.InputTokens == 0 &&
 		u.OutputTokens == 0 &&
 		u.CachedInputTokens == 0 &&
