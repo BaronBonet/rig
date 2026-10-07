@@ -624,13 +624,14 @@ func (m model) promptInputView() string {
 	}
 
 	builder.WriteString("\n\n")
-	binds := [][2]string{{"enter", "submit"}, {"ctrl+p", "pull requests"}, {"esc", "cancel"}}
+	newline := [2]string{"alt+enter", "newline"}
+	binds := [][2]string{{"enter", "submit"}, newline, {"ctrl+p", "pull requests"}, {"esc", "cancel"}}
 	switch {
 	case newSession:
-		binds = [][2]string{{"enter", "start session"}, {"esc", "cancel"}}
+		binds = [][2]string{{"enter", "start session"}, newline, {"esc", "cancel"}}
 	case m.draft.outsideGit:
 		// Pull requests need a repository to look them up in.
-		binds = [][2]string{{"enter", "submit"}, {"esc", "cancel"}}
+		binds = [][2]string{{"enter", "submit"}, newline, {"esc", "cancel"}}
 	}
 	builder.WriteString(footerKeybinds(binds...))
 

@@ -11,6 +11,9 @@ import (
 const (
 	promptInputMinHeight = 1
 	promptInputMaxHeight = 6
+	// promptInputMaxContentHeight lets a prompt run past the box, which then
+	// scrolls; left at 0, the textarea stops new lines at MaxHeight.
+	promptInputMaxContentHeight = 10000
 )
 
 func newPromptInput() textarea.Model {
@@ -21,7 +24,11 @@ func newPromptInput() textarea.Model {
 	input.DynamicHeight = true
 	input.MinHeight = promptInputMinHeight
 	input.MaxHeight = promptInputMaxHeight
+	input.MaxContentHeight = promptInputMaxContentHeight
 	input.SetHeight(3)
+	// Enter submits, so a modified enter breaks the line. Shift+enter only
+	// arrives inside tmux with extended-keys on; alt+enter always does.
+	input.KeyMap.InsertNewline.SetKeys("alt+enter", "shift+enter")
 
 	styles := textarea.DefaultDarkStyles()
 	styles.Focused.Base = lipgloss.NewStyle()

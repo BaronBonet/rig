@@ -285,6 +285,7 @@ Common TUI keys:
 | `tab` | Cycle configured providers while composing a task |
 | `ctrl+t` | Cycle the model while composing |
 | `ctrl+r` | Cycle the effort while composing |
+| `alt+enter` | Start a new line in the prompt (`shift+enter` too, inside tmux only with `extended-keys` on) |
 | `ctrl+g` | Toggle the handoff note while composing a new session |
 | `ctrl+w` | Replace the running session in its window instead of opening a new one |
 | `ctrl+p` | Pick a GitHub pull request while creating a task |

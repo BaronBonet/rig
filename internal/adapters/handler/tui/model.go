@@ -1225,7 +1225,10 @@ func (m model) updatePromptInput(msg tea.Msg) (tea.Model, tea.Cmd) {
 		case tea.KeyEscape:
 			return m.handleBack()
 		case tea.KeyEnter:
-			return m.submitPrompt()
+			// A modified enter is the textarea's newline.
+			if typed.Mod == 0 {
+				return m.submitPrompt()
+			}
 		}
 	}
 
