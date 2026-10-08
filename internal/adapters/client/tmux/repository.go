@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"maps"
 	"os"
+	"path/filepath"
 	"slices"
 	"strconv"
 	"strings"
@@ -23,7 +24,14 @@ const (
 	// task session; "none" leaves tmux's key bindings alone.
 	returnKeyEnvVar  = "RIG_TMUX_RETURN_KEY"
 	defaultReturnKey = "b"
-	rigSessionOption = "@rig_session"
+	// rigSessionOption, set on a task's session, names the rig the return key
+	// leads to; rigLastSessionOption is the fallback for a session without
+	// one. It is not rigSessionOption's global value, which every session
+	// would read as its own.
+	rigSessionOption     = "@rig_session"
+	rigLastSessionOption = "@rig_last_session"
+	// rigFolderOption, set on a rig's own session, is the folder it runs for.
+	rigFolderOption = "@rig_folder"
 )
 
 type repository struct {
@@ -176,15 +184,81 @@ func (r *repository) AttachTaskSession(ctx context.Context, task *core.Task) err
 
 // rememberReturnToRig lets one key bring the user back from a task to the
 // rig that opened it: the session rig runs in is recorded on the task's
-// session, and globally as the fallback for any other session, and the key
+// session, and as the fallback for sessions no rig has claimed, and the key
 // switches to whichever applies. Failures only lose the shortcut.
 func (r *repository) rememberReturnToRig(ctx context.Context, taskSession string) {
+	key, rigSession, ok := r.returnKeyAndRigSession(ctx)
+	if !ok {
+		return
+	}
+	r.setSessionOption(ctx, taskSession, rigSessionOption, rigSession)
+	_, _ = r.runner.Run(ctx, "", "tmux", "set-option", "-g", rigLastSessionOption, rigSession)
+	r.bindReturnKey(ctx, key)
+}
+
+// ClaimTaskSessions points the return key of folder's tasks at this rig. A
+// task session is taken over when it names no rig, a rig that is gone, or one
+// whose folder does not hold the task or holds it less closely, so a task
+// leads back to its own folder's rig whichever rig opened it last. The rig's
+// folder is published on its own session for other rigs to compare.
+func (r *repository) ClaimTaskSessions(ctx context.Context, folder string, tasks []*core.Task) error {
+	folder = strings.TrimSpace(folder)
+	if !filepath.IsAbs(folder) {
+		return nil
+	}
+	folder = filepath.Clean(folder)
+	key, rigSession, ok := r.returnKeyAndRigSession(ctx)
+	if !ok {
+		return nil
+	}
+	r.setSessionOption(ctx, rigSession, rigFolderOption, folder)
+	r.bindReturnKey(ctx, key)
+
+	result, err := r.runner.Run(ctx, "", "tmux", "list-sessions", "-F",
+		"#{session_name}\t#{"+rigSessionOption+"}\t#{"+rigFolderOption+"}")
+	if err != nil {
+		return err
+	}
+	recordedRig := make(map[string]string)
+	rigFolder := make(map[string]string)
+	for _, line := range strings.Split(result.Stdout, "\n") {
+		fields := strings.Split(line, "\t")
+		if len(fields) != 3 || fields[0] == "" {
+			continue
+		}
+		recordedRig[fields[0]] = fields[1]
+		rigFolder[fields[0]] = fields[2]
+	}
+
+	for _, task := range tasks {
+		if task == nil || !core.TaskInFolder(task, folder) {
+			continue
+		}
+		session := strings.TrimSpace(task.TmuxSession)
+		recorded, live := recordedRig[session]
+		if !live {
+			continue
+		}
+		// This rig's own folder is listed too, so a session already pointing
+		// here is kept as one an equally close rig holds.
+		if other := rigFolder[recorded]; other != "" && core.TaskInFolder(task, other) && len(other) >= len(folder) {
+			continue
+		}
+		r.setSessionOption(ctx, session, rigSessionOption, rigSession)
+		recordedRig[session] = rigSession
+	}
+	return nil
+}
+
+// returnKeyAndRigSession reports the return key and the tmux session this
+// rig runs in, or false when the key is turned off or rig is not in tmux.
+func (r *repository) returnKeyAndRigSession(ctx context.Context) (string, string, bool) {
 	key := strings.TrimSpace(r.env(returnKeyEnvVar))
 	if key == "" {
 		key = defaultReturnKey
 	}
-	if key == "none" {
-		return
+	if key == "none" || strings.TrimSpace(r.env("TMUX")) == "" {
+		return "", "", false
 	}
 	args := []string{"display-message", "-p"}
 	if pane := strings.TrimSpace(r.env("TMUX_PANE")); pane != "" {
@@ -193,13 +267,22 @@ func (r *repository) rememberReturnToRig(ctx context.Context, taskSession string
 	result, err := r.runner.Run(ctx, "", "tmux", append(args, "#{session_name}")...)
 	rigSession := strings.TrimSpace(result.Stdout)
 	if err != nil || rigSession == "" {
-		return
+		return "", "", false
 	}
-	_, _ = r.runner.Run(ctx, "", "tmux", "set-option", "-t", exactSessionTarget(taskSession)+":",
-		rigSessionOption, rigSession)
-	_, _ = r.runner.Run(ctx, "", "tmux", "set-option", "-g", rigSessionOption, rigSession)
-	_, _ = r.runner.Run(ctx, "", "tmux", "bind-key", "-T", "prefix", key,
-		"run-shell", "-C", "switch-client -t '=#{"+rigSessionOption+"}'")
+	return key, rigSession, true
+}
+
+func (r *repository) setSessionOption(ctx context.Context, session string, option string, value string) {
+	_, _ = r.runner.Run(ctx, "", "tmux", "set-option", "-t", exactSessionTarget(session)+":", option, value)
+}
+
+// bindReturnKey binds the key to the session's own rig, or the fallback. The
+// global rigSessionOption earlier builds set is cleared, or every session
+// would read it as its own.
+func (r *repository) bindReturnKey(ctx context.Context, key string) {
+	_, _ = r.runner.Run(ctx, "", "tmux", "set-option", "-gu", rigSessionOption)
+	_, _ = r.runner.Run(ctx, "", "tmux", "bind-key", "-T", "prefix", key, "run-shell", "-C",
+		"switch-client -t '=#{?"+rigSessionOption+",#{"+rigSessionOption+"},#{"+rigLastSessionOption+"}}'")
 }
 
 func (r *repository) env(key string) string {

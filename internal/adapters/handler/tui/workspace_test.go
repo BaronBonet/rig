@@ -105,19 +105,19 @@ func TestComposer_PullRequestsAreUnavailableOutsideGit(t *testing.T) {
 func TestTaskInFolder_KeepsEachClientsTasksApart(t *testing.T) {
 	project := "/src/project/code"
 
-	require.False(t, taskInFolder(&core.Task{RepoRoot: "/src/work/code", WorktreePath: "/src/work/code"}, project))
+	require.False(t, core.TaskInFolder(&core.Task{RepoRoot: "/src/work/code", WorktreePath: "/src/work/code"}, project))
 	require.False(
 		t,
-		taskInFolder(&core.Task{RepoRoot: "/src/project/code-old"}, project),
+		core.TaskInFolder(&core.Task{RepoRoot: "/src/project/code-old"}, project),
 		"a sibling sharing the prefix",
 	)
-	require.True(t, taskInFolder(&core.Task{RepoRoot: project, WorktreePath: project}, project))
-	require.True(t, taskInFolder(&core.Task{
+	require.True(t, core.TaskInFolder(&core.Task{RepoRoot: project, WorktreePath: project}, project))
+	require.True(t, core.TaskInFolder(&core.Task{
 		RepoRoot: project + "/api-server", WorktreePath: project + "/api-server_search",
 	}, project), "a worktree task of a repo below the folder")
-	require.True(t, taskInFolder(&core.Task{RepoRoot: project + "/api-server"}, project+"/api-server/app"),
+	require.True(t, core.TaskInFolder(&core.Task{RepoRoot: project + "/api-server"}, project+"/api-server/app"),
 		"rig launched inside the task's repository")
-	require.True(t, taskInFolder(&core.Task{}, project), "a task that names no folder is never hidden")
+	require.True(t, core.TaskInFolder(&core.Task{}, project), "a task that names no folder is never hidden")
 }
 
 func dashboardIn(t *testing.T, frontend *frontendHarness, folder string) model {
@@ -250,4 +250,20 @@ func TestDashboard_TheFolderLineIsCutToANarrowScreen(t *testing.T) {
 		}
 	}
 	t.Fatal("folder line not shown")
+}
+
+func TestModel_LoadedTasksClaimTheReturnKeyForTheLaunchFolder(t *testing.T) {
+	frontend := newFrontendHarness()
+	m := newLoadedModel(frontend)
+	m.launchCwd = "/src/work/code"
+	tasks := []*core.Task{
+		{ID: "task-1", TmuxSession: "code_task-1", RepoRoot: "/src/work/code"},
+		{ID: "task-2", TmuxSession: "code_task-2", RepoRoot: "/src/project/code"},
+	}
+
+	_, cmd := m.Update(tasksLoadedMsg{tasks: tasks})
+	runBatchCmd(t, cmd)
+
+	require.Equal(t, "/src/work/code", frontend.claimedFolder)
+	require.Equal(t, tasks, frontend.claimedTasks, "the frontend keeps the folder's own")
 }

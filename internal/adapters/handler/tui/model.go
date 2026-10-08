@@ -666,6 +666,9 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.clampSelection()
 		m.selectTask(selectedTaskID)
 		cmds := m.afterTasksLoadedCmds()
+		// Every task, shelf and all folders included: the frontend keeps the
+		// launch folder's.
+		cmds = append(cmds, claimTaskSessionsCmd(m.statusContext, m.frontend, m.launchCwd, msg.tasks))
 		if cmd := m.importHintCmd(); cmd != nil {
 			cmds = append(cmds, cmd)
 		}

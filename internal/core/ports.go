@@ -120,6 +120,10 @@ type TaskFrontend interface {
 	// session for interactive use. This is intentionally client-local behavior,
 	// not part of the daemon socket protocol.
 	AttachTaskSession(ctx context.Context, task *Task) error
+	// ClaimTaskSessions makes the tmux return key in the sessions of the tasks
+	// that belong to folder lead back to this rig. Client-local, like
+	// AttachTaskSession.
+	ClaimTaskSessions(ctx context.Context, folder string, tasks []*Task) error
 }
 
 // TaskDaemonHookRoute describes one provider hook endpoint the local task
@@ -500,6 +504,10 @@ type TmuxSessionClient interface {
 	SubmitTaskInput(ctx context.Context, task *Task, text string) error
 	// AttachTaskSession attaches to an existing task session.
 	AttachTaskSession(ctx context.Context, task *Task) error
+	// ClaimTaskSessions points the return key of the sessions of folder's
+	// tasks at the rig running in the current tmux session, unless a running
+	// rig with a closer folder already holds them.
+	ClaimTaskSessions(ctx context.Context, folder string, tasks []*Task) error
 	// InspectTaskSession returns the current tmux-side runtime state for the
 	// task session. Missing sessions are reported as Exists=false.
 	InspectTaskSession(ctx context.Context, task *Task) (TaskSessionRuntimeState, error)

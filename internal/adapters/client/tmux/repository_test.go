@@ -348,14 +348,85 @@ func TestRepositoryAttachTaskSession_SwitchesClientAndBindsAKeyBackToRig(t *test
 		expectTmuxRun(runner, subprocess.Result{Stdout: "project\n"}, nil,
 			"display-message", "-p", "-t", "%3", "#{session_name}"),
 		expectTmuxRun(runner, subprocess.Result{}, nil, "set-option", "-t", "=repo_task:", "@rig_session", "project"),
-		expectTmuxRun(runner, subprocess.Result{}, nil, "set-option", "-g", "@rig_session", "project"),
-		expectTmuxRun(runner, subprocess.Result{}, nil,
-			"bind-key", "-T", "prefix", "b", "run-shell", "-C", "switch-client -t '=#{@rig_session}'"),
+		expectTmuxRun(runner, subprocess.Result{}, nil, "set-option", "-g", "@rig_last_session", "project"),
+		expectTmuxRun(runner, subprocess.Result{}, nil, "set-option", "-gu", "@rig_session"),
+		expectTmuxRun(
+			runner,
+			subprocess.Result{},
+			nil,
+			"bind-key",
+			"-T",
+			"prefix",
+			"b",
+			"run-shell",
+			"-C",
+			returnBinding,
+		),
 	)
 
 	err := repo.AttachTaskSession(context.Background(), &core.Task{TmuxSession: "repo_task"})
 
 	require.NoError(t, err)
+}
+
+// returnBinding switches to the session's own rig, or the last rig used when
+// no rig has claimed the session.
+const returnBinding = "switch-client -t '=#{?@rig_session,#{@rig_session},#{@rig_last_session}}'"
+
+func TestRepositoryClaimTaskSessions_PointsTheFoldersTasksAtThisRigUnlessACloserRigHoldsThem(t *testing.T) {
+	runner := subprocess.NewMockRunner(t)
+	repo := New(runner).(*repository)
+	insideTmux(repo, nil)
+	inFolder := func(session string) *core.Task {
+		return &core.Task{TmuxSession: session, RepoRoot: "/src/work/code", WorktreePath: "/src/work/code"}
+	}
+
+	expectTmuxRun(runner, subprocess.Result{Stdout: "rig-work\n"}, nil,
+		"display-message", "-p", "-t", "%3", "#{session_name}")
+	expectTmuxRun(runner, subprocess.Result{}, nil, "set-option", "-t", "=rig-work:", "@rig_folder", "/src/work/code")
+	expectTmuxRun(runner, subprocess.Result{}, nil, "set-option", "-gu", "@rig_session")
+	expectTmuxRun(runner, subprocess.Result{}, nil, "bind-key", "-T", "prefix", "b", "run-shell", "-C", returnBinding)
+	expectTmuxRun(runner, subprocess.Result{Stdout: strings.Join([]string{
+		"rig-work\t\t/src/work/code",
+		"rig-project\t\t/src/project/code",
+		"rig-src\t\t/src",
+		"rig-api\t\t/src/work/code/api",
+		"code_unclaimed\t\t",
+		"code_other-rig\trig-project\t",
+		"code_rig-gone\trig-closed\t",
+		"code_wider-rig\trig-src\t",
+		"code_closer-rig\trig-api\t",
+		"code_mine\trig-work\t",
+		"code_other-folder\t\t",
+	}, "\n") + "\n"}, nil, "list-sessions", "-F", "#{session_name}\t#{@rig_session}\t#{@rig_folder}")
+	for _, session := range []string{"code_unclaimed", "code_other-rig", "code_rig-gone", "code_wider-rig"} {
+		expectTmuxRun(runner, subprocess.Result{}, nil, "set-option", "-t", "="+session+":", "@rig_session", "rig-work")
+	}
+
+	err := repo.ClaimTaskSessions(context.Background(), "/src/work/code", []*core.Task{
+		inFolder("code_unclaimed"),
+		inFolder("code_other-rig"), // opened from a rig whose folder does not hold it
+		inFolder("code_rig-gone"),
+		inFolder("code_wider-rig"),
+		{TmuxSession: "code_closer-rig", RepoRoot: "/src/work/code/api", WorktreePath: "/src/work/code/api"},
+		inFolder("code_mine"),
+		inFolder("code_session-ended"),
+		{TmuxSession: "code_other-folder", RepoRoot: "/src/project/code", WorktreePath: "/src/project/code"},
+	})
+
+	require.NoError(t, err)
+}
+
+func TestRepositoryClaimTaskSessions_DoesNothingOutsideTmuxOrWithTheKeyOff(t *testing.T) {
+	tasks := []*core.Task{{TmuxSession: "code_task", RepoRoot: "/src/work/code"}}
+
+	outside := New(subprocess.NewMockRunner(t)).(*repository)
+	outside.getenv = func(string) string { return "" }
+	require.NoError(t, outside.ClaimTaskSessions(context.Background(), "/src/work/code", tasks))
+
+	off := New(subprocess.NewMockRunner(t)).(*repository)
+	insideTmux(off, map[string]string{"RIG_TMUX_RETURN_KEY": "none"})
+	require.NoError(t, off.ClaimTaskSessions(context.Background(), "/src/work/code", tasks))
 }
 
 func TestRepositoryAttachTaskSession_TheReturnKeyCanBeChangedOrTurnedOff(t *testing.T) {
@@ -366,9 +437,9 @@ func TestRepositoryAttachTaskSession_TheReturnKeyCanBeChangedOrTurnedOff(t *test
 	expectTmuxRun(runner, subprocess.Result{Stdout: "project"}, nil,
 		"display-message", "-p", "-t", "%3", "#{session_name}")
 	expectTmuxRun(runner, subprocess.Result{}, nil, "set-option", "-t", "=repo_task:", "@rig_session", "project")
-	expectTmuxRun(runner, subprocess.Result{}, nil, "set-option", "-g", "@rig_session", "project")
-	expectTmuxRun(runner, subprocess.Result{}, nil,
-		"bind-key", "-T", "prefix", "e", "run-shell", "-C", "switch-client -t '=#{@rig_session}'")
+	expectTmuxRun(runner, subprocess.Result{}, nil, "set-option", "-g", "@rig_last_session", "project")
+	expectTmuxRun(runner, subprocess.Result{}, nil, "set-option", "-gu", "@rig_session")
+	expectTmuxRun(runner, subprocess.Result{}, nil, "bind-key", "-T", "prefix", "e", "run-shell", "-C", returnBinding)
 	require.NoError(t, repo.AttachTaskSession(context.Background(), &core.Task{TmuxSession: "repo_task"}))
 
 	off := subprocess.NewMockRunner(t)

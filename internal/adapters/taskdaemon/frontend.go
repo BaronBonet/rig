@@ -27,6 +27,14 @@ func (f *frontend) AttachTaskSession(ctx context.Context, task *core.Task) error
 	return f.sessions.AttachTaskSession(ctx, task)
 }
 
+func (f *frontend) ClaimTaskSessions(ctx context.Context, folder string, tasks []*core.Task) error {
+	if f.sessions == nil {
+		return fmt.Errorf("task session client not configured")
+	}
+
+	return f.sessions.ClaimTaskSessions(ctx, folder, tasks)
+}
+
 func (f *frontend) GetTaskActivity(ctx context.Context, taskID string, limit int) ([]core.TaskActivityEvent, error) {
 	return callUnary(ctx, f, opGetTaskActivity, taskActivityRequest{TaskID: taskID, Limit: limit})
 }

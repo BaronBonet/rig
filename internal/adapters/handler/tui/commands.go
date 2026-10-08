@@ -51,6 +51,15 @@ func listRepoPullRequestsCmd(
 	}
 }
 
+// claimTaskSessionsCmd points the tmux return key of the folder's tasks at
+// this rig. A failure only loses the shortcut, so nothing is reported.
+func claimTaskSessionsCmd(ctx context.Context, frontend core.TaskFrontend, folder string, tasks []*core.Task) tea.Cmd {
+	return func() tea.Msg {
+		_ = frontend.ClaimTaskSessions(ctx, folder, tasks)
+		return nil
+	}
+}
+
 func openTaskSessionCmd(ctx context.Context, frontend core.TaskFrontend, task *core.Task) tea.Cmd {
 	return func() tea.Msg {
 		err := frontend.AttachTaskSession(ctx, task)

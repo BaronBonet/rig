@@ -19,7 +19,7 @@ func (m model) scopeTasks(tasks []*core.Task) ([]*core.Task, int) {
 	folder = filepath.Clean(folder)
 	inFolder := make([]*core.Task, 0, len(tasks))
 	for _, task := range tasks {
-		if task != nil && taskInFolder(task, folder) {
+		if task != nil && core.TaskInFolder(task, folder) {
 			inFolder = append(inFolder, task)
 		}
 	}
@@ -73,25 +73,6 @@ func (m model) otherFoldersText() string {
 		text = "Showing all folders. Press f to show only " + homeRelativePath(m.launchCwd) + "."
 	}
 	return text
-}
-
-// taskInFolder reports whether a task belongs to folder: its repository or
-// worktree is the folder or lies below it, or the folder lies inside them. A
-// task that names no path is never hidden.
-func taskInFolder(task *core.Task, folder string) bool {
-	named := false
-	for _, path := range []string{task.RepoRoot, task.WorktreePath} {
-		path = strings.TrimSpace(path)
-		if !filepath.IsAbs(path) {
-			continue
-		}
-		named = true
-		path = filepath.Clean(path)
-		if core.FolderContains(folder, path) || core.FolderContains(path, folder) {
-			return true
-		}
-	}
-	return !named
 }
 
 // insideGitWorktree reports whether dir is inside a Git worktree, by finding a

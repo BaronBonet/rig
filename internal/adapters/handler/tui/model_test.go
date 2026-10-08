@@ -445,7 +445,7 @@ func TestModel_AfterLoadUsesSubscriptionsAsInitialStatusSource(t *testing.T) {
 	require.True(t, ok)
 
 	msgs := runBatchCmd(t, cmd)
-	require.Len(t, msgs, 8)
+	require.Len(t, msgs, 9, "four per task, and the return key's claim")
 	require.Empty(t, frontend.latestTaskStatusCalls)
 	require.Equal(t, []string{"task-1:6", "task-2:6"}, frontend.getTaskActivityCalls)
 	require.Equal(t, []string{"task-1", "task-2"}, frontend.getTaskTokenUsageCalls)
@@ -2421,6 +2421,8 @@ type frontendHarness struct {
 	newSessionEvents            []core.TaskCreateEvent
 	newSessionStreamErr         error
 	newSessionStreamCalls       int
+	claimedFolder               string
+	claimedTasks                []*core.Task
 }
 
 func newFrontendHarness() *frontendHarness {
@@ -2493,6 +2495,13 @@ func newFrontendHarness() *frontendHarness {
 				return nil, frontend.switchTaskErr
 			}
 			return frontend.switchTaskResult, nil
+		},
+	).Maybe()
+	frontend.mock.EXPECT().ClaimTaskSessions(mock.Anything, mock.Anything, mock.Anything).RunAndReturn(
+		func(_ context.Context, folder string, tasks []*core.Task) error {
+			frontend.claimedFolder = folder
+			frontend.claimedTasks = tasks
+			return nil
 		},
 	).Maybe()
 	frontend.mock.EXPECT().AttachTaskSession(mock.Anything, mock.Anything).RunAndReturn(

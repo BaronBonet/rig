@@ -397,6 +397,25 @@ func FolderContains(folder string, path string) bool {
 	return err == nil && rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator))
 }
 
+// TaskInFolder reports whether a task belongs to folder: its repository or
+// worktree is the folder or lies below it, or the folder lies inside them. A
+// task that names no path belongs everywhere.
+func TaskInFolder(task *Task, folder string) bool {
+	named := false
+	for _, path := range []string{task.RepoRoot, task.WorktreePath} {
+		path = strings.TrimSpace(path)
+		if !filepath.IsAbs(path) {
+			continue
+		}
+		named = true
+		path = filepath.Clean(path)
+		if FolderContains(folder, path) || FolderContains(path, folder) {
+			return true
+		}
+	}
+	return !named
+}
+
 // SessionFileChange is one file edit a Provider session made, recovered from
 // its Provider transcript (including the transcripts of its subagents).
 type SessionFileChange struct {
