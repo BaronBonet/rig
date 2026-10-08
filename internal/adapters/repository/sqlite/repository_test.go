@@ -1120,7 +1120,7 @@ func TestRepositoryTasks_PersistProviderEnv(t *testing.T) {
 		return byID
 	}
 	require.Equal(t, map[string]core.ProviderEnv{
-		"task-work":    {"CLAUDE_CONFIG_DIR": "/home/me/.claude-work", "CODEX_HOME": ""},
+		"task-work":   {"CLAUDE_CONFIG_DIR": "/home/me/.claude-work", "CODEX_HOME": ""},
 		"task-legacy": nil,
 	}, envs(), "an unset variable is kept, and a task without an env still defers to the daemon")
 
