@@ -15,8 +15,36 @@ Use `rig` for the CLI command and Rig for the product or system.
 - Task creation: The workflow that turns a prompt or pull request source into a
   prepared task workspace and interactive provider session.
 - Task draft: The in-progress task the TUI user is assembling before
-  submission: the prompt text, the chosen provider, and the optional pull
-  request source. Discarded on cancel; cleared once creation is submitted.
+  submission: the prompt text, the chosen provider, its launch options, and
+  the optional pull request source; or, for a new session, the continuation
+  prompt and whether to write a handoff. Discarded on cancel; cleared once
+  submitted.
+- Launch options: The model and effort a Task's provider starts and resumes
+  with, chosen when the Task or a new session is composed, kept on the Task,
+  and remembered per provider as the preselection for the next launch.
+- New session: Starting a fresh provider session in an existing Task, in the
+  same workspace and tmux session, usually from a handoff note, instead of
+  compacting a long conversation or creating another Task. It either replaces
+  the Task's session in its window or runs alongside it as a Child task.
+- Continuation prompt: What a new session is asked: the Task and its original
+  ask, where to pick up its state (the handoff note, or the workspace), then
+  the user's own instruction for that session.
+- Child task: A Task that is one session of another, its parent: it shares the
+  parent's workspace, branch and tmux session, runs in its own window there
+  with its own task ID, and has its own status, activity and token usage. It
+  is listed under its parent. A parent with its children is a task group.
+- Shelf: Where Tasks the user is not working on now are kept, off the current
+  list. Shelving a Task ends its provider sessions and keeps everything else:
+  its record, child tasks, launch options, history and workspace. A shelved
+  Task comes back when it is unshelved, and its latest session resumes when
+  it is opened.
+- Rename: Giving a Task a new name, usually because it is being reused for
+  another purpose. It happens in Rig, or by renaming the Task's provider
+  session, whose new title the Task takes. A rename drops the Task's original
+  ask, so new sessions are not briefed on what it was first for.
+- Handoff note: A note the previous provider session writes, in print mode on
+  a fork that is not saved, for a new session to start from: goal, state,
+  decisions, where things are, gotchas, next step. Kept under Rig's data dir.
 - Creation status: The durable state of task setup: `creating`, `ready`, or
   `failed`.
 - Creation step: The retryable task setup milestone, such as suggesting a name,
@@ -26,6 +54,16 @@ Use `rig` for the CLI command and Rig for the product or system.
   Task operation may run for a Task at a time; unrelated Tasks remain independent.
 - Workspace: The local filesystem environment where a task runs.
 - Worktree: A git worktree used to isolate task changes from the main checkout.
+- Session import: Making a provider session started outside Rig, in the launch
+  folder or below it, a folder task in the folder the session was started in,
+  and resuming it in the task's own Session through the reconnect path.
+- Provider configuration: The variables that choose a provider's account and
+  session store (CLAUDE_CONFIG_DIR, CODEX_HOME), captured from the rig window a
+  task came from and kept on the task, with an unset variable meaning the
+  provider's default.
+- Folder task: A task whose workspace is an existing folder, Git or not, used as
+  it is. It has no branch of its own, may share its folder with other tasks,
+  and is never seeded or removed by Rig.
 - Repository context: The repository root, name, and base branch used when Rig
   creates or inspects a task.
 - Session: The tmux-backed interactive environment for a task.
@@ -80,14 +118,26 @@ Use `rig` for the CLI command and Rig for the product or system.
   recent user prompts and assistant actions.
 - Resume metadata: The minimal provider state needed to reconnect a task session
   after its tmux session has been lost.
+- Session readiness: The point at which a freshly launched provider can take
+  the task prompt: its session-start hook has been observed and its ready
+  marker is on screen on a line other than the shell's echo of the launch
+  command. The prompt is typed then, never on the marker alone.
 - Token usage: The summed provider token counts observed across a task's
   provider sessions.
+- Touched worktree: A Git worktree a task's provider sessions have edited, shown
+  with the branch it has checked out now. Rig records the branch at the task's
+  latest edit there; a different branch now means the worktree moved on to
+  other work.
 - Pull request status: The GitHub pull request state associated with a task
   branch, if any.
 
 ## Relationships
 
 - A Task has exactly one Active provider.
+- A Session carries its Task's ID in `RIG_TASK_ID`. A Hook event carrying a
+  known Task ID belongs to that Task; otherwise it belongs to the single Task
+  whose Workspace matches the hook's working directory, and a directory shared
+  by several Tasks attributes nothing.
 - A Default provider becomes the Active provider for a new Task unless the user
   selects a different provider during Task creation.
 - An environment-selected Default provider must be one of the user's Configured
@@ -99,7 +149,28 @@ Use `rig` for the CLI command and Rig for the product or system.
 - Provider setup produces the user's Configured providers.
 - Tasks remain visible even when their Active provider is not currently a
   Configured provider.
-- A Task may have many Provider sessions over time.
+- A Task may have many Provider sessions over time; a New session adds one
+  without changing the Task's identity, workspace, or tmux session.
+- A New session that replaces the Task's session ends the Provider in the
+  Task's Session first, with the Provider's own exit command, once it sits
+  idle at its prompt; it is refused while the Provider is working. One that
+  runs alongside leaves the running Provider alone.
+- A Child task is a folder Task of its parent's workspace: never seeded, never
+  removed. Deleting a Child task closes only its window; deleting the parent
+  closes the Session and removes every Child task's record.
+- A Child task's hooks carry its own Task ID, set on its window, so they are
+  never attributed to the parent. A New session of a Child task joins the
+  parent's group.
+- Shelving or unshelving a Task moves its Child tasks with it; a Child task
+  can also be shelved on its own, which closes only its window. Shelving is
+  refused while any of them is working.
+- A Rename changes only the Task's display name and original ask; its slug,
+  and so its workspace, branch and tmux session, stays. A provider session
+  renames its Task only when the title the user gave it changes, so a Rename
+  made in Rig stands until the session is renamed again. Only the Active
+  provider's sessions rename the Task.
+- A Handoff note is written by the Task's latest Provider session of its
+  Active provider, and only by a Provider that supports it.
 - A Provider session belongs to exactly one Task and one Provider.
 - A Task's Runtime status is driven by the root agent of its Active provider,
   plus any subagent permission request that needs user action. Subagent work

@@ -3,6 +3,8 @@ package tui
 import (
 	"fmt"
 	"math"
+	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -29,20 +31,32 @@ func (m model) listView() string {
 	totalHeight := m.totalHeight()
 
 	lines := []string{
-		renderHeader(m.renderHeaderLabel(), m.listKeybindText(), totalWidth),
+		renderHeader(
+			m.renderHeaderLabel(),
+			m.listKeybindText(totalWidth-lipgloss.Width(m.renderHeaderLabel())-2),
+			totalWidth,
+		),
 		divider(totalWidth),
 	}
 
 	if m.err != nil {
 		lines = append(lines, errorStyle.Render("Error: "+m.err.Error()), "")
 	}
+	lines = append(lines, m.scopeLine(totalWidth)...)
 
 	switch {
 	case m.loading:
 		lines = append(lines, dimStyle.Render("Loading tasks..."))
 		lines = append(lines, sectionLines(m.listCreateStatusView(), totalWidth)...)
+	case len(m.rows) == 0 && m.showShelf:
+		lines = append(lines, dimStyle.Render("The shelf is empty. Press d on a task to shelve it."))
+		lines = append(lines, sectionLines(m.listCreateStatusView(), totalWidth)...)
 	case len(m.rows) == 0:
-		lines = append(lines, dimStyle.Render("No tasks found."), dimStyle.Render("Press n to create one."))
+		lines = append(lines, dimStyle.Render("No tasks found."))
+		if m.importableHere > 0 {
+			lines = append(lines, primaryStyle.Render(m.importHintText()))
+		}
+		lines = append(lines, dimStyle.Render("Press n to create one."))
 		lines = append(lines, sectionLines(m.listCreateStatusView(), totalWidth)...)
 	default:
 		createSection := sectionLines(m.listCreateStatusView(), totalWidth)
@@ -103,7 +117,7 @@ func (m model) taskListRowBudget(totalWidth int, totalHeight int) int {
 		return 0
 	}
 
-	baseLineCount := 2
+	baseLineCount := 2 + len(m.scopeLine(totalWidth))
 	if m.err != nil {
 		baseLineCount += 2
 	}
@@ -291,6 +305,10 @@ func (m model) renderRepoHeader(task *core.Task, totalWidth int) string {
 	if task != nil {
 		name = emptyFallback(task.RepoName, name)
 	}
+	// Folders are often all called "code"; their path tells them apart.
+	if task.UsesFolderWorkspace() {
+		name = homeRelativePath(task.RepoRoot)
+	}
 	return headerLabelStyle.Render(truncateStr(name, totalWidth))
 }
 
@@ -303,6 +321,11 @@ func (m model) renderRow(index int, row taskRow, totalWidth int) (string, string
 	if failedText, failedStyle := taskCreationFailureStatusText(row.task); failedText != "" {
 		statusText = failedText
 		statusStyle = failedStyle
+	}
+	if row.task.IsShelved() {
+		statusText, statusStyle = iconStatusIdle+" shelved "+formatElapsed(
+			time.Since(row.task.ShelvedAt),
+		)+" ago", dimStyle
 	}
 	statusCell := padRightVisible(statusText, colWidthStatus)
 	timeCell := padLeftVisible(taskElapsed(row.task), colWidthElapsed)
@@ -317,6 +340,10 @@ func (m model) renderRow(index int, row taskRow, totalWidth int) (string, string
 	if strings.TrimSpace(name) == "" {
 		name = row.task.ID
 	}
+	// A session of another task sits under it.
+	if row.task.IsChild() {
+		name = "  ↳ " + name
+	}
 	nameCell := padRightVisible(truncateStr(name, nameWidth), nameWidth)
 
 	provider := emptyFallback(string(row.task.Provider), "-")
@@ -325,6 +352,9 @@ func (m model) renderRow(index int, row taskRow, totalWidth int) (string, string
 	tokenText := taskTokenUsageRowText(row.tokenUsage)
 	if tokenText != "" {
 		prText += "  " + tokenText
+	}
+	if worktreesText := taskWorktreesRowText(row.worktrees); worktreesText != "" {
+		prText += "  " + worktreesText
 	}
 
 	if index == m.selected {
@@ -411,10 +441,29 @@ func (m model) selectedTaskDetailView() string {
 			mutedStyle.Render("provider")+"  "+providerStyle(provider).Render(provider),
 		)
 	}
+	if launch := launchOptionsText(task.Launch()); launch != "" {
+		sessionLines = append(
+			sessionLines,
+			mutedStyle.Render("launch")+"    "+primaryStyle.Render(launch),
+		)
+	}
+	if window := strings.TrimSpace(task.TmuxWindow); window != "" {
+		sessionLines = append(
+			sessionLines,
+			mutedStyle.Render("window")+"    "+primaryStyle.Render(task.TmuxSession+":"+window),
+		)
+	}
 
 	var builder strings.Builder
 	for _, line := range zipColumns(workspaceLines, sessionLines, detailColWidth) {
 		builder.WriteString(line + "\n")
+	}
+
+	if worktreeLines := taskWorktreesDetailLines(row.worktrees, totalWidth-6); len(worktreeLines) > 0 {
+		builder.WriteString("\n")
+		for _, line := range worktreeLines {
+			builder.WriteString("   " + line + "\n")
+		}
 	}
 
 	if tokenLines := taskTokenUsageDetailLines(row.tokenUsage); len(tokenLines) > 0 {
@@ -523,17 +572,36 @@ func taskActivityPreview(events []core.TaskActivityEvent) (string, []string) {
 
 func (m model) promptInputView() string {
 	totalWidth := m.totalWidth()
+	newSession := m.draft.forTask != nil
+
+	title, intro := "new task", "Enter task prompt."
+	if newSession {
+		title = "new session · " + truncateStr(m.draft.forTask.DisplayName, 40)
+		intro = "A fresh session of this task. It starts with the continuation prompt, then your instruction."
+	}
 
 	var builder strings.Builder
-	builder.WriteString(m.screenHeader(mutedStyle.Render("new task")))
+	builder.WriteString(m.screenHeader(mutedStyle.Render(title)))
 	builder.WriteString(errorBlock(m.draft.err))
-	builder.WriteString(dimStyle.Render("Enter task prompt.") + "\n\n")
+	builder.WriteString(dimStyle.Render(intro) + "\n\n")
 	createProvider := string(m.effectiveCreateProvider())
 	providerLine := mutedStyle.Render("provider  ") + providerStyle(createProvider).Render(createProvider)
 	if len(m.configuredProviders()) > 1 {
 		providerLine += mutedStyle.Render("  ·  ") + keybindStyle.Render("tab") + mutedStyle.Render(" cycle")
 	}
-	builder.WriteString(providerLine + "\n\n")
+	builder.WriteString(providerLine + "\n")
+	builder.WriteString(m.draftLaunchLine("model", m.draft.model, "ctrl+t") + "\n")
+	builder.WriteString(m.draftLaunchLine("effort", m.draft.effort, "ctrl+r") + "\n")
+	if newSession {
+		builder.WriteString(m.draftHandoffLine() + "\n")
+		builder.WriteString(m.draftWhereLine() + "\n\n")
+		for _, line := range wrapAndTruncate(m.continuationPreview(), totalWidth-4, 6) {
+			builder.WriteString("  " + dimStyle.Render(line) + "\n")
+		}
+		builder.WriteString("\n")
+	} else {
+		builder.WriteString(m.draftWorkspaceLine() + "\n\n")
+	}
 
 	promptBoxWidth := totalWidth - 4
 	if promptBoxWidth < 20 {
@@ -556,24 +624,92 @@ func (m model) promptInputView() string {
 	}
 
 	builder.WriteString("\n\n")
-	builder.WriteString(footerKeybinds(
-		[2]string{"enter", "submit"},
-		[2]string{"ctrl+p", "pull requests"},
-		[2]string{"esc", "cancel"},
-	))
+	newline := [2]string{"alt+enter", "newline"}
+	binds := [][2]string{{"enter", "submit"}, newline, {"ctrl+p", "pull requests"}, {"esc", "cancel"}}
+	switch {
+	case newSession:
+		binds = [][2]string{{"enter", "start session"}, newline, {"esc", "cancel"}}
+	case m.draft.outsideGit:
+		// Pull requests need a repository to look them up in.
+		binds = [][2]string{{"enter", "submit"}, newline, {"esc", "cancel"}}
+	}
+	builder.WriteString(footerKeybinds(binds...))
 
 	return builder.String()
 }
 
-func (m model) listKeybindText() string {
-	binds := [][2]string{{"n", "new"}, {"p", "provider"}, {"r", "refresh"}}
+// draftLaunchLine shows one launch option of the draft and the key that
+// cycles it.
+func (m model) draftLaunchLine(label string, value string, key string) string {
+	shown := value
+	if shown == "" {
+		shown = "default"
+	}
+	return mutedStyle.Render(padRightVisible(label, 10)) + primaryStyle.Render(shown) +
+		mutedStyle.Render("  ·  ") + keybindStyle.Render(key) + mutedStyle.Render(" cycle")
+}
+
+// draftWhereLine shows whether the new session replaces the task's session in
+// its window or runs alongside it in a new one.
+func (m model) draftWhereLine() string {
+	label := mutedStyle.Render("where     ")
+	if m.draft.newWindow {
+		return label + primaryStyle.Render("new window, alongside the running session") +
+			mutedStyle.Render("  ·  ") + keybindStyle.Render("ctrl+w") + mutedStyle.Render(" this window")
+	}
+	return label + primaryStyle.Render("this window, replacing the running session") +
+		mutedStyle.Render("  ·  ") + keybindStyle.Render("ctrl+w") + mutedStyle.Render(" new window")
+}
+
+// draftHandoffLine shows whether the new session starts from a handoff note
+// written by the previous session.
+func (m model) draftHandoffLine() string {
+	label := mutedStyle.Render("handoff   ")
+	if !m.providerSupportsHandoff(m.effectiveCreateProvider()) {
+		return label + dimStyle.Render("not available for this provider")
+	}
+	if m.draft.handoff {
+		return label + primaryStyle.Render("note from the previous session") +
+			mutedStyle.Render("  ·  ") + keybindStyle.Render("ctrl+g") + mutedStyle.Render(" skip")
+	}
+	return label + primaryStyle.Render("none") +
+		mutedStyle.Render("  ·  ") + keybindStyle.Render("ctrl+g") + mutedStyle.Render(" write a note")
+}
+
+// listKeybindText is the browse screen's key bar, at most width wide once the
+// window size is known: the keys needed least are left out first.
+func (m model) listKeybindText(width int) string {
+	if m.showShelf {
+		return m.fitKeybindBar(width, [][2]string{
+			{"enter", "open"}, {"d", "unshelve"}, {"e", "rename"}, {"tab", "current"},
+			{"space", "details"}, {"x", "clean"}, {"q", "quit"},
+		}, "e", "space", "tab")
+	}
+	binds := [][2]string{
+		{"n", "new"}, {"N", "session"}, {"d", "shelve"}, {"e", "rename"}, {"tab", "shelf"},
+		{"i", "import"}, {"p", "provider"}, {"r", "refresh"},
+	}
 	if row := m.selectedRow(); row != nil && row.task != nil &&
 		row.task.CreationStatus == core.TaskCreationStatusFailed {
 		binds = append(binds, [2]string{"R", "retry"})
 	}
 	binds = append(binds, [2]string{"space", "details"}, [2]string{"x", "clean"}, [2]string{"q", "quit"})
 
-	return keybindBar("   ", binds...)
+	return m.fitKeybindBar(width, binds, "r", "p", "i", "e", "space", "tab")
+}
+
+// fitKeybindBar renders binds as a key bar, leaving out the droppable keys,
+// in order, until it is no wider than width.
+func (m model) fitKeybindBar(width int, binds [][2]string, droppable ...string) string {
+	bar := keybindBar("  ", binds...)
+	for _, key := range droppable {
+		if m.width <= 0 || lipgloss.Width(bar) <= width {
+			break
+		}
+		binds = slices.DeleteFunc(binds, func(bind [2]string) bool { return bind[0] == key })
+		bar = keybindBar("  ", binds...)
+	}
+	return bar
 }
 
 func (m model) providerSetupView() string {
@@ -761,6 +897,15 @@ func (m model) renderCreateProgress() string {
 		core.TaskCreateProgressPreparingWorkspace,
 		core.TaskCreateProgressStartingSession,
 	}
+	if m.create.newSession {
+		// A new session has no workspace to make; the handoff step shows only
+		// once the daemon reports it.
+		steps = []core.TaskCreateProgressStep{core.TaskCreateProgressStartingSession}
+		if m.create.active == core.TaskCreateProgressWritingHandoff ||
+			containsCreateStep(m.create.done, core.TaskCreateProgressWritingHandoff) {
+			steps = append([]core.TaskCreateProgressStep{core.TaskCreateProgressWritingHandoff}, steps...)
+		}
+	}
 
 	var lines []string
 	for _, step := range steps {
@@ -782,6 +927,13 @@ func (m model) renderCreateProgress() string {
 
 func (m model) listCreateStatusView() string {
 	var lines []string
+	if m.pending == opShelving {
+		label := "Shelving the task..."
+		if m.showShelf {
+			label = "Putting the task back..."
+		}
+		lines = append(lines, stepActiveLine(label, m.shimmerTick))
+	}
 	if m.opening {
 		lines = append(lines, stepActiveLine("Reconnecting session...", m.shimmerTick))
 	}
@@ -804,9 +956,24 @@ func taskCreateProgressLabel(step core.TaskCreateProgressStep) string {
 		return "Preparing workspace"
 	case core.TaskCreateProgressStartingSession:
 		return "Starting session"
+	case core.TaskCreateProgressWritingHandoff:
+		return "Writing handoff from the previous session"
 	default:
 		return "Creating task"
 	}
+}
+
+// launchOptionsText names a task's launch options, or "" for the provider's
+// defaults.
+func launchOptionsText(options core.LaunchOptions) string {
+	var parts []string
+	if options.Model != "" {
+		parts = append(parts, options.Model)
+	}
+	if options.Effort != "" {
+		parts = append(parts, options.Effort+" effort")
+	}
+	return strings.Join(parts, " · ")
 }
 
 func (m model) confirmationView() string {
@@ -817,7 +984,7 @@ func (m model) confirmationView() string {
 		builder.WriteString(primaryStyle.Render(emptyFallback(row.task.DisplayName, row.task.ID)) + "\n\n")
 	}
 
-	builder.WriteString(dimStyle.Render("The tmux session and worktree will be deleted.") + "\n")
+	builder.WriteString(dimStyle.Render(m.cleanupEffectText()) + "\n")
 	builder.WriteString(dimStyle.Render("The branch will be kept.") + "\n\n")
 	if m.pending == opDeleting {
 		builder.WriteString(stepActiveLine("Cleaning up task...", m.shimmerTick) + "\n\n")
@@ -828,6 +995,22 @@ func (m model) confirmationView() string {
 	))
 
 	return builder.String()
+}
+
+// cleanupEffectText says what x removes for the selected task: a child task
+// owns only its window, a folder task only its tmux session.
+func (m model) cleanupEffectText() string {
+	row := m.selectedRow()
+	switch {
+	case row == nil || row.task == nil:
+		return "The tmux session and worktree will be deleted."
+	case row.task.IsChild():
+		return "The session's tmux window will be closed. The workspace is kept."
+	case row.task.UsesFolderWorkspace():
+		return "The tmux session will be closed. The folder is kept."
+	default:
+		return "The tmux session and worktree will be deleted."
+	}
 }
 
 func taskStatusText(update *core.TaskStatusUpdate) (string, lipgloss.Style) {
@@ -948,12 +1131,111 @@ func prStatusDetailText(status *core.PRStatus) string {
 	return mutedStyle.Render("pr") + "     " + prStatusText(status)
 }
 
-func taskTokenUsageRowText(usage *core.TaskTokenUsage) string {
-	if usage == nil || usage.TotalTokens <= 0 {
-		return ""
+// taskWorktreesRowLimit caps how many worktree names fit on a task row; the
+// detail view lists all of them.
+const taskWorktreesRowLimit = 2
+
+// taskWorktreesRowText names the worktrees a task has edited, most recently
+// edited first. A worktree that has since checked out another branch is dimmed:
+// it most likely belongs to other work now.
+func taskWorktreesRowText(worktrees []core.TaskWorktree) string {
+	parts := make([]string, 0, taskWorktreesRowLimit+1)
+	for index, worktree := range worktrees {
+		if index == taskWorktreesRowLimit {
+			parts = append(parts, mutedStyle.Render(fmt.Sprintf("+%d", len(worktrees)-index)))
+			break
+		}
+		style := primaryStyle
+		if worktree.BranchChanged() {
+			style = dimStyle
+		}
+		parts = append(parts, style.Render(filepath.Base(worktree.WorktreePath)))
+	}
+	return strings.Join(parts, mutedStyle.Render(" · "))
+}
+
+// taskWorktreesDetailLines lists every worktree the task has edited with the
+// branch it has checked out now. When that branch differs from the one the
+// task last edited on, the line is dimmed and reads "now on <branch>".
+func taskWorktreesDetailLines(worktrees []core.TaskWorktree, width int) []string {
+	if len(worktrees) == 0 {
+		return nil
 	}
 
-	return mutedStyle.Render(formatTokenCount(usage.TotalTokens) + " tok")
+	repoWidth, nameWidth := 0, 0
+	for _, worktree := range worktrees {
+		repoWidth = max(repoWidth, lipgloss.Width(worktree.RepoName))
+		nameWidth = max(nameWidth, lipgloss.Width(filepath.Base(worktree.WorktreePath)))
+	}
+
+	lines := []string{headerLabelStyle.Render("WORKTREES")}
+	for _, worktree := range worktrees {
+		repo := padRightVisible(worktree.RepoName, repoWidth+2)
+		name := padRightVisible(filepath.Base(worktree.WorktreePath), nameWidth+2)
+		branch := emptyFallback(worktree.Branch, "(detached)")
+		if worktree.BranchChanged() {
+			lines = append(lines, dimStyle.Render(truncateStr(repo+name+"now on "+branch, width)))
+			continue
+		}
+		lines = append(lines, mutedStyle.Render(repo)+primaryStyle.Render(name)+primaryStyle.Render(
+			truncateStr(branch, max(width-lipgloss.Width(repo+name), 10)),
+		))
+	}
+	return lines
+}
+
+// Every request re-reads the session's whole context, so past these sizes each
+// turn costs several fresh sessions' worth and a reset is due: /compact or a
+// new session (N) bring it back to a fresh session's size.
+const (
+	resetSoonContextTokens = 200_000
+	resetNowContextTokens  = 400_000
+)
+
+// taskTokenUsageRowText shows the latest session: how full its context is,
+// what it wrote, how often it was compacted, and every token it processed,
+// cache reads included. The context turns amber, then red, as a reset gets
+// due.
+func taskTokenUsageRowText(usage *core.TaskTokenUsage) string {
+	if usage == nil {
+		return ""
+	}
+	session := usage.Latest
+	var parts []string
+	if session.ContextTokens > 0 {
+		parts = append(
+			parts,
+			contextTokensStyle(session.ContextTokens).Render("ctx "+formatTokenCount(session.ContextTokens)),
+		)
+	}
+	if session.OutputTokens > 0 {
+		parts = append(parts, mutedStyle.Render("out "+formatTokenCount(session.OutputTokens)))
+	}
+	if session.Compactions > 0 {
+		parts = append(parts, mutedStyle.Render(compactionsText(session.Compactions)))
+	}
+	if session.TotalTokens > 0 {
+		parts = append(parts, mutedStyle.Render("total "+formatTokenCount(session.TotalTokens)))
+	}
+	return strings.Join(parts, mutedStyle.Render(" · "))
+}
+
+func compactionsText(count int) string {
+	if count == 1 {
+		return "1 compact"
+	}
+	return strconv.Itoa(count) + " compacts"
+}
+
+func contextTokensStyle(tokens int) lipgloss.Style {
+	switch {
+	case tokens >= resetNowContextTokens:
+		return errorStyle
+	case tokens >= resetSoonContextTokens:
+		return warningStyle
+	default:
+		return mutedStyle
+	}
 }
 
 func taskTokenUsageDetailLines(usage *core.TaskTokenUsage) []string {
@@ -966,14 +1248,14 @@ func taskTokenUsageDetailLines(usage *core.TaskTokenUsage) []string {
 		sessionLabel = "sessions"
 	}
 
-	fields := []string{
-		tokenUsageField("total", usage.TotalTokens),
-	}
-	fields = appendPositiveTokenUsageField(fields, "input", usage.InputTokens)
+	var fields []string
+	fields = appendPositiveTokenUsageField(fields, "context", usage.Latest.ContextTokens)
 	fields = appendPositiveTokenUsageField(fields, "output", usage.OutputTokens)
-	fields = appendPositiveTokenUsageField(fields, "cached", usage.CachedInputTokens)
-	fields = appendPositiveTokenUsageField(fields, "cache created", usage.CacheCreationInputTokens)
+	fields = appendPositiveTokenUsageField(fields, "input", usage.InputTokens)
+	fields = appendPositiveTokenUsageField(fields, "cache reads", usage.CachedInputTokens)
+	fields = appendPositiveTokenUsageField(fields, "cache writes", usage.CacheCreationInputTokens)
 	fields = appendPositiveTokenUsageField(fields, "reasoning", usage.ReasoningOutputTokens)
+	fields = append(fields, tokenUsageField("processed", usage.TotalTokens))
 	fields = append(fields, mutedStyle.Render(strconv.Itoa(usage.SessionCount)+" "+sessionLabel))
 
 	return []string{

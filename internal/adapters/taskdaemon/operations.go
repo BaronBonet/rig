@@ -43,6 +43,23 @@ type repoPullRequestsRequest struct {
 	Cwd string `json:"cwd"`
 }
 
+type importableSessionsRequest struct {
+	Env    core.ProviderEnv `json:"env,omitempty"`
+	Folder string           `json:"folder"`
+}
+
+type importSessionRequest struct {
+	Env     core.ProviderEnv            `json:"env,omitempty"`
+	Session core.ProviderSessionSummary `json:"session"`
+}
+
+// importSessionResponse carries the task even when its session failed to
+// start, so the TUI can show the imported task next to the error.
+type importSessionResponse struct {
+	Task  *core.Task `json:"task,omitempty"`
+	Error string     `json:"error,omitempty"`
+}
+
 type pullRequestStatusRequest struct {
 	Cwd        string `json:"cwd"`
 	BranchName string `json:"branch_name"`
@@ -50,6 +67,11 @@ type pullRequestStatusRequest struct {
 
 type saveProviderSetupRequest struct {
 	ProviderSetup *core.ProviderSetup `json:"provider_setup"`
+}
+
+type renameTaskRequest struct {
+	TaskID string `json:"task_id"`
+	Name   string `json:"name"`
 }
 
 type switchTaskProviderRequest struct {
@@ -89,6 +111,46 @@ var opGetTaskTokenUsage = unaryOp[taskIDRequest, *core.TaskTokenUsage]{
 	},
 }
 
+var opListImportableSessions = unaryOp[importableSessionsRequest, []core.ProviderSessionSummary]{
+	command:  "list_importable_sessions",
+	envelope: "importable_sessions_list",
+	call: func(
+		ctx context.Context,
+		svc core.TaskService,
+		req importableSessionsRequest,
+	) ([]core.ProviderSessionSummary, error) {
+		return svc.ListImportableSessions(ctx, req.Folder, req.Env)
+	},
+}
+
+var opImportSession = unaryOp[importSessionRequest, importSessionResponse]{
+	command:  "import_session",
+	envelope: "session_imported",
+	call: func(ctx context.Context, svc core.TaskService, req importSessionRequest) (importSessionResponse, error) {
+		task, err := svc.ImportSession(ctx, req.Session, req.Env)
+		if err != nil && task == nil {
+			return importSessionResponse{}, err
+		}
+		response := importSessionResponse{Task: task}
+		if err != nil {
+			response.Error = err.Error()
+		}
+		return response, nil
+	},
+}
+
+var opListTaskWorktrees = unaryOp[taskIDRequest, []core.TaskWorktree]{
+	command:  "list_task_worktrees",
+	envelope: "task_worktrees_list",
+	call: func(ctx context.Context, svc core.TaskService, req taskIDRequest) ([]core.TaskWorktree, error) {
+		taskID, err := requiredTaskID("list_task_worktrees", req.TaskID)
+		if err != nil {
+			return nil, err
+		}
+		return svc.ListTaskWorktrees(ctx, taskID)
+	},
+}
+
 var opListRepoPullRequests = unaryOp[repoPullRequestsRequest, []core.RepoPullRequest]{
 	command:  "list_repo_pull_requests",
 	envelope: "repo_pull_requests_list",
@@ -121,6 +183,42 @@ var opReconnectTaskSession = unaryOp[taskIDRequest, emptyResponse]{
 			return emptyResponse{}, err
 		}
 		return emptyResponse{}, svc.ReconnectTaskSession(ctx, taskID)
+	},
+}
+
+var opShelveTask = unaryOp[taskIDRequest, emptyResponse]{
+	command:  "shelve_task",
+	envelope: "task_shelved",
+	call: func(ctx context.Context, svc core.TaskService, req taskIDRequest) (emptyResponse, error) {
+		taskID, err := requiredTaskID("shelve_task", req.TaskID)
+		if err != nil {
+			return emptyResponse{}, err
+		}
+		return emptyResponse{}, svc.ShelveTask(ctx, taskID)
+	},
+}
+
+var opUnshelveTask = unaryOp[taskIDRequest, emptyResponse]{
+	command:  "unshelve_task",
+	envelope: "task_unshelved",
+	call: func(ctx context.Context, svc core.TaskService, req taskIDRequest) (emptyResponse, error) {
+		taskID, err := requiredTaskID("unshelve_task", req.TaskID)
+		if err != nil {
+			return emptyResponse{}, err
+		}
+		return emptyResponse{}, svc.UnshelveTask(ctx, taskID)
+	},
+}
+
+var opRenameTask = unaryOp[renameTaskRequest, emptyResponse]{
+	command:  "rename_task",
+	envelope: "task_renamed",
+	call: func(ctx context.Context, svc core.TaskService, req renameTaskRequest) (emptyResponse, error) {
+		taskID, err := requiredTaskID("rename_task", req.TaskID)
+		if err != nil {
+			return emptyResponse{}, err
+		}
+		return emptyResponse{}, svc.RenameTask(ctx, taskID, req.Name)
 	},
 }
 
@@ -164,6 +262,14 @@ var opSwitchTaskProvider = unaryOp[switchTaskProviderRequest, *core.Task]{
 			return nil, errors.New("switch_task_provider provider required")
 		}
 		return svc.SwitchTaskProvider(ctx, taskID, provider)
+	},
+}
+
+var opGetLaunchSettings = unaryOp[emptyResponse, *core.LaunchSettings]{
+	command:  "get_launch_settings",
+	envelope: "launch_settings",
+	call: func(ctx context.Context, svc core.TaskService, _ emptyResponse) (*core.LaunchSettings, error) {
+		return svc.GetLaunchSettings(ctx)
 	},
 }
 
@@ -227,18 +333,25 @@ func serveUnary[Req, Resp any](op unaryOp[Req, Resp]) unaryHandler {
 // callUnary. The frontend cannot compile without a descriptor per TaskService
 // method, which keeps this table honest.
 var socketUnaryHandlers = map[string]unaryHandler{
-	opGetTaskActivity.command:      serveUnary(opGetTaskActivity),
-	opGetTaskTokenUsage.command:    serveUnary(opGetTaskTokenUsage),
-	opListRepoPullRequests.command: serveUnary(opListRepoPullRequests),
-	opPullRequestStatus.command:    serveUnary(opPullRequestStatus),
-	opReconnectTaskSession.command: serveUnary(opReconnectTaskSession),
-	opGetProviderSetup.command:     serveUnary(opGetProviderSetup),
-	opSaveProviderSetup.command:    serveUnary(opSaveProviderSetup),
-	opDetectProviders.command:      serveUnary(opDetectProviders),
-	opSwitchTaskProvider.command:   serveUnary(opSwitchTaskProvider),
-	opDeleteTask.command:           serveUnary(opDeleteTask),
-	opListTasks.command:            serveUnary(opListTasks),
-	opLatestTaskStatus.command:     serveUnary(opLatestTaskStatus),
+	opGetTaskActivity.command:        serveUnary(opGetTaskActivity),
+	opGetTaskTokenUsage.command:      serveUnary(opGetTaskTokenUsage),
+	opListTaskWorktrees.command:      serveUnary(opListTaskWorktrees),
+	opListImportableSessions.command: serveUnary(opListImportableSessions),
+	opImportSession.command:          serveUnary(opImportSession),
+	opListRepoPullRequests.command:   serveUnary(opListRepoPullRequests),
+	opPullRequestStatus.command:      serveUnary(opPullRequestStatus),
+	opReconnectTaskSession.command:   serveUnary(opReconnectTaskSession),
+	opShelveTask.command:             serveUnary(opShelveTask),
+	opUnshelveTask.command:           serveUnary(opUnshelveTask),
+	opRenameTask.command:             serveUnary(opRenameTask),
+	opGetProviderSetup.command:       serveUnary(opGetProviderSetup),
+	opSaveProviderSetup.command:      serveUnary(opSaveProviderSetup),
+	opDetectProviders.command:        serveUnary(opDetectProviders),
+	opSwitchTaskProvider.command:     serveUnary(opSwitchTaskProvider),
+	opGetLaunchSettings.command:      serveUnary(opGetLaunchSettings),
+	opDeleteTask.command:             serveUnary(opDeleteTask),
+	opListTasks.command:              serveUnary(opListTasks),
+	opLatestTaskStatus.command:       serveUnary(opLatestTaskStatus),
 }
 
 func errorEnvelope(err error) socketEnvelope {
@@ -298,6 +411,7 @@ func unexpectedResponseError(command string, resp socketEnvelope) error {
 const (
 	socketCommandCreateTask        = "create_task"
 	socketCommandRetryTaskCreation = "retry_task_creation"
+	socketCommandNewTaskSession    = "new_task_session"
 
 	socketEnvelopeTaskCreateProgress = "task_create_progress"
 	socketEnvelopeTaskCreated        = "task_created"

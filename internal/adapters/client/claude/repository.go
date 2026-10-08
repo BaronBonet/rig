@@ -39,7 +39,14 @@ const (
 	claudeHookPath        = "/claude-hook"
 	defaultClaudeHooksURL = "http://127.0.0.1:4124" + claudeHookPath
 	workspaceSettingsPath = ".claude/settings.local.json"
+	// configDirEnvVar points Claude Code at a configuration directory other
+	// than ~/.claude, with its own login and sessions.
+	configDirEnvVar = "CLAUDE_CONFIG_DIR"
 )
+
+// ConfigEnvVars are the variables that choose which Claude Code
+// configuration, and so which account and sessions, a session uses.
+var ConfigEnvVars = []string{configDirEnvVar}
 
 // hookCatalog is Claude's hook event catalog: the one declaration of which
 // hook events Rig observes from Claude, how each is matched, and which
@@ -82,12 +89,25 @@ var needsInputNotificationTypes = []string{
 // title suggestions (common CLI noise is rejected by providerkit).
 var titleSkipPrefixes = []string(nil)
 
+// launchOptions are the model aliases and effort levels `claude --model` and
+// `claude --effort` accept, in display order. An alias always means the
+// latest model of that family, so the list does not age with releases.
+var launchOptions = core.ProviderLaunchOptions{
+	Models:  []string{"fable", "opus", "sonnet", "haiku"},
+	Efforts: []string{"low", "medium", "high", "xhigh", "max"},
+	Handoff: true,
+}
+
 type repository struct {
 	runner       subprocess.Runner
 	rigDataDir   func() (string, error)
 	binary       string
 	collectorURL string
 	hookSecret   string
+	fileChanges  transcriptEditCache
+	// claudeConfigDir overrides where Claude Code keeps its sessions; nil
+	// means the task's CLAUDE_CONFIG_DIR, the daemon's, or ~/.claude.
+	claudeConfigDir func() (string, error)
 }
 
 func New(runner subprocess.Runner, cfg Config, hooks HookForwardingConfig) core.ProviderClient {
@@ -131,18 +151,18 @@ func (r *repository) Doctor(ctx context.Context) error {
 	return nil
 }
 
-func (r *repository) SuggestTaskName(ctx context.Context, prompt string) (core.TaskSuggestion, error) {
+func (r *repository) SuggestTaskName(
+	ctx context.Context,
+	prompt string,
+	env core.ProviderEnv,
+) (core.TaskSuggestion, error) {
 	fullPrompt := prompts.SuggestTaskPrompt + "\n\nTask description: " + prompt
 
-	result, err := r.runner.Run(
-		ctx,
-		"",
-		r.binary,
-		"-p",
-		"--output-format",
-		"text",
-		fullPrompt,
-	)
+	result, err := r.runner.RunWithStdin(ctx, subprocess.RunWithStdinOptions{
+		Env:  providerkit.EnvOverrides(env, ConfigEnvVars),
+		Name: r.binary,
+		Args: []string{"-p", "--output-format", "text", fullPrompt},
+	})
 	if suggestion, ok := providerkit.ParseSuggestion(result.Stdout, titleSkipPrefixes); ok {
 		return suggestion, nil
 	}
@@ -160,7 +180,7 @@ func (r *repository) SuggestTaskName(ctx context.Context, prompt string) (core.T
 // script. The script does not trigger by itself: hook registration is written
 // per task workspace by BuildWorkspaceBootstrapSpec, so Claude sessions
 // outside Rig workspaces never report to Rig.
-func (r *repository) EnsureTaskSessionEnvironment(context.Context) error {
+func (r *repository) EnsureTaskSessionEnvironment(context.Context, core.ProviderEnv) error {
 	scriptPath, err := r.forwarderScriptPath()
 	if err != nil {
 		return err
@@ -208,21 +228,132 @@ func (r *repository) BuildWorkspaceBootstrapSpec(_ *core.Task) (core.WorkspaceBo
 	}, nil
 }
 
+func (r *repository) LaunchOptions() core.ProviderLaunchOptions {
+	return core.ProviderLaunchOptions{
+		Models:  append([]string(nil), launchOptions.Models...),
+		Efforts: append([]string(nil), launchOptions.Efforts...),
+		Handoff: launchOptions.Handoff,
+	}
+}
+
+// launchArgs are the flags a task's launch options add to every claude
+// launch, fresh or resumed.
+func launchArgs(task *core.Task) []string {
+	var args []string
+	options := task.Launch()
+	if options.Model != "" {
+		args = append(args, "--model", options.Model)
+	}
+	if options.Effort != "" {
+		args = append(args, "--effort", options.Effort)
+	}
+	return args
+}
+
 func (r *repository) BuildTaskSessionLaunchSpec(task *core.Task) (core.TaskSessionLaunchSpec, error) {
 	var prefillInput []string
 	if strings.TrimSpace(task.Prompt) != "" {
 		prefillInput = []string{task.Prompt}
 	}
 
+	command := append([]string{r.binary}, launchArgs(task)...)
 	return core.TaskSessionLaunchSpec{
-		Command:      []string{r.binary},
+		Command:      providerkit.EnvCommand(task.ProviderEnv, ConfigEnvVars, command),
 		ReadyMarker:  readyMarker,
 		PrefillInput: prefillInput,
 	}, nil
 }
 
+// WriteSessionHandoff runs the previous session once more in print mode,
+// forked so the session itself is left as it was, even while it is still open
+// interactively, with hooks and tools off so nothing but the note comes out,
+// and saves the note under rig's data dir. The session's own model is used: a
+// smaller one might not fit its context. The request goes in on stdin: as an
+// argument it would be swallowed by the variadic --tools flag.
+func (r *repository) WriteSessionHandoff(
+	ctx context.Context,
+	task *core.Task,
+	session core.TaskProviderSession,
+	focus string,
+) (string, error) {
+	sessionID := strings.TrimSpace(session.ProviderSessionID)
+	if sessionID == "" {
+		return "", fmt.Errorf("session ID is required")
+	}
+
+	args := []string{
+		"-p", "--output-format", "text",
+		"--resume", sessionID, "--fork-session", "--no-session-persistence",
+		"--setting-sources", "user", "--tools", "",
+	}
+	if model := strings.TrimSpace(session.Model); model != "" {
+		args = append(args, "--model", model)
+	} else if model := task.Launch().Model; model != "" {
+		args = append(args, "--model", model)
+	}
+
+	cwd := strings.TrimSpace(session.Cwd)
+	if cwd == "" {
+		cwd = strings.TrimSpace(task.WorktreePath)
+	}
+	result, err := r.runner.RunWithStdin(ctx, subprocess.RunWithStdinOptions{
+		Env:   providerkit.EnvOverrides(task.ProviderEnv, ConfigEnvVars),
+		Cwd:   cwd,
+		Name:  r.binary,
+		Args:  args,
+		Stdin: handoffPrompt(focus),
+	})
+	if err != nil {
+		return "", fmt.Errorf("claude print mode failed: %w", err)
+	}
+	note := strings.TrimSpace(result.Stdout)
+	if note == "" {
+		return "", fmt.Errorf("claude returned an empty handoff note")
+	}
+
+	path, err := r.handoffPath(task, sessionID)
+	if err != nil {
+		return "", err
+	}
+	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+		return "", fmt.Errorf("create handoff directory: %w", err)
+	}
+	if err := os.WriteFile(path, []byte(note+"\n"), 0o600); err != nil {
+		return "", fmt.Errorf("write handoff note: %w", err)
+	}
+	return path, nil
+}
+
+// handoffPrompt is the handoff request, told what the next session will be
+// asked to do so the note covers what it needs for that.
+func handoffPrompt(focus string) string {
+	focus = strings.TrimSpace(focus)
+	if focus == "" {
+		return prompts.HandoffPrompt
+	}
+	return prompts.HandoffPrompt +
+		"\n\nThe next session will start with this instruction from the user:\n" + focus +
+		"\n\nMake sure the note covers everything it needs for that: " +
+		"the context, files, decisions and open questions that bear on it."
+}
+
+// handoffPath names a task's handoff notes under rig's data dir, one file per
+// session they were written from, so earlier notes stay readable.
+func (r *repository) handoffPath(task *core.Task, sessionID string) (string, error) {
+	dataDir, err := r.resolveRigDataDir()
+	if err != nil {
+		return "", err
+	}
+	stamp := time.Now().UTC().Format("20060102-150405")
+	short := sessionID
+	if len(short) > 8 {
+		short = short[:8]
+	}
+	return filepath.Join(dataDir, "handoffs", strings.TrimSpace(task.ID), stamp+"-"+short+".md"), nil
+}
+
 func (r *repository) BuildReconnectTaskSessionLaunchSpec(
-	_ *core.Task,
+	task *core.Task,
 	sessionID string,
 ) (core.TaskSessionLaunchSpec, error) {
 	sessionID = strings.TrimSpace(sessionID)
@@ -230,10 +361,17 @@ func (r *repository) BuildReconnectTaskSessionLaunchSpec(
 		return core.TaskSessionLaunchSpec{}, fmt.Errorf("session ID is required")
 	}
 
+	// Claude Code finds a session in the configuration it was recorded in.
+	command := append([]string{r.binary, "--resume", sessionID}, launchArgs(task)...)
 	return core.TaskSessionLaunchSpec{
-		Command:     []string{r.binary, "--resume", sessionID},
+		Command:     providerkit.EnvCommand(task.ProviderEnv, ConfigEnvVars, command),
 		ReadyMarker: readyMarker,
 	}, nil
+}
+
+// ExitCommand ends an idle Claude Code session; Enter on the suggestion runs it.
+func (r *repository) ExitCommand() string {
+	return "/exit"
 }
 
 func (r *repository) TaskSessionCommandName() string {
@@ -274,7 +412,7 @@ func (r *repository) forwarderScriptPath() (string, error) {
 		return "", fmt.Errorf("rig data dir is required")
 	}
 
-	return filepath.Join(dataDir, "claude", "hooks", "forward-to-rig.sh"), nil
+	return filepath.Join(dataDir, "claude", "hooks", providerkit.ForwarderScriptName), nil
 }
 
 func (r *repository) resolveRigDataDir() (string, error) {
@@ -330,7 +468,7 @@ func mergeWorkspaceHookSettings(existing []byte, scriptPath string) ([]byte, err
 		}
 	}
 
-	merged := providerkit.MergeRigHookRules(hooks, hookCatalog.HookRules(hookCommandRenderer(scriptPath)), scriptPath)
+	merged := providerkit.MergeRigHookRules(hooks, hookCatalog.HookRules(hookCommandRenderer(scriptPath)))
 	encodedHooks, err := json.Marshal(merged)
 	if err != nil {
 		return nil, fmt.Errorf("encode merged claude workspace hooks: %w", err)

@@ -131,6 +131,21 @@ func TestHookEventToTaskStatus_MapsClaudeEventsToPhases(t *testing.T) {
 	}
 }
 
+func TestHookEventToTaskStatus_AResumedSessionWaitsForTheUser(t *testing.T) {
+	repo := &repository{binary: "claude"}
+
+	for source, phase := range map[string]core.TaskStatusPhase{
+		"resume":  core.TaskStatusPhaseWaitingForInput,
+		"startup": core.TaskStatusPhaseStarting,
+	} {
+		update, err := repo.HookEventToTaskStatus(core.HookEventInput{
+			TaskID: "task-1", EventName: "SessionStart", StartSource: source, OccurredAt: fixedNow(),
+		})
+		require.NoError(t, err, source)
+		require.Equal(t, phase, update.Phase, source)
+	}
+}
+
 func TestHookEventToTaskStatus_StopWithBackgroundWorkReportsWorkingInBackground(t *testing.T) {
 	repo := &repository{binary: "claude"}
 	work := core.TaskBackgroundWork{Subagents: 1, Shells: 1}

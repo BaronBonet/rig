@@ -178,6 +178,10 @@ func (o *taskObservation) GetTaskTokenUsage(ctx context.Context, taskID string) 
 		}
 
 		total.SessionCount++
+		// Sessions come oldest first, so the most recently active one wins.
+		if usage.ContextTokens > 0 {
+			total.Latest = *usage
+		}
 		total.InputTokens += usage.InputTokens
 		total.OutputTokens += usage.OutputTokens
 		total.CachedInputTokens += usage.CachedInputTokens
@@ -228,14 +232,11 @@ func (o *taskObservation) HandleHookEvent(ctx context.Context, input HookEventIn
 		return ErrUnmanagedHookEvent
 	}
 
-	input.TaskID = strings.TrimSpace(input.TaskID)
-	if input.TaskID == "" {
-		resolvedTaskID, err := o.resolveTaskIDFromCwd(ctx, input.Cwd)
-		if err != nil {
-			return err
-		}
-		input.TaskID = resolvedTaskID
+	resolvedTaskID, err := o.resolveHookTaskID(ctx, input)
+	if err != nil {
+		return err
 	}
+	input.TaskID = resolvedTaskID
 
 	drivesRuntimeStatus := true
 	if task, taskErr := taskByID(ctx, o.tasks, input.TaskID); taskErr == nil && task.Provider != input.Provider {
@@ -262,6 +263,9 @@ func (o *taskObservation) HandleHookEvent(ctx context.Context, input HookEventIn
 	if !drivesRuntimeStatus {
 		return nil
 	}
+	if err := o.adoptSessionTitle(ctx, providerClient, input); err != nil {
+		return err
+	}
 
 	update, err := providerClient.HookEventToTaskStatus(input)
 	if err != nil {
@@ -285,24 +289,46 @@ func isProviderAdoptionEvent(input HookEventInput) bool {
 	return strings.TrimSpace(input.EventName) == HookEventSessionStart
 }
 
-func (o *taskObservation) resolveTaskIDFromCwd(ctx context.Context, cwd string) (string, error) {
-	cwd = strings.TrimSpace(cwd)
-	if cwd == "" {
-		return "", ErrUnmanagedHookEvent
-	}
-
+// resolveHookTaskID finds the Task a hook event belongs to. A Task ID carried by
+// the event wins: Rig sets it on every Task Session it launches. Otherwise the
+// hook's working directory must match exactly one worktree Task; Tasks sharing a
+// workspace cannot be told apart by directory, so such events stay unmanaged
+// rather than being attributed to the wrong Task. Folder Tasks never match by
+// directory: their folder also hosts provider sessions Rig did not launch.
+func (o *taskObservation) resolveHookTaskID(ctx context.Context, input HookEventInput) (string, error) {
 	tasks, err := o.tasks.ListTasks(ctx)
 	if err != nil {
 		return "", fmt.Errorf("list tasks for hook resolution: %w", err)
 	}
 
-	for _, task := range tasks {
-		if task != nil && strings.TrimSpace(task.WorktreePath) == cwd {
-			return strings.TrimSpace(task.ID), nil
+	if taskID := strings.TrimSpace(input.TaskID); taskID != "" {
+		for _, task := range tasks {
+			if task != nil && strings.TrimSpace(task.ID) == taskID {
+				return taskID, nil
+			}
 		}
 	}
 
-	return "", ErrUnmanagedHookEvent
+	cwd := strings.TrimSpace(input.Cwd)
+	if cwd == "" {
+		return "", ErrUnmanagedHookEvent
+	}
+
+	matchedTaskID := ""
+	for _, task := range tasks {
+		if task == nil || task.UsesFolderWorkspace() || strings.TrimSpace(task.WorktreePath) != cwd {
+			continue
+		}
+		if matchedTaskID != "" {
+			return "", ErrUnmanagedHookEvent
+		}
+		matchedTaskID = strings.TrimSpace(task.ID)
+	}
+	if matchedTaskID == "" {
+		return "", ErrUnmanagedHookEvent
+	}
+
+	return matchedTaskID, nil
 }
 
 // statusResolution is the pure outcome of the runtime-status decision: what a

@@ -150,6 +150,8 @@ func TestTaskStatusService_GetTaskTokenUsageSumsLatestTranscriptPerProviderSessi
 			TotalTokens:  100,
 		},
 		"/tmp/codex-a-resumed.jsonl": {
+			ContextTokens:            900,
+			Compactions:              2,
 			InputTokens:              100,
 			CachedInputTokens:        25,
 			CacheCreationInputTokens: 15,
@@ -158,6 +160,7 @@ func TestTaskStatusService_GetTaskTokenUsageSumsLatestTranscriptPerProviderSessi
 			TotalTokens:              140,
 		},
 		"/tmp/codex-b.jsonl": {
+			ContextTokens:            300,
 			InputTokens:              30,
 			CachedInputTokens:        5,
 			CacheCreationInputTokens: 10,
@@ -169,7 +172,17 @@ func TestTaskStatusService_GetTaskTokenUsageSumsLatestTranscriptPerProviderSessi
 	usage, err := svc.service.GetTaskTokenUsage(t.Context(), "task-123")
 	require.NoError(t, err)
 	require.Equal(t, &TaskTokenUsage{
-		SessionCount:             2,
+		SessionCount: 2,
+		Latest: SessionTokenUsage{ // the most recently active session's
+			ContextTokens:            900,
+			Compactions:              2,
+			InputTokens:              100,
+			CachedInputTokens:        25,
+			CacheCreationInputTokens: 15,
+			OutputTokens:             40,
+			ReasoningOutputTokens:    10,
+			TotalTokens:              140,
+		},
 		InputTokens:              130,
 		CachedInputTokens:        30,
 		CacheCreationInputTokens: 25,
@@ -666,6 +679,53 @@ func TestTaskStatusService_HandleHookEventResolvesTaskIDAndPublishesMappedUpdate
 		RawEventName: "SessionStart",
 		ObservedAt:   time.Date(2026, time.April, 20, 9, 0, 0, 0, time.UTC),
 	}, *update)
+}
+
+func TestTaskStatusService_HandleHookEventPrefersCarriedTaskIDOverSharedWorkspace(t *testing.T) {
+	svc := newTestTaskService(t)
+	svc.taskRepo.listTasks = []*Task{
+		{ID: "task-a", WorktreePath: "/tmp/shared"},
+		{ID: "task-b", WorktreePath: "/tmp/shared"},
+	}
+
+	err := svc.service.HandleHookEvent(t.Context(), HookEventInput{
+		Provider:  ProviderCodex,
+		TaskID:    "task-b",
+		Cwd:       "/tmp/shared",
+		EventName: "SessionStart",
+	})
+	require.NoError(t, err)
+	require.Equal(t, "task-b", svc.providerRepo.hookInput.TaskID)
+}
+
+func TestTaskStatusService_HandleHookEventFallsBackToWorkspaceForUnknownTaskID(t *testing.T) {
+	svc := newTestTaskService(t)
+	svc.taskRepo.listTasks = []*Task{{ID: "task-123", WorktreePath: "/tmp/repo-task"}}
+
+	err := svc.service.HandleHookEvent(t.Context(), HookEventInput{
+		Provider:  ProviderCodex,
+		TaskID:    "task-deleted",
+		Cwd:       "/tmp/repo-task",
+		EventName: "SessionStart",
+	})
+	require.NoError(t, err)
+	require.Equal(t, "task-123", svc.providerRepo.hookInput.TaskID)
+}
+
+func TestTaskStatusService_HandleHookEventIgnoresWorkspaceSharedByTasksWithoutTaskID(t *testing.T) {
+	svc := newTestTaskService(t)
+	svc.taskRepo.listTasks = []*Task{
+		{ID: "task-a", WorktreePath: "/tmp/shared"},
+		{ID: "task-b", WorktreePath: "/tmp/shared"},
+	}
+
+	err := svc.service.HandleHookEvent(t.Context(), HookEventInput{
+		Provider:  ProviderCodex,
+		Cwd:       "/tmp/shared",
+		EventName: "SessionStart",
+	})
+	require.ErrorIs(t, err, ErrUnmanagedHookEvent)
+	require.Empty(t, svc.providerRepo.hookInput.TaskID)
 }
 
 func TestTaskStatusService_HandleHookEventPersistsResumeMetadataWhenSessionIDPresent(t *testing.T) {

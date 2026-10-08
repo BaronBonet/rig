@@ -3,6 +3,7 @@ package core
 import (
 	"context"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
@@ -74,6 +75,8 @@ func TestTaskCreationSeam_RetryRunsOnlyRemainingSteps(t *testing.T) {
 		t.Run(string(tc.failedStep), func(t *testing.T) {
 			h := newTestTaskService(t)
 			h.taskRepo.listTasks = []*Task{failedTaskFixture(tc.failedStep)}
+			// The failed attempt left the pane idle.
+			h.sessionClient.inspectState = TaskSessionRuntimeState{Exists: true, ActiveCommands: []string{"zsh"}}
 
 			var reported []TaskCreateProgressStep
 			reporter := NewMockTaskCreateProgressReporter(t)
@@ -91,6 +94,24 @@ func TestTaskCreationSeam_RetryRunsOnlyRemainingSteps(t *testing.T) {
 			require.Equal(t, tc.wantSessionStart, h.sessionClient.startedTask != nil, "session start")
 		})
 	}
+}
+
+func TestTaskCreationSeam_RetryWithTheProviderStillRunningOnlyTypesThePrompt(t *testing.T) {
+	h := newTestTaskService(t)
+	h.taskRepo.listTasks = []*Task{failedTaskFixture(TaskCreateProgressStartingSession)}
+	// The failed attempt's provider is still up in the pane, for example
+	// behind a dialog the prompt could not be typed into. Launching it again
+	// would type the launch command into the running provider.
+	h.sessionClient.inspectState = TaskSessionRuntimeState{Exists: true, ActiveCommands: []string{"codex"}}
+	// Its session start was reported back then; there is none to wait for now.
+	h.launcher.providerSessionWait = 5 * time.Second
+
+	task, err := h.creation.RetryTaskCreationWithProgress(t.Context(), "task-1", nil)
+
+	require.NoError(t, err)
+	require.Equal(t, TaskCreationStatusReady, task.CreationStatus)
+	require.Nil(t, h.sessionClient.startedTask, "the running provider is not launched again")
+	require.Equal(t, []string{"add billing retry flow"}, h.sessionClient.prefilledLaunch.PrefillInput)
 }
 
 func TestTaskCreationSeam_RetryRejectsNonRetryableStep(t *testing.T) {
@@ -160,6 +181,7 @@ func TestSessionLauncherSeam_PrepareWorkspaceSeedsBeforeBootstrap(t *testing.T) 
 	}, nil)
 
 	launcher := newSessionLauncher(
+		NewMockTaskRepository(t),
 		map[Provider]ProviderClient{ProviderCodex: providerClient},
 		config,
 		workspace,
@@ -182,6 +204,7 @@ func TestSessionLauncherSeam_BootstrapWorkspaceNeverSeeds(t *testing.T) {
 	workspace.EXPECT().BootstrapTaskWorkspace(mock.Anything, mock.Anything, mock.Anything).Return(nil)
 
 	launcher := newSessionLauncher(
+		NewMockTaskRepository(t),
 		map[Provider]ProviderClient{ProviderCodex: providerClient},
 		NewMockProviderConfigStore(t),
 		workspace,

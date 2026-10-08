@@ -72,7 +72,11 @@ func TestModel_ViewRendersTaskMetadata(t *testing.T) {
 
 	view := stripANSI(got.View().Content)
 	require.Contains(t, view, "RIG dev")
-	require.Contains(t, view, "n new   p provider   r refresh   space details   x clean   q quit")
+	require.Contains(
+		t,
+		view,
+		"n new  N session  d shelve  e rename  tab shelf  i import  p provider  r refresh  space details  x clean  q quit",
+	)
 	require.Contains(t, view, "first task")
 	require.Contains(t, view, "repo-a")
 	require.Contains(t, view, "feat/first-task")
@@ -441,10 +445,11 @@ func TestModel_AfterLoadUsesSubscriptionsAsInitialStatusSource(t *testing.T) {
 	require.True(t, ok)
 
 	msgs := runBatchCmd(t, cmd)
-	require.Len(t, msgs, 6)
+	require.Len(t, msgs, 9, "four per task, and the return key's claim")
 	require.Empty(t, frontend.latestTaskStatusCalls)
 	require.Equal(t, []string{"task-1:6", "task-2:6"}, frontend.getTaskActivityCalls)
 	require.Equal(t, []string{"task-1", "task-2"}, frontend.getTaskTokenUsageCalls)
+	require.Equal(t, []string{"task-1", "task-2"}, frontend.listTaskWorktreesCalls)
 	require.Equal(t, []string{"task-1", "task-2"}, frontend.subscribeTaskStatusCalls)
 }
 
@@ -932,7 +937,7 @@ func TestModel_TaskStatusUpdateReloadsTaskActivity(t *testing.T) {
 
 	batchMsg, ok := runCmd(t, followCmd).(tea.BatchMsg)
 	require.True(t, ok)
-	require.Len(t, batchMsg, 3)
+	require.Len(t, batchMsg, 4)
 
 	activityMsg, ok := batchMsg[0]().(taskActivityLoadedMsg)
 	require.True(t, ok)
@@ -945,10 +950,50 @@ func TestModel_TaskStatusUpdateReloadsTaskActivity(t *testing.T) {
 	tokenMsg, ok := batchMsg[1]().(taskTokenUsageLoadedMsg)
 	require.True(t, ok)
 	require.Equal(t, []string{"task-1", "task-1"}, frontend.getTaskTokenUsageCalls)
+	_, ok = batchMsg[2]().(taskWorktreesLoadedMsg)
+	require.True(t, ok)
 	next, _ = got.Update(tokenMsg)
 	got, ok = next.(model)
 	require.True(t, ok)
 	require.Equal(t, "fresh activity", got.rows[0].activity[0].Text)
+}
+
+func TestModel_WorktreesLoadedRenderInTaskRowAndDetail(t *testing.T) {
+	frontend := newFrontendHarness()
+	m := newLoadedModel(frontend)
+	m.rows = []taskRow{{
+		task: &core.Task{ID: "task-1", DisplayName: "search integration", Provider: core.ProviderClaude},
+	}}
+	edited := time.Date(2026, time.October, 2, 9, 0, 0, 0, time.UTC)
+
+	next, _ := m.Update(taskWorktreesLoadedMsg{
+		taskID: "task-1",
+		worktrees: []core.TaskWorktree{
+			{
+				LastEditAt: edited, WorktreePath: "/src/api-search", RepoName: "api",
+				Branch: "fix/null-check", EditedBranch: "fix/null-check", EditCount: 4,
+			},
+			{
+				LastEditAt: edited, WorktreePath: "/src/web-search", RepoName: "web",
+				Branch: "feat/search", EditedBranch: "feat/search", EditCount: 2,
+			},
+			{
+				LastEditAt: edited, WorktreePath: "/src/web-1", RepoName: "web",
+				Branch: "feat/deep-links", EditedBranch: "fix/avatar", EditCount: 1,
+			},
+		},
+	})
+
+	got, ok := next.(model)
+	require.True(t, ok)
+	_, rowLine := got.renderRow(0, got.rows[0], 120)
+	require.Contains(t, stripANSI(rowLine), "api-search · web-search · +1")
+
+	view := stripANSI(got.selectedTaskDetailView())
+	require.Contains(t, view, "WORKTREES")
+	require.Contains(t, view, "api  api-search  fix/null-check")
+	require.Contains(t, view, "web  web-search  feat/search")
+	require.Contains(t, view, "web  web-1       now on feat/deep-links")
 }
 
 func TestModel_TokenUsageLoadedRendersInSelectedTaskDetail(t *testing.T) {
@@ -967,6 +1012,7 @@ func TestModel_TokenUsageLoadedRendersInSelectedTaskDetail(t *testing.T) {
 		taskID: "task-1",
 		usage: &core.TaskTokenUsage{
 			SessionCount:             2,
+			Latest:                   core.SessionTokenUsage{ContextTokens: 45},
 			InputTokens:              130,
 			OutputTokens:             60,
 			CachedInputTokens:        30,
@@ -980,18 +1026,10 @@ func TestModel_TokenUsageLoadedRendersInSelectedTaskDetail(t *testing.T) {
 	require.True(t, ok)
 	view := stripANSI(got.selectedTaskDetailView())
 	require.Contains(t, view, "TOKENS")
-	require.Contains(t, view, "total 190")
-	require.Contains(t, view, "input 130")
-	require.Contains(t, view, "output 60")
-	require.Contains(t, view, "cached 30")
-	require.Contains(t, view, "cache created 15")
-	require.Contains(t, view, "reasoning 10")
-	require.Contains(t, view, "190")
-	require.Contains(t, view, "2 sessions")
 	require.Contains(
 		t,
 		view,
-		"total 190   input 130   output 60   cached 30   cache created 15   reasoning 10   2 sessions",
+		"context 45   output 60   input 130   cache reads 30   cache writes 15   reasoning 10   processed 190   2 sessions",
 	)
 	require.Less(t, strings.Index(view, "SESSION"), strings.Index(view, "TOKENS"))
 	require.Less(t, strings.Index(view, "TOKENS"), strings.Index(view, "INITIAL PROMPT"))
@@ -1531,6 +1569,7 @@ func TestModel_CreateTaskReloadsAuthoritativeTaskSnapshotWhenCreateResponseIsPar
 			DisplayName:  "verify new rig behavior",
 			Prompt:       "testing if new rig things work",
 			RepoName:     "rig",
+			RepoRoot:     "/tmp/repo",
 			BranchName:   "feat/verify-new-rig-behavior",
 			WorktreePath: "/tmp/rig-verify-new-rig-behavior",
 			Provider:     core.ProviderCodex,
@@ -2048,7 +2087,11 @@ func TestModel_PRPickerEnterCreatesTaskFromSelectedPR(t *testing.T) {
 	require.Equal(t, modeBrowse, pending.mode)
 	require.Equal(t, opCreating, pending.pending)
 	view := stripANSI(pending.View().Content)
-	require.Contains(t, view, "n new   p provider   r refresh   space details   x clean   q quit")
+	require.Contains(
+		t,
+		view,
+		"n new  N session  d shelve  e rename  tab shelf  i import  p provider  r refresh  space details  x clean  q quit",
+	)
 	require.Contains(t, view, "Creating task from pull request")
 	require.NotContains(t, view, "Suggesting name")
 	require.Less(t, strings.Index(view, "existing task"), strings.Index(view, "Creating task from pull request"))
@@ -2120,7 +2163,11 @@ func TestModel_PRPickerCreateFailureReturnsToBrowseWithProgressAndError(t *testi
 	require.ErrorContains(t, got.create.err, "create failed")
 
 	view = stripANSI(got.View().Content)
-	require.Contains(t, view, "n new   p provider   r refresh   space details   x clean   q quit")
+	require.Contains(
+		t,
+		view,
+		"n new  N session  d shelve  e rename  tab shelf  i import  p provider  r refresh  space details  x clean  q quit",
+	)
 	require.Contains(t, view, "Creating task from pull request")
 	require.NotContains(t, view, "Creating worktree")
 	require.Contains(t, view, "create failed")
@@ -2327,12 +2374,26 @@ type frontendHarness struct {
 	retryTaskStreamCalls        int
 	deleteTaskErr               error
 	deleteTaskIDs               []string
+	shelveTaskIDs               []string
+	unshelveTaskIDs             []string
+	shelveTaskErr               error
+	renamedTasks                map[string]string
+	renameTaskErr               error
 	latestTaskStatus            map[string]*core.TaskStatusUpdate
 	latestTaskStatusErr         map[string]error
 	latestTaskStatusCalls       []string
 	getTaskTokenUsage           map[string]*core.TaskTokenUsage
 	getTaskTokenUsageErr        map[string]error
 	getTaskTokenUsageCalls      []string
+	listTaskWorktrees           map[string][]core.TaskWorktree
+	listTaskWorktreesCalls      []string
+	importableSessions          []core.ProviderSessionSummary
+	importableSessionsFolder    string
+	importableSessionsEnv       core.ProviderEnv
+	importedSession             *core.ProviderSessionSummary
+	importEnv                   core.ProviderEnv
+	importTask                  *core.Task
+	importErr                   error
 	getTaskActivity             map[string][]core.TaskActivityEvent
 	getTaskActivityErr          map[string]error
 	getTaskActivityCalls        []string
@@ -2353,6 +2414,15 @@ type frontendHarness struct {
 	switchTaskResult            *core.Task
 	switchTaskErr               error
 	switchTaskCalls             int
+	launchSettings              *core.LaunchSettings
+	launchSettingsErr           error
+	launchSettingsCalls         int
+	newSessionInput             core.NewTaskSessionInput
+	newSessionEvents            []core.TaskCreateEvent
+	newSessionStreamErr         error
+	newSessionStreamCalls       int
+	claimedFolder               string
+	claimedTasks                []*core.Task
 }
 
 func newFrontendHarness() *frontendHarness {
@@ -2392,6 +2462,30 @@ func newFrontendHarness() *frontendHarness {
 			return append([]core.ProviderDetection(nil), frontend.detections...), nil
 		},
 	).Maybe()
+	frontend.mock.EXPECT().GetLaunchSettings(mock.Anything).RunAndReturn(
+		func(context.Context) (*core.LaunchSettings, error) {
+			frontend.launchSettingsCalls++
+			if frontend.launchSettingsErr != nil {
+				return nil, frontend.launchSettingsErr
+			}
+			return frontend.launchSettings, nil
+		},
+	).Maybe()
+	frontend.mock.EXPECT().NewTaskSessionStream(mock.Anything, mock.Anything).RunAndReturn(
+		func(_ context.Context, input core.NewTaskSessionInput) (<-chan core.TaskCreateEvent, error) {
+			frontend.newSessionStreamCalls++
+			frontend.newSessionInput = input
+			if frontend.newSessionStreamErr != nil {
+				return nil, frontend.newSessionStreamErr
+			}
+			events := make(chan core.TaskCreateEvent, len(frontend.newSessionEvents))
+			for _, event := range frontend.newSessionEvents {
+				events <- event
+			}
+			close(events)
+			return events, nil
+		},
+	).Maybe()
 	frontend.mock.EXPECT().SwitchTaskProvider(mock.Anything, mock.Anything, mock.Anything).RunAndReturn(
 		func(_ context.Context, taskID string, provider core.Provider) (*core.Task, error) {
 			frontend.switchTaskCalls++
@@ -2401,6 +2495,13 @@ func newFrontendHarness() *frontendHarness {
 				return nil, frontend.switchTaskErr
 			}
 			return frontend.switchTaskResult, nil
+		},
+	).Maybe()
+	frontend.mock.EXPECT().ClaimTaskSessions(mock.Anything, mock.Anything, mock.Anything).RunAndReturn(
+		func(_ context.Context, folder string, tasks []*core.Task) error {
+			frontend.claimedFolder = folder
+			frontend.claimedTasks = tasks
+			return nil
 		},
 	).Maybe()
 	frontend.mock.EXPECT().AttachTaskSession(mock.Anything, mock.Anything).RunAndReturn(
@@ -2456,6 +2557,50 @@ func newFrontendHarness() *frontendHarness {
 		func(_ context.Context, taskID string) error {
 			frontend.deleteTaskIDs = append(frontend.deleteTaskIDs, taskID)
 			return frontend.deleteTaskErr
+		},
+	).Maybe()
+	// Shelving moves the listed task, as the daemon would, so the reload that
+	// follows sees it on the shelf or back on the list.
+	setShelved := func(taskID string, at time.Time) {
+		for _, task := range frontend.listTasks {
+			if task != nil && task.ID == taskID {
+				task.ShelvedAt = at
+			}
+		}
+	}
+	frontend.mock.EXPECT().ShelveTask(mock.Anything, mock.Anything).RunAndReturn(
+		func(_ context.Context, taskID string) error {
+			frontend.shelveTaskIDs = append(frontend.shelveTaskIDs, taskID)
+			if frontend.shelveTaskErr == nil {
+				setShelved(taskID, time.Now().Add(-2*time.Hour))
+			}
+			return frontend.shelveTaskErr
+		},
+	).Maybe()
+	frontend.mock.EXPECT().UnshelveTask(mock.Anything, mock.Anything).RunAndReturn(
+		func(_ context.Context, taskID string) error {
+			frontend.unshelveTaskIDs = append(frontend.unshelveTaskIDs, taskID)
+			setShelved(taskID, time.Time{})
+			return nil
+		},
+	).Maybe()
+	// Renaming renames the listed task, as the daemon would, so the reload
+	// that follows shows the new name.
+	frontend.mock.EXPECT().RenameTask(mock.Anything, mock.Anything, mock.Anything).RunAndReturn(
+		func(_ context.Context, taskID string, name string) error {
+			if frontend.renameTaskErr != nil {
+				return frontend.renameTaskErr
+			}
+			if frontend.renamedTasks == nil {
+				frontend.renamedTasks = map[string]string{}
+			}
+			frontend.renamedTasks[taskID] = name
+			for _, task := range frontend.listTasks {
+				if task != nil && task.ID == taskID {
+					task.DisplayName = name
+				}
+			}
+			return nil
 		},
 	).Maybe()
 	frontend.mock.EXPECT().ListTasks(mock.Anything).RunAndReturn(
@@ -2523,6 +2668,26 @@ func newFrontendHarness() *frontendHarness {
 			return frontend.getTaskTokenUsage[taskID], nil
 		},
 	).Maybe()
+	frontend.mock.EXPECT().ListImportableSessions(mock.Anything, mock.Anything, mock.Anything).RunAndReturn(
+		func(_ context.Context, folder string, env core.ProviderEnv) ([]core.ProviderSessionSummary, error) {
+			frontend.importableSessionsFolder = folder
+			frontend.importableSessionsEnv = env
+			return frontend.importableSessions, nil
+		},
+	).Maybe()
+	frontend.mock.EXPECT().ImportSession(mock.Anything, mock.Anything, mock.Anything).RunAndReturn(
+		func(_ context.Context, session core.ProviderSessionSummary, env core.ProviderEnv) (*core.Task, error) {
+			frontend.importedSession = &session
+			frontend.importEnv = env
+			return frontend.importTask, frontend.importErr
+		},
+	).Maybe()
+	frontend.mock.EXPECT().ListTaskWorktrees(mock.Anything, mock.Anything).RunAndReturn(
+		func(_ context.Context, taskID string) ([]core.TaskWorktree, error) {
+			frontend.listTaskWorktreesCalls = append(frontend.listTaskWorktreesCalls, taskID)
+			return frontend.listTaskWorktrees[taskID], nil
+		},
+	).Maybe()
 	frontend.mock.EXPECT().SubscribeTaskStatus(mock.Anything, mock.Anything).RunAndReturn(
 		func(ctx context.Context, taskID string) (<-chan core.TaskStatusUpdate, error) {
 			frontend.subscribeTaskStatusCalls = append(frontend.subscribeTaskStatusCalls, taskID)
@@ -2539,4 +2704,34 @@ func newFrontendHarness() *frontendHarness {
 		},
 	).Maybe()
 	return frontend
+}
+
+func TestTaskRow_ShowsTheLatestSessionsContextOutputCompactionsAndProcessedTotal(t *testing.T) {
+	usage := &core.TaskTokenUsage{
+		SessionCount: 2,
+		Latest: core.SessionTokenUsage{
+			ContextTokens: 229_100, Compactions: 3, OutputTokens: 61_900, CachedInputTokens: 13_100_000,
+			TotalTokens: 13_400_000,
+		},
+		OutputTokens: 1_700_000, CachedInputTokens: 597_000_000, TotalTokens: 612_100_000,
+	}
+
+	require.Equal(t, "ctx 229.1k · out 61.9k · 3 compacts · total 13.4m", stripANSI(taskTokenUsageRowText(usage)),
+		"the session a handoff would replace, not the task's earlier sessions")
+	require.Equal(t, "out 2.0k · total 9.0k", stripANSI(taskTokenUsageRowText(&core.TaskTokenUsage{
+		Latest: core.SessionTokenUsage{OutputTokens: 2000, TotalTokens: 9000},
+	})), "a session that has not reported its context yet, nor been compacted")
+	require.Equal(t, "ctx 70.0k · 1 compact", stripANSI(taskTokenUsageRowText(&core.TaskTokenUsage{
+		Latest: core.SessionTokenUsage{ContextTokens: 70_000, Compactions: 1},
+	})))
+}
+
+func TestTaskRow_ContextTurnsAmberThenRedAsAHandoffGetsDue(t *testing.T) {
+	rowWithContext := func(tokens int) string {
+		return taskTokenUsageRowText(&core.TaskTokenUsage{Latest: core.SessionTokenUsage{ContextTokens: tokens}})
+	}
+
+	require.Equal(t, mutedStyle.Render("ctx 199.9k"), rowWithContext(199_900))
+	require.Equal(t, warningStyle.Render("ctx 200.0k"), rowWithContext(resetSoonContextTokens))
+	require.Equal(t, errorStyle.Render("ctx 400.0k"), rowWithContext(resetNowContextTokens))
 }

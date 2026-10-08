@@ -3,6 +3,7 @@ package core
 import (
 	"context"
 	"net/http"
+	"strings"
 	"time"
 )
 
@@ -38,6 +39,43 @@ type CreateTaskInput struct {
 	Cwd      string           `json:"cwd"`
 	Prompt   string           `json:"prompt"`
 	Provider Provider         `json:"provider"`
+	// Workspace requests a folder Task in Cwd. Empty creates a worktree Task
+	// when Cwd is inside a Git worktree and a folder Task otherwise.
+	Workspace WorkspaceKind `json:"workspace,omitempty"`
+	// ProviderEnv is the requesting rig window's provider configuration; the
+	// Task keeps it for every provider it launches.
+	ProviderEnv ProviderEnv `json:"provider_env,omitempty"`
+	// Model and Effort are the launch options the new Task's provider starts
+	// with; empty means the provider's default.
+	Model  string `json:"model,omitempty"`
+	Effort string `json:"effort,omitempty"`
+}
+
+// Launch returns the launch options the input asks for.
+func (i CreateTaskInput) Launch() LaunchOptions {
+	return LaunchOptions{Model: strings.TrimSpace(i.Model), Effort: strings.TrimSpace(i.Effort)}
+}
+
+// NewTaskSessionInput starts a fresh provider session in an existing Task: a
+// new conversation with a small context, in the same workspace and tmux
+// session, instead of compacting a long one. Prompt is typed into the new
+// session; with Handoff, a note written from the previous session is
+// referenced from it.
+type NewTaskSessionInput struct {
+	TaskID string `json:"task_id"`
+	Prompt string `json:"prompt"`
+	// Provider is the provider to start; empty keeps the Task's active one.
+	Provider Provider `json:"provider,omitempty"`
+	Model    string   `json:"model,omitempty"`
+	Effort   string   `json:"effort,omitempty"`
+	// Handoff asks the previous session of the Task's active provider for a
+	// handoff note before the new session starts. It is skipped quietly when
+	// the Task has no previous session.
+	Handoff bool `json:"handoff,omitempty"`
+	// NewWindow starts the session alongside the Task's running one, as a
+	// child Task in a new window of the Task's tmux session, instead of
+	// replacing it in the Task's own window.
+	NewWindow bool `json:"new_window,omitempty"`
 }
 
 type TaskCreateProgressStep string
@@ -47,6 +85,9 @@ const (
 	TaskCreateProgressCreatingWorktree   TaskCreateProgressStep = "creating_worktree"
 	TaskCreateProgressPreparingWorkspace TaskCreateProgressStep = "preparing_workspace"
 	TaskCreateProgressStartingSession    TaskCreateProgressStep = "starting_session"
+	// TaskCreateProgressWritingHandoff is a new-session milestone: the
+	// previous session is writing its handoff note.
+	TaskCreateProgressWritingHandoff TaskCreateProgressStep = "writing_handoff"
 )
 
 type TaskCreateProgressEvent struct {
@@ -79,6 +120,10 @@ type TaskFrontend interface {
 	// session for interactive use. This is intentionally client-local behavior,
 	// not part of the daemon socket protocol.
 	AttachTaskSession(ctx context.Context, task *Task) error
+	// ClaimTaskSessions makes the tmux return key in the sessions of the tasks
+	// that belong to folder lead back to this rig. Client-local, like
+	// AttachTaskSession.
+	ClaimTaskSessions(ctx context.Context, folder string, tasks []*Task) error
 }
 
 // TaskDaemonHookRoute describes one provider hook endpoint the local task
@@ -173,6 +218,19 @@ type TaskService interface {
 	// GetTaskTokenUsage returns the summed token usage across provider sessions
 	// observed for the selected task.
 	GetTaskTokenUsage(ctx context.Context, taskID string) (*TaskTokenUsage, error)
+	// ListTaskWorktrees returns the existing worktrees the task's provider
+	// sessions have edited, most recently edited first, each with the branch it
+	// has checked out now and the branch it had at the task's last edit there.
+	ListTaskWorktrees(ctx context.Context, taskID string) ([]TaskWorktree, error)
+	// ListImportableSessions returns the configured providers' sessions that
+	// were started in folder or below it and do not belong to a task yet, most
+	// recently active first, read from the session stores env points at.
+	ListImportableSessions(ctx context.Context, folder string, env ProviderEnv) ([]ProviderSessionSummary, error)
+	// ImportSession makes a provider session started outside Rig a folder task
+	// that runs with env, the configuration the session was listed from, and
+	// resumes it in the task's own session. When the task is created but its
+	// session fails to start, both the task and the error are returned.
+	ImportSession(ctx context.Context, session ProviderSessionSummary, env ProviderEnv) (*Task, error)
 	// ListTasks returns all known tasks.
 	ListTasks(ctx context.Context) ([]*Task, error)
 	// LatestTaskStatus returns the latest published live status for a task, or
@@ -188,6 +246,17 @@ type TaskService interface {
 	// ReconnectTaskSession recreates a missing task runtime session from
 	// persisted provider resume metadata.
 	ReconnectTaskSession(ctx context.Context, taskID string) error
+	// ShelveTask takes the task and its child tasks off the current list. Their
+	// provider sessions end and everything else is kept, so opening the task
+	// later resumes its latest session. It refuses while any of them is
+	// working.
+	ShelveTask(ctx context.Context, taskID string) error
+	// UnshelveTask puts the task and its child tasks back on the current list.
+	// Their sessions start again when they are opened.
+	UnshelveTask(ctx context.Context, taskID string) error
+	// RenameTask gives the task a new name and drops its original ask, so new
+	// sessions are not briefed on what it was first for.
+	RenameTask(ctx context.Context, taskID string, name string) error
 	// GetProviderSetup returns the user's provider setup, or nil when provider
 	// setup has never completed.
 	GetProviderSetup(ctx context.Context) (*ProviderSetup, error)
@@ -202,6 +271,14 @@ type TaskService interface {
 	// the current provider process is still running and only records the new
 	// active provider after the new provider launches successfully.
 	SwitchTaskProvider(ctx context.Context, taskID string, provider Provider) (*Task, error)
+	// NewTaskSessionStream starts a fresh provider session in an existing
+	// task, optionally after writing a handoff note from the previous one,
+	// and streams progress events followed by exactly one terminal result
+	// event. It refuses while a provider is still running in the task session.
+	NewTaskSessionStream(ctx context.Context, input NewTaskSessionInput) (<-chan TaskCreateEvent, error)
+	// GetLaunchSettings returns every configured provider's launch options and
+	// the options each was last launched with.
+	GetLaunchSettings(ctx context.Context) (*LaunchSettings, error)
 }
 
 // HookEventHandler consumes provider hook events inside the daemon process.
@@ -231,6 +308,12 @@ type ProviderConfigStore interface {
 	GetProviderSetup(ctx context.Context) (*ProviderSetup, error)
 	// SaveProviderSetup validates and atomically persists the provider setup.
 	SaveProviderSetup(ctx context.Context, setup ProviderSetup) error
+	// GetLaunchDefaults returns the launch options each provider was last
+	// launched with; nil when none were recorded.
+	GetLaunchDefaults(ctx context.Context) (map[Provider]LaunchOptions, error)
+	// SaveLaunchDefaults records the launch options a provider was last
+	// launched with, keeping the rest of the config.
+	SaveLaunchDefaults(ctx context.Context, provider Provider, options LaunchOptions) error
 }
 
 // TaskRepository persists task records and returns their durable state.
@@ -266,6 +349,12 @@ type TaskRepository interface {
 	LatestTaskResumeMetadata(ctx context.Context, taskID string) (*TaskResumeMetadata, error)
 	// ListTaskProviderSessions returns provider sessions observed for a task.
 	ListTaskProviderSessions(ctx context.Context, taskID string) ([]TaskProviderSession, error)
+	// UpsertTaskWorktreeRecord stores the latest observation of a worktree the
+	// task has edited, replacing any earlier one for the same worktree.
+	UpsertTaskWorktreeRecord(ctx context.Context, record TaskWorktreeRecord) error
+	// ListTaskWorktreeRecords returns every stored worktree observation for a
+	// task.
+	ListTaskWorktreeRecords(ctx context.Context, taskID string) ([]TaskWorktreeRecord, error)
 	// SubscribeTaskStatus subscribes to live status updates for a task. The
 	// subscription lifetime is owned by ctx; cancelling it removes the
 	// subscription and closes the update channel.
@@ -278,16 +367,29 @@ type ProviderClient interface {
 	// Doctor verifies that the provider dependency and provider-specific Rig
 	// integration are available.
 	Doctor(ctx context.Context) error
-	// SuggestTaskName derives a task display name and branch type from a prompt.
-	SuggestTaskName(ctx context.Context, prompt string) (TaskSuggestion, error)
+	// SuggestTaskName derives a task display name and branch type from a
+	// prompt, running the provider with env.
+	SuggestTaskName(ctx context.Context, prompt string, env ProviderEnv) (TaskSuggestion, error)
 	// EnsureTaskSessionEnvironment applies any provider-specific runtime
-	// configuration required before launching or resuming an interactive session.
-	EnsureTaskSessionEnvironment(ctx context.Context) error
+	// configuration required before launching or resuming an interactive
+	// session that runs with env.
+	EnsureTaskSessionEnvironment(ctx context.Context, env ProviderEnv) error
 	// BuildWorkspaceBootstrapSpec describes the provider-specific files that
 	// should be written into the task workspace before launch.
 	BuildWorkspaceBootstrapSpec(task *Task) (WorkspaceBootstrapSpec, error)
+	// LaunchOptions lists the models and efforts the provider's CLI accepts,
+	// and whether it can write a handoff note from a previous session.
+	LaunchOptions() ProviderLaunchOptions
+	// WriteSessionHandoff asks a previous provider session of the task, in
+	// print mode and without touching the task's interactive session, for a
+	// handoff note a fresh session can start from, and returns the path it
+	// wrote the note to. focus, when not empty, is what the next session will
+	// be asked to do, so the note covers what it needs for that.
+	// ErrHandoffUnsupported when the provider cannot.
+	WriteSessionHandoff(ctx context.Context, task *Task, session TaskProviderSession, focus string) (string, error)
 	// BuildTaskSessionLaunchSpec describes how the provider's CLI should be
-	// started inside the task's tmux session.
+	// started inside the task's tmux session, with the task's ProviderEnv and
+	// launch options.
 	BuildTaskSessionLaunchSpec(task *Task) (TaskSessionLaunchSpec, error)
 	// BuildReconnectTaskSessionLaunchSpec describes how the provider's CLI
 	// should resume an existing logical session inside a recreated tmux session.
@@ -295,6 +397,9 @@ type ProviderClient interface {
 	// TaskSessionCommandName returns the foreground process name expected while
 	// the provider is running in the task tmux pane.
 	TaskSessionCommandName() string
+	// ExitCommand is the command that, typed at the provider's idle prompt,
+	// ends its interactive session.
+	ExitCommand() string
 	// HookEventToTaskStatus normalizes a provider hook event into a task status
 	// update when the event contributes to the live task status stream.
 	HookEventToTaskStatus(input HookEventInput) (*TaskStatusUpdate, error)
@@ -318,6 +423,18 @@ type ProviderClient interface {
 	// ReadSessionTokenUsage reads provider-specific token usage from one
 	// provider transcript.
 	ReadSessionTokenUsage(ctx context.Context, transcriptPath string) (*SessionTokenUsage, error)
+	// ReadSessionTitle reads the title the user gave one provider session,
+	// empty when they gave none. A title the provider generated is not one.
+	ReadSessionTitle(ctx context.Context, transcriptPath string) (string, error)
+	// ReadSessionFileChanges reads the file edits one provider session made,
+	// including edits made by its subagents, as absolute paths.
+	ReadSessionFileChanges(ctx context.Context, session TaskProviderSession) ([]SessionFileChange, error)
+	// ListFolderSessions lists up to limit (all when limit <= 0) provider
+	// sessions started in folder or any folder below it, most recently active
+	// first, from the provider's
+	// own session store, the one env points at. Each session's Cwd is the
+	// folder it was started in, where it must be resumed.
+	ListFolderSessions(ctx context.Context, folder string, limit int, env ProviderEnv) ([]ProviderSessionSummary, error)
 }
 
 // GitWorktreeClient manages the Git worktree operations needed by the new task
@@ -333,9 +450,14 @@ type GitWorktreeClient interface {
 	// workspace for the same branch.
 	IsBranchUsedByWorktree(ctx context.Context, repoRoot string, branchName string) (bool, error)
 	// CreateTaskWorkspace creates a new Git worktree for a task by creating the
-	// task branch from the repository base branch and checking it out into the
-	// task's worktree path.
-	CreateTaskWorkspace(ctx context.Context, task *Task) error
+	// task branch from baseRef, or from the branch the main checkout has checked
+	// out when baseRef is empty, and checking it out into the task's worktree
+	// path.
+	CreateTaskWorkspace(ctx context.Context, task *Task, baseRef string) error
+	// ResolveBaseRef fetches baseBranch from origin and returns the ref new task
+	// branches start from: origin/<baseBranch>, or the local branch when the
+	// fetch fails, so task creation still works offline.
+	ResolveBaseRef(ctx context.Context, repoRoot string, baseBranch string) (string, error)
 	// CreateTaskWorkspaceFromBranch creates a task worktree by checking out an
 	// already existing branch, such as a branch associated with a pull request.
 	CreateTaskWorkspaceFromBranch(ctx context.Context, task *Task) error
@@ -344,6 +466,13 @@ type GitWorktreeClient interface {
 	CreateTaskWorkspaceFromPullRequest(ctx context.Context, task *Task, pullRequestNumber int) error
 	// RemoveTaskWorkspace deletes a task worktree while keeping its branch.
 	RemoveTaskWorkspace(ctx context.Context, task *Task) error
+	// WorktreeRootOf returns the root of the Git worktree containing dir, or ""
+	// when dir does not exist or is not inside a Git worktree. It reads only the
+	// filesystem, so it is cheap enough to call once per edited directory.
+	WorktreeRootOf(dir string) string
+	// InspectWorktree reports the repository and the branch checked out now for
+	// the worktree rooted at root, or nil when root is no longer a worktree.
+	InspectWorktree(ctx context.Context, root string) (*WorktreeRef, error)
 }
 
 // PullRequestClient lists repository pull requests through an external
@@ -364,10 +493,21 @@ type TmuxSessionClient interface {
 	// HealthCheck verifies that tmux is available for task sessions.
 	HealthCheck(ctx context.Context) error
 	// StartTaskSession starts the runtime session for a task using the provider's
-	// task session launch spec.
+	// task session launch spec. It launches the command only; PrefillInput is
+	// typed by PrefillTaskSession once the provider is ready.
 	StartTaskSession(ctx context.Context, task *Task, launch TaskSessionLaunchSpec) error
+	// PrefillTaskSession waits for the provider's ready marker in the task
+	// session and types the launch spec's PrefillInput without submitting it.
+	PrefillTaskSession(ctx context.Context, task *Task, launch TaskSessionLaunchSpec) error
+	// SubmitTaskInput types text into the task's window and submits it with
+	// Enter, for a command the provider running there should run.
+	SubmitTaskInput(ctx context.Context, task *Task, text string) error
 	// AttachTaskSession attaches to an existing task session.
 	AttachTaskSession(ctx context.Context, task *Task) error
+	// ClaimTaskSessions points the return key of the sessions of folder's
+	// tasks at the rig running in the current tmux session, unless a running
+	// rig with a closer folder already holds them.
+	ClaimTaskSessions(ctx context.Context, folder string, tasks []*Task) error
 	// InspectTaskSession returns the current tmux-side runtime state for the
 	// task session. Missing sessions are reported as Exists=false.
 	InspectTaskSession(ctx context.Context, task *Task) (TaskSessionRuntimeState, error)
@@ -388,4 +528,7 @@ type TaskWorkspaceManager interface {
 	// BootstrapTaskWorkspace writes the provider-specific bootstrap files needed
 	// to launch the interactive task session inside the task workspace.
 	BootstrapTaskWorkspace(ctx context.Context, task *Task, bootstrapSpec WorkspaceBootstrapSpec) error
+	// LoadRepoSettings reads the repository's own settings for the worktree
+	// tasks Rig creates in it.
+	LoadRepoSettings(repoRoot string) (RepoSettings, error)
 }

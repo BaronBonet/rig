@@ -135,6 +135,8 @@ func (s *unixSocketServer) handleConn(ctx context.Context, conn net.Conn) {
 		s.handleCreateTask(ctx, encoder, req)
 	case socketCommandRetryTaskCreation:
 		s.handleRetryTaskCreation(ctx, encoder, req)
+	case socketCommandNewTaskSession:
+		s.handleNewTaskSession(ctx, encoder, req)
 	case socketCommandSubscribeTaskStatus:
 		go cancelOnConnClose(conn, cancel)
 		s.handleSubscribeTaskStatus(connCtx, encoder, req)
@@ -193,6 +195,31 @@ func (s *unixSocketServer) handleRetryTaskCreation(ctx context.Context, encoder 
 	}
 
 	events, err := s.service.RetryTaskCreationStream(ctx, taskID)
+	if err != nil {
+		_ = writeSocketEnvelope(encoder, errorEnvelope(err))
+		return
+	}
+
+	writeTaskCreateStream(encoder, events)
+}
+
+func (s *unixSocketServer) handleNewTaskSession(ctx context.Context, encoder *json.Encoder, req socketRequest) {
+	var input core.NewTaskSessionInput
+	if len(req.Payload) == 0 {
+		_ = writeSocketEnvelope(encoder, errorEnvelope(errors.New(socketCommandNewTaskSession+" input required")))
+		return
+	}
+	if err := json.Unmarshal(req.Payload, &input); err != nil {
+		decodeErr := fmt.Errorf("%s: decode request: %w", socketCommandNewTaskSession, err)
+		_ = writeSocketEnvelope(encoder, errorEnvelope(decodeErr))
+		return
+	}
+	if strings.TrimSpace(input.TaskID) == "" {
+		_ = writeSocketEnvelope(encoder, errorEnvelope(errors.New(socketCommandNewTaskSession+" task ID required")))
+		return
+	}
+
+	events, err := s.service.NewTaskSessionStream(ctx, input)
 	if err != nil {
 		_ = writeSocketEnvelope(encoder, errorEnvelope(err))
 		return

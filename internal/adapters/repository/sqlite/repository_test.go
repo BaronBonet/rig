@@ -47,6 +47,7 @@ func TestRepositoryCreateTaskAndListTasks_PersistsCoreTaskFields(t *testing.T) {
 		BranchName:     "feat/one",
 		WorktreePath:   "/tmp/repo-one",
 		TmuxSession:    "repo_one",
+		WorkspaceKind:  core.WorkspaceKindWorktree,
 		Provider:       core.ProviderCodex,
 		CreationStatus: core.TaskCreationStatusReady,
 		CreatedAt:      now,
@@ -62,6 +63,7 @@ func TestRepositoryCreateTaskAndListTasks_PersistsCoreTaskFields(t *testing.T) {
 		BranchName:     "feat/two",
 		WorktreePath:   "/tmp/repo-two",
 		TmuxSession:    "repo_two",
+		WorkspaceKind:  core.WorkspaceKindWorktree,
 		Provider:       core.ProviderCodex,
 		CreationStatus: core.TaskCreationStatusReady,
 		CreatedAt:      now.Add(time.Second),
@@ -98,6 +100,7 @@ func TestRepositoryUpdateTask_PersistsMutations(t *testing.T) {
 		BranchName:     "feat/task-name",
 		WorktreePath:   "/tmp/repo-task-name",
 		TmuxSession:    "repo_task_name",
+		WorkspaceKind:  core.WorkspaceKindWorktree,
 		Provider:       core.ProviderCodex,
 		CreationStatus: core.TaskCreationStatusReady,
 		CreatedAt:      now,
@@ -137,6 +140,7 @@ func TestRepositoryUpdateTask_PersistsCreationFailureMetadata(t *testing.T) {
 		BranchName:     "feat/task-name",
 		WorktreePath:   "/tmp/repo-task-name",
 		TmuxSession:    "repo_task_name",
+		WorkspaceKind:  core.WorkspaceKindWorktree,
 		Provider:       core.ProviderCodex,
 		CreationStatus: core.TaskCreationStatusCreating,
 		CreatedAt:      now,
@@ -790,6 +794,15 @@ func TestRepositoryNew_MigratesDatabaseWithSquashedMigrationHistory(t *testing.T
 		"alter table task_status drop column background_monitors",
 		"alter table task_status drop column background_workflows",
 		"alter table task_status drop column background_other",
+		"drop table task_worktrees",
+		"alter table tasks drop column workspace_kind",
+		"alter table tasks drop column provider_env",
+		"alter table tasks drop column model",
+		"alter table tasks drop column effort",
+		"alter table tasks drop column parent_id",
+		"alter table tasks drop column tmux_window",
+		"alter table tasks drop column shelved_at",
+		"alter table tasks drop column session_title",
 		"delete from goose_db_version where version_id > 1",
 		"insert into goose_db_version (version_id, is_applied) values (2, 1), (3, 1), (4, 1), (5, 1)",
 	} {
@@ -911,6 +924,14 @@ func TestRepositoryNew_CreatesSchemaForTasksAndLatestStatuses(t *testing.T) {
 		"creation_status",
 		"creation_step",
 		"creation_error",
+		"workspace_kind",
+		"provider_env",
+		"model",
+		"effort",
+		"parent_id",
+		"tmux_window",
+		"shelved_at",
+		"session_title",
 	}
 	if !reflect.DeepEqual(names, wantTasks) {
 		t.Fatalf("unexpected tasks columns:\n got: %#v\nwant: %#v", names, wantTasks)
@@ -1007,4 +1028,103 @@ func tableColumnNames(t *testing.T, db *sql.DB, table string) []string {
 		t.Fatalf("table info rows %s: %v", table, err)
 	}
 	return names
+}
+
+func TestRepositoryTaskWorktreeRecords_UpsertReplacesAndDeleteTaskCascades(t *testing.T) {
+	repo := newTestRepository(t)
+	ctx := context.Background()
+	now := time.Date(2026, time.October, 2, 9, 0, 0, 0, time.UTC)
+	require.NoError(t, repo.CreateTask(ctx, &core.Task{
+		ID:           "task-1",
+		Slug:         "task-one",
+		DisplayName:  "task one",
+		RepoRoot:     "/src/code",
+		RepoName:     "code",
+		WorktreePath: "/src/code",
+		TmuxSession:  "code_task_one",
+		Provider:     core.ProviderClaude,
+		CreatedAt:    now,
+		UpdatedAt:    now,
+	}))
+
+	record := core.TaskWorktreeRecord{
+		LastEditAt:   now,
+		TaskID:       "task-1",
+		WorktreePath: "/src/api-1",
+		RepoName:     "api",
+		Branch:       "feat/billing",
+		EditCount:    2,
+	}
+	require.NoError(t, repo.UpsertTaskWorktreeRecord(ctx, record))
+	record.Branch = "feat/reuse"
+	record.EditCount = 3
+	record.LastEditAt = now.Add(time.Minute)
+	require.NoError(t, repo.UpsertTaskWorktreeRecord(ctx, record))
+
+	records, err := repo.ListTaskWorktreeRecords(ctx, "task-1")
+	require.NoError(t, err)
+	require.Equal(t, []core.TaskWorktreeRecord{record}, records)
+
+	require.NoError(t, repo.DeleteTask(ctx, "task-1"))
+	records, err = repo.ListTaskWorktreeRecords(ctx, "task-1")
+	require.NoError(t, err)
+	require.Empty(t, records)
+}
+
+func TestRepositoryTasks_PersistWorkspaceKind(t *testing.T) {
+	repo := newTestRepository(t)
+	ctx := context.Background()
+	now := time.Date(2026, time.October, 2, 9, 0, 0, 0, time.UTC)
+	base := core.Task{RepoName: "code", Provider: core.ProviderClaude, CreatedAt: now, UpdatedAt: now}
+
+	folderTask := base
+	folderTask.ID, folderTask.Slug, folderTask.WorkspaceKind = "task-folder", "folder", core.WorkspaceKindFolder
+	worktreeTask := base
+	worktreeTask.ID, worktreeTask.Slug = "task-worktree", "worktree"
+	require.NoError(t, repo.CreateTask(ctx, &folderTask))
+	require.NoError(t, repo.CreateTask(ctx, &worktreeTask))
+
+	tasks, err := repo.ListTasks(ctx)
+	require.NoError(t, err)
+	kinds := map[string]core.WorkspaceKind{}
+	for _, task := range tasks {
+		kinds[task.ID] = task.WorkspaceKind
+	}
+	require.Equal(t, map[string]core.WorkspaceKind{
+		"task-folder":   core.WorkspaceKindFolder,
+		"task-worktree": core.WorkspaceKindWorktree,
+	}, kinds)
+}
+
+func TestRepositoryTasks_PersistProviderEnv(t *testing.T) {
+	repo := newTestRepository(t)
+	ctx := context.Background()
+	now := time.Date(2026, time.October, 2, 9, 0, 0, 0, time.UTC)
+	work := core.Task{
+		ID: "task-work", Slug: "work", RepoName: "code", Provider: core.ProviderClaude, CreatedAt: now, UpdatedAt: now,
+		ProviderEnv: core.ProviderEnv{"CLAUDE_CONFIG_DIR": "/home/me/.claude-work", "CODEX_HOME": ""},
+	}
+	legacy := core.Task{
+		ID: "task-legacy", Slug: "legacy", RepoName: "code", Provider: core.ProviderClaude, CreatedAt: now, UpdatedAt: now,
+	}
+	require.NoError(t, repo.CreateTask(ctx, &work))
+	require.NoError(t, repo.CreateTask(ctx, &legacy))
+
+	envs := func() map[string]core.ProviderEnv {
+		tasks, err := repo.ListTasks(ctx)
+		require.NoError(t, err)
+		byID := map[string]core.ProviderEnv{}
+		for _, task := range tasks {
+			byID[task.ID] = task.ProviderEnv
+		}
+		return byID
+	}
+	require.Equal(t, map[string]core.ProviderEnv{
+		"task-work":   {"CLAUDE_CONFIG_DIR": "/home/me/.claude-work", "CODEX_HOME": ""},
+		"task-legacy": nil,
+	}, envs(), "an unset variable is kept, and a task without an env still defers to the daemon")
+
+	work.ProviderEnv = core.ProviderEnv{"CLAUDE_CONFIG_DIR": ""}
+	require.NoError(t, repo.UpdateTask(ctx, &work))
+	require.Equal(t, core.ProviderEnv{"CLAUDE_CONFIG_DIR": ""}, envs()["task-work"])
 }

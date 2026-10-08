@@ -4,7 +4,10 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"maps"
 	"os"
+	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -17,6 +20,18 @@ const (
 	promptSubmitDelay      = 500 * time.Millisecond
 	promptInputSettleDelay = 500 * time.Millisecond
 	taskWindowName         = "task"
+	// returnKeyEnvVar names the tmux prefix key that returns to rig from a
+	// task session; "none" leaves tmux's key bindings alone.
+	returnKeyEnvVar  = "RIG_TMUX_RETURN_KEY"
+	defaultReturnKey = "b"
+	// rigSessionOption, set on a task's session, names the rig the return key
+	// leads to; rigLastSessionOption is the fallback for a session without
+	// one. It is not rigSessionOption's global value, which every session
+	// would read as its own.
+	rigSessionOption     = "@rig_session"
+	rigLastSessionOption = "@rig_last_session"
+	// rigFolderOption, set on a rig's own session, is the folder it runs for.
+	rigFolderOption = "@rig_folder"
 )
 
 type repository struct {
@@ -41,11 +56,19 @@ func (r *repository) HealthCheck(ctx context.Context) error {
 }
 
 func (r *repository) StartTaskSession(ctx context.Context, task *core.Task, launch core.TaskSessionLaunchSpec) error {
+	window := windowOf(task)
 	// Provider switches launch into an existing idle session; only reconnects
-	// and fresh tasks need a new session created.
+	// and fresh tasks need a new session created. A child task's window is
+	// added to its parent's session, which may already exist.
 	alreadyExists := r.sessionExists(ctx, task.TmuxSession)
-	if !alreadyExists {
-		if err := r.createSession(ctx, task.TmuxSession, task.WorktreePath); err != nil {
+	session, cwd := task.TmuxSession, task.WorktreePath
+	switch {
+	case !alreadyExists:
+		if err := r.createSession(ctx, session, window, cwd, task.ID, task.ProviderEnv); err != nil {
+			return err
+		}
+	case !r.windowExists(ctx, session, window):
+		if err := r.createWindow(ctx, session, window, cwd, task.ID, task.ProviderEnv); err != nil {
 			return err
 		}
 	}
@@ -54,26 +77,7 @@ func (r *repository) StartTaskSession(ctx context.Context, task *core.Task, laun
 		return nil
 	}
 
-	if err := r.sendKeysToWindow(ctx, task.TmuxSession, taskWindowName, launch.Command); err != nil {
-		if alreadyExists {
-			return err
-		}
-		return r.cleanupStartedSession(ctx, task.TmuxSession, err)
-	}
-
-	if len(launch.PrefillInput) == 0 {
-		return nil
-	}
-
-	if err := r.waitForPrompt(ctx, task.TmuxSession, taskWindowName, launch.ReadyMarker); err != nil {
-		if alreadyExists {
-			return err
-		}
-		return r.cleanupStartedSession(ctx, task.TmuxSession, err)
-	}
-	r.sleep(promptInputSettleDelay)
-
-	if err := r.typeInWindow(ctx, task.TmuxSession, taskWindowName, launch.PrefillInput); err != nil {
+	if err := r.sendKeysToWindow(ctx, task.TmuxSession, window, launch.Command); err != nil {
 		if alreadyExists {
 			return err
 		}
@@ -81,6 +85,55 @@ func (r *repository) StartTaskSession(ctx context.Context, task *core.Task, laun
 	}
 
 	return nil
+}
+
+// windowOf is the window of the task's tmux session its provider runs in.
+func windowOf(task *core.Task) string {
+	if task == nil {
+		return taskWindowName
+	}
+	if window := strings.TrimSpace(task.TmuxWindow); window != "" {
+		return window
+	}
+	return taskWindowName
+}
+
+// PrefillTaskSession types the launch spec's PrefillInput into the task
+// window once the provider shows its ready marker, without submitting it. A
+// session that fails to take the prompt is left running: the provider is up
+// and the prompt is still on the task record.
+func (r *repository) PrefillTaskSession(
+	ctx context.Context,
+	task *core.Task,
+	launch core.TaskSessionLaunchSpec,
+) error {
+	if len(launch.PrefillInput) == 0 {
+		return nil
+	}
+
+	window := windowOf(task)
+	if err := r.waitForPrompt(ctx, task.TmuxSession, window, launch.ReadyMarker, launch.Command); err != nil {
+		return err
+	}
+	r.sleep(promptInputSettleDelay)
+
+	return r.typeInWindow(ctx, task.TmuxSession, window, launch.PrefillInput)
+}
+
+// SubmitTaskInput types text literally into the task's window and presses
+// Enter after a short settle, so a provider's command suggestion has appeared
+// and Enter runs the command rather than only accepting the suggestion.
+func (r *repository) SubmitTaskInput(ctx context.Context, task *core.Task, text string) error {
+	if task == nil || strings.TrimSpace(task.TmuxSession) == "" {
+		return fmt.Errorf("task tmux session is required")
+	}
+	target := exactWindowTarget(task.TmuxSession, windowOf(task))
+	if _, err := r.runner.Run(ctx, "", "tmux", "send-keys", "-t", target, "-l", text); err != nil {
+		return err
+	}
+	r.sleep(promptInputSettleDelay)
+	_, err := r.runner.Run(ctx, "", "tmux", "send-keys", "-t", target, "Enter")
+	return err
 }
 
 func (r *repository) sessionExists(ctx context.Context, sessionName string) bool {
@@ -100,9 +153,16 @@ func (r *repository) AttachTaskSession(ctx context.Context, task *core.Task) err
 		return fmt.Errorf("task tmux session is required")
 	}
 
+	insideTmux := strings.TrimSpace(r.env("TMUX")) != ""
 	command := "attach-session"
-	if r.getenv != nil && strings.TrimSpace(r.getenv("TMUX")) != "" {
+	if insideTmux {
 		command = "switch-client"
+	}
+	// A child task lives in one window of its parent's session; attaching
+	// lands there.
+	target := exactSessionTarget(task.TmuxSession)
+	if strings.TrimSpace(task.TmuxWindow) != "" {
+		target = exactWindowTarget(task.TmuxSession, task.TmuxWindow)
 	}
 
 	result, err := r.runner.Run(
@@ -111,12 +171,125 @@ func (r *repository) AttachTaskSession(ctx context.Context, task *core.Task) err
 		"tmux",
 		command,
 		"-t",
-		exactSessionTarget(task.TmuxSession),
+		target,
 	)
 	if isMissingSessionError(err, result) {
 		return core.ErrTaskSessionNotFound
 	}
+	if err == nil && insideTmux {
+		r.rememberReturnToRig(ctx, task.TmuxSession)
+	}
 	return err
+}
+
+// rememberReturnToRig lets one key bring the user back from a task to the
+// rig that opened it: the session rig runs in is recorded on the task's
+// session, and as the fallback for sessions no rig has claimed, and the key
+// switches to whichever applies. Failures only lose the shortcut.
+func (r *repository) rememberReturnToRig(ctx context.Context, taskSession string) {
+	key, rigSession, ok := r.returnKeyAndRigSession(ctx)
+	if !ok {
+		return
+	}
+	r.setSessionOption(ctx, taskSession, rigSessionOption, rigSession)
+	_, _ = r.runner.Run(ctx, "", "tmux", "set-option", "-g", rigLastSessionOption, rigSession)
+	r.bindReturnKey(ctx, key)
+}
+
+// ClaimTaskSessions points the return key of folder's tasks at this rig. A
+// task session is taken over when it names no rig, a rig that is gone, or one
+// whose folder does not hold the task or holds it less closely, so a task
+// leads back to its own folder's rig whichever rig opened it last. The rig's
+// folder is published on its own session for other rigs to compare.
+func (r *repository) ClaimTaskSessions(ctx context.Context, folder string, tasks []*core.Task) error {
+	folder = strings.TrimSpace(folder)
+	if !filepath.IsAbs(folder) {
+		return nil
+	}
+	folder = filepath.Clean(folder)
+	key, rigSession, ok := r.returnKeyAndRigSession(ctx)
+	if !ok {
+		return nil
+	}
+	r.setSessionOption(ctx, rigSession, rigFolderOption, folder)
+	r.bindReturnKey(ctx, key)
+
+	result, err := r.runner.Run(ctx, "", "tmux", "list-sessions", "-F",
+		"#{session_name}\t#{"+rigSessionOption+"}\t#{"+rigFolderOption+"}")
+	if err != nil {
+		return err
+	}
+	recordedRig := make(map[string]string)
+	rigFolder := make(map[string]string)
+	for _, line := range strings.Split(result.Stdout, "\n") {
+		fields := strings.Split(line, "\t")
+		if len(fields) != 3 || fields[0] == "" {
+			continue
+		}
+		recordedRig[fields[0]] = fields[1]
+		rigFolder[fields[0]] = fields[2]
+	}
+
+	for _, task := range tasks {
+		if task == nil || !core.TaskInFolder(task, folder) {
+			continue
+		}
+		session := strings.TrimSpace(task.TmuxSession)
+		recorded, live := recordedRig[session]
+		if !live {
+			continue
+		}
+		// This rig's own folder is listed too, so a session already pointing
+		// here is kept as one an equally close rig holds.
+		if other := rigFolder[recorded]; other != "" && core.TaskInFolder(task, other) && len(other) >= len(folder) {
+			continue
+		}
+		r.setSessionOption(ctx, session, rigSessionOption, rigSession)
+		recordedRig[session] = rigSession
+	}
+	return nil
+}
+
+// returnKeyAndRigSession reports the return key and the tmux session this
+// rig runs in, or false when the key is turned off or rig is not in tmux.
+func (r *repository) returnKeyAndRigSession(ctx context.Context) (string, string, bool) {
+	key := strings.TrimSpace(r.env(returnKeyEnvVar))
+	if key == "" {
+		key = defaultReturnKey
+	}
+	if key == "none" || strings.TrimSpace(r.env("TMUX")) == "" {
+		return "", "", false
+	}
+	args := []string{"display-message", "-p"}
+	if pane := strings.TrimSpace(r.env("TMUX_PANE")); pane != "" {
+		args = append(args, "-t", pane)
+	}
+	result, err := r.runner.Run(ctx, "", "tmux", append(args, "#{session_name}")...)
+	rigSession := strings.TrimSpace(result.Stdout)
+	if err != nil || rigSession == "" {
+		return "", "", false
+	}
+	return key, rigSession, true
+}
+
+func (r *repository) setSessionOption(ctx context.Context, session string, option string, value string) {
+	_, _ = r.runner.Run(ctx, "", "tmux", "set-option", "-t", exactSessionTarget(session)+":", option, value)
+}
+
+// bindReturnKey binds the key to the session's own rig, or the fallback. The
+// global rigSessionOption earlier builds set is cleared, or every session
+// would read it as its own.
+func (r *repository) bindReturnKey(ctx context.Context, key string) {
+	_, _ = r.runner.Run(ctx, "", "tmux", "set-option", "-gu", rigSessionOption)
+	_, _ = r.runner.Run(ctx, "", "tmux", "bind-key", "-T", "prefix", key, "run-shell", "-C",
+		"switch-client -t '=#{?"+rigSessionOption+",#{"+rigSessionOption+"},#{"+rigLastSessionOption+"}}'")
+}
+
+func (r *repository) env(key string) string {
+	if r.getenv == nil {
+		return ""
+	}
+	return r.getenv(key)
 }
 
 func (r *repository) InspectTaskSession(ctx context.Context, task *core.Task) (core.TaskSessionRuntimeState, error) {
@@ -130,7 +303,7 @@ func (r *repository) InspectTaskSession(ctx context.Context, task *core.Task) (c
 		"tmux",
 		"list-panes",
 		"-t",
-		exactWindowTarget(task.TmuxSession, taskWindowName),
+		exactWindowTarget(task.TmuxSession, windowOf(task)),
 		"-F",
 		"#{pane_current_command}\t#{pane_pid}",
 	)
@@ -160,6 +333,8 @@ func (r *repository) InspectTaskSessions(
 	tasks []*core.Task,
 ) (map[string]core.TaskSessionRuntimeState, error) {
 	states := make(map[string]core.TaskSessionRuntimeState, len(tasks))
+	// Tasks are keyed by session and window: a child task shares its
+	// parent's session and has a window of its own there.
 	taskIDsBySession := make(map[string][]string, len(tasks))
 	for _, task := range tasks {
 		if task == nil {
@@ -172,7 +347,8 @@ func (r *repository) InspectTaskSessions(
 		states[taskID] = core.TaskSessionRuntimeState{}
 		session := normalizedSessionName(strings.TrimSpace(task.TmuxSession))
 		if session != "" {
-			taskIDsBySession[session] = append(taskIDsBySession[session], taskID)
+			key := session + ":" + windowOf(task)
+			taskIDsBySession[key] = append(taskIDsBySession[key], taskID)
 		}
 	}
 
@@ -201,18 +377,16 @@ func (r *repository) InspectTaskSessions(
 	seenSessions := make(map[string]bool)
 	allPanePIDsPresent := true
 	for _, pane := range inventory {
-		if pane.window != taskWindowName {
+		key := pane.session + ":" + pane.window
+		if _, tracked := taskIDsBySession[key]; !tracked {
 			continue
 		}
-		if _, tracked := taskIDsBySession[pane.session]; !tracked {
-			continue
-		}
-		seenSessions[pane.session] = true
+		seenSessions[key] = true
 		if pane.command != "" {
-			commandsBySession[pane.session] = append(commandsBySession[pane.session], pane.command)
+			commandsBySession[key] = append(commandsBySession[key], pane.command)
 		}
 		if pane.pid != "" {
-			panePIDsBySession[pane.session] = append(panePIDsBySession[pane.session], pane.pid)
+			panePIDsBySession[key] = append(panePIDsBySession[key], pane.pid)
 		} else {
 			allPanePIDsPresent = false
 		}
@@ -359,14 +533,12 @@ func (r *repository) DeleteTaskSession(ctx context.Context, task *core.Task) err
 		return nil
 	}
 
-	result, err := r.runner.Run(
-		ctx,
-		"",
-		"tmux",
-		"kill-session",
-		"-t",
-		exactSessionTarget(task.TmuxSession),
-	)
+	// A child task owns only its window; the session is its parent's.
+	args := []string{"kill-session", "-t", exactSessionTarget(task.TmuxSession)}
+	if window := strings.TrimSpace(task.TmuxWindow); window != "" {
+		args = []string{"kill-window", "-t", exactWindowTarget(task.TmuxSession, window)}
+	}
+	result, err := r.runner.Run(ctx, "", "tmux", args...)
 	if isMissingSessionError(err, result) {
 		return nil
 	}
@@ -374,22 +546,17 @@ func (r *repository) DeleteTaskSession(ctx context.Context, task *core.Task) err
 	return err
 }
 
-func (r *repository) createSession(ctx context.Context, sessionName, workingDir string) error {
+func (r *repository) createSession(
+	ctx context.Context,
+	sessionName, window, workingDir, taskID string,
+	providerEnv core.ProviderEnv,
+) error {
 	sessionName = normalizedSessionName(sessionName)
 
-	_, err := r.runner.Run(
-		ctx,
-		"",
-		"tmux",
-		"new-session",
-		"-d",
-		"-s",
-		sessionName,
-		"-n",
-		taskWindowName,
-		"-c",
-		workingDir,
-	)
+	args := []string{"new-session", "-d", "-s", sessionName, "-n", window, "-c", workingDir}
+	args = append(args, taskEnvArgs(taskID, providerEnv)...)
+
+	_, err := r.runner.Run(ctx, "", "tmux", args...)
 	if err != nil {
 		return err
 	}
@@ -421,6 +588,56 @@ func (r *repository) createSession(ctx context.Context, sessionName, workingDir 
 	return err
 }
 
+// taskEnvArgs are the tmux -e flags that give a session or window a task's
+// identity and provider configuration. The environment reaches every shell and
+// provider started there, and through them the provider hooks that report back
+// to Rig; a window's own RIG_TASK_ID is what tells a child task's hooks from
+// its parent's. tmux can only set variables, so one the task leaves unset is
+// removed by the provider launch command instead.
+func taskEnvArgs(taskID string, providerEnv core.ProviderEnv) []string {
+	var args []string
+	if taskID = strings.TrimSpace(taskID); taskID != "" {
+		args = append(args, "-e", core.TaskIDEnvVar+"="+taskID)
+	}
+	for _, name := range slices.Sorted(maps.Keys(providerEnv)) {
+		if value, _ := providerEnv.Lookup(name); value != "" {
+			args = append(args, "-e", name+"="+value)
+		}
+	}
+	return args
+}
+
+// createWindow adds a task's window to an existing session.
+func (r *repository) createWindow(
+	ctx context.Context,
+	sessionName, window, workingDir, taskID string,
+	providerEnv core.ProviderEnv,
+) error {
+	args := []string{"new-window", "-d", "-t", exactSessionTarget(sessionName), "-n", window, "-c", workingDir}
+	args = append(args, taskEnvArgs(taskID, providerEnv)...)
+	_, err := r.runner.Run(ctx, "", "tmux", args...)
+	if err != nil {
+		return err
+	}
+	r.sleep(promptSubmitDelay)
+	return nil
+}
+
+// windowExists reports whether the session has a window of that name.
+func (r *repository) windowExists(ctx context.Context, sessionName, window string) bool {
+	result, err := r.runner.Run(ctx, "", "tmux", "list-windows", "-t", exactSessionTarget(sessionName),
+		"-F", "#{window_name}")
+	if err != nil {
+		return false
+	}
+	for _, line := range strings.Split(result.Stdout, "\n") {
+		if strings.TrimSpace(line) == window {
+			return true
+		}
+	}
+	return false
+}
+
 func (r *repository) cleanupStartedSession(ctx context.Context, sessionName string, cause error) error {
 	_, cleanupErr := r.runner.Run(ctx, "", "tmux", "kill-session", "-t", exactSessionTarget(sessionName))
 	if cleanupErr != nil {
@@ -431,15 +648,6 @@ func (r *repository) cleanupStartedSession(ctx context.Context, sessionName stri
 }
 
 func (r *repository) sendKeysToWindow(ctx context.Context, session, window string, command []string) error {
-	quoted := make([]string, 0, len(command))
-	for _, part := range command {
-		if strings.ContainsRune(part, ' ') {
-			quoted = append(quoted, "'"+strings.ReplaceAll(part, "'", "'\\''")+"'")
-			continue
-		}
-		quoted = append(quoted, part)
-	}
-
 	_, err := r.runner.Run(
 		ctx,
 		"",
@@ -447,10 +655,23 @@ func (r *repository) sendKeysToWindow(ctx context.Context, session, window strin
 		"send-keys",
 		"-t",
 		exactWindowTarget(session, window),
-		strings.Join(quoted, " "),
+		strings.Join(quoteShellCommand(command), " "),
 		"C-m",
 	)
 	return err
+}
+
+// quoteShellCommand quotes the command words that need it for the shell.
+func quoteShellCommand(command []string) []string {
+	quoted := make([]string, 0, len(command))
+	for _, part := range command {
+		if part == "" || strings.ContainsRune(part, ' ') {
+			quoted = append(quoted, "'"+strings.ReplaceAll(part, "'", "'\\''")+"'")
+			continue
+		}
+		quoted = append(quoted, part)
+	}
+	return quoted
 }
 
 func (r *repository) capturePaneContent(ctx context.Context, session, window string) (string, error) {
@@ -507,7 +728,7 @@ func (r *repository) typeInWindow(ctx context.Context, session, window string, c
 	return deleteErr
 }
 
-func (r *repository) waitForPrompt(ctx context.Context, session, window, marker string) error {
+func (r *repository) waitForPrompt(ctx context.Context, session, window, marker string, command []string) error {
 	const (
 		pollInterval = 500 * time.Millisecond
 		timeout      = 30 * time.Second
@@ -522,7 +743,7 @@ func (r *repository) waitForPrompt(ctx context.Context, session, window, marker 
 		}
 
 		content, err := r.capturePaneContent(ctx, session, window)
-		if err == nil && strings.Contains(content, marker) {
+		if err == nil && promptReady(content, marker, shellCommandText(command)) {
 			return nil
 		}
 
@@ -530,6 +751,37 @@ func (r *repository) waitForPrompt(ctx context.Context, session, window, marker 
 	}
 
 	return errors.New("timed out waiting for " + marker + " prompt")
+}
+
+// promptReady reports whether the pane shows the provider's ready marker on
+// a line of its own. The shell's echo of the launch command is not it: a
+// shell prompt may use the same character, and `❯ claude` is on screen before
+// the provider has started, so a marker followed by the command, or by the
+// start of a command too long for one line, is skipped.
+func promptReady(content string, marker string, commandText string) bool {
+	if marker == "" {
+		return true
+	}
+	for _, line := range strings.Split(content, "\n") {
+		_, rest, found := strings.Cut(line, marker)
+		if !found {
+			continue
+		}
+		rest = strings.TrimSpace(rest)
+		if rest == "" || commandText == "" {
+			return true
+		}
+		if strings.HasPrefix(commandText, rest) || strings.HasPrefix(rest, commandText) {
+			continue
+		}
+		return true
+	}
+	return false
+}
+
+// shellCommandText is the launch command as the shell echoes it.
+func shellCommandText(command []string) string {
+	return strings.TrimSpace(strings.Join(quoteShellCommand(command), " "))
 }
 
 func exactSessionTarget(session string) string {

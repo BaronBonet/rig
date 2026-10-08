@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"time"
 )
 
 type TaskServiceDependencies struct {
@@ -36,7 +37,13 @@ type service struct {
 	launcher       *sessionLauncher
 	creation       *taskCreation
 	observation    *taskObservation
+	worktrees      *taskWorktrees
 	operations     *taskOperationCoordinator
+	// sessionExitWait bounds how long replacing a session waits for the
+	// provider to leave the pane after being told to exit; sessionExitPoll
+	// paces the wait.
+	sessionExitWait time.Duration
+	sessionExitPoll time.Duration
 }
 
 // The concrete service must satisfy every port it is wired into. These
@@ -74,6 +81,7 @@ func healthCheckError(checks []HealthCheck) error {
 func NewTaskService(deps TaskServiceDependencies) *service {
 	operations := newTaskOperationCoordinator()
 	launcher := newSessionLauncher(
+		deps.Tasks,
 		deps.Providers,
 		deps.ProviderConfig,
 		deps.Workspace,
@@ -82,15 +90,18 @@ func NewTaskService(deps TaskServiceDependencies) *service {
 	)
 
 	return &service{
-		tasks:          deps.Tasks,
-		gitWorktree:    deps.GitWorktree,
-		tmuxSession:    deps.TmuxSession,
-		pullRequests:   deps.PullRequests,
-		providers:      deps.Providers,
-		providerConfig: deps.ProviderConfig,
-		launcher:       launcher,
-		creation:       newTaskCreation(deps.Tasks, deps.GitWorktree, launcher, operations),
-		operations:     operations,
+		tasks:           deps.Tasks,
+		gitWorktree:     deps.GitWorktree,
+		tmuxSession:     deps.TmuxSession,
+		pullRequests:    deps.PullRequests,
+		providers:       deps.Providers,
+		providerConfig:  deps.ProviderConfig,
+		launcher:        launcher,
+		creation:        newTaskCreation(deps.Tasks, deps.GitWorktree, launcher, operations),
+		worktrees:       newTaskWorktrees(deps.Tasks, deps.GitWorktree, deps.Providers),
+		operations:      operations,
+		sessionExitWait: 15 * time.Second,
+		sessionExitPoll: 250 * time.Millisecond,
 		observation: newTaskObservation(
 			deps.Tasks,
 			deps.TmuxSession,
@@ -267,6 +278,10 @@ func (s *service) GetTaskTokenUsage(ctx context.Context, taskID string) (*TaskTo
 	return s.observation.GetTaskTokenUsage(ctx, taskID)
 }
 
+func (s *service) ListTaskWorktrees(ctx context.Context, taskID string) ([]TaskWorktree, error) {
+	return s.worktrees.ListTaskWorktrees(ctx, taskID)
+}
+
 func (s *service) ListRepoPullRequests(ctx context.Context, cwd string) ([]RepoPullRequest, error) {
 	if s.pullRequests == nil {
 		return nil, fmt.Errorf("pull request client not configured")
@@ -338,8 +353,20 @@ func (s *service) deleteTask(ctx context.Context, taskID string) error {
 	if err := s.tmuxSession.DeleteTaskSession(ctx, task); err != nil {
 		return fmt.Errorf("delete task session: %w", err)
 	}
-	if err := s.gitWorktree.RemoveTaskWorkspace(ctx, task); err != nil {
-		return fmt.Errorf("remove task workspace: %w", err)
+	// A child Task's window dies with its parent's tmux session; its record
+	// goes with it.
+	for _, child := range s.childTasks(ctx, task.ID) {
+		if err := s.tasks.DeleteTask(ctx, child.ID); err != nil {
+			return fmt.Errorf("delete task record %s: %w", child.ID, err)
+		}
+		s.observation.statusObserver.ForgetTask(child.ID)
+	}
+	// A folder Task's workspace is an existing folder other Tasks may share;
+	// only a worktree Rig created is removed.
+	if !task.UsesFolderWorkspace() {
+		if err := s.gitWorktree.RemoveTaskWorkspace(ctx, task); err != nil {
+			return fmt.Errorf("remove task workspace: %w", err)
+		}
 	}
 	if err := s.tasks.DeleteTask(ctx, task.ID); err != nil {
 		return fmt.Errorf("delete task record: %w", err)
@@ -360,7 +387,10 @@ func (s *service) reconnectTaskSession(ctx context.Context, taskID string) error
 	if err != nil {
 		return err
 	}
+	return s.reconnectTask(ctx, task)
+}
 
+func (s *service) reconnectTask(ctx context.Context, task *Task) error {
 	_, providerClient, err := s.launcher.resolveProvider(ctx, task.Provider)
 	if err != nil {
 		return err
@@ -382,7 +412,7 @@ func (s *service) reconnectTaskSession(ctx context.Context, taskID string) error
 		return err
 	}
 	_ = s.launcher.bootstrapConfiguredProviders(ctx, task, task.Provider)
-	if err := providerClient.EnsureTaskSessionEnvironment(ctx); err != nil {
+	if err := providerClient.EnsureTaskSessionEnvironment(ctx, task.ProviderEnv); err != nil {
 		return fmt.Errorf("ensure task session environment: %w", err)
 	}
 
@@ -427,6 +457,21 @@ func (s *service) SubscribeTaskStatus(
 
 func (s *service) HandleHookEvent(ctx context.Context, input HookEventInput) error {
 	return s.observation.HandleHookEvent(ctx, input)
+}
+
+// childTasks lists the Tasks that are sessions of the given Task.
+func (s *service) childTasks(ctx context.Context, taskID string) []*Task {
+	tasks, err := s.tasks.ListTasks(ctx)
+	if err != nil {
+		return nil
+	}
+	var children []*Task
+	for _, task := range tasks {
+		if task != nil && task.ParentID == taskID {
+			children = append(children, task)
+		}
+	}
+	return children
 }
 
 // taskByID resolves a task record by ID from the repository. Shared by the

@@ -27,6 +27,14 @@ type fakeTaskService struct {
 	tasks      []*core.Task
 	activity   map[string][]core.TaskActivityEvent
 	usage      map[string]*core.TaskTokenUsage
+	worktrees  map[string][]core.TaskWorktree
+	importable []core.ProviderSessionSummary
+	imported   []core.ProviderSessionSummary
+	listEnv    core.ProviderEnv
+	importEnv  core.ProviderEnv
+	createEnv  core.ProviderEnv
+	importTask *core.Task
+	importErr  error
 	prs        map[string][]core.RepoPullRequest
 	prStatuses map[string]*core.PRStatus
 	setup      *core.ProviderSetup
@@ -37,12 +45,18 @@ type fakeTaskService struct {
 	createTask  *core.Task
 	createErr   error
 
+	newSessionInput *core.NewTaskSessionInput
+	launchSettings  *core.LaunchSettings
+
 	updates      chan core.TaskStatusUpdate
 	subscribeErr error
 	subscribeCtx chan context.Context
 
 	deleted     []string
 	reconnected []string
+	shelved     []string
+	unshelved   []string
+	renamed     map[string]string
 
 	errByOp map[string]error
 }
@@ -51,6 +65,7 @@ func newFakeTaskService() *fakeTaskService {
 	return &fakeTaskService{
 		activity:     map[string][]core.TaskActivityEvent{},
 		usage:        map[string]*core.TaskTokenUsage{},
+		worktrees:    map[string][]core.TaskWorktree{},
 		prs:          map[string][]core.RepoPullRequest{},
 		prStatuses:   map[string]*core.PRStatus{},
 		latest:       map[string]*core.TaskStatusUpdate{},
@@ -84,6 +99,7 @@ func (f *fakeTaskService) CreateTaskStream(
 	input core.CreateTaskInput,
 ) (<-chan core.TaskCreateEvent, error) {
 	f.mu.Lock()
+	f.createEnv = input.ProviderEnv
 	f.tasks = append(f.tasks, f.createTask)
 	f.mu.Unlock()
 
@@ -95,6 +111,22 @@ func (f *fakeTaskService) RetryTaskCreationStream(
 	taskID string,
 ) (<-chan core.TaskCreateEvent, error) {
 	return f.taskCreateResult()
+}
+
+func (f *fakeTaskService) NewTaskSessionStream(
+	_ context.Context,
+	input core.NewTaskSessionInput,
+) (<-chan core.TaskCreateEvent, error) {
+	f.mu.Lock()
+	f.newSessionInput = &input
+	f.mu.Unlock()
+	return f.taskCreateResult()
+}
+
+func (f *fakeTaskService) GetLaunchSettings(context.Context) (*core.LaunchSettings, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.launchSettings, f.errByOp["get_launch_settings"]
 }
 
 func (f *fakeTaskService) ListRepoPullRequests(_ context.Context, cwd string) ([]core.RepoPullRequest, error) {
@@ -131,6 +163,41 @@ func (f *fakeTaskService) GetTaskTokenUsage(_ context.Context, taskID string) (*
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	return f.usage[taskID], f.errByOp["get_task_token_usage"]
+}
+
+func (f *fakeTaskService) ListImportableSessions(
+	_ context.Context,
+	folder string,
+	env core.ProviderEnv,
+) ([]core.ProviderSessionSummary, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.listEnv = env
+	var sessions []core.ProviderSessionSummary
+	for _, session := range f.importable {
+		if session.Cwd == folder {
+			sessions = append(sessions, session)
+		}
+	}
+	return sessions, f.errByOp["list_importable_sessions"]
+}
+
+func (f *fakeTaskService) ImportSession(
+	_ context.Context,
+	session core.ProviderSessionSummary,
+	env core.ProviderEnv,
+) (*core.Task, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.imported = append(f.imported, session)
+	f.importEnv = env
+	return f.importTask, f.importErr
+}
+
+func (f *fakeTaskService) ListTaskWorktrees(_ context.Context, taskID string) ([]core.TaskWorktree, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.worktrees[taskID], f.errByOp["list_task_worktrees"]
 }
 
 func (f *fakeTaskService) ListTasks(context.Context) ([]*core.Task, error) {
@@ -176,6 +243,30 @@ func (f *fakeTaskService) ReconnectTaskSession(_ context.Context, taskID string)
 	defer f.mu.Unlock()
 	f.reconnected = append(f.reconnected, taskID)
 	return f.errByOp["reconnect_task_session"]
+}
+
+func (f *fakeTaskService) ShelveTask(_ context.Context, taskID string) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.shelved = append(f.shelved, taskID)
+	return f.errByOp["shelve_task"]
+}
+
+func (f *fakeTaskService) UnshelveTask(_ context.Context, taskID string) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.unshelved = append(f.unshelved, taskID)
+	return f.errByOp["unshelve_task"]
+}
+
+func (f *fakeTaskService) RenameTask(_ context.Context, taskID string, name string) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.renamed == nil {
+		f.renamed = map[string]string{}
+	}
+	f.renamed[taskID] = name
+	return f.errByOp["rename_task"]
 }
 
 func (f *fakeTaskService) GetProviderSetup(context.Context) (*core.ProviderSetup, error) {
@@ -258,6 +349,22 @@ func TestUnaryOperationsRoundTrip(t *testing.T) {
 		{TaskID: "task-1", Role: core.TaskActivityRoleAssistant, Text: "editing main.go"},
 	}
 	svc.usage["task-1"] = &core.TaskTokenUsage{InputTokens: 100, OutputTokens: 25}
+	svc.importable = []core.ProviderSessionSummary{{
+		LastActiveAt:   time.Date(2026, time.October, 2, 8, 0, 0, 0, time.UTC),
+		Provider:       core.ProviderClaude,
+		SessionID:      "sess-1",
+		Title:          "search-integration",
+		Cwd:            "/src/code",
+		TranscriptPath: "/claude/projects/-src-code/sess-1.jsonl",
+	}}
+	svc.worktrees["task-1"] = []core.TaskWorktree{{
+		LastEditAt:   time.Date(2026, time.October, 2, 9, 0, 0, 0, time.UTC),
+		WorktreePath: "/src/api-1",
+		RepoName:     "api",
+		Branch:       "feat/reuse",
+		EditedBranch: "feat/billing",
+		EditCount:    3,
+	}}
 	svc.prs["/tmp/repo"] = []core.RepoPullRequest{{Number: 7, Title: "retry flow", BranchName: "retries"}}
 	svc.prStatuses["/tmp/repo|retries"] = &core.PRStatus{State: core.PRStateOpen, Number: 7}
 	svc.setup = &core.ProviderSetup{
@@ -301,6 +408,45 @@ func TestUnaryOperationsRoundTrip(t *testing.T) {
 
 	t.Run("get task token usage requires task id", func(t *testing.T) {
 		_, err := client.GetTaskTokenUsage(ctx, "")
+		require.ErrorContains(t, err, "task_id required")
+	})
+
+	t.Run("list task worktrees", func(t *testing.T) {
+		worktrees, err := client.ListTaskWorktrees(ctx, "task-1")
+		require.NoError(t, err)
+		require.Equal(t, svc.worktrees["task-1"], worktrees)
+	})
+
+	t.Run("list importable sessions", func(t *testing.T) {
+		env := core.ProviderEnv{"CLAUDE_CONFIG_DIR": "/home/me/.claude-work", "CODEX_HOME": ""}
+		sessions, err := client.ListImportableSessions(ctx, "/src/code", env)
+		require.NoError(t, err)
+		require.Equal(t, svc.importable, sessions)
+		svc.mu.Lock()
+		defer svc.mu.Unlock()
+		require.Equal(t, env, svc.listEnv, "an unset variable survives the socket")
+	})
+
+	t.Run("import session returns the task alongside a session start error", func(t *testing.T) {
+		svc.mu.Lock()
+		svc.importTask = &core.Task{ID: "task-imported", WorkspaceKind: core.WorkspaceKindFolder}
+		svc.importErr = errors.New("imported, but its session did not start")
+		svc.mu.Unlock()
+
+		env := core.ProviderEnv{"CLAUDE_CONFIG_DIR": "/home/me/.claude-work"}
+		task, err := client.ImportSession(ctx, svc.importable[0], env)
+
+		require.ErrorContains(t, err, "session did not start")
+		require.NotNil(t, task)
+		require.Equal(t, "task-imported", task.ID)
+		require.Equal(t, svc.importable[0], svc.imported[0])
+		svc.mu.Lock()
+		defer svc.mu.Unlock()
+		require.Equal(t, env, svc.importEnv)
+	})
+
+	t.Run("list task worktrees requires task id", func(t *testing.T) {
+		_, err := client.ListTaskWorktrees(ctx, " ")
 		require.ErrorContains(t, err, "task_id required")
 	})
 
@@ -382,6 +528,34 @@ func TestUnaryOperationsRoundTrip(t *testing.T) {
 		require.Equal(t, []string{"task-1"}, svc.reconnected)
 	})
 
+	t.Run("shelve and unshelve a task", func(t *testing.T) {
+		require.NoError(t, client.ShelveTask(ctx, "task-1"))
+		require.NoError(t, client.UnshelveTask(ctx, "task-1"))
+		require.ErrorContains(t, client.ShelveTask(ctx, " "), "task_id required")
+		svc.mu.Lock()
+		defer svc.mu.Unlock()
+		require.Equal(t, []string{"task-1"}, svc.shelved)
+		require.Equal(t, []string{"task-1"}, svc.unshelved)
+	})
+
+	t.Run("rename a task", func(t *testing.T) {
+		require.NoError(t, client.RenameTask(ctx, "task-1", "flaky test investigation"))
+		require.ErrorContains(t, client.RenameTask(ctx, " ", "anything"), "task_id required")
+		svc.mu.Lock()
+		defer svc.mu.Unlock()
+		require.Equal(t, map[string]string{"task-1": "flaky test investigation"}, svc.renamed)
+	})
+
+	t.Run("shelve surfaces a refusal", func(t *testing.T) {
+		svc.mu.Lock()
+		svc.errByOp["shelve_task"] = errors.New("provider session is still running: \"task-1\" is working")
+		svc.mu.Unlock()
+		require.ErrorContains(t, client.ShelveTask(ctx, "task-1"), "is working")
+		svc.mu.Lock()
+		delete(svc.errByOp, "shelve_task")
+		svc.mu.Unlock()
+	})
+
 	t.Run("delete task", func(t *testing.T) {
 		require.NoError(t, client.DeleteTask(ctx, "task-2"))
 		svc.mu.Lock()
@@ -418,9 +592,10 @@ func TestCreateTaskStreamRoundTrip(t *testing.T) {
 		client := startTestFrontend(t, svc)
 
 		events, err := client.CreateTaskStream(context.Background(), core.CreateTaskInput{
-			Cwd:      "/tmp/repo",
-			Prompt:   "add retries",
-			Provider: core.ProviderCodex,
+			Cwd:         "/tmp/repo",
+			Prompt:      "add retries",
+			Provider:    core.ProviderCodex,
+			ProviderEnv: core.ProviderEnv{"CODEX_HOME": "/home/me/.codex-work"},
 		})
 		require.NoError(t, err)
 
@@ -429,6 +604,9 @@ func TestCreateTaskStreamRoundTrip(t *testing.T) {
 			got = append(got, event)
 		}
 		require.Len(t, got, 3)
+		svc.mu.Lock()
+		require.Equal(t, core.ProviderEnv{"CODEX_HOME": "/home/me/.codex-work"}, svc.createEnv)
+		svc.mu.Unlock()
 		require.Equal(t, core.TaskCreateProgressSuggestingName, got[0].Progress.Step)
 		require.Equal(t, core.TaskCreateProgressCreatingWorktree, got[1].Progress.Step)
 		require.NotNil(t, got[2].Task)

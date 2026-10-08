@@ -12,6 +12,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/BaronBonet/rig/internal/adapters/client/providerkit"
 	"github.com/BaronBonet/rig/internal/core"
 )
 
@@ -94,6 +95,9 @@ func (h *HTTPHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 
 	input := DecodeHookEventInput(h.now, r.Header.Get("X-Codex-Hook-Event"), body)
+	if taskID := strings.TrimSpace(r.Header.Get(providerkit.TaskIDHeader)); taskID != "" {
+		input.TaskID = taskID
+	}
 	if err := h.handle(r.Context(), input); err != nil && !errors.Is(err, core.ErrUnmanagedHookEvent) {
 		http.Error(w, "handle hook event: "+err.Error(), http.StatusInternalServerError)
 		return

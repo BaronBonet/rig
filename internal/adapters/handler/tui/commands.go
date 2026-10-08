@@ -51,6 +51,15 @@ func listRepoPullRequestsCmd(
 	}
 }
 
+// claimTaskSessionsCmd points the tmux return key of the folder's tasks at
+// this rig. A failure only loses the shortcut, so nothing is reported.
+func claimTaskSessionsCmd(ctx context.Context, frontend core.TaskFrontend, folder string, tasks []*core.Task) tea.Cmd {
+	return func() tea.Msg {
+		_ = frontend.ClaimTaskSessions(ctx, folder, tasks)
+		return nil
+	}
+}
+
 func openTaskSessionCmd(ctx context.Context, frontend core.TaskFrontend, task *core.Task) tea.Cmd {
 	return func() tea.Msg {
 		err := frontend.AttachTaskSession(ctx, task)
@@ -75,6 +84,23 @@ func createTaskStreamCmd(ctx context.Context, frontend core.TaskFrontend, input 
 	}
 }
 
+func newTaskSessionStreamCmd(ctx context.Context, frontend core.TaskFrontend, input core.NewTaskSessionInput) tea.Cmd {
+	return func() tea.Msg {
+		events, err := frontend.NewTaskSessionStream(ctx, input)
+		if err != nil {
+			return taskCreateStreamStartFailedMsg{err: err}
+		}
+		return waitForTaskCreateEventCmd(events)()
+	}
+}
+
+func getLaunchSettingsCmd(ctx context.Context, frontend core.TaskFrontend) tea.Cmd {
+	return func() tea.Msg {
+		settings, err := frontend.GetLaunchSettings(ctx)
+		return launchSettingsLoadedMsg{settings: settings, err: err}
+	}
+}
+
 func retryTaskCreationStreamCmd(ctx context.Context, frontend core.TaskFrontend, taskID string) tea.Cmd {
 	return func() tea.Msg {
 		events, err := frontend.RetryTaskCreationStream(ctx, taskID)
@@ -82,6 +108,24 @@ func retryTaskCreationStreamCmd(ctx context.Context, frontend core.TaskFrontend,
 			return taskCreateStreamStartFailedMsg{err: err}
 		}
 		return waitForTaskCreateEventCmd(events)()
+	}
+}
+
+func shelveTaskCmd(ctx context.Context, frontend core.TaskFrontend, task *core.Task, shelve bool, open bool) tea.Cmd {
+	return func() tea.Msg {
+		var err error
+		if shelve {
+			err = frontend.ShelveTask(ctx, task.ID)
+		} else {
+			err = frontend.UnshelveTask(ctx, task.ID)
+		}
+		return taskShelvedMsg{task: task, open: open, err: err}
+	}
+}
+
+func renameTaskCmd(ctx context.Context, frontend core.TaskFrontend, taskID string, name string) tea.Cmd {
+	return func() tea.Msg {
+		return taskRenamedMsg{err: frontend.RenameTask(ctx, taskID, name)}
 	}
 }
 
@@ -164,6 +208,53 @@ func taskTokenUsageCmd(ctx context.Context, frontend core.TaskFrontend, taskID s
 			taskID: taskID,
 			usage:  usage,
 			err:    err,
+		}
+	}
+}
+
+func listImportableSessionsCmd(
+	ctx context.Context,
+	frontend core.TaskFrontend,
+	folder string,
+	env core.ProviderEnv,
+) tea.Cmd {
+	return func() tea.Msg {
+		sessions, err := frontend.ListImportableSessions(ctx, folder, env)
+		return importableSessionsLoadedMsg{err: err, sessions: sessions}
+	}
+}
+
+func importableCountCmd(
+	ctx context.Context,
+	frontend core.TaskFrontend,
+	folder string,
+	env core.ProviderEnv,
+) tea.Cmd {
+	return func() tea.Msg {
+		sessions, err := frontend.ListImportableSessions(ctx, folder, env)
+		return importableCountLoadedMsg{err: err, count: len(sessions)}
+	}
+}
+
+func importSessionCmd(
+	ctx context.Context,
+	frontend core.TaskFrontend,
+	session core.ProviderSessionSummary,
+	env core.ProviderEnv,
+) tea.Cmd {
+	return func() tea.Msg {
+		task, err := frontend.ImportSession(ctx, session, env)
+		return sessionImportedMsg{task: task, err: err}
+	}
+}
+
+func taskWorktreesCmd(ctx context.Context, frontend core.TaskFrontend, taskID string) tea.Cmd {
+	return func() tea.Msg {
+		worktrees, err := frontend.ListTaskWorktrees(ctx, taskID)
+		return taskWorktreesLoadedMsg{
+			err:       err,
+			taskID:    taskID,
+			worktrees: worktrees,
 		}
 	}
 }

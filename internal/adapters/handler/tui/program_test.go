@@ -7,6 +7,6 @@ import (
 )
 
 func TestNewProgram_CreatesBubbleTeaProgram(t *testing.T) {
-	program := NewProgram(newFrontendHarness().mock, "/tmp/repo", "1.2.3")
+	program := NewProgram(newFrontendHarness().mock, "/tmp/repo", "1.2.3", nil)
 	require.NotNil(t, program)
 }

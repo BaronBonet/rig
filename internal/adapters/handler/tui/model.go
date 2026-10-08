@@ -18,6 +18,7 @@ type taskRow struct {
 	status      *core.TaskStatusUpdate
 	tokenUsage  *core.TaskTokenUsage
 	pullRequest *core.PRStatus
+	worktrees   []core.TaskWorktree
 }
 
 type modelMode int
@@ -29,6 +30,8 @@ const (
 	modeCleanupConfirm
 	modeProviderSetup
 	modeSwitchProvider
+	modeImportSession
+	modeRenameTask
 )
 
 const defaultBuildVersion = "dev"
@@ -43,6 +46,9 @@ const (
 	opCreating
 	opDeleting
 	opSwitching
+	opImporting
+	opShelving
+	opRenaming
 )
 
 const taskActivityPreviewLimit = 6
@@ -55,18 +61,37 @@ type model struct {
 	cancelStatus  context.CancelFunc
 	rows          []taskRow
 	providerSetup *core.ProviderSetup
-	selected      int
-	width         int
-	height        int
-	shimmerTick   int
-	mode          modelMode
-	pending       pendingOp
-	opening       bool
-	launchCwd     string
+	// launchSettings are the configured providers' launch options and the
+	// options each was last launched with; nil until loaded.
+	launchSettings *core.LaunchSettings
+	selected       int
+	width          int
+	height         int
+	shimmerTick    int
+	mode           modelMode
+	pending        pendingOp
+	opening        bool
+	launchCwd      string
+	// providerEnv is this rig window's provider configuration, sent with every
+	// request that lists sessions or starts a task so the shared daemon uses
+	// this window's accounts rather than its own.
+	providerEnv   core.ProviderEnv
 	buildVersion  string
 	loading       bool
 	detailsHidden bool
 	setupOnly     bool
+	// importableHere counts the sessions in the launch folder an empty
+	// dashboard offers to import.
+	importableHere int
+	// allFolders lists every task; by default a window lists only the tasks
+	// of the folder it was launched in, so one rig per client stays apart.
+	allFolders bool
+	// otherFolderTasks counts the tasks outside the launch folder, listed or not.
+	otherFolderTasks int
+	// showShelf lists the shelved tasks instead of the current ones.
+	showShelf bool
+	// shelvedTasks counts the shelved tasks in scope, listed or not.
+	shelvedTasks int
 
 	// adoptionReloads dampens the reload triggered by a status/record provider
 	// mismatch: one reload per observed mismatch. When the mismatch survives a
@@ -84,6 +109,8 @@ type model struct {
 	draft          taskDraft
 	setupForm      setupFormState
 	providerSwitch switchState
+	sessionImport  importState
+	rename         renameState
 
 	// In-flight creation progress; outlives the draft and renders in browse.
 	create createFlowState
@@ -102,6 +129,23 @@ type taskDraft struct {
 	repoRoot   string
 	repoName   string
 	err        error // validation error shown inside the draft views
+	// inFolder runs the new task in the launch folder as it is instead of a
+	// new worktree; it is the only choice outside a Git worktree.
+	inFolder   bool
+	outsideGit bool
+	// model and effort are the launch options for the provider; "" means the
+	// provider's own default.
+	model  string
+	effort string
+	// forTask, when set, makes the draft a fresh session of that existing
+	// task rather than a new task.
+	forTask *core.Task
+	// handoff asks the task's previous session for a handoff note before the
+	// new session starts.
+	handoff bool
+	// newWindow starts the session alongside the task's running one, in a new
+	// window of its tmux session, as a child task.
+	newWindow bool
 }
 
 // createFlowState is the progress of an in-flight or just-failed task
@@ -110,7 +154,10 @@ type createFlowState struct {
 	active core.TaskCreateProgressStep
 	done   []core.TaskCreateProgressStep
 	fromPR bool
-	err    error
+	// newSession marks a fresh session of an existing task, which has only
+	// the session steps.
+	newSession bool
+	err        error
 }
 
 // setupFormState is the provider setup screen's working state.
@@ -127,6 +174,19 @@ type setupFormState struct {
 type switchState struct {
 	options  []core.Provider
 	selected int
+}
+
+// importState is the session import picker: provider sessions started in the
+// launch folder that no task owns yet, narrowed by an optional search.
+type importState struct {
+	err      error
+	folder   string
+	query    string
+	sessions []core.ProviderSessionSummary
+	// selected indexes the sessions that match the query.
+	selected  int
+	loading   bool
+	searching bool
 }
 
 // providerSetupRow is one supported provider in the provider setup UI.
@@ -158,6 +218,12 @@ type taskTokenUsageLoadedMsg struct {
 	usage  *core.TaskTokenUsage
 	err    error
 	taskID string
+}
+
+type taskWorktreesLoadedMsg struct {
+	err       error
+	taskID    string
+	worktrees []core.TaskWorktree
 }
 
 type taskStatusSubscriptionReadyMsg struct {
@@ -196,6 +262,14 @@ type taskCreateEventMsg struct {
 
 type taskCreateStreamClosedMsg struct{}
 
+// taskShelvedMsg reports a task moved onto the shelf, or off it; open asks
+// for the task to be opened once it is back on the list.
+type taskShelvedMsg struct {
+	task *core.Task
+	err  error
+	open bool
+}
+
 type taskDeletedMsg struct {
 	err    error
 	taskID string
@@ -223,9 +297,29 @@ type providerSetupSavedMsg struct {
 	setup core.ProviderSetup
 }
 
+type launchSettingsLoadedMsg struct {
+	settings *core.LaunchSettings
+	err      error
+}
+
 type taskProviderSwitchedMsg struct {
 	task *core.Task
 	err  error
+}
+
+type importableSessionsLoadedMsg struct {
+	err      error
+	sessions []core.ProviderSessionSummary
+}
+
+type sessionImportedMsg struct {
+	task *core.Task
+	err  error
+}
+
+type importableCountLoadedMsg struct {
+	err   error
+	count int
 }
 
 type shimmerTickMsg struct{}
@@ -259,6 +353,7 @@ func newModel(frontend core.TaskFrontend, launchCwd string, buildVersion string)
 func (m model) Init() tea.Cmd {
 	return tea.Batch(
 		getProviderSetupCmd(m.statusContext, m.frontend),
+		getLaunchSettingsCmd(m.statusContext, m.frontend),
 		loadTasksCmd(m.statusContext, m.frontend),
 		activityRefreshTickCmd(),
 	)
@@ -293,7 +388,8 @@ func (m model) effectiveCreateProvider() core.Provider {
 }
 
 // cycleCreateProvider advances the create-flow provider selection to the next
-// configured provider. With a single configured provider it is a no-op.
+// configured provider, preselecting that provider's last launch options.
+// With a single configured provider it is a no-op.
 func (m *model) cycleCreateProvider() {
 	providers := m.configuredProviders()
 	if len(providers) < 2 {
@@ -301,13 +397,88 @@ func (m *model) cycleCreateProvider() {
 	}
 
 	current := m.effectiveCreateProvider()
+	m.draft.provider = providers[0]
 	for index, provider := range providers {
 		if provider == current {
 			m.draft.provider = providers[(index+1)%len(providers)]
-			return
+			break
 		}
 	}
-	m.draft.provider = providers[0]
+	m.applyLaunchDefaults(m.draft.provider)
+	if m.draft.forTask != nil {
+		m.draft.handoff = m.providerSupportsHandoff(m.draft.provider)
+	}
+}
+
+// launchChoices lists the models and efforts provider accepts, each led by
+// "" for the provider's own default.
+func (m model) launchChoices(provider core.Provider) ([]string, []string) {
+	models, efforts := []string{""}, []string{""}
+	if m.launchSettings == nil {
+		return models, efforts
+	}
+	options, ok := m.launchSettings.Options[provider]
+	if !ok {
+		return models, efforts
+	}
+	return append(models, options.Models...), append(efforts, options.Efforts...)
+}
+
+// providerSupportsHandoff reports whether provider can write a handoff note
+// from a previous session.
+func (m model) providerSupportsHandoff(provider core.Provider) bool {
+	if m.launchSettings == nil {
+		return false
+	}
+	return m.launchSettings.Options[provider].Handoff
+}
+
+// cycleCreateModel advances the draft's model through the provider's choices.
+func (m *model) cycleCreateModel() {
+	models, _ := m.launchChoices(m.effectiveCreateProvider())
+	m.draft.model = nextChoice(models, m.draft.model)
+}
+
+// cycleCreateEffort advances the draft's effort through the provider's choices.
+func (m *model) cycleCreateEffort() {
+	_, efforts := m.launchChoices(m.effectiveCreateProvider())
+	m.draft.effort = nextChoice(efforts, m.draft.effort)
+}
+
+// nextChoice is the choice after current, wrapping around; an unknown current
+// leads to the first choice.
+func nextChoice(choices []string, current string) string {
+	if len(choices) == 0 {
+		return ""
+	}
+	for index, choice := range choices {
+		if choice == current {
+			return choices[(index+1)%len(choices)]
+		}
+	}
+	return choices[0]
+}
+
+// applyLaunchDefaults preselects the options provider was last launched with.
+func (m *model) applyLaunchDefaults(provider core.Provider) {
+	m.draft.model, m.draft.effort = "", ""
+	if m.launchSettings == nil {
+		return
+	}
+	defaults := m.launchSettings.Defaults[provider]
+	m.draft.model, m.draft.effort = defaults.Model, defaults.Effort
+}
+
+// rememberLaunchDefaults mirrors what the daemon records on launch, so the
+// next draft preselects the same options without a reload.
+func (m *model) rememberLaunchDefaults(provider core.Provider, options core.LaunchOptions) {
+	if m.launchSettings == nil {
+		return
+	}
+	if m.launchSettings.Defaults == nil {
+		m.launchSettings.Defaults = make(map[core.Provider]core.LaunchOptions)
+	}
+	m.launchSettings.Defaults[provider] = options
 }
 
 // quit cancels the background status context before exiting the program.
@@ -337,6 +508,12 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.height = msg.Height
 		return m, nil
 	case tea.PasteMsg:
+		if m.mode == modeImportSession {
+			return m.pasteImportQuery(msg)
+		}
+		if m.mode == modeRenameTask {
+			return m.updateRename(msg)
+		}
 		return m.updatePromptPaste(msg)
 	case tea.KeyPressMsg:
 		if isForceQuitKey(msg) {
@@ -361,6 +538,12 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if m.mode == modeSwitchProvider {
 			return m.updateSwitchProvider(msg)
 		}
+		if m.mode == modeImportSession {
+			return m.updateImportSession(msg)
+		}
+		if m.mode == modeRenameTask {
+			return m.updateRename(msg)
+		}
 
 		if isQuitKey(msg) {
 			return m.quit()
@@ -370,9 +553,20 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// press; background refreshes must not clear it.
 		m.err = nil
 
+		if m.showShelf && !shelfKey(msg.String()) {
+			return m, nil
+		}
+
 		switch msg.String() {
 		case "esc":
+			if m.showShelf {
+				return m.toggleShelf()
+			}
 			return m.handleBack()
+		case "tab":
+			return m.toggleShelf()
+		case "d":
+			return m.moveSelectedTask(false)
 		case "a", "n":
 			if m.pending != opNone {
 				return m, nil
@@ -381,12 +575,24 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				return m.enterProviderSetupMode()
 			}
 			return m.enterPromptInputMode("")
+		case "N":
+			return m.enterNewSessionMode()
+		case "e":
+			return m.enterRenameMode()
 		case "p":
 			return m.enterSwitchProviderMode()
+		case "i":
+			return m.enterImportSessionMode()
 		case "S":
 			return m.enterProviderSetupMode()
 		case "r":
 			m.loading = true
+			return m, loadTasksCmd(m.statusContext, m.frontend)
+		case "f":
+			if m.launchCwd == "" {
+				return m, nil
+			}
+			m.allFolders = !m.allFolders
 			return m, loadTasksCmd(m.statusContext, m.frontend)
 		case "R":
 			return m.retrySelectedTaskCreation()
@@ -411,6 +617,9 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.transition(modeCleanupConfirm)
 			return m, nil
 		case "enter":
+			if m.showShelf {
+				return m.moveSelectedTask(true)
+			}
 			if len(m.rows) == 0 || m.opening || (m.pending != opNone && m.pending != opCreating) {
 				return m, nil
 			}
@@ -441,13 +650,29 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if row := m.selectedRow(); row != nil {
 			selectedTaskID = taskID(row.task)
 		}
-		nextRows := rowsFromTasks(msg.tasks)
+		current, shelved := splitShelved(msg.tasks)
+		listed := current
+		if m.showShelf {
+			listed = shelved
+		}
+		visible, others := m.scopeTasks(listed)
+		m.otherFolderTasks = others
+		shelvedHere, _ := m.scopeTasks(shelved)
+		m.shelvedTasks = len(shelvedHere)
+		nextRows := rowsFromTasks(visible)
 		preserveTaskStatuses(nextRows, m.rows)
 		m.reconcileTaskStatusTracking(nextRows)
 		m.rows = nextRows
 		m.clampSelection()
 		m.selectTask(selectedTaskID)
-		return m, tea.Batch(m.afterTasksLoadedCmds()...)
+		cmds := m.afterTasksLoadedCmds()
+		// Every task, shelf and all folders included: the frontend keeps the
+		// launch folder's.
+		cmds = append(cmds, claimTaskSessionsCmd(m.statusContext, m.frontend, m.launchCwd, msg.tasks))
+		if cmd := m.importHintCmd(); cmd != nil {
+			cmds = append(cmds, cmd)
+		}
+		return m, tea.Batch(cmds...)
 	case pullRequestStatusLoadedMsg:
 		if msg.err != nil {
 			return m, nil
@@ -467,6 +692,14 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		m.setTaskTokenUsage(msg.taskID, msg.usage)
 		return m, nil
+	case taskWorktreesLoadedMsg:
+		// A worktree that cannot be inspected keeps the last known list; the
+		// next refresh retries.
+		if msg.err != nil {
+			return m, nil
+		}
+		m.setTaskWorktrees(msg.taskID, msg.worktrees)
+		return m, nil
 	case taskStatusSubscriptionReadyMsg:
 		if msg.err != nil {
 			m.cancelTaskStatusTracking(msg.taskID)
@@ -479,6 +712,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		cmds := []tea.Cmd{
 			taskActivityCmd(m.statusContext, m.frontend, msg.taskID, taskActivityPreviewLimit),
 			taskTokenUsageCmd(m.statusContext, m.frontend, msg.taskID),
+			taskWorktreesCmd(m.statusContext, m.frontend, msg.taskID),
 			waitForTaskStatusCmd(msg.taskID, msg.updates),
 		}
 		// A live status from a different provider than the task record means
@@ -539,7 +773,44 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		m.transition(modeBrowse)
 		m.loading = true
-		return m, loadTasksCmd(m.statusContext, m.frontend)
+		return m, tea.Batch(
+			loadTasksCmd(m.statusContext, m.frontend),
+			getLaunchSettingsCmd(m.statusContext, m.frontend),
+		)
+	case launchSettingsLoadedMsg:
+		// Without settings the composer simply offers no options to cycle.
+		if msg.err == nil && msg.settings != nil {
+			m.launchSettings = msg.settings
+		}
+		return m, nil
+	case importableSessionsLoadedMsg:
+		if m.mode != modeImportSession {
+			return m, nil
+		}
+		m.sessionImport.loading = false
+		m.sessionImport.err = msg.err
+		m.sessionImport.sessions = msg.sessions
+		m.sessionImport.selected = 0
+		return m, nil
+	case importableCountLoadedMsg:
+		// The hint is optional: a failed count only hides it.
+		m.importableHere = 0
+		if msg.err == nil {
+			m.importableHere = msg.count
+		}
+		return m, nil
+	case sessionImportedMsg:
+		m.endOp()
+		m.transition(modeBrowse)
+		m.err = msg.err
+		if msg.task == nil {
+			return m, nil
+		}
+		if index := m.upsertTaskRow(msg.task); index >= 0 {
+			m.selected = index
+		}
+		m.clampSelection()
+		return m, tea.Batch(m.taskStatusTrackingCmds(taskID(msg.task))...)
 	case taskProviderSwitchedMsg:
 		m.endOp()
 		m.transition(modeBrowse)
@@ -626,6 +897,28 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		m.err = nil
 		return m, nil
+	case taskShelvedMsg:
+		m.endOp()
+		if msg.err != nil {
+			m.err = msg.err
+			return m, nil
+		}
+		cmds := []tea.Cmd{loadTasksCmd(m.statusContext, m.frontend)}
+		if msg.open {
+			m.showShelf = false
+			m.opening = true
+			cmds = append(cmds, openTaskSessionCmd(m.statusContext, m.frontend, msg.task), shimmerTickCmd())
+		}
+		return m, tea.Batch(cmds...)
+	case taskRenamedMsg:
+		m.endOp()
+		if msg.err != nil {
+			// The typed name stays, so it can be fixed and sent again.
+			m.err = msg.err
+			return m, nil
+		}
+		m.transition(modeBrowse)
+		return m, loadTasksCmd(m.statusContext, m.frontend)
 	case taskDeletedMsg:
 		m.endOp()
 		m.transition(modeBrowse)
@@ -639,7 +932,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.cancelTaskStatusTracking(msg.taskID)
 		delete(m.adoptionReloads, msg.taskID)
 		m.clampSelection()
-		return m, nil
+		return m, m.importHintCmd()
 	case activityRefreshTickMsg:
 		cmds := []tea.Cmd{activityRefreshTickCmd()}
 		if row := m.selectedRow(); row != nil && row.task != nil && taskID(row.task) != "" {
@@ -647,6 +940,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			cmds = append(cmds,
 				taskActivityCmd(m.statusContext, m.frontend, id, taskActivityPreviewLimit),
 				taskTokenUsageCmd(m.statusContext, m.frontend, id),
+				taskWorktreesCmd(m.statusContext, m.frontend, id),
 			)
 		}
 		return m, tea.Batch(cmds...)
@@ -659,6 +953,9 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	default:
 		if m.mode == modePromptInput {
 			return m.updatePromptInput(msg)
+		}
+		if m.mode == modeRenameTask {
+			return m.updateRename(msg)
 		}
 		return m, nil
 	}
@@ -677,6 +974,10 @@ func (m model) View() tea.View {
 		body = m.providerSetupView()
 	case modeSwitchProvider:
 		body = m.switchProviderView()
+	case modeImportSession:
+		body = m.importSessionView()
+	case modeRenameTask:
+		body = m.renameTaskView()
 	default:
 		body = m.listView()
 	}
@@ -684,6 +985,53 @@ func (m model) View() tea.View {
 	view := tea.NewView(body)
 	view.AltScreen = true
 	return view
+}
+
+// splitShelved separates the tasks on the current list from those on the
+// shelf.
+func splitShelved(tasks []*core.Task) ([]*core.Task, []*core.Task) {
+	var current, shelved []*core.Task
+	for _, task := range tasks {
+		if task.IsShelved() {
+			shelved = append(shelved, task)
+		} else {
+			current = append(current, task)
+		}
+	}
+	return current, shelved
+}
+
+// shelfKey reports whether a key does something on the shelf: browsing,
+// putting a task back, opening or cleaning it up. Starting, importing or
+// switching work happens on the current list.
+func shelfKey(key string) bool {
+	switch key {
+	case "a", "n", "N", "p", "i", "R":
+		return false
+	default:
+		return true
+	}
+}
+
+// toggleShelf switches the list between the current tasks and the shelf.
+func (m model) toggleShelf() (tea.Model, tea.Cmd) {
+	m.showShelf = !m.showShelf
+	m.selected = 0
+	return m, loadTasksCmd(m.statusContext, m.frontend)
+}
+
+// moveSelectedTask shelves the selected task, or, on the shelf, puts it back
+// on the current list; open then opens it, resuming its latest session.
+func (m model) moveSelectedTask(open bool) (tea.Model, tea.Cmd) {
+	row := m.selectedRow()
+	if row == nil || row.task == nil || m.opening || m.pending != opNone {
+		return m, nil
+	}
+	m.beginOp(opShelving)
+	return m, tea.Batch(
+		shelveTaskCmd(m.statusContext, m.frontend, row.task, !m.showShelf, open),
+		shimmerTickCmd(),
+	)
 }
 
 func rowsFromTasks(tasks []*core.Task) []taskRow {
@@ -718,6 +1066,7 @@ func (m *model) afterTasksLoadedCmds() []tea.Cmd {
 		if taskID != "" {
 			cmds = append(cmds, taskActivityCmd(m.statusContext, m.frontend, taskID, taskActivityPreviewLimit))
 			cmds = append(cmds, taskTokenUsageCmd(m.statusContext, m.frontend, taskID))
+			cmds = append(cmds, taskWorktreesCmd(m.statusContext, m.frontend, taskID))
 		}
 		if cmd := m.taskPullRequestStatusCmd(row.task); cmd != nil {
 			cmds = append(cmds, cmd)
@@ -729,22 +1078,52 @@ func (m *model) afterTasksLoadedCmds() []tea.Cmd {
 func (m model) submitPrompt() (model, tea.Cmd) {
 	m.ensurePromptInputInitialized()
 	prompt := strings.TrimSpace(m.promptValue())
-	if prompt == "" {
+	// A new session has its continuation prompt; the user's own instruction
+	// is optional.
+	if prompt == "" && m.draft.forTask == nil {
 		return m, nil
 	}
 
 	// Capture the draft's inputs before the transition discards it.
 	cwd := m.currentCreateCwd()
 	provider := m.effectiveCreateProvider()
+	options := core.LaunchOptions{Model: m.draft.model, Effort: m.draft.effort}
+	var workspace core.WorkspaceKind
+	if m.draft.inFolder {
+		workspace = core.WorkspaceKindFolder
+	}
+	forTask := m.draft.forTask
+	handoff := m.draft.handoff
+	newWindow := m.draft.newWindow
 	m.transition(modeBrowse)
 	m.beginOp(opCreating)
-	m.create = createFlowState{}
+	m.create = createFlowState{newSession: forTask != nil}
+	m.rememberLaunchDefaults(provider, options)
+
+	if forTask != nil {
+		return m, tea.Batch(
+			newTaskSessionStreamCmd(m.statusContext, m.frontend, core.NewTaskSessionInput{
+				TaskID:    forTask.ID,
+				Prompt:    prompt,
+				Provider:  provider,
+				Model:     options.Model,
+				Effort:    options.Effort,
+				Handoff:   handoff,
+				NewWindow: newWindow,
+			}),
+			shimmerTickCmd(),
+		)
+	}
 
 	return m, tea.Batch(
 		createTaskStreamCmd(m.statusContext, m.frontend, core.CreateTaskInput{
-			Cwd:      cwd,
-			Prompt:   prompt,
-			Provider: provider,
+			Cwd:         cwd,
+			Prompt:      prompt,
+			Provider:    provider,
+			Workspace:   workspace,
+			ProviderEnv: m.providerEnv,
+			Model:       options.Model,
+			Effort:      options.Effort,
 		}),
 		shimmerTickCmd(),
 	)
@@ -790,7 +1169,43 @@ func (m model) updatePromptInput(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.cycleCreateProvider()
 			return m, nil
 		}
+		if typed.String() == "ctrl+t" {
+			m.cycleCreateModel()
+			return m, nil
+		}
+		if typed.String() == "ctrl+r" {
+			m.cycleCreateEffort()
+			return m, nil
+		}
+		if typed.String() == "ctrl+g" {
+			if m.draft.forTask != nil && m.providerSupportsHandoff(m.effectiveCreateProvider()) {
+				m.draft.handoff = !m.draft.handoff
+			}
+			return m, nil
+		}
+		if typed.String() == "ctrl+w" {
+			if m.draft.forTask != nil {
+				m.draft.newWindow = !m.draft.newWindow
+			}
+			return m, nil
+		}
+		if typed.String() == "ctrl+o" {
+			// Outside Git the folder is the only workspace there is, and a new
+			// session keeps its task's workspace.
+			if !m.draft.outsideGit && m.draft.forTask == nil {
+				m.draft.inFolder = !m.draft.inFolder
+			}
+			return m, nil
+		}
 		if typed.String() == "ctrl+p" {
+			if m.draft.forTask != nil {
+				// A new session belongs to its task; there is no source to pick.
+				return m, nil
+			}
+			if m.draft.outsideGit {
+				m.draft.err = errors.New("pull requests need a git repository")
+				return m, nil
+			}
 			repoRoot, repoName, ok := m.currentRepoScope()
 			if !ok {
 				m.draft.err = errors.New("repo scope unavailable")
@@ -813,7 +1228,10 @@ func (m model) updatePromptInput(msg tea.Msg) (tea.Model, tea.Cmd) {
 		case tea.KeyEscape:
 			return m.handleBack()
 		case tea.KeyEnter:
-			return m.submitPrompt()
+			// A modified enter is the textarea's newline.
+			if typed.Mod == 0 {
+				return m.submitPrompt()
+			}
 		}
 	}
 
@@ -883,6 +1301,7 @@ func (m model) updatePRPicker(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 				Source: core.CreateTaskSource{
 					PullRequest: &selected,
 				},
+				ProviderEnv: m.providerEnv,
 			}),
 			shimmerTickCmd(),
 		)
@@ -900,10 +1319,69 @@ func (m model) enterPromptInputMode(initialValue string) (tea.Model, tea.Cmd) {
 	}
 	input := newPromptInput()
 	input.SetValue(initialValue)
-	m.draft = taskDraft{prompt: initialValue, input: input}
+	outsideGit := !insideGitWorktree(m.currentCreateCwd())
+	m.draft = taskDraft{prompt: initialValue, input: input, inFolder: outsideGit, outsideGit: outsideGit}
+	m.applyLaunchDefaults(m.effectiveCreateProvider())
 	m.create.err = nil
 	m.create.fromPR = false
+	m.create.newSession = false
 	return m, m.draft.input.Focus()
+}
+
+// enterNewSessionMode opens the composer for a fresh provider session of the
+// selected task: a new conversation in the same workspace and tmux session,
+// so a long-running task keeps one row however many sessions it takes.
+func (m model) enterNewSessionMode() (tea.Model, tea.Cmd) {
+	if m.pending != opNone {
+		return m, nil
+	}
+	if m.providerSetup == nil {
+		return m.enterProviderSetupMode()
+	}
+	row := m.selectedRow()
+	if row == nil || row.task == nil {
+		return m, nil
+	}
+	task := row.task
+	if task.CreationStatus != core.TaskCreationStatusReady {
+		m.err = errors.New("the task is not ready: retry its creation first")
+		return m, nil
+	}
+	if !m.transition(modePromptInput) {
+		return m, nil
+	}
+
+	// The box takes the user's own instruction for the session; the
+	// continuation prompt (the task, its original ask, where to pick up) is
+	// composed around it and previewed above.
+	input := newPromptInput()
+	input.Placeholder = "What should this session do? Optional: the continuation prompt goes first."
+	m.draft = taskDraft{input: input, forTask: task, provider: task.Provider}
+	// The task's own last options win; a task without any takes the
+	// provider's last used ones.
+	m.draft.model, m.draft.effort = task.Launch().Model, task.Launch().Effort
+	if m.draft.model == "" && m.draft.effort == "" {
+		m.applyLaunchDefaults(m.effectiveCreateProvider())
+	}
+	m.draft.handoff = m.providerSupportsHandoff(m.effectiveCreateProvider())
+	// The running session is left as it is; the new one opens next to it.
+	m.draft.newWindow = true
+	m.create = createFlowState{}
+	m.err = nil
+	return m, m.draft.input.Focus()
+}
+
+// continuationPreview is the continuation prompt as the daemon will compose
+// it, before the user's own instruction, for the composer to show.
+func (m model) continuationPreview() string {
+	if m.draft.forTask == nil {
+		return ""
+	}
+	handoffPath := ""
+	if m.draft.handoff && m.providerSupportsHandoff(m.effectiveCreateProvider()) {
+		handoffPath = "(the note written when the session starts)"
+	}
+	return core.ContinuationPrompt(m.draft.forTask, "", handoffPath)
 }
 
 func (m model) promptValue() string {
@@ -1097,6 +1575,12 @@ func (m *model) setTaskTokenUsage(taskID string, usage *core.TaskTokenUsage) {
 	row.tokenUsage = &copied
 }
 
+func (m *model) setTaskWorktrees(taskID string, worktrees []core.TaskWorktree) {
+	if row := m.taskRowByID(taskID); row != nil {
+		row.worktrees = append([]core.TaskWorktree(nil), worktrees...)
+	}
+}
+
 func (m *model) upsertTaskRow(task *core.Task) int {
 	id := taskID(task)
 	if id == "" {
@@ -1239,9 +1723,36 @@ func groupRowsByRepo(rows []taskRow) []taskRow {
 
 	grouped := make([]taskRow, 0, len(rows))
 	for _, key := range order {
-		grouped = append(grouped, groups[key]...)
+		grouped = append(grouped, nestChildRows(groups[key])...)
 	}
 	return grouped
+}
+
+// nestChildRows places each task's sessions right under it, in their own
+// order. A child whose parent is not listed stands on its own.
+func nestChildRows(rows []taskRow) []taskRow {
+	listed := make(map[string]bool, len(rows))
+	for _, row := range rows {
+		listed[taskID(row.task)] = true
+	}
+	children := make(map[string][]taskRow)
+	nested := make([]taskRow, 0, len(rows))
+	for _, row := range rows {
+		if row.task != nil && row.task.IsChild() && listed[row.task.ParentID] {
+			children[row.task.ParentID] = append(children[row.task.ParentID], row)
+			continue
+		}
+		nested = append(nested, row)
+	}
+	if len(children) == 0 {
+		return rows
+	}
+	withChildren := make([]taskRow, 0, len(rows))
+	for _, row := range nested {
+		withChildren = append(withChildren, row)
+		withChildren = append(withChildren, children[taskID(row.task)]...)
+	}
+	return withChildren
 }
 
 func repoGroupKey(task *core.Task) string {

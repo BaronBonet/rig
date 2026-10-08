@@ -13,6 +13,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/BaronBonet/rig/internal/adapters/client/providerkit"
 	"github.com/BaronBonet/rig/internal/core"
 )
 
@@ -95,6 +96,9 @@ func (h *HTTPHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 
 	input := DecodeHookEventInput(h.now, r.Header.Get(hookEventHeader), body)
+	if taskID := strings.TrimSpace(r.Header.Get(providerkit.TaskIDHeader)); taskID != "" {
+		input.TaskID = taskID
+	}
 	if err := h.handle(r.Context(), input); err != nil && !errors.Is(err, core.ErrUnmanagedHookEvent) {
 		http.Error(w, "handle hook event: "+err.Error(), http.StatusInternalServerError)
 		return
@@ -112,8 +116,9 @@ func (h *HTTPHandler) authorized(r *http.Request) bool {
 }
 
 // DecodeHookEventInput normalizes a Claude Code hook payload into Rig's hook
-// event input. Claude payloads carry no task ID; the task is resolved from the
-// hook's working directory by the task service.
+// event input. Claude payloads carry no task ID; the HTTP handler takes it from
+// the forwarder's task ID header, and the task service falls back to the hook's
+// working directory when the session was not launched by Rig.
 func DecodeHookEventInput(now func() time.Time, headerEventName string, body []byte) core.HookEventInput {
 	if now == nil {
 		now = time.Now

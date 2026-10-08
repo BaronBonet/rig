@@ -15,7 +15,9 @@ const (
 )
 
 type repoConfig struct {
-	Seed seedConfig
+	Seed         seedConfig
+	BaseBranch   string
+	WorktreeName string
 }
 
 type seedConfig struct {
@@ -44,10 +46,56 @@ func loadRepoConfig(repoRoot string) (repoConfig, error) {
 	if err != nil {
 		return repoConfig{}, err
 	}
+	root, err := documentRoot(&doc, configName)
+	if err != nil || root == nil {
+		return repoConfig{Seed: seed}, err
+	}
+	baseBranch, err := parseRootString(root, "base_branch", configName)
+	if err != nil {
+		return repoConfig{}, err
+	}
+	if strings.ContainsAny(baseBranch, " ~^:?*[\\") || strings.HasPrefix(baseBranch, "-") {
+		return repoConfig{}, fmt.Errorf("invalid %s: base_branch %q is not a branch name", configName, baseBranch)
+	}
+	worktreeName, err := parseRootString(root, "worktree_name", configName)
+	if err != nil {
+		return repoConfig{}, err
+	}
+	if err := validateWorktreeName(worktreeName); err != nil {
+		return repoConfig{}, fmt.Errorf("invalid %s: worktree_name %w", configName, err)
+	}
 
 	return repoConfig{
-		Seed: seed,
+		Seed:         seed,
+		BaseBranch:   baseBranch,
+		WorktreeName: worktreeName,
 	}, nil
+}
+
+func parseRootString(root *yaml.Node, key string, configName string) (string, error) {
+	node, ok, err := lookupMapping(root, key, configName)
+	if err != nil || !ok {
+		return "", err
+	}
+	if node.Kind != yaml.ScalarNode || node.Tag != "!!str" {
+		return "", fmt.Errorf("invalid %s: %s must be a string", configName, key)
+	}
+	return strings.TrimSpace(node.Value), nil
+}
+
+// validateWorktreeName checks a worktree folder name template: it must name a
+// single sibling folder of the repository and stay unique per task.
+func validateWorktreeName(template string) error {
+	if template == "" {
+		return nil
+	}
+	if !strings.Contains(template, "{slug}") {
+		return fmt.Errorf("%q must contain {slug}", template)
+	}
+	if strings.ContainsAny(template, `/\`) || strings.Contains(template, "..") {
+		return fmt.Errorf("%q must name a single folder", template)
+	}
+	return nil
 }
 
 func readRepoConfig(repoRoot string) (string, []byte, error) {
@@ -96,7 +144,7 @@ func parseSeed(doc *yaml.Node, configName string) (seedConfig, error) {
 	if root.Kind != yaml.MappingNode {
 		return seedConfig{}, fmt.Errorf("invalid %s: root must be a mapping", configName)
 	}
-	if err := validateAllowedKeys(root, configName, configName, "seed"); err != nil {
+	if err := validateAllowedKeys(root, configName, configName, "seed", "base_branch", "worktree_name"); err != nil {
 		return seedConfig{}, err
 	}
 

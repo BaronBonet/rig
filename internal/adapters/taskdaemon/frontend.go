@@ -27,12 +27,47 @@ func (f *frontend) AttachTaskSession(ctx context.Context, task *core.Task) error
 	return f.sessions.AttachTaskSession(ctx, task)
 }
 
+func (f *frontend) ClaimTaskSessions(ctx context.Context, folder string, tasks []*core.Task) error {
+	if f.sessions == nil {
+		return fmt.Errorf("task session client not configured")
+	}
+
+	return f.sessions.ClaimTaskSessions(ctx, folder, tasks)
+}
+
 func (f *frontend) GetTaskActivity(ctx context.Context, taskID string, limit int) ([]core.TaskActivityEvent, error) {
 	return callUnary(ctx, f, opGetTaskActivity, taskActivityRequest{TaskID: taskID, Limit: limit})
 }
 
 func (f *frontend) GetTaskTokenUsage(ctx context.Context, taskID string) (*core.TaskTokenUsage, error) {
 	return callUnary(ctx, f, opGetTaskTokenUsage, taskIDRequest{TaskID: taskID})
+}
+
+func (f *frontend) ListImportableSessions(
+	ctx context.Context,
+	folder string,
+	env core.ProviderEnv,
+) ([]core.ProviderSessionSummary, error) {
+	return callUnary(ctx, f, opListImportableSessions, importableSessionsRequest{Env: env, Folder: folder})
+}
+
+func (f *frontend) ImportSession(
+	ctx context.Context,
+	session core.ProviderSessionSummary,
+	env core.ProviderEnv,
+) (*core.Task, error) {
+	response, err := callUnary(ctx, f, opImportSession, importSessionRequest{Env: env, Session: session})
+	if err != nil {
+		return nil, err
+	}
+	if response.Error != "" {
+		return response.Task, errors.New(response.Error)
+	}
+	return response.Task, nil
+}
+
+func (f *frontend) ListTaskWorktrees(ctx context.Context, taskID string) ([]core.TaskWorktree, error) {
+	return callUnary(ctx, f, opListTaskWorktrees, taskIDRequest{TaskID: taskID})
 }
 
 func (f *frontend) ListRepoPullRequests(ctx context.Context, cwd string) ([]core.RepoPullRequest, error) {
@@ -60,6 +95,21 @@ func (f *frontend) PullRequestStatus(
 
 func (f *frontend) ReconnectTaskSession(ctx context.Context, taskID string) error {
 	_, err := callUnary(ctx, f, opReconnectTaskSession, taskIDRequest{TaskID: taskID})
+	return err
+}
+
+func (f *frontend) ShelveTask(ctx context.Context, taskID string) error {
+	_, err := callUnary(ctx, f, opShelveTask, taskIDRequest{TaskID: taskID})
+	return err
+}
+
+func (f *frontend) UnshelveTask(ctx context.Context, taskID string) error {
+	_, err := callUnary(ctx, f, opUnshelveTask, taskIDRequest{TaskID: taskID})
+	return err
+}
+
+func (f *frontend) RenameTask(ctx context.Context, taskID string, name string) error {
+	_, err := callUnary(ctx, f, opRenameTask, renameTaskRequest{TaskID: taskID, Name: name})
 	return err
 }
 
@@ -110,6 +160,25 @@ func (f *frontend) CreateTaskStream(
 		Command: socketCommandCreateTask,
 		Payload: payload,
 	})
+}
+
+func (f *frontend) NewTaskSessionStream(
+	ctx context.Context,
+	input core.NewTaskSessionInput,
+) (<-chan core.TaskCreateEvent, error) {
+	payload, err := json.Marshal(input)
+	if err != nil {
+		return nil, fmt.Errorf("%s: encode request: %w", socketCommandNewTaskSession, err)
+	}
+
+	return f.taskCreateEventStream(ctx, socketRequest{
+		Command: socketCommandNewTaskSession,
+		Payload: payload,
+	})
+}
+
+func (f *frontend) GetLaunchSettings(ctx context.Context) (*core.LaunchSettings, error) {
+	return callUnary(ctx, f, opGetLaunchSettings, emptyResponse{})
 }
 
 func (f *frontend) RetryTaskCreationStream(

@@ -70,10 +70,14 @@ func TestTaskServiceCreateTask_CreatesWorkspaceSessionAndPersistsTask(t *testing
 	require.Equal(t, task.WorktreePath, svc.providerRepo.bootstrapRequest.WorktreePath)
 	require.Equal(t, task.BranchName, svc.providerRepo.bootstrapRequest.BranchName)
 	require.Equal(t, TaskSessionLaunchSpec{
+		Command:     []string{"codex"},
+		ReadyMarker: "›",
+	}, svc.sessionClient.startedLaunch, "the prompt is typed only once the provider is ready")
+	require.Equal(t, TaskSessionLaunchSpec{
 		Command:      []string{"codex"},
 		ReadyMarker:  "›",
 		PrefillInput: []string{"add billing retry flow"},
-	}, svc.sessionClient.startedLaunch)
+	}, svc.sessionClient.prefilledLaunch)
 }
 
 func TestTaskServiceCreateTask_EnsuresProviderSessionEnvironmentBeforeStartingSession(t *testing.T) {
@@ -249,6 +253,8 @@ func TestTaskServiceRetryTaskCreationWithProgress_ResumesPreparingWorkspaceFailu
 		Content:  []byte("hooks"),
 		FileMode: 0o644,
 	}}}
+	// The failed attempt left the pane idle.
+	svc.sessionClient.inspectState = TaskSessionRuntimeState{Exists: true, ActiveCommands: []string{"zsh"}}
 
 	var steps []TaskCreateProgressStep
 	reporter := NewMockTaskCreateProgressReporter(t)
@@ -291,6 +297,8 @@ func TestTaskServiceCreateTask_BootstrapsWorkspaceWhenRepoSetupIsDisabled(t *tes
 		EnableWorkspaceSetup: false,
 		ProviderConfig:       svc.providerConfigMock,
 	})
+	svc.service.launcher.providerSessionWait = 0
+	svc.service.launcher.providerSessionLateWait = 0
 
 	task, err := svc.service.CreateTaskWithProgress(t.Context(), CreateTaskInput{
 		Cwd:    "/tmp/repo",
@@ -489,4 +497,36 @@ func TestTaskServiceCreateTaskWithProgress_AllowsNilReporter(t *testing.T) {
 
 	require.NoError(t, err)
 	require.NotNil(t, task)
+}
+
+func TestTaskServiceCreateTask_UsesTheRepositorysBaseBranchAndWorktreeName(t *testing.T) {
+	svc := newTestTaskService(t)
+	svc.providerRepo.suggestedName = "billing retry flow"
+	svc.workspace.repoSettings = RepoSettings{BaseBranch: "develop", WorktreeName: "{repo}-{slug}"}
+
+	task, err := svc.service.CreateTaskWithProgress(t.Context(), CreateTaskInput{
+		Cwd:    "/tmp/repo",
+		Prompt: "add billing retry flow",
+	}, nil)
+
+	require.NoError(t, err)
+	require.Equal(t, "/tmp/repo-billing-retry-flow", task.WorktreePath)
+	require.Equal(t, "repo_billing-retry-flow", task.TmuxSession, "session names keep their own scheme")
+	require.Equal(t, "develop", svc.repoClient.resolvedBaseBranch)
+	require.Equal(t, "origin/develop", svc.repoClient.createdFromRef)
+}
+
+func TestTaskServiceCreateTask_WithoutSettingsBranchesFromTheMainCheckout(t *testing.T) {
+	svc := newTestTaskService(t)
+	svc.providerRepo.suggestedName = "billing retry flow"
+
+	task, err := svc.service.CreateTaskWithProgress(t.Context(), CreateTaskInput{
+		Cwd:    "/tmp/repo",
+		Prompt: "add billing retry flow",
+	}, nil)
+
+	require.NoError(t, err)
+	require.Equal(t, "/tmp/repo_billing-retry-flow", task.WorktreePath)
+	require.Empty(t, svc.repoClient.resolvedBaseBranch)
+	require.Empty(t, svc.repoClient.createdFromRef)
 }

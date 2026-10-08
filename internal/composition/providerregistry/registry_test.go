@@ -20,6 +20,7 @@ func TestProviderModulesMatchSupportedProviders(t *testing.T) {
 		moduleProviders = append(moduleProviders, module.provider)
 		require.NotNil(t, module.client, "provider %s must contribute a client constructor", module.provider)
 		require.NotNil(t, module.routes, "provider %s must contribute hook routes", module.provider)
+		require.NotEmpty(t, module.configEnv, "provider %s must declare its configuration variables", module.provider)
 	}
 
 	require.ElementsMatch(t, core.SupportedProviders(), moduleProviders)
@@ -48,4 +49,15 @@ func TestLoadOrCreateHookSecret_RegeneratesEmptyFile(t *testing.T) {
 	secret, err := LoadOrCreateHookSecret(path)
 	require.NoError(t, err)
 	require.Len(t, secret, 64)
+}
+
+func TestCaptureProviderEnv_RecordsEveryProviderVariableIncludingUnsetOnes(t *testing.T) {
+	window := map[string]string{"CLAUDE_CONFIG_DIR": "/home/me/.claude-work", "PATH": "/usr/bin"}
+
+	env := CaptureProviderEnv(func(name string) (string, bool) {
+		value, ok := window[name]
+		return value, ok
+	})
+
+	require.Equal(t, core.ProviderEnv{"CLAUDE_CONFIG_DIR": "/home/me/.claude-work", "CODEX_HOME": ""}, env)
 }

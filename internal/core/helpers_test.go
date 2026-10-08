@@ -41,10 +41,12 @@ type testTaskServiceHarness struct {
 }
 
 type providerConfigState struct {
-	getErr     error
-	saveErr    error
-	setup      *ProviderSetup
-	savedSetup *ProviderSetup
+	getErr              error
+	saveErr             error
+	setup               *ProviderSetup
+	savedSetup          *ProviderSetup
+	launchDefaults      map[Provider]LaunchOptions
+	savedLaunchDefaults map[Provider]LaunchOptions
 }
 
 type taskRepositoryState struct {
@@ -59,7 +61,9 @@ type taskRepositoryState struct {
 	listTasks              []*Task
 	createdTask            *Task
 	updatedTask            *Task
+	updatedTasks           []*Task
 	deletedTaskID          string
+	deletedTaskIDs         []string
 	savedResumeMetadata    *TaskResumeMetadata
 	savedProviderSessions  []TaskProviderSession
 	latestResumeByTask     map[string]TaskResumeMetadata
@@ -82,19 +86,33 @@ type repoClientState struct {
 	createdTask     *Task
 	removedTask     *Task
 	createdPRNumber int
+	// outsideWorktree makes the creation cwd look like a plain folder.
+	outsideWorktree    bool
+	createdFromRef     string
+	resolvedBaseBranch string
 }
 
 type sessionClientState struct {
-	mu                  sync.Mutex
-	healthErr           error
-	startErr            error
-	deleteErr           error
-	inspectErr          error
-	batchInspectErr     error
-	events              *[]string
-	startedTask         *Task
-	deletedTask         *Task
-	startedLaunch       TaskSessionLaunchSpec
+	mu              sync.Mutex
+	healthErr       error
+	startErr        error
+	deleteErr       error
+	inspectErr      error
+	batchInspectErr error
+	events          *[]string
+	startedTask     *Task
+	deletedTask     *Task
+	startedLaunch   TaskSessionLaunchSpec
+	prefilledLaunch TaskSessionLaunchSpec
+	prefillErr      error
+	// onStart runs when a session is started, for example to record the
+	// provider session its hooks would report.
+	onStart func(*Task)
+	// submittedInputs are the texts submitted into the task window; onSubmit
+	// runs for each, for example to make the provider leave the pane.
+	submittedInputs     []string
+	submitErr           error
+	onSubmit            func(*Task, string)
 	inspectState        TaskSessionRuntimeState
 	batchInspectCalls   int
 	batchInspectActive  int
@@ -106,6 +124,7 @@ type sessionClientState struct {
 type providerClientState struct {
 	mu                      sync.Mutex
 	commandName             string
+	exitCommand             string
 	healthErr               error
 	suggestErr              error
 	suggestedName           string
@@ -118,6 +137,11 @@ type providerClientState struct {
 	bootstrapRequest        *Task
 	launchErr               error
 	launchRequest           TaskSessionLaunchSpec
+	launchOptions           ProviderLaunchOptions
+	handoffPath             string
+	handoffErr              error
+	handoffSession          *TaskProviderSession
+	handoffFocus            string
 	reconnectLaunchErr      error
 	reconnectLaunch         TaskSessionLaunchSpec
 	hookErr                 error
@@ -139,7 +163,17 @@ type providerClientState struct {
 	errByTranscript         map[string]error
 	usageByTranscript       map[string]*SessionTokenUsage
 	tokenUsageCalls         []providerTokenUsageCall
-	builtLaunchSpecs        []TaskSessionLaunchSpec
+	// sessionTitles is the title the user gave each transcript's session.
+	sessionTitles     map[string]string
+	sessionTitleReads []string
+	builtLaunchSpecs  []TaskSessionLaunchSpec
+	folderSessions    []ProviderSessionSummary
+	// The provider env each call received, for asserting a task's
+	// configuration reaches its provider.
+	suggestEnv    ProviderEnv
+	sessionEnvEnv ProviderEnv
+	listEnv       ProviderEnv
+	listLimit     int
 }
 
 func (s *providerClientState) mockCommandName() string {
@@ -182,6 +216,7 @@ type workspaceManagerState struct {
 	bootstrapCalledBeforeSession bool
 	preparedDisplayName          string
 	preparedBranchName           string
+	repoSettings                 RepoSettings
 }
 
 func newTestTaskService(t *testing.T) *testTaskServiceHarness {
@@ -251,6 +286,12 @@ func newTestTaskService(t *testing.T) *testTaskServiceHarness {
 	h.creation = h.service.creation
 	h.launcher = h.service.launcher
 	h.observation = h.service.observation
+	// Prompts are typed on the ready marker alone unless a test opts into the
+	// session-start wait.
+	h.launcher.providerSessionWait = 0
+	h.launcher.providerSessionLateWait = 0
+	h.service.sessionExitWait = 50 * time.Millisecond
+	h.service.sessionExitPoll = time.Millisecond
 
 	return h
 }
@@ -267,6 +308,26 @@ func configureProviderConfigMock(store *MockProviderConfigStore, state *provider
 			setup := *state.setup
 			setup.Configured = append([]Provider(nil), state.setup.Configured...)
 			return &setup, nil
+		},
+	).Maybe()
+	store.EXPECT().GetLaunchDefaults(mock.Anything).RunAndReturn(
+		func(context.Context) (map[Provider]LaunchOptions, error) {
+			if state.getErr != nil {
+				return nil, state.getErr
+			}
+			return state.launchDefaults, nil
+		},
+	).Maybe()
+	store.EXPECT().SaveLaunchDefaults(mock.Anything, mock.Anything, mock.Anything).RunAndReturn(
+		func(_ context.Context, provider Provider, options LaunchOptions) error {
+			if state.saveErr != nil {
+				return state.saveErr
+			}
+			if state.savedLaunchDefaults == nil {
+				state.savedLaunchDefaults = make(map[Provider]LaunchOptions)
+			}
+			state.savedLaunchDefaults[provider] = options
+			return nil
 		},
 	).Maybe()
 	store.EXPECT().SaveProviderSetup(mock.Anything, mock.Anything).RunAndReturn(
@@ -287,6 +348,14 @@ func configureGitWorktreeMock(client *MockGitWorktreeClient, state *repoClientSt
 			return state.healthErr
 		},
 	).Maybe()
+	client.EXPECT().WorktreeRootOf(mock.Anything).RunAndReturn(
+		func(dir string) string {
+			if state.outsideWorktree {
+				return ""
+			}
+			return dir
+		},
+	).Maybe()
 	client.EXPECT().DetectRepo(mock.Anything, mock.Anything).RunAndReturn(
 		func(context.Context, string) (RepoContext, error) {
 			if state.detectRepoErr != nil {
@@ -303,10 +372,17 @@ func configureGitWorktreeMock(client *MockGitWorktreeClient, state *repoClientSt
 			return state.branchInUse[branchName], nil
 		},
 	).Maybe()
-	client.EXPECT().CreateTaskWorkspace(mock.Anything, mock.Anything).RunAndReturn(
-		func(_ context.Context, task *Task) error {
+	client.EXPECT().CreateTaskWorkspace(mock.Anything, mock.Anything, mock.Anything).RunAndReturn(
+		func(_ context.Context, task *Task, baseRef string) error {
 			state.createdTask = cloneTask(task)
+			state.createdFromRef = baseRef
 			return state.createErr
+		},
+	).Maybe()
+	client.EXPECT().ResolveBaseRef(mock.Anything, mock.Anything, mock.Anything).RunAndReturn(
+		func(_ context.Context, _ string, baseBranch string) (string, error) {
+			state.resolvedBaseBranch = baseBranch
+			return "origin/" + baseBranch, nil
 		},
 	).Maybe()
 	client.EXPECT().CreateTaskWorkspaceFromBranch(mock.Anything, mock.Anything).RunAndReturn(
@@ -378,7 +454,31 @@ func configureTmuxSessionMock(client *MockTmuxSessionClient, state *sessionClien
 			}
 			state.startedTask = cloneTask(task)
 			state.startedLaunch = launch
+			if state.onStart != nil {
+				state.onStart(task)
+			}
 			return state.startErr
+		},
+	).Maybe()
+	client.EXPECT().PrefillTaskSession(mock.Anything, mock.Anything, mock.Anything).RunAndReturn(
+		func(_ context.Context, _ *Task, launch TaskSessionLaunchSpec) error {
+			if state.events != nil {
+				*state.events = append(*state.events, "prefill_task_session")
+			}
+			state.prefilledLaunch = launch
+			return state.prefillErr
+		},
+	).Maybe()
+	client.EXPECT().SubmitTaskInput(mock.Anything, mock.Anything, mock.Anything).RunAndReturn(
+		func(_ context.Context, task *Task, text string) error {
+			if state.events != nil {
+				*state.events = append(*state.events, "submit_task_input")
+			}
+			state.submittedInputs = append(state.submittedInputs, text)
+			if state.onSubmit != nil {
+				state.onSubmit(task, text)
+			}
+			return state.submitErr
 		},
 	).Maybe()
 	client.EXPECT().AttachTaskSession(mock.Anything, mock.Anything).Return(nil).Maybe()
@@ -441,8 +541,9 @@ func configureProviderClientMock(client *MockProviderClient, state *providerClie
 			return state.healthErr
 		},
 	).Maybe()
-	client.EXPECT().SuggestTaskName(mock.Anything, mock.Anything).RunAndReturn(
-		func(context.Context, string) (TaskSuggestion, error) {
+	client.EXPECT().SuggestTaskName(mock.Anything, mock.Anything, mock.Anything).RunAndReturn(
+		func(_ context.Context, _ string, env ProviderEnv) (TaskSuggestion, error) {
+			state.suggestEnv = env
 			if state.suggestErr != nil {
 				return TaskSuggestion{}, state.suggestErr
 			}
@@ -452,8 +553,9 @@ func configureProviderClientMock(client *MockProviderClient, state *providerClie
 			return TaskSuggestion{Name: state.suggestedName, BranchType: "feat"}, nil
 		},
 	).Maybe()
-	client.EXPECT().EnsureTaskSessionEnvironment(mock.Anything).RunAndReturn(
-		func(context.Context) error {
+	client.EXPECT().EnsureTaskSessionEnvironment(mock.Anything, mock.Anything).RunAndReturn(
+		func(_ context.Context, env ProviderEnv) error {
+			state.sessionEnvEnv = env
 			if state.events != nil {
 				*state.events = append(*state.events, "ensure_task_session_environment")
 			}
@@ -504,6 +606,29 @@ func configureProviderClientMock(client *MockProviderClient, state *providerClie
 		},
 	).Maybe()
 	client.EXPECT().TaskSessionCommandName().RunAndReturn(state.mockCommandName).Maybe()
+	client.EXPECT().ExitCommand().RunAndReturn(func() string {
+		if state.exitCommand != "" {
+			return state.exitCommand
+		}
+		return "/exit"
+	}).Maybe()
+	client.EXPECT().LaunchOptions().RunAndReturn(func() ProviderLaunchOptions {
+		return state.launchOptions
+	}).Maybe()
+	client.EXPECT().WriteSessionHandoff(mock.Anything, mock.Anything, mock.Anything, mock.Anything).RunAndReturn(
+		func(_ context.Context, _ *Task, session TaskProviderSession, focus string) (string, error) {
+			if state.events != nil {
+				*state.events = append(*state.events, "write_session_handoff")
+			}
+			copied := session
+			state.handoffSession = &copied
+			state.handoffFocus = focus
+			if state.handoffErr != nil {
+				return "", state.handoffErr
+			}
+			return state.handoffPath, nil
+		},
+	).Maybe()
 	client.EXPECT().HookEventToTaskStatus(mock.Anything).RunAndReturn(
 		func(input HookEventInput) (*TaskStatusUpdate, error) {
 			state.hookInput = input
@@ -579,6 +704,25 @@ func configureProviderClientMock(client *MockProviderClient, state *providerClie
 			return append([]TaskActivityEvent(nil), events...), nil
 		},
 	).Maybe()
+	client.EXPECT().ListFolderSessions(mock.Anything, mock.Anything, mock.Anything, mock.Anything).RunAndReturn(
+		func(_ context.Context, folder string, limit int, env ProviderEnv) ([]ProviderSessionSummary, error) {
+			state.listEnv = env
+			state.listLimit = limit
+			var sessions []ProviderSessionSummary
+			for _, session := range state.folderSessions {
+				if session.Cwd == folder {
+					sessions = append(sessions, session)
+				}
+			}
+			return sessions, nil
+		},
+	).Maybe()
+	client.EXPECT().ReadSessionTitle(mock.Anything, mock.Anything).RunAndReturn(
+		func(_ context.Context, transcriptPath string) (string, error) {
+			state.sessionTitleReads = append(state.sessionTitleReads, transcriptPath)
+			return state.sessionTitles[transcriptPath], nil
+		},
+	).Maybe()
 	client.EXPECT().ReadSessionTokenUsage(mock.Anything, mock.Anything).RunAndReturn(
 		func(_ context.Context, transcriptPath string) (*SessionTokenUsage, error) {
 			state.tokenUsageCalls = append(state.tokenUsageCalls, providerTokenUsageCall{
@@ -616,6 +760,11 @@ func configureWorkspaceManagerMock(
 			}
 			state.setupCalledBeforeSession = session.startedTask == nil
 			return state.setupErr
+		},
+	).Maybe()
+	workspace.EXPECT().LoadRepoSettings(mock.Anything).RunAndReturn(
+		func(string) (RepoSettings, error) {
+			return state.repoSettings, nil
 		},
 	).Maybe()
 	workspace.EXPECT().BootstrapTaskWorkspace(mock.Anything, mock.Anything, mock.Anything).RunAndReturn(
@@ -656,6 +805,7 @@ func configureTaskRepositoryMock(repo *MockTaskRepository, state *taskRepository
 				return state.updateErr
 			}
 			state.updatedTask = cloneTask(task)
+			state.updatedTasks = append(state.updatedTasks, cloneTask(task))
 			return nil
 		},
 	).Maybe()
@@ -665,6 +815,7 @@ func configureTaskRepositoryMock(repo *MockTaskRepository, state *taskRepository
 				return state.deleteErr
 			}
 			state.deletedTaskID = taskID
+			state.deletedTaskIDs = append(state.deletedTaskIDs, taskID)
 			filtered := state.listTasks[:0]
 			for _, task := range state.listTasks {
 				if task == nil || task.ID == taskID {
@@ -771,6 +922,8 @@ func configureTaskRepositoryMock(repo *MockTaskRepository, state *taskRepository
 	).Maybe()
 	repo.EXPECT().ListTaskProviderSessions(mock.Anything, mock.Anything).RunAndReturn(
 		func(_ context.Context, taskID string) ([]TaskProviderSession, error) {
+			state.mu.Lock()
+			defer state.mu.Unlock()
 			return append([]TaskProviderSession(nil), state.providerSessionsByTask[taskID]...), nil
 		},
 	).Maybe()

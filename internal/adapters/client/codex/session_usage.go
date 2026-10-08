@@ -23,6 +23,12 @@ func (r *repository) ReadSessionTokenUsage(
 	return snapshot.usage, err
 }
 
+// ReadSessionTitle reports no title: Rig reads none the user gives a Codex
+// session.
+func (r *repository) ReadSessionTitle(context.Context, string) (string, error) {
+	return "", nil
+}
+
 type codexTranscriptEnvelope struct {
 	Timestamp time.Time       `json:"timestamp"`
 	Type      string          `json:"type"`
@@ -40,6 +46,11 @@ type codexEventPayload struct {
 			ReasoningOutputTokens    int `json:"reasoning_output_tokens"`
 			TotalTokens              int `json:"total_tokens"`
 		} `json:"total_token_usage"`
+		// LastTokenUsage is the latest request alone; its input includes the
+		// cached part, so it is the size of the context sent.
+		LastTokenUsage struct {
+			InputTokens int `json:"input_tokens"`
+		} `json:"last_token_usage"`
 	} `json:"info"`
 }
 

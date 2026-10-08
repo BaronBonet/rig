@@ -1,6 +1,7 @@
 package sqlite
 
 import (
+	"encoding/json"
 	"time"
 
 	"github.com/BaronBonet/rig/internal/adapters/repository/sqlite/generated"
@@ -24,6 +25,14 @@ func createTaskParams(task *core.Task) generated.CreateTaskParams {
 		CreationError:  task.CreationError,
 		CreatedAt:      formatTime(task.CreatedAt),
 		UpdatedAt:      formatTime(task.UpdatedAt),
+		WorkspaceKind:  string(normalizeWorkspaceKind(task.WorkspaceKind)),
+		ProviderEnv:    encodeProviderEnv(task.ProviderEnv),
+		Model:          task.Launch().Model,
+		Effort:         task.Launch().Effort,
+		ParentID:       task.ParentID,
+		TmuxWindow:     task.TmuxWindow,
+		ShelvedAt:      formatTime(task.ShelvedAt),
+		SessionTitle:   task.SessionTitle,
 	}
 }
 
@@ -43,6 +52,14 @@ func updateTaskParams(task *core.Task) generated.UpdateTaskParams {
 		CreationError:  task.CreationError,
 		CreatedAt:      formatTime(task.CreatedAt),
 		UpdatedAt:      formatTime(task.UpdatedAt),
+		WorkspaceKind:  string(normalizeWorkspaceKind(task.WorkspaceKind)),
+		ProviderEnv:    encodeProviderEnv(task.ProviderEnv),
+		Model:          task.Launch().Model,
+		Effort:         task.Launch().Effort,
+		ParentID:       task.ParentID,
+		TmuxWindow:     task.TmuxWindow,
+		ShelvedAt:      formatTime(task.ShelvedAt),
+		SessionTitle:   task.SessionTitle,
 		ID:             task.ID,
 	}
 }
@@ -97,6 +114,32 @@ func upsertTaskProviderSessionParams(session core.TaskProviderSession) generated
 	}
 }
 
+func upsertTaskWorktreeParams(record core.TaskWorktreeRecord) generated.UpsertTaskWorktreeParams {
+	return generated.UpsertTaskWorktreeParams{
+		TaskID:       record.TaskID,
+		WorktreePath: record.WorktreePath,
+		RepoName:     record.RepoName,
+		Branch:       record.Branch,
+		LastEditAt:   formatTime(record.LastEditAt),
+		EditCount:    int64(record.EditCount),
+	}
+}
+
+func taskWorktreeRecordsFromRows(rows []generated.TaskWorktree) []core.TaskWorktreeRecord {
+	records := make([]core.TaskWorktreeRecord, 0, len(rows))
+	for _, row := range rows {
+		records = append(records, core.TaskWorktreeRecord{
+			LastEditAt:   parseTime(row.LastEditAt),
+			TaskID:       row.TaskID,
+			WorktreePath: row.WorktreePath,
+			RepoName:     row.RepoName,
+			Branch:       row.Branch,
+			EditCount:    int(row.EditCount),
+		})
+	}
+	return records
+}
+
 func formatTime(ts time.Time) string {
 	if ts.IsZero() {
 		return ""
@@ -135,7 +178,44 @@ func taskFromRow(row generated.ListTasksRow) *core.Task {
 		CreationError:  row.CreationError,
 		CreatedAt:      parseTime(row.CreatedAt),
 		UpdatedAt:      parseTime(row.UpdatedAt),
+		WorkspaceKind:  normalizeWorkspaceKind(core.WorkspaceKind(row.WorkspaceKind)),
+		ProviderEnv:    decodeProviderEnv(row.ProviderEnv),
+		Model:          row.Model,
+		Effort:         row.Effort,
+		ParentID:       row.ParentID,
+		TmuxWindow:     row.TmuxWindow,
+		ShelvedAt:      parseTime(row.ShelvedAt),
+		SessionTitle:   row.SessionTitle,
 	}
+}
+
+// encodeProviderEnv stores a task's provider configuration as a JSON object;
+// "" records a task created before rig captured it, which decodes to nil and
+// so defers to the daemon's environment.
+func encodeProviderEnv(env core.ProviderEnv) string {
+	if env == nil {
+		return ""
+	}
+	encoded, err := json.Marshal(env)
+	if err != nil {
+		return ""
+	}
+	return string(encoded)
+}
+
+func decodeProviderEnv(raw string) core.ProviderEnv {
+	var env core.ProviderEnv
+	if json.Unmarshal([]byte(raw), &env) != nil {
+		return nil
+	}
+	return env
+}
+
+func normalizeWorkspaceKind(kind core.WorkspaceKind) core.WorkspaceKind {
+	if kind == core.WorkspaceKindFolder {
+		return core.WorkspaceKindFolder
+	}
+	return core.WorkspaceKindWorktree
 }
 
 func normalizeTaskCreationStatus(status core.TaskCreationStatus) core.TaskCreationStatus {

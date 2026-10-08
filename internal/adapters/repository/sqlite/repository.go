@@ -139,6 +139,14 @@ func (r *healthCheckRepository) ListTaskProviderSessions(context.Context, string
 	return nil, errHealthCheckRepositoryOnly
 }
 
+func (r *healthCheckRepository) UpsertTaskWorktreeRecord(context.Context, core.TaskWorktreeRecord) error {
+	return errHealthCheckRepositoryOnly
+}
+
+func (r *healthCheckRepository) ListTaskWorktreeRecords(context.Context, string) ([]core.TaskWorktreeRecord, error) {
+	return nil, errHealthCheckRepositoryOnly
+}
+
 func (r *healthCheckRepository) SubscribeTaskStatus(context.Context, string) (<-chan core.TaskStatusUpdate, error) {
 	return nil, errHealthCheckRepositoryOnly
 }
@@ -229,6 +237,30 @@ func (r *repository) ListTaskProviderSessions(ctx context.Context, taskID string
 	}
 
 	return taskProviderSessionsFromRows(rows), nil
+}
+
+func (r *repository) UpsertTaskWorktreeRecord(ctx context.Context, record core.TaskWorktreeRecord) error {
+	record.TaskID = strings.TrimSpace(record.TaskID)
+	record.WorktreePath = strings.TrimSpace(record.WorktreePath)
+	if record.TaskID == "" || record.WorktreePath == "" {
+		return fmt.Errorf("task worktree record task ID and worktree path are required")
+	}
+
+	return r.queries.UpsertTaskWorktree(ctx, upsertTaskWorktreeParams(record))
+}
+
+func (r *repository) ListTaskWorktreeRecords(ctx context.Context, taskID string) ([]core.TaskWorktreeRecord, error) {
+	taskID = strings.TrimSpace(taskID)
+	if taskID == "" {
+		return nil, nil
+	}
+
+	rows, err := r.queries.ListTaskWorktrees(ctx, taskID)
+	if err != nil {
+		return nil, err
+	}
+
+	return taskWorktreeRecordsFromRows(rows), nil
 }
 
 func (r *repository) RecordTaskActivity(ctx context.Context, event core.TaskActivityEvent) error {

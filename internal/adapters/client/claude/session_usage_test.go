@@ -1,6 +1,7 @@
 package claude
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -35,12 +36,52 @@ func TestReadSessionTokenUsage_SumsUsageAcrossAssistantMessages(t *testing.T) {
 
 	require.NoError(t, err)
 	require.Equal(t, &core.SessionTokenUsage{
+		ContextTokens:            735,
 		InputTokens:              130,
 		OutputTokens:             100,
 		CachedInputTokens:        1200,
 		CacheCreationInputTokens: 15,
 		TotalTokens:              1445,
 	}, usage)
+}
+
+func TestReadSessionTokenUsage_ContextIsTheLatestMainConversationRequest(t *testing.T) {
+	repo, _ := newTestRepository(t, subprocess.NewMockRunner(t))
+	transcript := writeTranscript(t,
+		`{"type":"assistant","message":{"id":"msg_1","usage":{"input_tokens":2,"output_tokens":40,`+
+			`"cache_creation_input_tokens":8000,"cache_read_input_tokens":420000}}}`,
+		// A sidechain request runs in its own, smaller context.
+		`{"type":"assistant","isSidechain":true,"message":{"id":"msg_2","usage":{"input_tokens":3,`+
+			`"output_tokens":10,"cache_creation_input_tokens":0,"cache_read_input_tokens":15000}}}`,
+	)
+
+	usage, err := repo.ReadSessionTokenUsage(t.Context(), transcript)
+
+	require.NoError(t, err)
+	require.Equal(t, 428002, usage.ContextTokens)
+	require.Equal(t, 50, usage.OutputTokens)
+}
+
+func TestReadSessionTokenUsage_CountsTheMainConversationsCompactions(t *testing.T) {
+	repo, _ := newTestRepository(t, subprocess.NewMockRunner(t))
+	boundary := `{"type":"system","subtype":"compact_boundary","uuid":"%s","isSidechain":%t,` +
+		`"content":"Conversation compacted","compactMetadata":{"trigger":"manual","preTokens":362835}}`
+	transcript := writeTranscript(t,
+		`{"type":"assistant","message":{"id":"msg_1","usage":{"input_tokens":2,"output_tokens":40,`+
+			`"cache_creation_input_tokens":0,"cache_read_input_tokens":360000}}}`,
+		fmt.Sprintf(boundary, "b1", false),
+		fmt.Sprintf(boundary, "b1", false), // the same boundary written twice
+		fmt.Sprintf(boundary, "b2", true),  // a subagent's own compaction
+		`{"type":"assistant","message":{"id":"msg_2","usage":{"input_tokens":2,"output_tokens":40,`+
+			`"cache_creation_input_tokens":0,"cache_read_input_tokens":70000}}}`,
+		fmt.Sprintf(boundary, "b3", false),
+	)
+
+	usage, err := repo.ReadSessionTokenUsage(t.Context(), transcript)
+
+	require.NoError(t, err)
+	require.Equal(t, 2, usage.Compactions)
+	require.Equal(t, 70002, usage.ContextTokens)
 }
 
 func TestReadSessionTokenUsage_CountsRepeatedMessageIDsOnce(t *testing.T) {

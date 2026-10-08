@@ -14,6 +14,10 @@ const (
 	taskOperationReconnect     taskOperation = "reconnect"
 	taskOperationRetryCreation taskOperation = "retry creation"
 	taskOperationSwitch        taskOperation = "switch provider"
+	taskOperationNewSession    taskOperation = "new session"
+	taskOperationShelve        taskOperation = "shelve"
+	taskOperationUnshelve      taskOperation = "unshelve"
+	taskOperationRename        taskOperation = "rename"
 )
 
 func (o taskOperation) progressLabel() string {
@@ -26,6 +30,14 @@ func (o taskOperation) progressLabel() string {
 		return "retrying task creation"
 	case taskOperationSwitch:
 		return "switching providers"
+	case taskOperationNewSession:
+		return "starting a new session"
+	case taskOperationShelve:
+		return "being shelved"
+	case taskOperationUnshelve:
+		return "being put back on the list"
+	case taskOperationRename:
+		return "being renamed"
 	default:
 		return "running another operation"
 	}

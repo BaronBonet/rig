@@ -9,6 +9,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/BaronBonet/rig/internal/adapters/client/providerkit"
 	"github.com/BaronBonet/rig/internal/core"
 
 	"github.com/stretchr/testify/mock"
@@ -40,6 +41,31 @@ func TestNewHookHTTPHandler_DecodesCodexHookAndDelegatesToTaskService(t *testing
 		bytes.NewBufferString(payload),
 	)
 	req.Header.Set("X-Codex-Hook-Event", "SessionStart")
+	req.Header.Set(hookSecretHeader, "secret-token")
+
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+
+	require.Equal(t, http.StatusAccepted, rec.Code)
+}
+
+func TestNewHookHTTPHandler_TakesTaskIDFromForwarderHeader(t *testing.T) {
+	now := time.Date(2026, time.April, 20, 11, 0, 0, 0, time.UTC)
+	payload := `{"cwd":"/tmp/shared","hook_event_name":"Stop","session_id":"sess-1"}`
+	service := core.NewMockHookEventHandler(t)
+	service.EXPECT().HandleHookEvent(mock.Anything, mock.MatchedBy(func(input core.HookEventInput) bool {
+		return input.TaskID == "task-123"
+	})).Return(nil).Once()
+	handler := NewHookHTTPHandler(service, func() time.Time { return now }, "secret-token")
+
+	req := httptest.NewRequestWithContext(
+		context.Background(),
+		http.MethodPost,
+		"/hook",
+		bytes.NewBufferString(payload),
+	)
+	req.Header.Set("X-Codex-Hook-Event", "Stop")
+	req.Header.Set(providerkit.TaskIDHeader, "task-123")
 	req.Header.Set(hookSecretHeader, "secret-token")
 
 	rec := httptest.NewRecorder()
@@ -112,6 +138,21 @@ func TestRepositoryHookEventToTaskStatus_MapsCodexEvent(t *testing.T) {
 		RawEventName: "PostToolUse",
 		ObservedAt:   time.Date(2026, time.April, 20, 11, 1, 0, 0, time.UTC),
 	}, update)
+}
+
+func TestRepositoryHookEventToTaskStatus_AResumedSessionWaitsForTheUser(t *testing.T) {
+	repo := New(nil, Config{Binary: "codex"}, HookForwardingConfig{})
+
+	update, err := repo.HookEventToTaskStatus(core.HookEventInput{
+		TaskID:      "task-123",
+		OccurredAt:  time.Date(2026, time.April, 20, 11, 2, 0, 0, time.UTC),
+		EventName:   "SessionStart",
+		StartSource: "resume",
+		Provider:    core.ProviderCodex,
+	})
+
+	require.NoError(t, err)
+	require.Equal(t, core.TaskStatusPhaseWaitingForInput, update.Phase)
 }
 
 func TestRepositoryHookEventToTaskStatus_MapsPermissionRequestToWaitingForInput(t *testing.T) {

@@ -8,12 +8,24 @@ import (
 	"path/filepath"
 	"strings"
 	"text/template"
+
+	"github.com/BaronBonet/rig/internal/core"
 )
 
 //go:embed forward-to-rig.sh.tmpl
 var forwarderScriptTemplateText string
 
-var forwarderScriptTemplate = template.Must(template.New("forward-to-rig.sh").Parse(forwarderScriptTemplateText))
+// ForwarderScriptName is the file name of every provider's forwarder script.
+// A hook command invoking a script of this name is Rig's, whichever data dir
+// the script lives in.
+const ForwarderScriptName = "forward-to-rig.sh"
+
+var forwarderScriptTemplate = template.Must(template.New(ForwarderScriptName).Parse(forwarderScriptTemplateText))
+
+// TaskIDHeader carries the Task ID from the hook's environment
+// (core.TaskIDEnvVar) to the collector. It is empty for provider sessions Rig
+// did not launch.
+const TaskIDHeader = "X-Rig-Task-Id"
 
 // Forwarder describes one provider's hook forwarding: the script that ships
 // hook payloads to Rig's collector, and the HTTP header the collector reads
@@ -44,12 +56,16 @@ func (f Forwarder) RenderScript() ([]byte, error) {
 		EnvVarPrefix       string
 		TmpPrefix          string
 		EventHeader        string
+		TaskIDHeader       string
+		TaskIDEnvVar       string
 		CollectorURLQuoted string
 		HookSecretQuoted   string
 	}{
 		EnvVarPrefix:       strings.ToUpper(label),
 		TmpPrefix:          label,
 		EventHeader:        f.EventHeader,
+		TaskIDHeader:       TaskIDHeader,
+		TaskIDEnvVar:       core.TaskIDEnvVar,
 		CollectorURLQuoted: ShellQuote(f.CollectorURL),
 		HookSecretQuoted:   ShellQuote(f.HookSecret),
 	}); err != nil {

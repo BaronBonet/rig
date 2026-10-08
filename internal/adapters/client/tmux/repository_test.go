@@ -14,7 +14,7 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func TestRepositoryStartTaskSession_LaunchesCommandAndPrefillsInputWithoutSubmitting(t *testing.T) {
+func TestRepositoryStartTaskSession_LaunchesTheCommandWithoutTypingThePrompt(t *testing.T) {
 	runner := subprocess.NewMockRunner(t)
 	repo := New(runner).(*repository)
 	repo.now = func() time.Time { return time.Unix(0, 0) }
@@ -34,7 +34,39 @@ func TestRepositoryStartTaskSession_LaunchesCommandAndPrefillsInputWithoutSubmit
 		expectTmuxRun(runner, subprocess.Result{}, nil,
 			"send-keys", "-t", "=repo_task:task", "codex", "C-m",
 		),
-		expectTmuxRun(runner, subprocess.Result{Stdout: "›"}, nil,
+	)
+
+	// No capture-pane or paste-buffer expectation: the prompt is typed by
+	// PrefillTaskSession, once the provider is known to be ready.
+	err := repo.StartTaskSession(context.Background(), &core.Task{
+		TmuxSession:  "repo_task",
+		WorktreePath: "/tmp/repo-task",
+	}, core.TaskSessionLaunchSpec{
+		Command:      []string{"codex"},
+		ReadyMarker:  "›",
+		PrefillInput: []string{"fix billing retry flow"},
+	})
+
+	require.NoError(t, err)
+	require.Equal(t, []time.Duration{promptSubmitDelay}, slept)
+}
+
+func TestRepositoryPrefillTaskSession_TypesThePromptOnTheProvidersPromptNotTheShellsEcho(t *testing.T) {
+	runner := subprocess.NewMockRunner(t)
+	repo := New(runner).(*repository)
+	repo.now = func() time.Time { return time.Unix(0, 0) }
+	var slept []time.Duration
+	repo.sleep = func(d time.Duration) { slept = append(slept, d) }
+
+	// A shell prompt that uses the provider's marker shows it next to the
+	// launch command before the provider has started.
+	shellEcho := "~/repo-task via v2\n❯ claude --model opus\n"
+	providerPrompt := shellEcho + "\n Claude Code v2.1\n\n❯ Try \"how do I log an error?\"\n"
+	mock.InOrder(
+		expectTmuxRun(runner, subprocess.Result{Stdout: shellEcho}, nil,
+			"capture-pane", "-t", "=repo_task:task", "-p",
+		),
+		expectTmuxRun(runner, subprocess.Result{Stdout: providerPrompt}, nil,
 			"capture-pane", "-t", "=repo_task:task", "-p",
 		),
 		expectTmuxRunWithStdin(runner, subprocess.RunWithStdinOptions{
@@ -51,20 +83,21 @@ func TestRepositoryStartTaskSession_LaunchesCommandAndPrefillsInputWithoutSubmit
 		),
 	)
 
-	err := repo.StartTaskSession(context.Background(), &core.Task{
+	err := repo.PrefillTaskSession(context.Background(), &core.Task{
 		TmuxSession:  "repo_task",
 		WorktreePath: "/tmp/repo-task",
 	}, core.TaskSessionLaunchSpec{
-		Command:      []string{"codex"},
-		ReadyMarker:  "›",
+		Command:      []string{"claude", "--model", "opus"},
+		ReadyMarker:  "❯",
 		PrefillInput: []string{"fix billing retry flow"},
 	})
 
 	require.NoError(t, err)
-	require.Equal(t, []time.Duration{promptSubmitDelay, promptInputSettleDelay}, slept)
+	require.Equal(t, []time.Duration{500 * time.Millisecond, promptInputSettleDelay}, slept,
+		"one poll while only the shell's echo is up, then the settle delay")
 }
 
-func TestRepositoryStartTaskSession_PrefillsLargeInputThroughTmuxBuffer(t *testing.T) {
+func TestRepositoryPrefillTaskSession_PrefillsLargeInputThroughTmuxBuffer(t *testing.T) {
 	runner := subprocess.NewMockRunner(t)
 	repo := New(runner).(*repository)
 	repo.now = func() time.Time { return time.Unix(0, 0) }
@@ -73,18 +106,6 @@ func TestRepositoryStartTaskSession_PrefillsLargeInputThroughTmuxBuffer(t *testi
 	prompt := strings.Repeat("debug output\n", 5000)
 
 	mock.InOrder(
-		expectTmuxRun(runner, subprocess.Result{}, errors.New("no session"),
-			"has-session", "-t", "=repo_task",
-		),
-		expectTmuxRun(runner, subprocess.Result{}, nil,
-			"new-session", "-d", "-s", "repo_task", "-n", "task", "-c", "/tmp/repo-task",
-		),
-		expectTmuxRun(runner, subprocess.Result{}, nil,
-			"new-window", "-d", "-t", "=repo_task", "-n", "editor", "-c", "/tmp/repo-task",
-		),
-		expectTmuxRun(runner, subprocess.Result{}, nil,
-			"send-keys", "-t", "=repo_task:task", "codex", "C-m",
-		),
 		expectTmuxRun(runner, subprocess.Result{Stdout: "›"}, nil,
 			"capture-pane", "-t", "=repo_task:task", "-p",
 		),
@@ -102,7 +123,7 @@ func TestRepositoryStartTaskSession_PrefillsLargeInputThroughTmuxBuffer(t *testi
 		),
 	)
 
-	err := repo.StartTaskSession(context.Background(), &core.Task{
+	err := repo.PrefillTaskSession(context.Background(), &core.Task{
 		TmuxSession:  "repo_task",
 		WorktreePath: "/tmp/repo-task",
 	}, core.TaskSessionLaunchSpec{
@@ -112,6 +133,48 @@ func TestRepositoryStartTaskSession_PrefillsLargeInputThroughTmuxBuffer(t *testi
 	})
 
 	require.NoError(t, err)
+}
+
+func TestRepositoryPrefillTaskSession_TimesOutWhileOnlyTheShellEchoIsUp(t *testing.T) {
+	runner := subprocess.NewMockRunner(t)
+	repo := New(runner).(*repository)
+	clock := time.Unix(0, 0)
+	repo.now = func() time.Time { return clock }
+	repo.sleep = func(d time.Duration) { clock = clock.Add(31 * time.Second) }
+
+	expectTmuxRun(runner, subprocess.Result{Stdout: "❯ claude\n"}, nil,
+		"capture-pane", "-t", "=repo_task:task", "-p",
+	)
+
+	err := repo.PrefillTaskSession(context.Background(), &core.Task{
+		TmuxSession:  "repo_task",
+		WorktreePath: "/tmp/repo-task",
+	}, core.TaskSessionLaunchSpec{
+		Command:      []string{"claude"},
+		ReadyMarker:  "❯",
+		PrefillInput: []string{"fix billing retry flow"},
+	})
+
+	require.EqualError(t, err, "timed out waiting for ❯ prompt")
+}
+
+func TestPromptReady_SkipsTheShellsEchoOfTheLaunchCommand(t *testing.T) {
+	command := shellCommandText([]string{"env", "CLAUDE_CONFIG_DIR=/home/me/.claude-work", "claude", "--model", "opus"})
+
+	require.False(t, promptReady("❯ env CLAUDE_CONFIG_DIR=/home/me/.claude-work claude --model opus\n", "❯", command),
+		"the shell's echo of the command")
+	require.False(
+		t,
+		promptReady("❯ env CLAUDE_CONFIG_DIR=/home/me/.claude-work claude --model opus   ✔ 14:22\n", "❯", command),
+		"a right prompt after the echo",
+	)
+	require.False(t, promptReady("❯ env CLAUDE_CONFIG_DIR=/home/me/.cla\nude-work claude --model opus\n", "❯", command),
+		"an echo wrapped onto a second line")
+	require.False(t, promptReady("no marker here\n", "❯", command))
+	require.True(t, promptReady("❯ \n", "❯", command), "an empty input box")
+	require.True(t, promptReady("❯ Try \"how do I log an error?\"\n", "❯", command), "a placeholder in the input box")
+	require.True(t, promptReady("❯ claude\n\n❯ \n", "❯", command), "the input box below the echo")
+	require.True(t, promptReady("anything", "", command), "no marker to wait for")
 }
 
 func TestRepositoryStartTaskSession_LeavesShellIdleWhenLaunchCommandIsEmpty(t *testing.T) {
@@ -134,6 +197,67 @@ func TestRepositoryStartTaskSession_LeavesShellIdleWhenLaunchCommandIsEmpty(t *t
 	err := repo.StartTaskSession(context.Background(), &core.Task{
 		TmuxSession:  "repo_task",
 		WorktreePath: "/tmp/repo-task",
+	}, core.TaskSessionLaunchSpec{})
+
+	require.NoError(t, err)
+}
+
+func TestRepositoryStartTaskSession_ExportsTaskIDToTheSessionEnvironment(t *testing.T) {
+	runner := subprocess.NewMockRunner(t)
+	repo := New(runner).(*repository)
+	repo.sleep = func(time.Duration) {}
+
+	mock.InOrder(
+		expectTmuxRun(runner, subprocess.Result{}, errors.New("no session"),
+			"has-session", "-t", "=repo_task",
+		),
+		expectTmuxRun(runner, subprocess.Result{}, nil,
+			"new-session", "-d", "-s", "repo_task", "-n", "task", "-c", "/tmp/repo-task",
+			"-e", "RIG_TASK_ID=task-123",
+		),
+		expectTmuxRun(runner, subprocess.Result{}, nil,
+			"new-window", "-d", "-t", "=repo_task", "-n", "editor", "-c", "/tmp/repo-task",
+		),
+	)
+
+	err := repo.StartTaskSession(context.Background(), &core.Task{
+		ID:           "task-123",
+		TmuxSession:  "repo_task",
+		WorktreePath: "/tmp/repo-task",
+	}, core.TaskSessionLaunchSpec{})
+
+	require.NoError(t, err)
+}
+
+func TestRepositoryStartTaskSession_ExportsTheTaskProviderConfiguration(t *testing.T) {
+	runner := subprocess.NewMockRunner(t)
+	repo := New(runner).(*repository)
+	repo.sleep = func(time.Duration) {}
+
+	mock.InOrder(
+		expectTmuxRun(runner, subprocess.Result{}, errors.New("no session"),
+			"has-session", "-t", "=repo_task",
+		),
+		expectTmuxRun(runner, subprocess.Result{}, nil,
+			"new-session", "-d", "-s", "repo_task", "-n", "task", "-c", "/tmp/repo-task",
+			"-e", "RIG_TASK_ID=task-123",
+			"-e", "CLAUDE_CONFIG_DIR=/home/me/.claude-work",
+			"-e", "CODEX_HOME=/home/me/.codex-work",
+		),
+		expectTmuxRun(runner, subprocess.Result{}, nil,
+			"new-window", "-d", "-t", "=repo_task", "-n", "editor", "-c", "/tmp/repo-task",
+		),
+	)
+
+	err := repo.StartTaskSession(context.Background(), &core.Task{
+		ID:           "task-123",
+		TmuxSession:  "repo_task",
+		WorktreePath: "/tmp/repo-task",
+		ProviderEnv: core.ProviderEnv{
+			"CODEX_HOME":        "/home/me/.codex-work",
+			"CLAUDE_CONFIG_DIR": "/home/me/.claude-work",
+			"GEMINI_HOME":       "",
+		},
 	}, core.TaskSessionLaunchSpec{})
 
 	require.NoError(t, err)
@@ -168,25 +292,15 @@ func TestRepositoryStartTaskSession_CleansUpSessionWhenEditorWindowCreationFails
 	require.EqualError(t, err, "new-window failed")
 }
 
-func TestRepositoryStartTaskSession_CleansUpSessionWhenPrefillFails(t *testing.T) {
+func TestRepositoryPrefillTaskSession_LeavesTheSessionRunningWhenTypingFails(t *testing.T) {
 	runner := subprocess.NewMockRunner(t)
 	repo := New(runner).(*repository)
 	repo.now = func() time.Time { return time.Unix(0, 0) }
 	repo.sleep = func(time.Duration) {}
 
+	// No kill-session expectation: the provider is up, only the prompt is
+	// missing, and it stays on the task record.
 	mock.InOrder(
-		expectTmuxRun(runner, subprocess.Result{}, errors.New("no session"),
-			"has-session", "-t", "=repo_task",
-		),
-		expectTmuxRun(runner, subprocess.Result{}, nil,
-			"new-session", "-d", "-s", "repo_task", "-n", "task", "-c", "/tmp/repo-task",
-		),
-		expectTmuxRun(runner, subprocess.Result{}, nil,
-			"new-window", "-d", "-t", "=repo_task", "-n", "editor", "-c", "/tmp/repo-task",
-		),
-		expectTmuxRun(runner, subprocess.Result{}, nil,
-			"send-keys", "-t", "=repo_task:task", "codex", "C-m",
-		),
 		expectTmuxRun(runner, subprocess.Result{Stdout: "›"}, nil,
 			"capture-pane", "-t", "=repo_task:task", "-p",
 		),
@@ -196,12 +310,9 @@ func TestRepositoryStartTaskSession_CleansUpSessionWhenPrefillFails(t *testing.T
 			Args:  []string{"load-buffer", "-b", "rig-prefill-repo_task-task", "-"},
 			Stdin: "fix billing retry flow",
 		}, subprocess.Result{}, errors.New("load-buffer failed")),
-		expectTmuxRun(runner, subprocess.Result{}, nil,
-			"kill-session", "-t", "=repo_task",
-		),
 	)
 
-	err := repo.StartTaskSession(context.Background(), &core.Task{
+	err := repo.PrefillTaskSession(context.Background(), &core.Task{
 		TmuxSession:  "repo_task",
 		WorktreePath: "/tmp/repo-task",
 	}, core.TaskSessionLaunchSpec{
@@ -213,23 +324,164 @@ func TestRepositoryStartTaskSession_CleansUpSessionWhenPrefillFails(t *testing.T
 	require.EqualError(t, err, "load task input into tmux buffer: load-buffer failed")
 }
 
-func TestRepositoryAttachTaskSession_SwitchesClientWhenInsideTmux(t *testing.T) {
+// insideTmux runs rig in pane %3 of a tmux client, with env overriding the
+// rest of its environment.
+func insideTmux(repo *repository, env map[string]string) {
+	repo.getenv = func(key string) string {
+		switch key {
+		case "TMUX":
+			return "/tmp/tmux-1000/default,123,0"
+		case "TMUX_PANE":
+			return "%3"
+		}
+		return env[key]
+	}
+}
+
+func TestRepositoryAttachTaskSession_SwitchesClientAndBindsAKeyBackToRig(t *testing.T) {
 	runner := subprocess.NewMockRunner(t)
 	repo := New(runner).(*repository)
-	repo.getenv = func(key string) string {
-		if key == "TMUX" {
-			return "/tmp/tmux-1000/default,123,0"
-		}
-		return ""
+	insideTmux(repo, nil)
+
+	mock.InOrder(
+		expectTmuxRun(runner, subprocess.Result{}, nil, "switch-client", "-t", "=repo_task"),
+		expectTmuxRun(runner, subprocess.Result{Stdout: "project\n"}, nil,
+			"display-message", "-p", "-t", "%3", "#{session_name}"),
+		expectTmuxRun(runner, subprocess.Result{}, nil, "set-option", "-t", "=repo_task:", "@rig_session", "project"),
+		expectTmuxRun(runner, subprocess.Result{}, nil, "set-option", "-g", "@rig_last_session", "project"),
+		expectTmuxRun(runner, subprocess.Result{}, nil, "set-option", "-gu", "@rig_session"),
+		expectTmuxRun(
+			runner,
+			subprocess.Result{},
+			nil,
+			"bind-key",
+			"-T",
+			"prefix",
+			"b",
+			"run-shell",
+			"-C",
+			returnBinding,
+		),
+	)
+
+	err := repo.AttachTaskSession(context.Background(), &core.Task{TmuxSession: "repo_task"})
+
+	require.NoError(t, err)
+}
+
+// returnBinding switches to the session's own rig, or the last rig used when
+// no rig has claimed the session.
+const returnBinding = "switch-client -t '=#{?@rig_session,#{@rig_session},#{@rig_last_session}}'"
+
+func TestRepositoryClaimTaskSessions_PointsTheFoldersTasksAtThisRigUnlessACloserRigHoldsThem(t *testing.T) {
+	runner := subprocess.NewMockRunner(t)
+	repo := New(runner).(*repository)
+	insideTmux(repo, nil)
+	inFolder := func(session string) *core.Task {
+		return &core.Task{TmuxSession: session, RepoRoot: "/src/work/code", WorktreePath: "/src/work/code"}
 	}
 
-	expectTmuxRun(runner, subprocess.Result{}, nil, "switch-client", "-t", "=repo_task")
+	expectTmuxRun(runner, subprocess.Result{Stdout: "rig-work\n"}, nil,
+		"display-message", "-p", "-t", "%3", "#{session_name}")
+	expectTmuxRun(runner, subprocess.Result{}, nil, "set-option", "-t", "=rig-work:", "@rig_folder", "/src/work/code")
+	expectTmuxRun(runner, subprocess.Result{}, nil, "set-option", "-gu", "@rig_session")
+	expectTmuxRun(runner, subprocess.Result{}, nil, "bind-key", "-T", "prefix", "b", "run-shell", "-C", returnBinding)
+	expectTmuxRun(runner, subprocess.Result{Stdout: strings.Join([]string{
+		"rig-work\t\t/src/work/code",
+		"rig-project\t\t/src/project/code",
+		"rig-src\t\t/src",
+		"rig-api\t\t/src/work/code/api",
+		"code_unclaimed\t\t",
+		"code_other-rig\trig-project\t",
+		"code_rig-gone\trig-closed\t",
+		"code_wider-rig\trig-src\t",
+		"code_closer-rig\trig-api\t",
+		"code_mine\trig-work\t",
+		"code_other-folder\t\t",
+	}, "\n") + "\n"}, nil, "list-sessions", "-F", "#{session_name}\t#{@rig_session}\t#{@rig_folder}")
+	for _, session := range []string{"code_unclaimed", "code_other-rig", "code_rig-gone", "code_wider-rig"} {
+		expectTmuxRun(runner, subprocess.Result{}, nil, "set-option", "-t", "="+session+":", "@rig_session", "rig-work")
+	}
 
-	err := repo.AttachTaskSession(context.Background(), &core.Task{
-		TmuxSession: "repo_task",
+	err := repo.ClaimTaskSessions(context.Background(), "/src/work/code", []*core.Task{
+		inFolder("code_unclaimed"),
+		inFolder("code_other-rig"), // opened from a rig whose folder does not hold it
+		inFolder("code_rig-gone"),
+		inFolder("code_wider-rig"),
+		{TmuxSession: "code_closer-rig", RepoRoot: "/src/work/code/api", WorktreePath: "/src/work/code/api"},
+		inFolder("code_mine"),
+		inFolder("code_session-ended"),
+		{TmuxSession: "code_other-folder", RepoRoot: "/src/project/code", WorktreePath: "/src/project/code"},
 	})
 
 	require.NoError(t, err)
+}
+
+func TestRepositoryClaimTaskSessions_DoesNothingOutsideTmuxOrWithTheKeyOff(t *testing.T) {
+	tasks := []*core.Task{{TmuxSession: "code_task", RepoRoot: "/src/work/code"}}
+
+	outside := New(subprocess.NewMockRunner(t)).(*repository)
+	outside.getenv = func(string) string { return "" }
+	require.NoError(t, outside.ClaimTaskSessions(context.Background(), "/src/work/code", tasks))
+
+	off := New(subprocess.NewMockRunner(t)).(*repository)
+	insideTmux(off, map[string]string{"RIG_TMUX_RETURN_KEY": "none"})
+	require.NoError(t, off.ClaimTaskSessions(context.Background(), "/src/work/code", tasks))
+}
+
+func TestRepositoryAttachTaskSession_TheReturnKeyCanBeChangedOrTurnedOff(t *testing.T) {
+	runner := subprocess.NewMockRunner(t)
+	repo := New(runner).(*repository)
+	insideTmux(repo, map[string]string{"RIG_TMUX_RETURN_KEY": "e"})
+	expectTmuxRun(runner, subprocess.Result{}, nil, "switch-client", "-t", "=repo_task")
+	expectTmuxRun(runner, subprocess.Result{Stdout: "project"}, nil,
+		"display-message", "-p", "-t", "%3", "#{session_name}")
+	expectTmuxRun(runner, subprocess.Result{}, nil, "set-option", "-t", "=repo_task:", "@rig_session", "project")
+	expectTmuxRun(runner, subprocess.Result{}, nil, "set-option", "-g", "@rig_last_session", "project")
+	expectTmuxRun(runner, subprocess.Result{}, nil, "set-option", "-gu", "@rig_session")
+	expectTmuxRun(runner, subprocess.Result{}, nil, "bind-key", "-T", "prefix", "e", "run-shell", "-C", returnBinding)
+	require.NoError(t, repo.AttachTaskSession(context.Background(), &core.Task{TmuxSession: "repo_task"}))
+
+	off := subprocess.NewMockRunner(t)
+	repo = New(off).(*repository)
+	insideTmux(repo, map[string]string{"RIG_TMUX_RETURN_KEY": "none"})
+	expectTmuxRun(off, subprocess.Result{}, nil, "switch-client", "-t", "=repo_task")
+	require.NoError(t, repo.AttachTaskSession(context.Background(), &core.Task{TmuxSession: "repo_task"}))
+}
+
+func TestRepositoryAttachTaskSession_BindsNothingWhenRigCannotNameItsSession(t *testing.T) {
+	runner := subprocess.NewMockRunner(t)
+	repo := New(runner).(*repository)
+	insideTmux(repo, nil)
+	expectTmuxRun(runner, subprocess.Result{}, nil, "switch-client", "-t", "=repo_task")
+	expectTmuxRun(runner, subprocess.Result{}, errors.New("no server"),
+		"display-message", "-p", "-t", "%3", "#{session_name}")
+
+	require.NoError(t, repo.AttachTaskSession(context.Background(), &core.Task{TmuxSession: "repo_task"}))
+}
+
+func TestRepositoryAttachTaskSession_AFailedSwitchBindsNothing(t *testing.T) {
+	runner := subprocess.NewMockRunner(t)
+	repo := New(runner).(*repository)
+	insideTmux(repo, nil)
+	expectTmuxRun(runner, subprocess.Result{Stderr: "no current client"}, errors.New("exit status 1"),
+		"switch-client", "-t", "=repo_task")
+
+	err := repo.AttachTaskSession(context.Background(), &core.Task{TmuxSession: "repo_task"})
+
+	require.ErrorContains(t, err, "exit status 1")
+}
+
+func TestRepositoryAttachTaskSession_MissingSessionBindsNothing(t *testing.T) {
+	runner := subprocess.NewMockRunner(t)
+	repo := New(runner).(*repository)
+	insideTmux(repo, nil)
+	expectTmuxRun(runner, subprocess.Result{Stderr: "can't find session: =repo_task"}, errors.New("exit status 1"),
+		"switch-client", "-t", "=repo_task")
+
+	err := repo.AttachTaskSession(context.Background(), &core.Task{TmuxSession: "repo_task"})
+
+	require.ErrorIs(t, err, core.ErrTaskSessionNotFound)
 }
 
 func TestRepositoryAttachTaskSession_AttachesWhenOutsideTmux(t *testing.T) {
@@ -491,6 +743,9 @@ func TestRepositoryStartTaskSession_LaunchesIntoExistingSessionWithoutRecreating
 		expectTmuxRun(runner, subprocess.Result{}, nil,
 			"has-session", "-t", "=repo_task",
 		),
+		expectTmuxRun(runner, subprocess.Result{Stdout: "task\neditor\n"}, nil,
+			"list-windows", "-t", "=repo_task", "-F", "#{window_name}",
+		),
 		expectTmuxRun(runner, subprocess.Result{}, nil,
 			"send-keys", "-t", "=repo_task:task", "claude", "C-m",
 		),
@@ -503,6 +758,37 @@ func TestRepositoryStartTaskSession_LaunchesIntoExistingSessionWithoutRecreating
 		Command:     []string{"claude"},
 		ReadyMarker: "❯",
 	})
+
+	require.NoError(t, err)
+}
+
+func TestRepositoryStartTaskSession_RecreatesAMissingTaskWindowInAnExistingSession(t *testing.T) {
+	runner := subprocess.NewMockRunner(t)
+	repo := New(runner).(*repository)
+	repo.sleep = func(time.Duration) {}
+
+	// A child task's window opened the session first; the parent's own
+	// window has to be added before its provider can start there.
+	mock.InOrder(
+		expectTmuxRun(runner, subprocess.Result{}, nil,
+			"has-session", "-t", "=repo_task",
+		),
+		expectTmuxRun(runner, subprocess.Result{Stdout: "s2\neditor\n"}, nil,
+			"list-windows", "-t", "=repo_task", "-F", "#{window_name}",
+		),
+		expectTmuxRun(runner, subprocess.Result{}, nil,
+			"new-window", "-d", "-t", "=repo_task", "-n", "task", "-c", "/tmp/repo-task", "-e", "RIG_TASK_ID=task-1",
+		),
+		expectTmuxRun(runner, subprocess.Result{}, nil,
+			"send-keys", "-t", "=repo_task:task", "claude", "C-m",
+		),
+	)
+
+	err := repo.StartTaskSession(context.Background(), &core.Task{
+		ID:           "task-1",
+		TmuxSession:  "repo_task",
+		WorktreePath: "/tmp/repo-task",
+	}, core.TaskSessionLaunchSpec{Command: []string{"claude"}, ReadyMarker: "❯"})
 
 	require.NoError(t, err)
 }
@@ -590,4 +876,132 @@ func expectTmuxRunWithStdin(
 	err error,
 ) *mock.Call {
 	return runner.On("RunWithStdin", mock.Anything, opts).Return(result, err).Once()
+}
+
+func TestRepositoryStartTaskSession_AddsAChildTasksWindowToItsParentsSession(t *testing.T) {
+	runner := subprocess.NewMockRunner(t)
+	repo := New(runner).(*repository)
+	repo.sleep = func(time.Duration) {}
+
+	mock.InOrder(
+		expectTmuxRun(runner, subprocess.Result{}, nil,
+			"has-session", "-t", "=repo_task",
+		),
+		expectTmuxRun(runner, subprocess.Result{Stdout: "task\neditor\n"}, nil,
+			"list-windows", "-t", "=repo_task", "-F", "#{window_name}",
+		),
+		expectTmuxRun(runner, subprocess.Result{}, nil,
+			"new-window", "-d", "-t", "=repo_task", "-n", "s2", "-c", "/tmp/repo-task",
+			"-e", "RIG_TASK_ID=task-2", "-e", "CLAUDE_CONFIG_DIR=/home/me/.claude-work",
+		),
+		expectTmuxRun(runner, subprocess.Result{}, nil,
+			"send-keys", "-t", "=repo_task:s2", "claude", "C-m",
+		),
+	)
+
+	err := repo.StartTaskSession(context.Background(), &core.Task{
+		ID:           "task-2",
+		ParentID:     "task-1",
+		TmuxSession:  "repo_task",
+		TmuxWindow:   "s2",
+		WorktreePath: "/tmp/repo-task",
+		ProviderEnv:  core.ProviderEnv{"CLAUDE_CONFIG_DIR": "/home/me/.claude-work"},
+	}, core.TaskSessionLaunchSpec{Command: []string{"claude"}, ReadyMarker: "❯"})
+
+	require.NoError(t, err, "the window carries the child's own task ID so its hooks are told apart")
+}
+
+func TestRepositoryStartTaskSession_ReusesAChildTasksExistingWindow(t *testing.T) {
+	runner := subprocess.NewMockRunner(t)
+	repo := New(runner).(*repository)
+	repo.sleep = func(time.Duration) {}
+
+	mock.InOrder(
+		expectTmuxRun(runner, subprocess.Result{}, nil,
+			"has-session", "-t", "=repo_task",
+		),
+		expectTmuxRun(runner, subprocess.Result{Stdout: "task\ns2\n"}, nil,
+			"list-windows", "-t", "=repo_task", "-F", "#{window_name}",
+		),
+		expectTmuxRun(runner, subprocess.Result{}, nil,
+			"send-keys", "-t", "=repo_task:s2", "claude --resume sess-2", "C-m",
+		),
+	)
+
+	err := repo.StartTaskSession(context.Background(), &core.Task{
+		TmuxSession:  "repo_task",
+		TmuxWindow:   "s2",
+		WorktreePath: "/tmp/repo-task",
+	}, core.TaskSessionLaunchSpec{Command: []string{"claude", "--resume", "sess-2"}})
+
+	require.NoError(t, err)
+}
+
+func TestRepositoryAttachAndDeleteTaskSession_TargetAChildTasksWindow(t *testing.T) {
+	runner := subprocess.NewMockRunner(t)
+	repo := New(runner).(*repository)
+	insideTmux(repo, nil)
+	child := &core.Task{TmuxSession: "repo_task", TmuxWindow: "s2"}
+
+	expectTmuxRun(runner, subprocess.Result{}, nil, "switch-client", "-t", "=repo_task:s2")
+	expectTmuxRun(runner, subprocess.Result{Stdout: "rig"}, nil, "display-message", "-p", "-t", "%3", "#{session_name}")
+	runner.On("Run", mock.Anything, "", "tmux", "set-option", mock.Anything, mock.Anything, mock.Anything, mock.Anything).
+		Return(subprocess.Result{}, nil).
+		Maybe()
+	runner.On("Run", mock.Anything, "", "tmux", "set-option", mock.Anything, mock.Anything, mock.Anything).
+		Return(subprocess.Result{}, nil).Maybe()
+	runner.On("Run", mock.Anything, "", "tmux", "bind-key", mock.Anything, mock.Anything, mock.Anything,
+		mock.Anything, mock.Anything, mock.Anything).Return(subprocess.Result{}, nil).Maybe()
+	require.NoError(t, repo.AttachTaskSession(context.Background(), child))
+
+	expectTmuxRun(runner, subprocess.Result{}, nil, "kill-window", "-t", "=repo_task:s2")
+	require.NoError(
+		t,
+		repo.DeleteTaskSession(context.Background(), child),
+		"only the window: the session is the parent's",
+	)
+}
+
+func TestRepositorySubmitTaskInput_TypesTheTextThenPressesEnterAfterASettle(t *testing.T) {
+	runner := subprocess.NewMockRunner(t)
+	repo := New(runner).(*repository)
+	var slept []time.Duration
+	repo.sleep = func(d time.Duration) { slept = append(slept, d) }
+
+	mock.InOrder(
+		expectTmuxRun(runner, subprocess.Result{}, nil, "send-keys", "-t", "=repo_task:s2", "-l", "/exit"),
+		expectTmuxRun(runner, subprocess.Result{}, nil, "send-keys", "-t", "=repo_task:s2", "Enter"),
+	)
+
+	err := repo.SubmitTaskInput(context.Background(), &core.Task{TmuxSession: "repo_task", TmuxWindow: "s2"}, "/exit")
+
+	require.NoError(t, err)
+	require.Equal(t, []time.Duration{promptInputSettleDelay}, slept,
+		"the provider's command suggestion must be up before Enter runs it")
+}
+
+func TestRepositoryInspectTaskSessions_TellsAChildTasksWindowFromItsParents(t *testing.T) {
+	runner := subprocess.NewMockRunner(t)
+	repo := New(runner).(*repository)
+
+	expectTmuxRun(runner, subprocess.Result{
+		Stdout: "repo_task\ttask\tzsh\t100\nrepo_task\ts2\t2.1.291\t200\nrepo_task\teditor\tnvim\t300\n",
+	}, nil, "list-panes", "-a", "-F", "#{session_name}\t#{window_name}\t#{pane_current_command}\t#{pane_pid}")
+	runner.On("Run", mock.Anything, "", "ps", "-axo", "ppid=,etime=,comm=").
+		Return(subprocess.Result{Stdout: "200 01:30 claude\n300 00:10 nvim\n"}, nil).Once()
+
+	states, err := repo.InspectTaskSessions(context.Background(), []*core.Task{
+		{ID: "task-1", TmuxSession: "repo_task"},
+		{ID: "task-2", TmuxSession: "repo_task", TmuxWindow: "s2"},
+		{ID: "task-3", TmuxSession: "repo_task", TmuxWindow: "s3"},
+	})
+
+	require.NoError(t, err)
+	require.True(t, states["task-1"].Exists)
+	require.Equal(t, []string{"zsh"}, states["task-1"].ActiveCommands, "the parent's pane is idle")
+	require.True(t, states["task-2"].Exists)
+	require.Equal(t, []string{"2.1.291", "claude"}, states["task-2"].ActiveCommands, "the child's runs claude")
+	require.Contains(t, states["task-2"].CommandStartedAt, "claude", "its provider's start time stays with its window")
+	require.Empty(t, states["task-1"].CommandStartedAt)
+	require.False(t, states["task-3"].Exists, "a window that is gone")
 }

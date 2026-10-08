@@ -84,6 +84,10 @@ func (c *taskCreation) CreateTaskWithProgress(
 	input CreateTaskInput,
 	reporter TaskCreateProgressReporter,
 ) (*Task, error) {
+	if input.Source.PullRequest == nil && c.wantsFolderTask(input) {
+		return c.createFolderTask(ctx, input, reporter)
+	}
+
 	repoCtx, err := c.gitWorktree.DetectRepo(ctx, input.Cwd)
 	if err != nil {
 		return nil, err
@@ -126,12 +130,17 @@ func (c *taskCreation) retryTaskCreationWithProgress(
 		return nil, fmt.Errorf("task creation is not failed")
 	}
 
-	steps, ok := taskCreationStepsFrom(c.creationSteps(
+	steps, ok := taskCreationStepsFrom(c.creationStepsWith(
 		task,
 		task.RepoRoot,
 		func(ctx context.Context) error {
-			return c.gitWorktree.CreateTaskWorkspace(ctx, task)
+			settings, err := c.launcher.repoSettings(task.RepoRoot)
+			if err != nil {
+				return err
+			}
+			return c.createTaskWorktree(ctx, task, settings)
 		},
+		c.launcher.resumeStartSession,
 	), task.CreationStep)
 	if !ok {
 		return nil, fmt.Errorf("task creation failed step %q is not retryable", task.CreationStep)
@@ -155,7 +164,7 @@ func (c *taskCreation) createTaskFromPrompt(
 	}
 
 	reportTaskCreateProgress(reporter, TaskCreateProgressSuggestingName)
-	suggestion, err := suggestTaskName(ctx, providerClient, input.Prompt)
+	suggestion, err := suggestTaskName(ctx, providerClient, input.Prompt, input.ProviderEnv)
 	if err != nil {
 		return nil, err
 	}
@@ -165,27 +174,94 @@ func (c *taskCreation) createTaskFromPrompt(
 		return nil, err
 	}
 
+	settings, err := c.launcher.repoSettings(repoCtx.Root)
+	if err != nil {
+		return nil, err
+	}
+
 	taskSlug := uniqueTaskSlug(repoCtx.Root, suggestion.Name, existingTasks)
 	task := newPromptTaskRecord(
 		repoCtx,
+		settings,
 		provider,
 		suggestion.Name,
 		taskSlug,
 		suggestion.BranchType,
 	)
 	task.Prompt = input.Prompt
+	task.ProviderEnv = input.ProviderEnv
+	task.SetLaunch(input.Launch())
 
 	if err := c.tasks.CreateTask(ctx, task); err != nil {
 		return nil, err
 	}
+	c.launcher.rememberLaunchDefaults(ctx, provider, task.Launch())
 
 	steps := c.creationSteps(
 		task,
 		repoCtx.Root,
 		func(ctx context.Context) error {
-			return c.gitWorktree.CreateTaskWorkspace(ctx, task)
+			return c.createTaskWorktree(ctx, task, settings)
 		},
 	)
+	if err := c.runSteps(ctx, task, reporter, steps, taskCreationStepPersistenceReadyOnly); err != nil {
+		return task, err
+	}
+	return task, nil
+}
+
+// wantsFolderTask reports whether a prompt Task should run in its folder as it
+// is: when asked to, or when the folder is not inside a Git worktree and so has
+// no repository to branch from.
+func (c *taskCreation) wantsFolderTask(input CreateTaskInput) bool {
+	return input.Workspace == WorkspaceKindFolder || c.gitWorktree.WorktreeRootOf(input.Cwd) == ""
+}
+
+func (c *taskCreation) createFolderTask(
+	ctx context.Context,
+	input CreateTaskInput,
+	reporter TaskCreateProgressReporter,
+) (*Task, error) {
+	folder := strings.TrimSpace(input.Cwd)
+	if !filepath.IsAbs(folder) {
+		return nil, fmt.Errorf("folder task requires an absolute working directory, got %q", folder)
+	}
+	folder = filepath.Clean(folder)
+
+	provider, providerClient, err := c.launcher.resolveProvider(ctx, input.Provider)
+	if err != nil {
+		return nil, err
+	}
+
+	reportTaskCreateProgress(reporter, TaskCreateProgressSuggestingName)
+	suggestion, err := suggestTaskName(ctx, providerClient, input.Prompt, input.ProviderEnv)
+	if err != nil {
+		return nil, err
+	}
+
+	existingTasks, err := c.tasks.ListTasks(ctx)
+	if err != nil {
+		return nil, err
+	}
+
+	label := filepath.Base(folder)
+	task := newFolderTaskRecord(
+		folder,
+		label,
+		provider,
+		suggestion.Name,
+		uniqueFolderTaskSlug(folder, label, suggestion.Name, existingTasks),
+	)
+	task.Prompt = input.Prompt
+	task.ProviderEnv = input.ProviderEnv
+	task.SetLaunch(input.Launch())
+
+	if err := c.tasks.CreateTask(ctx, task); err != nil {
+		return nil, err
+	}
+	c.launcher.rememberLaunchDefaults(ctx, provider, task.Launch())
+
+	steps := c.creationSteps(task, folder, nil)
 	if err := c.runSteps(ctx, task, reporter, steps, taskCreationStepPersistenceReadyOnly); err != nil {
 		return task, err
 	}
@@ -224,17 +300,26 @@ func (c *taskCreation) createTaskFromPullRequest(
 		return nil, fmt.Errorf("PR already has workspace")
 	}
 
+	settings, err := c.launcher.repoSettings(repoCtx.Root)
+	if err != nil {
+		return nil, err
+	}
+
 	taskSlug := uniqueTaskSlug(repoCtx.Root, pr.BranchName, existingTasks)
 	task := newPullRequestTaskRecord(
 		repoCtx,
+		settings,
 		provider,
 		prDisplayName(*pr),
 		taskSlug,
 		pr.BranchName,
 	)
+	task.ProviderEnv = input.ProviderEnv
+	task.SetLaunch(input.Launch())
 	if err := c.tasks.CreateTask(ctx, task); err != nil {
 		return nil, err
 	}
+	c.launcher.rememberLaunchDefaults(ctx, provider, task.Launch())
 
 	steps := c.creationSteps(
 		task,
@@ -254,8 +339,19 @@ func (c *taskCreation) creationSteps(
 	repoRoot string,
 	createWorktree func(context.Context) error,
 ) []taskCreationStepAction {
-	return []taskCreationStepAction{
-		{
+	return c.creationStepsWith(task, repoRoot, createWorktree, c.launcher.startSession)
+}
+
+func (c *taskCreation) creationStepsWith(
+	task *Task,
+	repoRoot string,
+	createWorktree func(context.Context) error,
+	startSession func(context.Context, *Task) (*Task, error),
+) []taskCreationStepAction {
+	var steps []taskCreationStepAction
+	// A folder Task runs where it was created; there is no worktree to make.
+	if !task.UsesFolderWorkspace() {
+		steps = append(steps, taskCreationStepAction{
 			step: TaskCreateProgressCreatingWorktree,
 			run: func(ctx context.Context) error {
 				if err := createWorktree(ctx); err != nil {
@@ -263,7 +359,9 @@ func (c *taskCreation) creationSteps(
 				}
 				return nil
 			},
-		},
+		})
+	}
+	return append(steps, []taskCreationStepAction{
 		{
 			step: TaskCreateProgressPreparingWorkspace,
 			run: func(ctx context.Context) error {
@@ -273,11 +371,11 @@ func (c *taskCreation) creationSteps(
 		{
 			step: TaskCreateProgressStartingSession,
 			run: func(ctx context.Context) error {
-				_, err := c.launcher.startSession(ctx, task)
+				_, err := startSession(ctx, task)
 				return err
 			},
 		},
-	}
+	}...)
 }
 
 func taskCreationStepsFrom(
@@ -359,8 +457,13 @@ func (c *taskCreation) taskCreateEventStream(
 	return events, nil
 }
 
-func suggestTaskName(ctx context.Context, providerClient ProviderClient, prompt string) (TaskSuggestion, error) {
-	suggestion, err := providerClient.SuggestTaskName(ctx, prompt)
+func suggestTaskName(
+	ctx context.Context,
+	providerClient ProviderClient,
+	prompt string,
+	env ProviderEnv,
+) (TaskSuggestion, error) {
+	suggestion, err := providerClient.SuggestTaskName(ctx, prompt, env)
 	if err != nil {
 		return TaskSuggestion{}, fmt.Errorf("suggest task name: %w", err)
 	}
@@ -413,6 +516,7 @@ func (c *taskCreation) markReady(ctx context.Context, task *Task) error {
 
 func newPromptTaskRecord(
 	repoCtx RepoContext,
+	settings RepoSettings,
 	provider Provider,
 	displayName string,
 	taskSlug string,
@@ -428,10 +532,11 @@ func newPromptTaskRecord(
 		RepoRoot:       repoCtx.Root,
 		RepoName:       repoCtx.Name,
 		BranchName:     branchNameForTask(taskSlug, branchType),
-		WorktreePath:   taskWorktreePath(repoCtx, taskSlug),
+		WorktreePath:   taskWorktreePath(repoCtx, settings, taskSlug),
 		TmuxSession:    taskSessionName(repoCtx, taskSlug),
 		Provider:       provider,
 		CreationStatus: TaskCreationStatusCreating,
+		WorkspaceKind:  WorkspaceKindWorktree,
 		CreatedAt:      now,
 		UpdatedAt:      now,
 	}
@@ -439,6 +544,7 @@ func newPromptTaskRecord(
 
 func newPullRequestTaskRecord(
 	repoCtx RepoContext,
+	settings RepoSettings,
 	provider Provider,
 	displayName string,
 	taskSlug string,
@@ -454,10 +560,39 @@ func newPullRequestTaskRecord(
 		RepoRoot:       repoCtx.Root,
 		RepoName:       repoCtx.Name,
 		BranchName:     strings.TrimSpace(branchName),
-		WorktreePath:   taskWorktreePath(repoCtx, taskSlug),
+		WorktreePath:   taskWorktreePath(repoCtx, settings, taskSlug),
 		TmuxSession:    taskSessionName(repoCtx, taskSlug),
 		Provider:       provider,
 		CreationStatus: TaskCreationStatusCreating,
+		WorkspaceKind:  WorkspaceKindWorktree,
+		CreatedAt:      now,
+		UpdatedAt:      now,
+	}
+}
+
+// newFolderTaskRecord builds a Task that runs in folder as it is, with no
+// branch of its own. Its Session is named after the folder like a worktree
+// Task's is named after its repository.
+func newFolderTaskRecord(
+	folder string,
+	label string,
+	provider Provider,
+	displayName string,
+	taskSlug string,
+) *Task {
+	now := time.Now().UTC()
+
+	return &Task{
+		ID:             fmt.Sprintf("%d", now.UnixNano()),
+		Slug:           taskSlug,
+		DisplayName:    displayName,
+		RepoRoot:       folder,
+		RepoName:       label,
+		WorktreePath:   folder,
+		TmuxSession:    label + "_" + taskSlug,
+		Provider:       provider,
+		CreationStatus: TaskCreationStatusCreating,
+		WorkspaceKind:  WorkspaceKindFolder,
 		CreatedAt:      now,
 		UpdatedAt:      now,
 	}
@@ -467,8 +602,27 @@ func branchNameForTask(taskSlug string, branchType string) string {
 	return TaskSuggestion{BranchType: branchType}.BranchTypeOrDefault() + "/" + taskSlug
 }
 
-func taskWorktreePath(repoCtx RepoContext, taskSlug string) string {
-	return filepath.Join(filepath.Dir(repoCtx.Root), taskRuntimeStem(repoCtx, taskSlug))
+func taskWorktreePath(repoCtx RepoContext, settings RepoSettings, taskSlug string) string {
+	name := taskRuntimeStem(repoCtx, taskSlug)
+	if template := strings.TrimSpace(settings.WorktreeName); template != "" {
+		name = strings.NewReplacer("{repo}", repoCtx.Name, "{slug}", taskSlug).Replace(template)
+	}
+	return filepath.Join(filepath.Dir(repoCtx.Root), name)
+}
+
+// createTaskWorktree creates the task's worktree from the repository's
+// configured base branch, fetched from origin, or from the branch the main
+// checkout has checked out when none is configured.
+func (c *taskCreation) createTaskWorktree(ctx context.Context, task *Task, settings RepoSettings) error {
+	baseRef := ""
+	if baseBranch := strings.TrimSpace(settings.BaseBranch); baseBranch != "" {
+		ref, err := c.gitWorktree.ResolveBaseRef(ctx, task.RepoRoot, baseBranch)
+		if err != nil {
+			return err
+		}
+		baseRef = ref
+	}
+	return c.gitWorktree.CreateTaskWorkspace(ctx, task, baseRef)
 }
 
 func taskSessionName(repoCtx RepoContext, taskSlug string) string {
@@ -486,13 +640,35 @@ func uniqueTaskSlug(repoRoot string, raw string, tasks []*Task) string {
 		if task == nil || task.RepoRoot != repoRoot {
 			continue
 		}
-		slug := strings.TrimSpace(task.Slug)
-		if slug == "" {
-			slug = slugpkg.FromDisplayName(task.DisplayName)
-		}
-		existing[slug] = struct{}{}
+		existing[taskSlugOf(task)] = struct{}{}
 	}
 	return slugpkg.EnsureUnique(base, existing)
+}
+
+// uniqueFolderTaskSlug also avoids the Session names of Tasks in other folders
+// with the same base name: ~/a/code and ~/b/code both name Sessions "code_*".
+func uniqueFolderTaskSlug(folder string, label string, raw string, tasks []*Task) string {
+	base := slugpkg.FromDisplayName(raw)
+	existing := make(map[string]struct{})
+	for _, task := range tasks {
+		if task == nil {
+			continue
+		}
+		if task.RepoRoot == folder {
+			existing[taskSlugOf(task)] = struct{}{}
+		}
+		if slug, ok := strings.CutPrefix(task.TmuxSession, label+"_"); ok {
+			existing[slug] = struct{}{}
+		}
+	}
+	return slugpkg.EnsureUnique(base, existing)
+}
+
+func taskSlugOf(task *Task) string {
+	if slug := strings.TrimSpace(task.Slug); slug != "" {
+		return slug
+	}
+	return slugpkg.FromDisplayName(task.DisplayName)
 }
 
 func existingTaskForBranch(tasks []*Task, repoRoot string, branchName string) *Task {
