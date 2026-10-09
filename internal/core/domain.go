@@ -242,6 +242,7 @@ const (
 	HookEventPreToolUse        = "PreToolUse"
 	HookEventPostToolUse       = "PostToolUse"
 	HookEventStop              = "Stop"
+	HookEventStopFailure       = "StopFailure"
 	HookEventNotification      = "Notification"
 	HookEventPermissionRequest = "PermissionRequest"
 	HookEventSubagentStart     = "SubagentStart"

@@ -116,6 +116,7 @@ func TestHookEventToTaskStatus_MapsClaudeEventsToPhases(t *testing.T) {
 		{"PreToolUse", core.TaskStatusPhaseWorking},
 		{"PostToolUse", core.TaskStatusPhaseWorking},
 		{"Stop", core.TaskStatusPhaseWaitingForInput},
+		{"StopFailure", core.TaskStatusPhaseWaitingForInput},
 		{"Notification", core.TaskStatusPhaseWaitingForInput},
 	}
 	for _, tc := range cases {
@@ -164,6 +165,30 @@ func TestHookEventToTaskStatus_StopWithoutBackgroundWorkNeedsInput(t *testing.T)
 	require.True(t, update.BackgroundWork.IsZero())
 }
 
+func TestHookEventToTaskStatus_APIErrorTurnEndNeedsInput(t *testing.T) {
+	repo := &repository{binary: "claude"}
+	// Payload shape from the Claude Code hooks reference. StopFailure fires
+	// instead of Stop, so it is the only evidence that the turn ended.
+	input := DecodeHookEventInput(fixedNow, "StopFailure", []byte(`{
+		"session_id": "sess-1",
+		"transcript_path": "/tmp/transcript.jsonl",
+		"cwd": "/tmp/repo-task",
+		"hook_event_name": "StopFailure",
+		"error": "rate_limit",
+		"error_details": "429 Too Many Requests",
+		"last_assistant_message": "API Error: Rate limit reached"
+	}`))
+	input.TaskID = "task-1"
+
+	update, err := repo.HookEventToTaskStatus(input)
+
+	require.NoError(t, err)
+	require.NotNil(t, update)
+	require.Equal(t, core.TaskStatusPhaseWaitingForInput, update.Phase)
+	require.Equal(t, "StopFailure", update.RawEventName)
+	require.Equal(t, fixedNow(), update.ObservedAt)
+}
+
 func TestHookEventToTaskStatus_OnlyNotificationsAskingForInputDriveStatus(t *testing.T) {
 	repo := &repository{binary: "claude"}
 
@@ -200,7 +225,7 @@ func TestHookEventToTaskStatus_OnlyNotificationsAskingForInputDriveStatus(t *tes
 func TestHookEventToTaskStatus_SubagentHooksDriveStatusOnlyWhenAskingForInput(t *testing.T) {
 	repo := &repository{binary: "claude"}
 
-	for _, event := range []string{"UserPromptSubmit", "PreToolUse", "PostToolUse", "Stop"} {
+	for _, event := range []string{"UserPromptSubmit", "PreToolUse", "PostToolUse", "Stop", "StopFailure"} {
 		update, err := repo.HookEventToTaskStatus(core.HookEventInput{
 			TaskID:    "task-1",
 			EventName: event,

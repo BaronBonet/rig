@@ -26,7 +26,6 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
-	"time"
 
 	"github.com/BaronBonet/rig/internal/adapters/client/providerkit"
 	"github.com/BaronBonet/rig/internal/core"
@@ -53,6 +52,10 @@ const (
 // Stop drives needs-input unless its payload reports background work still in
 // flight; HookEventToTaskStatus then reports the task as working in the
 // background instead.
+//
+// StopFailure replaces Stop when the turn ends on an API error, such as a rate
+// limit, an overloaded or failed request, or an authentication problem. It is
+// unmatched so that every error type ends the working status.
 var hookCatalog = providerkit.Catalog{
 	{Event: core.HookEventSessionStart, Matcher: "startup|resume", Phase: core.TaskStatusPhaseStarting},
 	{Event: core.HookEventUserPromptSubmit, Phase: core.TaskStatusPhaseWorking},
@@ -64,6 +67,7 @@ var hookCatalog = providerkit.Catalog{
 		Phase:   core.TaskStatusPhaseWaitingForInput,
 	},
 	{Event: core.HookEventStop, Phase: core.TaskStatusPhaseWaitingForInput},
+	{Event: core.HookEventStopFailure, Phase: core.TaskStatusPhaseWaitingForInput},
 }
 
 // needsInputNotificationTypes are the Claude notification types that ask the
@@ -242,17 +246,6 @@ func (r *repository) TaskSessionCommandName() string {
 		return "claude"
 	}
 	return commandName
-}
-
-// RecoverLatestTaskStatus returns no recovery: Claude status is driven by
-// hook events only in this first version.
-func (r *repository) RecoverLatestTaskStatus(
-	context.Context,
-	core.TaskStatusUpdate,
-	[]core.TaskProviderSession,
-	time.Time,
-) (*core.TaskStatusUpdate, error) {
-	return nil, nil
 }
 
 func (r *repository) healthCheckHookForwarding() error {
