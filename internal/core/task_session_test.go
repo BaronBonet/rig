@@ -139,6 +139,47 @@ func TestTaskServiceNewTaskSession_RefusesToReplaceASessionThatIsStillWorking(t 
 	require.Nil(t, svc.taskRepo.updatedTask)
 }
 
+func TestTaskServiceNewTaskSession_ReplacesASessionAtItsPromptWhileAChildWorks(t *testing.T) {
+	// A hook-driven status outlives the turn it describes: a parent left at
+	// its prompt keeps the phase of its last hook. Its child's turn is the
+	// child's own.
+	for name, status := range map[string]TaskStatusUpdate{
+		"resumed, nothing typed yet": {Phase: TaskStatusPhaseStarting},
+		"a background shell that never woke it": {
+			Phase:          TaskStatusPhaseWorkingInBackground,
+			BackgroundWork: TaskBackgroundWork{Shells: 1},
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			svc := newTestTaskService(t)
+			parent, child := shelfGroupFixture()
+			svc.taskRepo.listTasks = []*Task{parent, child}
+			status.TaskID = "task-1"
+			svc.taskRepo.latestByTask["task-1"] = status
+			svc.taskRepo.latestByTask["task-2"] = TaskStatusUpdate{TaskID: "task-2", Phase: TaskStatusPhaseWorking}
+			svc.providerRepo.exitCommand = "/quit"
+			svc.sessionClient.inspectState = TaskSessionRuntimeState{Exists: true, ActiveCommands: []string{"codex"}}
+			var exited []string
+			svc.sessionClient.onSubmit = func(task *Task, _ string) {
+				exited = append(exited, task.ID)
+				svc.sessionClient.inspectState = idlePane()
+			}
+
+			task, err := svc.service.NewTaskSessionWithProgress(t.Context(), NewTaskSessionInput{
+				TaskID: "task-1",
+				Prompt: "continue",
+			}, nil)
+
+			require.NoError(t, err)
+			require.Equal(t, []string{"task-1"}, exited, "only the parent's session is told to exit")
+			require.Equal(t, []string{"/quit"}, svc.sessionClient.submittedInputs)
+			require.Equal(t, "task-1", svc.sessionClient.startedTask.ID)
+			require.Empty(t, svc.sessionClient.startedTask.TmuxWindow, "the new session takes the parent's own window")
+			require.Equal(t, "task-1", task.ID)
+		})
+	}
+}
+
 func TestTaskServiceNewTaskSession_ReportsAProviderThatDoesNotExit(t *testing.T) {
 	svc := newTestTaskService(t)
 	svc.taskRepo.listTasks = []*Task{readyTaskFixture()}

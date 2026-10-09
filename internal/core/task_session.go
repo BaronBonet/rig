@@ -69,7 +69,7 @@ func (s *service) newTaskSession(
 		if err != nil {
 			return nil, err
 		}
-		if occupant != "" && s.taskIsWorking(ctx, task.ID) {
+		if occupant != "" && s.taskIsMidTurn(ctx, task.ID) {
 			return nil, fmt.Errorf(
 				"%w: %s is still working in the task's window; "+
 					"wait for it to finish, or start the session in a new window instead",
@@ -169,6 +169,17 @@ func (s *service) taskIsWorking(ctx context.Context, taskID string) bool {
 	default:
 		return false
 	}
+}
+
+// taskIsMidTurn reports whether the Task's own latest status says its
+// provider is in a turn; its children's statuses never count. Starting and
+// working in the background both leave the provider at its prompt, and since
+// Claude's status comes from hooks alone, either can stand for days: a resumed
+// session nobody has typed into stays starting, and a background shell that
+// never wakes the agent keeps it working in the background.
+func (s *service) taskIsMidTurn(ctx context.Context, taskID string) bool {
+	status, err := s.tasks.LatestTaskStatus(ctx, taskID)
+	return err == nil && status != nil && status.Phase == TaskStatusPhaseWorking
 }
 
 // endProviderSession asks the provider idle in the Task's pane to exit, with
