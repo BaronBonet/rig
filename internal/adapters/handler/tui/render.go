@@ -1069,8 +1069,13 @@ func taskStatusText(update *core.TaskStatusUpdate) (string, lipgloss.Style) {
 }
 
 // taskStatusDetailText is taskStatusText for the detail panel, which has room
-// to break background work down by kind.
+// to break background work down by kind, including the shells and monitors
+// still running beside a task that waits for its user.
 func taskStatusDetailText(update *core.TaskStatusUpdate) (string, lipgloss.Style) {
+	if update != nil && update.Phase == core.TaskStatusPhaseWaitingForInput && !update.BackgroundWork.IsZero() {
+		text, style := taskStatusText(update)
+		return text + " · " + strings.Join(backgroundWorkParts(update.BackgroundWork), ", ") + " running", style
+	}
 	if update == nil || update.Phase != core.TaskStatusPhaseWorkingInBackground {
 		return taskStatusText(update)
 	}

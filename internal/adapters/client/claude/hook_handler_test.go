@@ -116,7 +116,11 @@ func TestHookEventToTaskStatus_MapsClaudeEventsToPhases(t *testing.T) {
 		{"PreToolUse", core.TaskStatusPhaseWorking},
 		{"PostToolUse", core.TaskStatusPhaseWorking},
 		{"Stop", core.TaskStatusPhaseWaitingForInput},
+		// An API error ends the turn with StopFailure instead of Stop.
+		{"StopFailure", core.TaskStatusPhaseWaitingForInput},
 		{"Notification", core.TaskStatusPhaseWaitingForInput},
+		// Exiting, or killing the session's window, ends the process.
+		{"SessionEnd", core.TaskStatusPhaseStopped},
 	}
 	for _, tc := range cases {
 		update, err := repo.HookEventToTaskStatus(core.HookEventInput{
@@ -162,6 +166,24 @@ func TestHookEventToTaskStatus_StopWithBackgroundWorkReportsWorkingInBackground(
 	require.Equal(t, core.TaskStatusPhaseWorkingInBackground, update.Phase)
 	require.Equal(t, work, update.BackgroundWork)
 	require.Equal(t, "Stop", update.RawEventName)
+}
+
+func TestHookEventToTaskStatus_StopWithOnlyShellsAndMonitorsNeedsInput(t *testing.T) {
+	// A dev server or an artifact watch runs on its own; ending, or being
+	// killed, it only queues a notice for the next prompt, so no Stop follows.
+	repo := &repository{binary: "claude"}
+	work := core.TaskBackgroundWork{Shells: 1, Monitors: 7, Other: 1}
+
+	update, err := repo.HookEventToTaskStatus(core.HookEventInput{
+		TaskID:         "task-1",
+		EventName:      "Stop",
+		OccurredAt:     fixedNow(),
+		BackgroundWork: work,
+	})
+
+	require.NoError(t, err)
+	require.Equal(t, core.TaskStatusPhaseWaitingForInput, update.Phase)
+	require.Equal(t, work, update.BackgroundWork, "the counts are kept to show")
 }
 
 func TestHookEventToTaskStatus_StopWithoutBackgroundWorkNeedsInput(t *testing.T) {

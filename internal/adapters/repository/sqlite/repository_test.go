@@ -822,6 +822,58 @@ func TestRepositoryNew_MigratesDatabaseWithSquashedMigrationHistory(t *testing.T
 	})
 }
 
+func TestRepositoryNew_SettlesStatusesNoHookWouldEverReplace(t *testing.T) {
+	ctx := context.Background()
+	path := filepath.Join(t.TempDir(), "state.db")
+	repo := newTestRepositoryAtPath(t, path)
+	now := time.Now().UTC()
+	statuses := map[string]core.TaskStatusUpdate{
+		"shells-only": {
+			Phase:          core.TaskStatusPhaseWorkingInBackground,
+			BackgroundWork: core.TaskBackgroundWork{Shells: 1, Monitors: 7},
+		},
+		"subagent": {
+			Phase:          core.TaskStatusPhaseWorkingInBackground,
+			BackgroundWork: core.TaskBackgroundWork{Subagents: 1, Shells: 1},
+		},
+		"imported":     {Phase: core.TaskStatusPhaseStarting},
+		"just-started": {Phase: core.TaskStatusPhaseStarting},
+	}
+	for id, status := range statuses {
+		require.NoError(t, repo.CreateTask(ctx, &core.Task{
+			ID: id, Slug: id, Prompt: "p", DisplayName: id, RepoRoot: "/tmp/repo", RepoName: "repo",
+			BranchName: "feat/" + id, WorktreePath: "/tmp/" + id, TmuxSession: "repo_" + id,
+			Provider: core.ProviderClaude, CreatedAt: now, UpdatedAt: now,
+		}))
+		status.TaskID, status.Provider, status.RawEventName, status.ObservedAt = id, core.ProviderClaude, "Stop", now
+		require.NoError(t, repo.UpsertTaskStatus(ctx, status))
+	}
+	for id, source := range map[string]string{"imported": "import", "just-started": "startup"} {
+		require.NoError(t, repo.UpsertTaskProviderSession(ctx, core.TaskProviderSession{
+			TaskID: id, Provider: core.ProviderClaude, ProviderSessionID: "sess-" + id, StartSource: source,
+			FirstObservedAt: now, LastObservedAt: now, LastEventName: "SessionStart",
+		}))
+	}
+	// Rewind to before the migration, as an older database would be.
+	_, err := repo.db.ExecContext(ctx, "delete from goose_db_version where version_id = 14")
+	require.NoError(t, err)
+	require.NoError(t, repo.db.Close())
+
+	reopened := newTestRepositoryAtPath(t, path)
+
+	for id, phase := range map[string]core.TaskStatusPhase{
+		"shells-only":  core.TaskStatusPhaseWaitingForInput,
+		"subagent":     core.TaskStatusPhaseWorkingInBackground,
+		"imported":     core.TaskStatusPhaseWaitingForInput,
+		"just-started": core.TaskStatusPhaseStarting,
+	} {
+		status, err := reopened.LatestTaskStatus(ctx, id)
+		require.NoError(t, err, id)
+		require.Equal(t, phase, status.Phase, id)
+		require.Equal(t, statuses[id].BackgroundWork, status.BackgroundWork, id)
+	}
+}
+
 func TestRepositoryNew_ReturnsErrorAndPreservesDBWhenSchemaIsStale(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "state.db")
 

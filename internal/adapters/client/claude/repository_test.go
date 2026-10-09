@@ -158,6 +158,9 @@ func TestRepositoryBuildWorkspaceBootstrapSpec_EmitsWorkspaceScopedHookSettings(
 		require.Contains(t, settings.Hooks, event)
 	}
 	require.Equal(t, "startup|resume|clear", settings.Hooks["SessionStart"][0].Matcher)
+	// A clear or resume starts the next session at once; only an end of the
+	// process stops the task.
+	require.Equal(t, "prompt_input_exit|logout|other", settings.Hooks["SessionEnd"][0].Matcher)
 	// Tool hooks must fire for every tool, not just Bash, so that non-Bash
 	// work (Read, Edit, ...) keeps the task status at working.
 	require.Empty(t, settings.Hooks["PreToolUse"][0].Matcher)
@@ -275,8 +278,8 @@ func TestRepositoryBuildWorkspaceBootstrapSpec_MergePreservesUserSettings(t *tes
 	existing := `{
 		"permissions": {"allow": ["Bash(go test *)"]},
 		"hooks": {
-			"SessionEnd": [
-				{"hooks": [{"type": "command", "command": "/bin/sh '` + scriptPath + `' 'SessionEnd'"}]},
+			"SubagentStop": [
+				{"hooks": [{"type": "command", "command": "/bin/sh '` + scriptPath + `' 'SubagentStop'"}]},
 				{"hooks": [{"type": "command", "command": "/usr/local/bin/my-own-hook"}]}
 			]
 		}
@@ -293,12 +296,13 @@ func TestRepositoryBuildWorkspaceBootstrapSpec_MergePreservesUserSettings(t *tes
 
 	// User content survives.
 	require.Contains(t, settings.Permissions, "allow")
-	// The user's own SessionEnd hook survives; Rig's stale SessionEnd rule is gone.
-	require.Len(t, settings.Hooks["SessionEnd"], 1)
-	require.Contains(t, settings.Hooks["SessionEnd"][0].Hooks[0].Command, "my-own-hook")
+	// The user's own SubagentStop hook survives; Rig's stale SubagentStop rule is gone.
+	require.Len(t, settings.Hooks["SubagentStop"], 1)
+	require.Contains(t, settings.Hooks["SubagentStop"][0].Hooks[0].Command, "my-own-hook")
 	// Rig's current catalog events are registered.
 	for _, event := range []string{
-		"SessionStart", "UserPromptSubmit", "PreToolUse", "PostToolUse", "Notification", "Stop",
+		"SessionStart", "SessionEnd", "UserPromptSubmit", "PreToolUse", "PostToolUse",
+		"Notification", "Stop", "StopFailure",
 	} {
 		require.Contains(t, settings.Hooks, event)
 		require.Contains(t, settings.Hooks[event][0].Hooks[0].Command, scriptPath)

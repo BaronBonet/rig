@@ -1144,6 +1144,19 @@ func TestTaskStatusText_NamesBackgroundWorkWithinStatusColumn(t *testing.T) {
 	}
 }
 
+func TestTaskStatusDetailText_ListsShellsAndMonitorsBesideATaskWaitingForInput(t *testing.T) {
+	status := &core.TaskStatusUpdate{
+		Phase:          core.TaskStatusPhaseWaitingForInput,
+		BackgroundWork: core.TaskBackgroundWork{Monitors: 7, Shells: 1},
+	}
+
+	row, _ := taskStatusText(status)
+	require.Equal(t, iconStatusProgress+" needs input", row, "the list column keeps to the phase")
+	detail, detailStyle := taskStatusDetailText(status)
+	require.Equal(t, iconStatusProgress+" needs input · 7 monitors, 1 shell running", detail)
+	require.Equal(t, warningStyle.Render(detail), detailStyle.Render(detail))
+}
+
 func TestModel_StatusEnrichmentFailuresDoNotCollapseListView(t *testing.T) {
 	frontend := newFrontendHarness()
 	frontend.listTasks = []*core.Task{

@@ -58,11 +58,19 @@ var ConfigEnvVars = []string{configDirEnvVar}
 // tools (Read, Edit, Grep, ...), and every tool event must drive the task's
 // working status.
 //
-// Stop drives needs-input unless its payload reports background work still in
-// flight; HookEventToTaskStatus then reports the task as working in the
-// background instead.
+// Stop drives needs-input unless its payload reports background work that will
+// bring the agent back; HookEventToTaskStatus then reports the task as working
+// in the background instead.
+//
+// A turn ended by an API error sends StopFailure instead of Stop. A turn the
+// user interrupts with Esc sends no hook at all (verified on Claude Code
+// 2.1.295, mid-tool and mid-text): it reads as working until the next prompt.
+// SessionEnd is observed only for the reasons that end the process, killing
+// its tmux session included ("other"); a clear or resume starts the next
+// session at once.
 var hookCatalog = providerkit.Catalog{
 	{Event: core.HookEventSessionStart, Matcher: "startup|resume|clear", Phase: core.TaskStatusPhaseStarting},
+	{Event: core.HookEventSessionEnd, Matcher: "prompt_input_exit|logout|other", Phase: core.TaskStatusPhaseStopped},
 	{Event: core.HookEventUserPromptSubmit, Phase: core.TaskStatusPhaseWorking},
 	{Event: core.HookEventPreToolUse, Phase: core.TaskStatusPhaseWorking},
 	{Event: core.HookEventPostToolUse, Phase: core.TaskStatusPhaseWorking},
@@ -72,6 +80,7 @@ var hookCatalog = providerkit.Catalog{
 		Phase:   core.TaskStatusPhaseWaitingForInput,
 	},
 	{Event: core.HookEventStop, Phase: core.TaskStatusPhaseWaitingForInput},
+	{Event: core.HookEventStopFailure, Phase: core.TaskStatusPhaseWaitingForInput},
 }
 
 // needsInputNotificationTypes are the Claude notification types that ask the

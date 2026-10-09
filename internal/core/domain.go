@@ -255,6 +255,15 @@ func (w TaskBackgroundWork) IsZero() bool {
 	return w.Total() == 0
 }
 
+// WakesAgent reports whether the work will bring the root agent back for a
+// new turn when it completes: subagents and workflows report back to it.
+// Shells and monitors run on their own, a dev server or an artifact watch
+// for as long as the session lasts, and one that ends or is killed only
+// queues a notice for the user's next prompt.
+func (w TaskBackgroundWork) WakesAgent() bool {
+	return w.Subagents > 0 || w.Workflows > 0
+}
+
 // TaskStatusUpdate is the live status message published by the observer
 // process. It is intentionally separate from the durable Task record.
 type TaskStatusUpdate struct {
@@ -476,10 +485,12 @@ const (
 // for status, activity, and provider adoption.
 const (
 	HookEventSessionStart      = "SessionStart"
+	HookEventSessionEnd        = "SessionEnd"
 	HookEventUserPromptSubmit  = "UserPromptSubmit"
 	HookEventPreToolUse        = "PreToolUse"
 	HookEventPostToolUse       = "PostToolUse"
 	HookEventStop              = "Stop"
+	HookEventStopFailure       = "StopFailure"
 	HookEventNotification      = "Notification"
 	HookEventPermissionRequest = "PermissionRequest"
 	HookEventSubagentStart     = "SubagentStart"
