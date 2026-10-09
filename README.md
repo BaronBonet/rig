@@ -137,7 +137,9 @@ Rig's hooks for that workspace only. The file is written into every Rig task
 workspace — not just tasks whose active provider is Claude — so manually
 launching Claude in any Rig task is observed and adopted. If the file already
 exists (Claude Code stores permission decisions in it), Rig merges its hook
-entries in and preserves everything else. Rig never modifies your user-level
+entries in and preserves everything else. Rig's daemon rewrites these entries
+in every task workspace when it starts, so hooks added by a Rig update also
+reach existing tasks. Rig never modifies your user-level
 `~/.claude/settings.json`, so Claude sessions outside Rig workspaces are never
 observed by or reported to Rig. The workspace settings file is untracked, so it
 never shows up in diffs or pull requests.
@@ -162,6 +164,15 @@ instead of `needs input`. Claude wakes the task when that work finishes, and
 the next turn end updates the status. Monitor watches appear as shells, and a
 backgrounded long-running process such as a dev server keeps the task working
 until it exits.
+
+When a Claude turn ends on an API error, such as a rate limit, an overloaded
+or failed request, or an authentication problem, Claude fires `StopFailure`
+instead of `Stop`, and Rig shows the task as `needs input`. The error message
+appears in the task's recent activity.
+
+Claude fires no hook when you interrupt a turn with `esc`. While the TUI is
+watching the task, Rig reads the interruption from the Claude transcript and
+shows the task as `needs input`.
 
 When a Codex task ends its turn while subagents it spawned are still running,
 Rig shows the task as working in the background in the same way, for example

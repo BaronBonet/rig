@@ -88,6 +88,27 @@ func TestReadSessionActivity_SkipsToolResultsMetaAndSidechainEntries(t *testing.
 	require.Empty(t, events)
 }
 
+func TestReadSessionActivity_RecoversTheAPIErrorThatEndedTheTurn(t *testing.T) {
+	repo, _ := newTestRepository(t, subprocess.NewMockRunner(t))
+	// Claude Code records the API error behind a StopFailure as a synthetic
+	// assistant message, so the detail view already shows why the agent
+	// stopped.
+	transcript := writeTranscript(t,
+		`{"type":"user","timestamp":"2026-07-04T08:21:23.479Z",`+
+			`"message":{"role":"user","content":"fix the flaky test"}}`,
+		`{"type":"assistant","isApiErrorMessage":true,"error":"rate_limit",`+
+			`"timestamp":"2026-07-04T08:21:30.000Z","message":{"id":"msg_err","model":"<synthetic>",`+
+			`"role":"assistant","content":[{"type":"text","text":"API Error: Rate limit reached"}]}}`,
+	)
+
+	events, err := repo.ReadSessionActivity(t.Context(), claudeSession(transcript), time.Time{})
+
+	require.NoError(t, err)
+	require.Len(t, events, 2)
+	require.Equal(t, core.TaskActivityRoleAssistant, events[1].Role)
+	require.Equal(t, "API Error: Rate limit reached", events[1].Text)
+}
+
 func TestReadSessionActivity_ToleratesMissingTranscriptAndTaskID(t *testing.T) {
 	repo, _ := newTestRepository(t, subprocess.NewMockRunner(t))
 

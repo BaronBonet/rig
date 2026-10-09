@@ -114,7 +114,7 @@ func TestRepositoryBuildWorkspaceBootstrapSpec_EmitsWorkspaceScopedHookSettings(
 	var settings providerkit.HookConfig
 	require.NoError(t, json.Unmarshal(file.Content, &settings))
 	for _, event := range []string{
-		"SessionStart", "UserPromptSubmit", "PreToolUse", "PostToolUse", "Notification", "Stop",
+		"SessionStart", "UserPromptSubmit", "PreToolUse", "PostToolUse", "Notification", "Stop", "StopFailure",
 	} {
 		require.Contains(t, settings.Hooks, event)
 	}
@@ -128,10 +128,13 @@ func TestRepositoryBuildWorkspaceBootstrapSpec_EmitsWorkspaceScopedHookSettings(
 		"permission_prompt|worker_permission_prompt|elicitation_dialog|elicitation_url_dialog|agent_needs_input",
 		settings.Hooks["Notification"][0].Matcher,
 	)
+	// Every API error type ends the turn, so StopFailure is unmatched.
+	require.Empty(t, settings.Hooks["StopFailure"][0].Matcher)
 
 	scriptPath := filepath.Join(dataDir, "claude", "hooks", "forward-to-rig.sh")
 	require.Contains(t, settings.Hooks["SessionStart"][0].Hooks[0].Command, scriptPath)
 	require.Contains(t, settings.Hooks["Stop"][0].Hooks[0].Command, "'Stop'")
+	require.Contains(t, settings.Hooks["StopFailure"][0].Hooks[0].Command, "'StopFailure'")
 }
 
 func TestRepositoryDoctorReportsMissingForwarderScript(t *testing.T) {
@@ -236,7 +239,7 @@ func TestRepositoryBuildWorkspaceBootstrapSpec_MergePreservesUserSettings(t *tes
 	require.Contains(t, settings.Hooks["SessionEnd"][0].Hooks[0].Command, "my-own-hook")
 	// Rig's current catalog events are registered.
 	for _, event := range []string{
-		"SessionStart", "UserPromptSubmit", "PreToolUse", "PostToolUse", "Notification", "Stop",
+		"SessionStart", "UserPromptSubmit", "PreToolUse", "PostToolUse", "Notification", "Stop", "StopFailure",
 	} {
 		require.Contains(t, settings.Hooks, event)
 		require.Contains(t, settings.Hooks[event][0].Hooks[0].Command, scriptPath)
