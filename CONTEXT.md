@@ -110,10 +110,11 @@ Use `rig` for the CLI command and Rig for the product or system.
   durable task record.
 - Background work: Provider work the root agent started that is still in
   flight when its turn ends, such as background subagents, shells, monitors,
-  and workflows. A Task with background work is working in the background, not
-  waiting for input. Claude wakes the agent when the work completes; Codex
-  does not, so a Codex Task returns to needs input once its last subagent
-  finishes.
+  and workflows. A Claude Task is working in the background only while
+  subagents or workflows run, which wake the agent when they complete; shells
+  and monitors do not, so with only those it waits for input. Codex wakes the
+  agent for none, so a Codex Task returns to needs input once its last
+  subagent finishes.
 - Activity event: A compact persisted event used by the detail view to show
   recent user prompts and assistant actions.
 - Resume metadata: The minimal provider state needed to reconnect a task session
@@ -151,10 +152,12 @@ Use `rig` for the CLI command and Rig for the product or system.
   Configured provider.
 - A Task may have many Provider sessions over time; a New session adds one
   without changing the Task's identity, workspace, or tmux session.
-- A New session that replaces the Task's session ends the Provider in the
-  Task's Session first, with the Provider's own exit command, once it sits
-  idle at its prompt; it is refused while the Provider is working. One that
-  runs alongside leaves the running Provider alone.
+- A New session that replaces the Task's session clears the Provider in place
+  when it would launch the same way (same Provider, model and effort) and the
+  Provider has a clear command, and otherwise ends it with its own exit
+  command first. Whether the session can go is the user's call, made with its
+  window shown live; Rig does not refuse on a status. One that runs alongside
+  leaves the running Provider alone.
 - A Child task is a folder Task of its parent's workspace: never seeded, never
   removed. Deleting a Child task closes only its window; deleting the parent
   closes the Session and removes every Child task's record.
@@ -162,8 +165,7 @@ Use `rig` for the CLI command and Rig for the product or system.
   never attributed to the parent. A New session of a Child task joins the
   parent's group.
 - Shelving or unshelving a Task moves its Child tasks with it; a Child task
-  can also be shelved on its own, which closes only its window. Shelving is
-  refused while any of them is working.
+  can also be shelved on its own, which closes only its window.
 - A Rename changes only the Task's display name and original ask; its slug,
   and so its workspace, branch and tmux session, stays. A provider session
   renames its Task only when the title the user gave it changes, so a Rename

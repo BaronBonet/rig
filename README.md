@@ -180,13 +180,19 @@ task still shows `needs input` after you submit a prompt, Rig has not yet
 received the next provider hook, such as `UserPromptSubmit`, `PreToolUse`, or
 `PostToolUse`, that marks the task as working.
 
-When a Claude task ends its turn while background work it started is still
-running (subagents, background shells, Monitor watches, workflows), Rig shows
-the task as working in the background, for example `1 subagent working`,
-instead of `needs input`. Claude wakes the task when that work finishes, and
-the next turn end updates the status. Monitor watches appear as shells, and a
-backgrounded long-running process such as a dev server keeps the task working
-until it exits.
+When a Claude task ends its turn while subagents or workflows it started are
+still running, Rig shows the task as working in the background, for example
+`1 subagent working`, instead of `needs input`: they report back to Claude,
+which takes another turn, and that turn's end updates the status. Background
+shells and monitors (a dev server, a Monitor watch, an artifact watch) do not:
+they run on their own, and one that ends or is killed only queues a notice
+for your next prompt. A task with only those running shows `needs input`, and
+the detail panel lists what is still running.
+
+A turn ended by an API error (a rate limit, say) shows `needs input`, and a
+session that exits, or whose window is closed, shows `stopped`. A turn you
+interrupt with Esc sends Rig nothing, so the task shows `working` until your
+next prompt.
 
 When a Codex task ends its turn while subagents it spawned are still running,
 Rig shows the task as working in the background in the same way, for example
@@ -393,12 +399,15 @@ write handoff notes yet.
   and branch, the handoff note, and its own instruction. A session started
   from one of these rows joins the same group. `x` on a session row closes
   only its window; cleaning up the task closes them all.
-- **this window** (`ctrl+w`) replaces it: Rig types the provider's own exit
-  command (`/exit` for Claude Code, `/quit` for Codex) into the session once
-  the handoff note is written, waits for it to leave, and starts the new
-  session in its place. The task keeps its row, now with one more session
-  behind it. A session still in a turn is never cut off: Rig refuses and
-  says so, so wait for it to finish or use a new window.
+- **this window** (`ctrl+w`) replaces it, once the handoff note is written.
+  When the new session runs with the same provider, model and effort, Claude
+  Code's session is cleared in place with `/clear`, a new session in the same
+  process, and given the prompt. Otherwise Rig types the provider's own exit
+  command (`/exit` for Claude Code, `/quit` for Codex), waits for it to leave,
+  and launches the new session with its own options. The task keeps its row,
+  now with one more session behind it. While set to replace it, the composer
+  shows the session's window live, so you can see whether it is still in a
+  turn: Rig does not judge that for you.
 
 Choosing another provider with `tab` switches the task to it, as `p` does, and
 starts the new session there.
@@ -418,8 +427,8 @@ anything else running in its windows, which frees the memory they hold. It
 keeps everything else: the record and its sessions, the model and effort,
 activity, token usage, the branch and the worktree. Unlike `x`, nothing is
 removed. A task moves with the sessions listed under it, and `d` on a session
-row shelves only that session and closes its window. Rig refuses while any of
-them is in a turn, so no work is cut off.
+row shelves only that session and closes its window. A session still in a
+turn is ended with the rest, so check before shelving one you are not sure of.
 
 On the shelf, `enter` puts the task back on the current list and opens it,
 resuming its latest session, as a reconnect would; `d` puts it back without
