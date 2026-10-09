@@ -349,6 +349,7 @@ func TestRepositoryAttachTaskSession_SwitchesClientAndBindsAKeyBackToRig(t *test
 			"display-message", "-p", "-t", "%3", "#{session_name}"),
 		expectTmuxRun(runner, subprocess.Result{}, nil, "set-option", "-t", "=repo_task:", "@rig_session", "project"),
 		expectTmuxRun(runner, subprocess.Result{}, nil, "set-option", "-g", "@rig_last_session", "project"),
+		expectTmuxRun(runner, subprocess.Result{}, nil, "set-option", "-t", "=project:", "@rig_session", "project"),
 		expectTmuxRun(runner, subprocess.Result{}, nil, "set-option", "-gu", "@rig_session"),
 		expectTmuxRun(
 			runner,
@@ -370,7 +371,8 @@ func TestRepositoryAttachTaskSession_SwitchesClientAndBindsAKeyBackToRig(t *test
 }
 
 // returnBinding switches to the session's own rig, or the last rig used when
-// no rig has claimed the session.
+// no rig has claimed the session. A rig's own session names itself, so there
+// the key stays put.
 const returnBinding = "switch-client -t '=#{?@rig_session,#{@rig_session},#{@rig_last_session}}'"
 
 func TestRepositoryClaimTaskSessions_PointsTheFoldersTasksAtThisRigUnlessACloserRigHoldsThem(t *testing.T) {
@@ -384,6 +386,9 @@ func TestRepositoryClaimTaskSessions_PointsTheFoldersTasksAtThisRigUnlessACloser
 	expectTmuxRun(runner, subprocess.Result{Stdout: "rig-work\n"}, nil,
 		"display-message", "-p", "-t", "%3", "#{session_name}")
 	expectTmuxRun(runner, subprocess.Result{}, nil, "set-option", "-t", "=rig-work:", "@rig_folder", "/src/work/code")
+	// On the rig's own screen the key leads to the rig itself, not to the
+	// last rig another folder used.
+	expectTmuxRun(runner, subprocess.Result{}, nil, "set-option", "-t", "=rig-work:", "@rig_session", "rig-work")
 	expectTmuxRun(runner, subprocess.Result{}, nil, "set-option", "-gu", "@rig_session")
 	expectTmuxRun(runner, subprocess.Result{}, nil, "bind-key", "-T", "prefix", "b", "run-shell", "-C", returnBinding)
 	expectTmuxRun(runner, subprocess.Result{Stdout: strings.Join([]string{
@@ -438,6 +443,7 @@ func TestRepositoryAttachTaskSession_TheReturnKeyCanBeChangedOrTurnedOff(t *test
 		"display-message", "-p", "-t", "%3", "#{session_name}")
 	expectTmuxRun(runner, subprocess.Result{}, nil, "set-option", "-t", "=repo_task:", "@rig_session", "project")
 	expectTmuxRun(runner, subprocess.Result{}, nil, "set-option", "-g", "@rig_last_session", "project")
+	expectTmuxRun(runner, subprocess.Result{}, nil, "set-option", "-t", "=project:", "@rig_session", "project")
 	expectTmuxRun(runner, subprocess.Result{}, nil, "set-option", "-gu", "@rig_session")
 	expectTmuxRun(runner, subprocess.Result{}, nil, "bind-key", "-T", "prefix", "e", "run-shell", "-C", returnBinding)
 	require.NoError(t, repo.AttachTaskSession(context.Background(), &core.Task{TmuxSession: "repo_task"}))

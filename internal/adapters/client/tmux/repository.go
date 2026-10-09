@@ -25,9 +25,9 @@ const (
 	returnKeyEnvVar  = "RIG_TMUX_RETURN_KEY"
 	defaultReturnKey = "b"
 	// rigSessionOption, set on a task's session, names the rig the return key
-	// leads to; rigLastSessionOption is the fallback for a session without
-	// one. It is not rigSessionOption's global value, which every session
-	// would read as its own.
+	// leads to, and on a rig's own session names that rig; rigLastSessionOption
+	// is the fallback for a session without one. It is not rigSessionOption's
+	// global value, which every session would read as its own.
 	rigSessionOption     = "@rig_session"
 	rigLastSessionOption = "@rig_last_session"
 	// rigFolderOption, set on a rig's own session, is the folder it runs for.
@@ -193,7 +193,7 @@ func (r *repository) rememberReturnToRig(ctx context.Context, taskSession string
 	}
 	r.setSessionOption(ctx, taskSession, rigSessionOption, rigSession)
 	_, _ = r.runner.Run(ctx, "", "tmux", "set-option", "-g", rigLastSessionOption, rigSession)
-	r.bindReturnKey(ctx, key)
+	r.bindReturnKey(ctx, key, rigSession)
 }
 
 // ClaimTaskSessions points the return key of folder's tasks at this rig. A
@@ -212,7 +212,7 @@ func (r *repository) ClaimTaskSessions(ctx context.Context, folder string, tasks
 		return nil
 	}
 	r.setSessionOption(ctx, rigSession, rigFolderOption, folder)
-	r.bindReturnKey(ctx, key)
+	r.bindReturnKey(ctx, key, rigSession)
 
 	result, err := r.runner.Run(ctx, "", "tmux", "list-sessions", "-F",
 		"#{session_name}\t#{"+rigSessionOption+"}\t#{"+rigFolderOption+"}")
@@ -277,9 +277,12 @@ func (r *repository) setSessionOption(ctx context.Context, session string, optio
 }
 
 // bindReturnKey binds the key to the session's own rig, or the fallback. The
-// global rigSessionOption earlier builds set is cleared, or every session
-// would read it as its own.
-func (r *repository) bindReturnKey(ctx context.Context, key string) {
+// rig's own session names itself, so the key stays put there instead of
+// falling back to whichever rig opened a task last. The global
+// rigSessionOption earlier builds set is cleared, or every session would read
+// it as its own.
+func (r *repository) bindReturnKey(ctx context.Context, key string, rigSession string) {
+	r.setSessionOption(ctx, rigSession, rigSessionOption, rigSession)
 	_, _ = r.runner.Run(ctx, "", "tmux", "set-option", "-gu", rigSessionOption)
 	_, _ = r.runner.Run(ctx, "", "tmux", "bind-key", "-T", "prefix", key, "run-shell", "-C",
 		"switch-client -t '=#{?"+rigSessionOption+",#{"+rigSessionOption+"},#{"+rigLastSessionOption+"}}'")
