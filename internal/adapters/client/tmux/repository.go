@@ -158,12 +158,10 @@ func (r *repository) AttachTaskSession(ctx context.Context, task *core.Task) err
 	if insideTmux {
 		command = "switch-client"
 	}
-	// A child task lives in one window of its parent's session; attaching
-	// lands there.
-	target := exactSessionTarget(task.TmuxSession)
-	if strings.TrimSpace(task.TmuxWindow) != "" {
-		target = exactWindowTarget(task.TmuxSession, task.TmuxWindow)
-	}
+	// Attaching lands in the task's own window, not the one last shown in
+	// its session, which its children's windows share. A window that is gone
+	// reports the session missing, and the task is reconnected into it.
+	target := exactWindowTarget(task.TmuxSession, windowOf(task))
 
 	result, err := r.runner.Run(
 		ctx,
