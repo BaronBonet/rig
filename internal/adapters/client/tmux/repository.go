@@ -331,6 +331,13 @@ func (r *repository) InspectTaskSession(ctx context.Context, task *core.Task) (c
 	}, nil
 }
 
+func (r *repository) CaptureTaskSession(ctx context.Context, task *core.Task) (string, error) {
+	if task == nil || strings.TrimSpace(task.TmuxSession) == "" {
+		return "", fmt.Errorf("task tmux session is required")
+	}
+	return r.capturePaneContent(ctx, task.TmuxSession, windowOf(task))
+}
+
 func (r *repository) InspectTaskSessions(
 	ctx context.Context,
 	tasks []*core.Task,

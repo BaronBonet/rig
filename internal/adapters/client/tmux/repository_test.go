@@ -799,6 +799,29 @@ func TestRepositoryStartTaskSession_RecreatesAMissingTaskWindowInAnExistingSessi
 	require.NoError(t, err)
 }
 
+func TestRepositoryCaptureTaskSession_ReadsTheTasksOwnWindow(t *testing.T) {
+	runner := subprocess.NewMockRunner(t)
+	repo := New(runner).(*repository)
+	expectTmuxRun(runner, subprocess.Result{Stdout: "❯ \n"}, nil, "capture-pane", "-t", "=repo_task:task", "-p")
+	expectTmuxRun(
+		runner,
+		subprocess.Result{Stdout: "esc to interrupt\n"},
+		nil,
+		"capture-pane",
+		"-t",
+		"=repo_task:s2",
+		"-p",
+	)
+
+	parent, err := repo.CaptureTaskSession(context.Background(), &core.Task{TmuxSession: "repo_task"})
+	require.NoError(t, err)
+	require.Equal(t, "❯ \n", parent)
+
+	child, err := repo.CaptureTaskSession(context.Background(), &core.Task{TmuxSession: "repo_task", TmuxWindow: "s2"})
+	require.NoError(t, err)
+	require.Equal(t, "esc to interrupt\n", child, "a child's window is its own")
+}
+
 func TestRepositoryInspectTaskSession_ReturnsMissingWhenTaskWindowIsGone(t *testing.T) {
 	runner := subprocess.NewMockRunner(t)
 	repo := New(runner).(*repository)

@@ -69,7 +69,7 @@ func (s *service) newTaskSession(
 		if err != nil {
 			return nil, err
 		}
-		if occupant != "" && s.taskIsMidTurn(ctx, task.ID) {
+		if occupant != "" && s.providerMidTurn(ctx, task, occupant) {
 			return nil, fmt.Errorf(
 				"%w: %s is still working in the task's window; "+
 					"wait for it to finish, or start the session in a new window instead",
@@ -169,6 +169,42 @@ func (s *service) taskIsWorking(ctx context.Context, taskID string) bool {
 	default:
 		return false
 	}
+}
+
+// providerMidTurn reports whether the provider in the Task's own window is in
+// a turn. The window decides when the provider has a turn marker and the
+// window can be read: a turn that is interrupted sends no Stop, so the
+// status it leaves says working long after the provider is back at its
+// prompt. Otherwise the Task's own status decides.
+func (s *service) providerMidTurn(ctx context.Context, task *Task, provider Provider) bool {
+	client, err := supportedProviderClient(s.providers, provider)
+	if err == nil && client.TurnMarker() != "" {
+		if content, captureErr := s.tmuxSession.CaptureTaskSession(ctx, task); captureErr == nil {
+			return windowFootShows(content, client.TurnMarker())
+		}
+	}
+	return s.taskIsMidTurn(ctx, task.ID)
+}
+
+// windowFootLines is how many of a window's last non-blank lines are its
+// foot, the prompt and what sits around it: a turn marker is looked for
+// there, not in the whole conversation, which can quote it. Too wide a foot
+// only refuses a replacement; too narrow a one would end a turn.
+const windowFootLines = 8
+
+func windowFootShows(content string, marker string) bool {
+	lines := strings.Split(content, "\n")
+	seen := 0
+	for i := len(lines) - 1; i >= 0 && seen < windowFootLines; i-- {
+		if strings.TrimSpace(lines[i]) == "" {
+			continue
+		}
+		seen++
+		if strings.Contains(strings.ToLower(lines[i]), strings.ToLower(marker)) {
+			return true
+		}
+	}
+	return false
 }
 
 // taskIsMidTurn reports whether the Task's own latest status says its

@@ -110,10 +110,13 @@ type sessionClientState struct {
 	onStart func(*Task)
 	// submittedInputs are the texts submitted into the task window; onSubmit
 	// runs for each, for example to make the provider leave the pane.
-	submittedInputs     []string
-	submitErr           error
-	onSubmit            func(*Task, string)
-	inspectState        TaskSessionRuntimeState
+	submittedInputs []string
+	submitErr       error
+	onSubmit        func(*Task, string)
+	inspectState    TaskSessionRuntimeState
+	// window is what the task's window shows; captureErr fails reading it.
+	window              string
+	captureErr          error
 	batchInspectCalls   int
 	batchInspectActive  int
 	batchInspectMax     int
@@ -125,6 +128,7 @@ type providerClientState struct {
 	mu                      sync.Mutex
 	commandName             string
 	exitCommand             string
+	turnMarker              string
 	healthErr               error
 	suggestErr              error
 	suggestedName           string
@@ -487,6 +491,11 @@ func configureTmuxSessionMock(client *MockTmuxSessionClient, state *sessionClien
 			return state.inspectState, state.inspectErr
 		},
 	).Maybe()
+	client.EXPECT().CaptureTaskSession(mock.Anything, mock.Anything).RunAndReturn(
+		func(_ context.Context, _ *Task) (string, error) {
+			return state.window, state.captureErr
+		},
+	).Maybe()
 	client.EXPECT().InspectTaskSessions(mock.Anything, mock.Anything).RunAndReturn(
 		func(_ context.Context, tasks []*Task) (map[string]TaskSessionRuntimeState, error) {
 			state.mu.Lock()
@@ -612,6 +621,7 @@ func configureProviderClientMock(client *MockProviderClient, state *providerClie
 		}
 		return "/exit"
 	}).Maybe()
+	client.EXPECT().TurnMarker().RunAndReturn(func() string { return state.turnMarker }).Maybe()
 	client.EXPECT().LaunchOptions().RunAndReturn(func() ProviderLaunchOptions {
 		return state.launchOptions
 	}).Maybe()

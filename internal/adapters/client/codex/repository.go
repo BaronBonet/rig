@@ -263,6 +263,12 @@ func (r *repository) ExitCommand() string {
 	return "/quit"
 }
 
+// TurnMarker is empty: no Codex footer has been verified, so its status
+// decides whether it is in a turn.
+func (r *repository) TurnMarker() string {
+	return ""
+}
+
 func (r *repository) TaskSessionCommandName() string {
 	commandName := filepath.Base(strings.TrimSpace(r.binary))
 	if commandName == "." {

@@ -394,6 +394,12 @@ func (r *repository) ExitCommand() string {
 	return "/exit"
 }
 
+// TurnMarker is in Claude Code's footer, below its prompt, while a turn runs
+// and gone once it ends, including when the turn is interrupted.
+func (r *repository) TurnMarker() string {
+	return "esc to interrupt"
+}
+
 func (r *repository) TaskSessionCommandName() string {
 	commandName := filepath.Base(strings.TrimSpace(r.binary))
 	if commandName == "." {

@@ -400,6 +400,9 @@ type ProviderClient interface {
 	// ExitCommand is the command that, typed at the provider's idle prompt,
 	// ends its interactive session.
 	ExitCommand() string
+	// TurnMarker is text the provider shows at the foot of its window only
+	// while a turn is running, or "" when it shows none Rig can rely on.
+	TurnMarker() string
 	// HookEventToTaskStatus normalizes a provider hook event into a task status
 	// update when the event contributes to the live task status stream.
 	HookEventToTaskStatus(input HookEventInput) (*TaskStatusUpdate, error)
@@ -511,6 +514,8 @@ type TmuxSessionClient interface {
 	// InspectTaskSession returns the current tmux-side runtime state for the
 	// task session. Missing sessions are reported as Exists=false.
 	InspectTaskSession(ctx context.Context, task *Task) (TaskSessionRuntimeState, error)
+	// CaptureTaskSession returns the text the task's own window shows now.
+	CaptureTaskSession(ctx context.Context, task *Task) (string, error)
 	// InspectTaskSessions returns one shared runtime snapshot for the supplied
 	// tasks. The result is keyed by task ID; missing sessions are included with
 	// Exists=false.
