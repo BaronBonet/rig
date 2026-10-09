@@ -2,6 +2,8 @@ package core
 
 import (
 	"context"
+	"fmt"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -53,22 +55,22 @@ type taskRepositoryState struct {
 	createErr              error
 	updateErr              error
 	deleteErr              error
-	resumeMetadataErr      error
 	updateErrAt            int
 	updateCount            int
 	listTasks              []*Task
 	createdTask            *Task
 	updatedTask            *Task
 	deletedTaskID          string
-	savedResumeMetadata    *TaskResumeMetadata
 	savedProviderSessions  []TaskProviderSession
-	latestResumeByTask     map[string]TaskResumeMetadata
 	providerSessionsByTask map[string][]TaskProviderSession
 	activityByTask         map[string][]TaskActivityEvent
 	mu                     sync.Mutex
-	latestByTask           map[string]TaskStatusUpdate
-	subscribers            map[string][]chan TaskStatusUpdate
-	subscribeCalls         map[string]int
+	// agentSessions holds every agent session ever created, open or ended.
+	agentSessions []AgentSession
+	// createAgentSessionErr fails every agent session creation.
+	createAgentSessionErr error
+	// agentSessionReads counts reads of each task's open agent sessions.
+	agentSessionReads map[string]int
 }
 
 type repoClientState struct {
@@ -85,61 +87,101 @@ type repoClientState struct {
 }
 
 type sessionClientState struct {
-	mu                  sync.Mutex
-	healthErr           error
-	startErr            error
-	deleteErr           error
-	inspectErr          error
-	batchInspectErr     error
-	events              *[]string
-	startedTask         *Task
-	deletedTask         *Task
-	startedLaunch       TaskSessionLaunchSpec
-	inspectState        TaskSessionRuntimeState
-	batchInspectCalls   int
-	batchInspectActive  int
-	batchInspectMax     int
-	batchInspectStarted chan struct{}
-	batchInspectRelease chan struct{}
+	mu              sync.Mutex
+	healthErr       error
+	startErr        error
+	deleteErr       error
+	inspectErr      error
+	batchInspectErr error
+	events          *[]string
+	startedTask     *Task
+	deletedTask     *Task
+	startedLaunch   TaskSessionLaunchSpec
+	// startPane is the pane StartTaskSession reports launching in; zero
+	// leaves the launch without an agent session until a hook opens one.
+	// startOpened runs once the Session is up, before StartTaskSession
+	// returns, as the agent starting in its task window would.
+	startPane   TmuxPaneRef
+	startOpened func(TmuxPaneRef)
+	// SplitAgentPane opens panes %100, %101 and so on, on locateServer,
+	// unless agentPaneErr fails them, or agentPaneErrByCommand fails the
+	// panes whose launch runs that command. agentPaneOpened runs once a pane
+	// is open, before SplitAgentPane returns, as the agent starting in it
+	// would.
+	agentPaneErr          error
+	agentPaneErrByCommand map[string]error
+	agentPaneOpened       func(TmuxPaneRef)
+	agentPanes            []agentPaneCall
+	inspectState          TaskSessionRuntimeState
+	batchInspectCalls     int
+	batchInspectActive    int
+	batchInspectMax       int
+	batchInspectStarted   chan struct{}
+	batchInspectRelease   chan struct{}
+	// The InspectTaskSessions and LocateProcessPane fakes report
+	// locateServer, locatePanes and locateTaskSessionPanes as the tmux
+	// server's state. LocateProcessPane traces each PID to locatePaneByPID
+	// through the process chain in locateChainByPID.
+	locateErr              error
+	locateServer           TmuxServer
+	locatePanes            []TmuxPane
+	locateTaskSessionPanes map[string][]string
+	locatePaneByPID        map[int]string
+	locateChainByPID       map[int][]string
+	locatedPIDs            []int
+}
+
+// agentPaneCall is one pane SplitAgentPane was asked to split in.
+type agentPaneCall struct {
+	task   *Task
+	beside string
+	launch TaskSessionLaunchSpec
+	pane   TmuxPaneRef
 }
 
 type providerClientState struct {
-	mu                      sync.Mutex
-	commandName             string
-	healthErr               error
-	suggestErr              error
-	suggestedName           string
-	suggestedSuggestion     TaskSuggestion
-	sessionEnvErr           error
-	sessionEnvCalls         int
-	events                  *[]string
-	bootstrapErr            error
-	bootstrapSpec           WorkspaceBootstrapSpec
-	bootstrapRequest        *Task
-	launchErr               error
-	launchRequest           TaskSessionLaunchSpec
-	reconnectLaunchErr      error
-	reconnectLaunch         TaskSessionLaunchSpec
-	hookErr                 error
-	hookUpdate              *TaskStatusUpdate
-	hookInput               HookEventInput
-	statusRecoveryErr       error
-	statusRecoveryUpdate    *TaskStatusUpdate
-	statusRecoveryCurrent   *TaskStatusUpdate
-	statusRecoverySessions  []TaskProviderSession
-	statusRecoveryStartedAt time.Time
-	statusRecoveryCalls     map[string]int
-	statusRecoveryActive    int
-	statusRecoveryMax       int
-	statusRecoveryStarted   chan struct{}
-	statusRecoveryRelease   chan struct{}
-	activityErrByTranscript map[string]error
-	activityByTranscript    map[string][]TaskActivityEvent
-	activityCalls           []providerActivityCall
-	errByTranscript         map[string]error
-	usageByTranscript       map[string]*SessionTokenUsage
-	tokenUsageCalls         []providerTokenUsageCall
-	builtLaunchSpecs        []TaskSessionLaunchSpec
+	mu                  sync.Mutex
+	commandName         string
+	healthErr           error
+	suggestErr          error
+	suggestedName       string
+	suggestedSuggestion TaskSuggestion
+	sessionEnvErr       error
+	sessionEnvCalls     int
+	// sessionEnvRan runs as each session environment is ensured, as a hook
+	// event arriving meanwhile would.
+	sessionEnvRan        func()
+	events               *[]string
+	bootstrapErr         error
+	bootstrapSpec        WorkspaceBootstrapSpec
+	bootstrapRequest     *Task
+	launchErr            error
+	launchRequest        TaskSessionLaunchSpec
+	reconnectLaunchErr   error
+	reconnectLaunch      TaskSessionLaunchSpec
+	hookErr              error
+	hookUpdate           *TaskStatusUpdate
+	hookInput            HookEventInput
+	statusRecoveryErr    error
+	statusRecoveryUpdate *AgentSessionStatus
+	// statusRecoveryByConversation, when set, recovers per Provider session
+	// ID instead of statusRecoveryUpdate.
+	statusRecoveryByConversation map[string]*AgentSessionStatus
+	statusRecoveryCurrent        *AgentSessionStatus
+	statusRecoverySessions       []TaskProviderSession
+	statusRecoveryStartedAt      time.Time
+	statusRecoveryCalls          map[string]int
+	statusRecoveryActive         int
+	statusRecoveryMax            int
+	statusRecoveryStarted        chan struct{}
+	statusRecoveryRelease        chan struct{}
+	activityErrByTranscript      map[string]error
+	activityByTranscript         map[string][]TaskActivityEvent
+	activityCalls                []providerActivityCall
+	errByTranscript              map[string]error
+	usageByTranscript            map[string]*SessionTokenUsage
+	tokenUsageCalls              []providerTokenUsageCall
+	builtLaunchSpecs             []TaskSessionLaunchSpec
 }
 
 func (s *providerClientState) mockCommandName() string {
@@ -197,10 +239,7 @@ func newTestTaskService(t *testing.T) *testTaskServiceHarness {
 			branchInUse: map[string]bool{},
 		},
 	}
-	h.sessionClient.inspectState = TaskSessionRuntimeState{
-		Exists:         true,
-		ActiveCommands: []string{"codex"},
-	}
+	h.sessionClient.inspectState = TaskSessionRuntimeState{Exists: true}
 	h.sessionClient.events = &h.events
 	h.providerRepo.events = &h.events
 	h.providerRepo.commandName = "codex"
@@ -210,12 +249,9 @@ func newTestTaskService(t *testing.T) *testTaskServiceHarness {
 		Configured: []Provider{ProviderCodex},
 		Default:    ProviderCodex,
 	}
-	h.taskRepo.latestByTask = make(map[string]TaskStatusUpdate)
-	h.taskRepo.latestResumeByTask = make(map[string]TaskResumeMetadata)
 	h.taskRepo.providerSessionsByTask = make(map[string][]TaskProviderSession)
 	h.taskRepo.activityByTask = make(map[string][]TaskActivityEvent)
-	h.taskRepo.subscribers = make(map[string][]chan TaskStatusUpdate)
-	h.taskRepo.subscribeCalls = make(map[string]int)
+	h.taskRepo.agentSessionReads = make(map[string]int)
 	h.taskRepoMock = NewMockTaskRepository(t)
 	h.repoClientMock = NewMockGitWorktreeClient(t)
 	h.sessionClientMock = NewMockTmuxSessionClient(t)
@@ -372,23 +408,60 @@ func configureTmuxSessionMock(client *MockTmuxSessionClient, state *sessionClien
 		},
 	).Maybe()
 	client.EXPECT().StartTaskSession(mock.Anything, mock.Anything, mock.Anything).RunAndReturn(
-		func(_ context.Context, task *Task, launch TaskSessionLaunchSpec) error {
+		func(_ context.Context, task *Task, launch TaskSessionLaunchSpec) (TmuxPaneRef, error) {
 			if state.events != nil {
 				*state.events = append(*state.events, "start_task_session")
 			}
 			state.startedTask = cloneTask(task)
 			state.startedLaunch = launch
-			return state.startErr
+			if state.startErr != nil {
+				return TmuxPaneRef{}, state.startErr
+			}
+			if state.startOpened != nil {
+				state.startOpened(state.startPane)
+			}
+			return state.startPane, nil
 		},
 	).Maybe()
-	client.EXPECT().AttachTaskSession(mock.Anything, mock.Anything).Return(nil).Maybe()
+	client.EXPECT().SplitAgentPane(mock.Anything, mock.Anything, mock.Anything, mock.Anything).RunAndReturn(
+		func(_ context.Context, task *Task, beside string, launch TaskSessionLaunchSpec) (TmuxPaneRef, error) {
+			state.mu.Lock()
+			if state.events != nil {
+				*state.events = append(*state.events, "split_agent_pane")
+			}
+			if state.agentPaneErr != nil {
+				state.mu.Unlock()
+				return TmuxPaneRef{}, state.agentPaneErr
+			}
+			if len(launch.Command) > 0 {
+				if err := state.agentPaneErrByCommand[launch.Command[0]]; err != nil {
+					state.mu.Unlock()
+					return TmuxPaneRef{}, err
+				}
+			}
+			pane := TmuxPaneRef{Server: state.locateServer, ID: fmt.Sprintf("%%%d", 100+len(state.agentPanes))}
+			state.agentPanes = append(state.agentPanes, agentPaneCall{
+				task:   cloneTask(task),
+				beside: beside,
+				launch: launch,
+				pane:   pane,
+			})
+			opened := state.agentPaneOpened
+			state.mu.Unlock()
+			if opened != nil {
+				opened(pane)
+			}
+			return pane, nil
+		},
+	).Maybe()
+	client.EXPECT().AttachTaskSession(mock.Anything, mock.Anything, mock.Anything).Return(nil).Maybe()
 	client.EXPECT().InspectTaskSession(mock.Anything, mock.Anything).RunAndReturn(
 		func(_ context.Context, _ *Task) (TaskSessionRuntimeState, error) {
 			return state.inspectState, state.inspectErr
 		},
 	).Maybe()
 	client.EXPECT().InspectTaskSessions(mock.Anything, mock.Anything).RunAndReturn(
-		func(_ context.Context, tasks []*Task) (map[string]TaskSessionRuntimeState, error) {
+		func(_ context.Context, tasks []*Task) (TmuxSnapshot, error) {
 			state.mu.Lock()
 			state.batchInspectCalls++
 			state.batchInspectActive++
@@ -398,7 +471,6 @@ func configureTmuxSessionMock(client *MockTmuxSessionClient, state *sessionClien
 			started := state.batchInspectStarted
 			release := state.batchInspectRelease
 			inspectErr := state.batchInspectErr
-			inspectState := state.inspectState
 			state.mu.Unlock()
 			if started != nil {
 				select {
@@ -413,15 +485,24 @@ func configureTmuxSessionMock(client *MockTmuxSessionClient, state *sessionClien
 			state.batchInspectActive--
 			state.mu.Unlock()
 			if inspectErr != nil {
-				return nil, inspectErr
+				return TmuxSnapshot{}, inspectErr
 			}
-			runtimeByTask := make(map[string]TaskSessionRuntimeState, len(tasks))
+			state.mu.Lock()
+			defer state.mu.Unlock()
+			snapshot := TmuxSnapshot{
+				TaskSessionPanes: make(map[string][]string, len(tasks)),
+				Server:           state.locateServer,
+				Panes:            append([]TmuxPane(nil), state.locatePanes...),
+			}
 			for _, task := range tasks {
-				if task != nil {
-					runtimeByTask[task.ID] = inspectState
+				if task == nil {
+					continue
+				}
+				if panes, ok := state.locateTaskSessionPanes[task.ID]; ok {
+					snapshot.TaskSessionPanes[task.ID] = append([]string(nil), panes...)
 				}
 			}
-			return runtimeByTask, nil
+			return snapshot, nil
 		},
 	).Maybe()
 	client.EXPECT().DeleteTaskSession(mock.Anything, mock.Anything).RunAndReturn(
@@ -431,6 +512,33 @@ func configureTmuxSessionMock(client *MockTmuxSessionClient, state *sessionClien
 			}
 			state.deletedTask = cloneTask(task)
 			return nil
+		},
+	).Maybe()
+	client.EXPECT().LocateProcessPane(mock.Anything, mock.Anything, mock.Anything).RunAndReturn(
+		func(_ context.Context, task *Task, pid int) (TmuxSnapshot, ProcessPane, error) {
+			state.mu.Lock()
+			defer state.mu.Unlock()
+			state.locatedPIDs = append(state.locatedPIDs, pid)
+			if state.locateErr != nil {
+				return TmuxSnapshot{}, ProcessPane{}, state.locateErr
+			}
+			snapshot := TmuxSnapshot{
+				TaskSessionPanes: map[string][]string{},
+				Server:           state.locateServer,
+				Panes:            append([]TmuxPane(nil), state.locatePanes...),
+			}
+			if task != nil {
+				if panes, ok := state.locateTaskSessionPanes[task.ID]; ok {
+					snapshot.TaskSessionPanes[task.ID] = append([]string(nil), panes...)
+				}
+			}
+			if pid <= 0 || state.locatePaneByPID[pid] == "" {
+				return snapshot, ProcessPane{}, nil
+			}
+			return snapshot, ProcessPane{
+				Pane:  state.locatePaneByPID[pid],
+				Chain: append([]string(nil), state.locateChainByPID[pid]...),
+			}, nil
 		},
 	).Maybe()
 }
@@ -458,6 +566,9 @@ func configureProviderClientMock(client *MockProviderClient, state *providerClie
 				*state.events = append(*state.events, "ensure_task_session_environment")
 			}
 			state.sessionEnvCalls++
+			if state.sessionEnvRan != nil {
+				state.sessionEnvRan()
+			}
 			return state.sessionEnvErr
 		},
 	).Maybe()
@@ -517,19 +628,21 @@ func configureProviderClientMock(client *MockProviderClient, state *providerClie
 			return &update, nil
 		},
 	).Maybe()
-	client.EXPECT().RecoverLatestTaskStatus(mock.Anything, mock.Anything, mock.Anything, mock.Anything).RunAndReturn(
+	client.EXPECT().RecoverAgentSessionStatus(mock.Anything, mock.Anything, mock.Anything, mock.Anything).RunAndReturn(
 		func(
 			_ context.Context,
-			current TaskStatusUpdate,
-			sessions []TaskProviderSession,
+			current AgentSessionStatus,
+			conversation []TaskProviderSession,
 			providerStartedAt time.Time,
-		) (*TaskStatusUpdate, error) {
+		) (*AgentSessionStatus, error) {
 			state.mu.Lock()
 			copyCurrent := current
 			state.statusRecoveryCurrent = &copyCurrent
-			state.statusRecoverySessions = append([]TaskProviderSession(nil), sessions...)
+			state.statusRecoverySessions = append([]TaskProviderSession(nil), conversation...)
 			state.statusRecoveryStartedAt = providerStartedAt
-			state.statusRecoveryCalls[current.TaskID]++
+			// Core asks for recovery only with a conversation's history, whose
+			// entries all belong to the agent session's task.
+			state.statusRecoveryCalls[conversation[0].TaskID]++
 			state.statusRecoveryActive++
 			if state.statusRecoveryActive > state.statusRecoveryMax {
 				state.statusRecoveryMax = state.statusRecoveryActive
@@ -537,7 +650,10 @@ func configureProviderClientMock(client *MockProviderClient, state *providerClie
 			started := state.statusRecoveryStarted
 			release := state.statusRecoveryRelease
 			recoveryErr := state.statusRecoveryErr
-			recoveryUpdate := cloneTaskStatusUpdate(state.statusRecoveryUpdate)
+			recoveryUpdate := state.statusRecoveryUpdate
+			if state.statusRecoveryByConversation != nil {
+				recoveryUpdate = state.statusRecoveryByConversation[conversation[0].ProviderSessionID]
+			}
 			state.mu.Unlock()
 			if started != nil {
 				select {
@@ -557,9 +673,8 @@ func configureProviderClientMock(client *MockProviderClient, state *providerClie
 			if recoveryUpdate == nil {
 				return nil, nil
 			}
-			update := *recoveryUpdate
-			update.TaskID = current.TaskID
-			return &update, nil
+			recovered := *recoveryUpdate
+			return &recovered, nil
 		},
 	).Maybe()
 	client.EXPECT().ReadSessionActivity(mock.Anything, mock.Anything, mock.Anything).RunAndReturn(
@@ -656,6 +771,12 @@ func configureTaskRepositoryMock(repo *MockTaskRepository, state *taskRepository
 				return state.updateErr
 			}
 			state.updatedTask = cloneTask(task)
+			// A listed task reads back as updated.
+			for i, listed := range state.listTasks {
+				if listed != nil && task != nil && listed.ID == task.ID {
+					state.listTasks[i] = cloneTask(task)
+				}
+			}
 			return nil
 		},
 	).Maybe()
@@ -674,8 +795,14 @@ func configureTaskRepositoryMock(repo *MockTaskRepository, state *taskRepository
 			}
 			state.listTasks = filtered
 			state.mu.Lock()
-			delete(state.latestByTask, taskID)
-			state.mu.Unlock()
+			defer state.mu.Unlock()
+			remaining := state.agentSessions[:0]
+			for _, session := range state.agentSessions {
+				if session.TaskID != taskID {
+					remaining = append(remaining, session)
+				}
+			}
+			state.agentSessions = remaining
 			return nil
 		},
 	).Maybe()
@@ -710,33 +837,36 @@ func configureTaskRepositoryMock(repo *MockTaskRepository, state *taskRepository
 			return events, nil
 		},
 	).Maybe()
-	repo.EXPECT().UpsertTaskStatus(mock.Anything, mock.Anything).RunAndReturn(
-		func(_ context.Context, update TaskStatusUpdate) error {
+	repo.EXPECT().ListLatestAgentSessionPrompts(mock.Anything, mock.Anything).RunAndReturn(
+		func(_ context.Context, taskID string) ([]TaskActivityEvent, error) {
 			state.mu.Lock()
-			state.latestByTask[update.TaskID] = update
-			subscribers := append([]chan TaskStatusUpdate(nil), state.subscribers[update.TaskID]...)
-			state.mu.Unlock()
-			for _, subscriber := range subscribers {
-				subscriber <- update
+			defer state.mu.Unlock()
+			open := make(map[string]bool)
+			for _, session := range state.agentSessions {
+				if session.TaskID == taskID && session.IsOpen() {
+					open[session.ID] = true
+				}
 			}
-			return nil
-		},
-	).Maybe()
-	repo.EXPECT().UpsertTaskResumeMetadata(mock.Anything, mock.Anything).RunAndReturn(
-		func(_ context.Context, metadata TaskResumeMetadata) error {
-			if state.resumeMetadataErr != nil {
-				return state.resumeMetadataErr
+			latest := make(map[string]TaskActivityEvent)
+			for _, event := range state.activityByTask[taskID] {
+				if !open[event.AgentSessionID] || event.Role != TaskActivityRoleUser {
+					continue
+				}
+				if current, ok := latest[event.AgentSessionID]; !ok || !event.ObservedAt.Before(current.ObservedAt) {
+					latest[event.AgentSessionID] = event
+				}
 			}
-			copy := metadata
-			state.savedResumeMetadata = &copy
-			state.mu.Lock()
-			state.latestResumeByTask[metadata.TaskID] = metadata
-			state.mu.Unlock()
-			return nil
+			prompts := make([]TaskActivityEvent, 0, len(latest))
+			for _, event := range latest {
+				prompts = append(prompts, event)
+			}
+			return prompts, nil
 		},
 	).Maybe()
 	repo.EXPECT().UpsertTaskProviderSession(mock.Anything, mock.Anything).RunAndReturn(
 		func(_ context.Context, session TaskProviderSession) error {
+			state.mu.Lock()
+			defer state.mu.Unlock()
 			state.savedProviderSessions = append(state.savedProviderSessions, session)
 			state.providerSessionsByTask[session.TaskID] = append(
 				state.providerSessionsByTask[session.TaskID],
@@ -745,69 +875,125 @@ func configureTaskRepositoryMock(repo *MockTaskRepository, state *taskRepository
 			return nil
 		},
 	).Maybe()
-	repo.EXPECT().LatestTaskStatus(mock.Anything, mock.Anything).RunAndReturn(
-		func(_ context.Context, taskID string) (*TaskStatusUpdate, error) {
-			state.mu.Lock()
-			defer state.mu.Unlock()
-			update, ok := state.latestByTask[taskID]
-			if !ok {
-				return nil, nil
-			}
-			copy := update
-			return &copy, nil
-		},
-	).Maybe()
-	repo.EXPECT().LatestTaskResumeMetadata(mock.Anything, mock.Anything).RunAndReturn(
-		func(_ context.Context, taskID string) (*TaskResumeMetadata, error) {
-			state.mu.Lock()
-			defer state.mu.Unlock()
-			metadata, ok := state.latestResumeByTask[taskID]
-			if !ok {
-				return nil, nil
-			}
-			copy := metadata
-			return &copy, nil
-		},
-	).Maybe()
 	repo.EXPECT().ListTaskProviderSessions(mock.Anything, mock.Anything).RunAndReturn(
 		func(_ context.Context, taskID string) ([]TaskProviderSession, error) {
+			state.mu.Lock()
+			defer state.mu.Unlock()
 			return append([]TaskProviderSession(nil), state.providerSessionsByTask[taskID]...), nil
 		},
 	).Maybe()
-	repo.EXPECT().SubscribeTaskStatus(mock.Anything, mock.Anything).RunAndReturn(
-		func(ctx context.Context, taskID string) (<-chan TaskStatusUpdate, error) {
-			updates := make(chan TaskStatusUpdate, 8)
+	configureAgentSessionRepositoryMock(repo, state)
+}
+
+// configureAgentSessionRepositoryMock stores agent sessions in memory and
+// enforces the repository's one-open-agent-session-per-pane rule.
+func configureAgentSessionRepositoryMock(repo *MockTaskRepository, state *taskRepositoryState) {
+	repo.EXPECT().CreateAgentSession(mock.Anything, mock.Anything).RunAndReturn(
+		func(_ context.Context, session AgentSession) error {
 			state.mu.Lock()
-			state.subscribeCalls[taskID]++
-			state.subscribers[taskID] = append(state.subscribers[taskID], updates)
-			state.mu.Unlock()
-			var once sync.Once
-			cleanup := func() {
-				once.Do(func() {
-					state.mu.Lock()
-					defer state.mu.Unlock()
-					subscribers := state.subscribers[taskID]
-					filtered := subscribers[:0]
-					for _, subscriber := range subscribers {
-						if subscriber != updates {
-							filtered = append(filtered, subscriber)
-						}
-					}
-					if len(filtered) == 0 {
-						delete(state.subscribers, taskID)
-					} else {
-						state.subscribers[taskID] = filtered
-					}
-					close(updates)
-				})
+			defer state.mu.Unlock()
+			if state.createAgentSessionErr != nil {
+				return state.createAgentSessionErr
 			}
-			go func() {
-				<-ctx.Done()
-				cleanup()
-			}()
-			return updates, nil
+			for _, existing := range state.agentSessions {
+				if existing.ID == session.ID {
+					return fmt.Errorf("agent session %q already exists", session.ID)
+				}
+				if existing.IsOpen() && session.TmuxPane != "" &&
+					existing.TmuxServer == session.TmuxServer && existing.TmuxPane == session.TmuxPane {
+					return fmt.Errorf("pane %s already has open agent session %q", session.TmuxPane, existing.ID)
+				}
+			}
+			state.agentSessions = append(state.agentSessions, session)
+			return nil
 		},
 	).Maybe()
+	repo.EXPECT().OpenAgentSessionOnPane(mock.Anything, mock.Anything, mock.Anything).RunAndReturn(
+		func(_ context.Context, server TmuxServer, pane string) (*AgentSession, error) {
+			state.mu.Lock()
+			defer state.mu.Unlock()
+			for _, existing := range state.agentSessions {
+				if existing.IsOpen() && pane != "" && existing.TmuxServer == server && existing.TmuxPane == pane {
+					found := existing
+					return &found, nil
+				}
+			}
+			return nil, nil
+		},
+	).Maybe()
+	repo.EXPECT().ListOpenAgentSessions(mock.Anything, mock.Anything).RunAndReturn(
+		func(_ context.Context, taskID string) ([]AgentSession, error) {
+			state.mu.Lock()
+			defer state.mu.Unlock()
+			state.agentSessionReads[taskID]++
+			var open []AgentSession
+			for _, existing := range state.agentSessions {
+				if existing.TaskID == taskID && existing.IsOpen() {
+					open = append(open, existing)
+				}
+			}
+			slices.SortStableFunc(open, func(left, right AgentSession) int {
+				return left.StartedAt.Compare(right.StartedAt)
+			})
+			return open, nil
+		},
+	).Maybe()
+	repo.EXPECT().LatestAgentSession(mock.Anything, mock.Anything).RunAndReturn(
+		func(_ context.Context, taskID string) (*AgentSession, error) {
+			state.mu.Lock()
+			defer state.mu.Unlock()
+			var latest *AgentSession
+			for i, existing := range state.agentSessions {
+				if existing.TaskID == taskID && (latest == nil || !existing.StartedAt.Before(latest.StartedAt)) {
+					latest = &state.agentSessions[i]
+				}
+			}
+			if latest == nil {
+				return nil, nil
+			}
+			found := *latest
+			return &found, nil
+		},
+	).Maybe()
+	repo.EXPECT().UpdateAgentSession(mock.Anything, mock.Anything).RunAndReturn(
+		func(_ context.Context, session AgentSession) error {
+			state.mu.Lock()
+			defer state.mu.Unlock()
+			for i, existing := range state.agentSessions {
+				if existing.ID != session.ID || !existing.IsOpen() {
+					continue
+				}
+				existing.TmuxServer = session.TmuxServer
+				existing.TmuxPane = session.TmuxPane
+				existing.LaunchedAt = session.LaunchedAt
+				existing.PaneTrusted = session.PaneTrusted
+				existing.ProviderSessionID = session.ProviderSessionID
+				existing.Status = session.Status
+				state.agentSessions[i] = existing
+			}
+			return nil
+		},
+	).Maybe()
+	repo.EXPECT().EndAgentSession(mock.Anything, mock.Anything, mock.Anything).RunAndReturn(
+		func(_ context.Context, agentSessionID string, endedAt time.Time) error {
+			state.mu.Lock()
+			defer state.mu.Unlock()
+			for i, existing := range state.agentSessions {
+				if existing.ID == agentSessionID && existing.IsOpen() {
+					state.agentSessions[i].EndedAt = endedAt
+				}
+			}
+			return nil
+		},
+	).Maybe()
+}
+
+// taskLevelStatus is an update without the agent sessions it carries: the
+// status the task row shows.
+func taskLevelStatus(update TaskStatusUpdate) TaskStatusUpdate {
+	update.LeadAgentSessionID = ""
+	update.AgentSessions = nil
+	return update
 }
 
 func hasCustomLaunchSpec(req TaskSessionLaunchSpec) bool {

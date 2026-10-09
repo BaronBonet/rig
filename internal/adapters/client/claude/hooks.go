@@ -13,6 +13,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/BaronBonet/rig/internal/adapters/client/providerkit"
 	"github.com/BaronBonet/rig/internal/core"
 )
 
@@ -95,6 +96,8 @@ func (h *HTTPHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 
 	input := DecodeHookEventInput(h.now, r.Header.Get(hookEventHeader), body)
+	input.TmuxPane, input.TmuxServer = providerkit.DecodeTmuxHeaders(r.Header)
+	input.HookPID = providerkit.DecodeHookPID(r.Header)
 	if err := h.handle(r.Context(), input); err != nil && !errors.Is(err, core.ErrUnmanagedHookEvent) {
 		http.Error(w, "handle hook event: "+err.Error(), http.StatusInternalServerError)
 		return
@@ -146,7 +149,8 @@ func DecodeHookEventInput(now func() time.Time, headerEventName string, body []b
 	input.Cwd = strings.TrimSpace(payload.Cwd)
 	input.TranscriptPath = strings.TrimSpace(payload.TranscriptPath)
 	input.StartSource = strings.TrimSpace(payload.Source)
-	input.PromptText = strings.TrimSpace(payload.Prompt)
+	input.EndReason = strings.TrimSpace(payload.Reason)
+	input.PromptText = userPromptText(payload.Prompt)
 	input.CommandText = strings.TrimSpace(payload.ToolInput.Command)
 	input.CommandResultText = flattenPayloadText(payload.ToolResponse)
 	input.ToolUseID = strings.TrimSpace(payload.ToolUseID)
@@ -179,6 +183,33 @@ func (r *repository) HookEventToTaskStatus(input core.HookEventInput) (*core.Tas
 		update.BackgroundWork = input.BackgroundWork
 	}
 	return update, nil
+}
+
+// systemPromptPrefixes start the prompts of turns Claude Code starts on its
+// own, which are none of the user's:
+//   - <task-notification>: background work reports back, such as a subagent
+//     or shell finishing or a monitor emitting an event.
+//   - <agent-message : a background subagent sends a message, such as its
+//     hand-back.
+//   - <cross-session-message : another Claude session sends a message.
+var systemPromptPrefixes = []string{
+	"<task-notification>",
+	"<agent-message ",
+	"<cross-session-message ",
+}
+
+// userPromptText is the user's prompt that a UserPromptSubmit payload's
+// prompt carries. A turn Claude Code starts on its own has none: Claude Code
+// fires the hook for it too, but nothing marks the payload as its own except
+// the prompt's opening tag. The hook still drives the agent's status.
+func userPromptText(prompt string) string {
+	prompt = strings.TrimSpace(prompt)
+	for _, prefix := range systemPromptPrefixes {
+		if strings.HasPrefix(prompt, prefix) {
+			return ""
+		}
+	}
+	return prompt
 }
 
 func notificationNeedsInput(notificationType string) bool {
@@ -230,6 +261,7 @@ type hookPayload struct {
 	Cwd              string               `json:"cwd"`
 	TranscriptPath   string               `json:"transcript_path"`
 	Source           string               `json:"source"`
+	Reason           string               `json:"reason"`
 	Message          string               `json:"message"`
 	NotificationType string               `json:"notification_type"`
 	ToolInput        hookToolInput        `json:"tool_input"`

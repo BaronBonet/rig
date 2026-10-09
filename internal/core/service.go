@@ -24,8 +24,8 @@ type TaskServiceDependencies struct {
 // server), and HealthChecker (doctor).
 //
 // Task creation lives in the taskCreation module and the workspace/session
-// launching behaviour shared with reconnect and provider switching lives in
-// the sessionLauncher module; the service delegates to both.
+// launching behaviour shared with reconnect lives in the sessionLauncher
+// module; the service delegates to both.
 type service struct {
 	tasks          TaskRepository
 	gitWorktree    GitWorktreeClient
@@ -73,11 +73,18 @@ func healthCheckError(checks []HealthCheck) error {
 
 func NewTaskService(deps TaskServiceDependencies) *service {
 	operations := newTaskOperationCoordinator()
+	observation := newTaskObservation(
+		deps.Tasks,
+		deps.TmuxSession,
+		deps.Providers,
+		deps.ProviderConfig,
+	)
 	launcher := newSessionLauncher(
 		deps.Providers,
 		deps.ProviderConfig,
 		deps.Workspace,
 		deps.TmuxSession,
+		observation,
 		deps.EnableWorkspaceSetup,
 	)
 
@@ -91,12 +98,7 @@ func NewTaskService(deps TaskServiceDependencies) *service {
 		launcher:       launcher,
 		creation:       newTaskCreation(deps.Tasks, deps.GitWorktree, launcher, operations),
 		operations:     operations,
-		observation: newTaskObservation(
-			deps.Tasks,
-			deps.TmuxSession,
-			deps.Providers,
-			deps.ProviderConfig,
-		),
+		observation:    observation,
 	}
 }
 
@@ -237,8 +239,8 @@ func (s *service) ListTasks(ctx context.Context) ([]*Task, error) {
 
 // RefreshTaskWorkspaceHooks rewrites every configured provider's hook
 // registration files into each ready task's workspace, so that manually
-// launched configured providers stay observable (and adoptable) in workspaces
-// prepared before a provider was configured or by an older Rig. It is not
+// launched configured providers stay observable as agent sessions in
+// workspaces prepared before a provider was configured or by an older Rig. It is not
 // part of the TaskService port; the daemon runs it at startup. Failures
 // degrade observability but must not stop the daemon.
 func (s *service) RefreshTaskWorkspaceHooks(ctx context.Context) []error {
@@ -361,53 +363,22 @@ func (s *service) reconnectTaskSession(ctx context.Context, taskID string) error
 		return err
 	}
 
-	_, providerClient, err := s.launcher.resolveProvider(ctx, task.Provider)
+	// Reconnect only recreates a missing Session: it never launches agents
+	// into one that exists, where agents may run. The caller's next attach
+	// reports why it could not reach a Session that exists.
+	runtime, err := s.tmuxSession.InspectTaskSession(ctx, task)
 	if err != nil {
-		return err
+		return fmt.Errorf("inspect task session: %w", err)
+	}
+	if runtime.Exists {
+		return nil
 	}
 
-	resumeMetadata, err := s.tasks.LatestTaskResumeMetadata(ctx, task.ID)
-	if err != nil {
-		return fmt.Errorf("load task resume metadata: %w", err)
-	}
-	// Resume metadata recorded for a previous active provider cannot resume the
-	// current one; reconnect launches the active provider fresh instead.
-	if resumeMetadata != nil && resumeMetadata.Provider != task.Provider {
-		resumeMetadata = nil
-	}
-
-	// Reconnect restores an existing Session. Destructive repo seeding and
-	// setup scripts belong to Task creation/retry and must not rerun here.
-	if err := s.launcher.bootstrapWorkspace(ctx, providerClient, task); err != nil {
-		return err
-	}
-	_ = s.launcher.bootstrapConfiguredProviders(ctx, task, task.Provider)
-	if err := providerClient.EnsureTaskSessionEnvironment(ctx); err != nil {
-		return fmt.Errorf("ensure task session environment: %w", err)
-	}
-
-	var launch TaskSessionLaunchSpec
-	if resumeMetadata != nil && strings.TrimSpace(resumeMetadata.SessionID) != "" {
-		launch, err = providerClient.BuildReconnectTaskSessionLaunchSpec(task, resumeMetadata.SessionID)
-		if err != nil {
-			return fmt.Errorf("build reconnect task session launch spec: %w", err)
-		}
-	} else {
-		launch, err = promptlessTaskSessionLaunchSpec(providerClient, task)
-		if err != nil {
-			return fmt.Errorf("build task session launch spec: %w", err)
-		}
-	}
-
-	if err := s.tmuxSession.StartTaskSession(ctx, task, launch); err != nil {
-		return fmt.Errorf("reconnect task session: %w", err)
-	}
-
-	return nil
+	return s.launcher.restoreSession(ctx, task)
 }
 
 // promptlessTaskSessionLaunchSpec builds a fresh provider launch spec without
-// prefilling the original task prompt, for reconnects and provider switches.
+// prefilling the original task prompt, for reconnects.
 func promptlessTaskSessionLaunchSpec(providerClient ProviderClient, task *Task) (TaskSessionLaunchSpec, error) {
 	launchTask := *task
 	launchTask.Prompt = ""

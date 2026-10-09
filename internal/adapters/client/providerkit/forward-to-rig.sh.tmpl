@@ -9,7 +9,16 @@ trap 'rm -f "$payload_file"' EXIT INT TERM
 
 cat >"$payload_file"
 
-if command -v curl >/dev/null 2>&1 && curl -fsS --max-time 2 -X POST -H "Content-Type: application/json" -H "{{ .EventHeader }}: $event_name" -H "X-Rig-Hook-Secret: $hook_secret" --data-binary @"$payload_file" "$collector_url"; then
+set -- -H "Content-Type: application/json" -H "{{ .EventHeader }}: $event_name" \
+  -H "X-Rig-Hook-Secret: $hook_secret" -H "{{ .HookPIDHeader }}: $$"
+if [ -n "${TMUX_PANE:-}" ]; then
+  set -- "$@" -H "{{ .TmuxPaneHeader }}: $TMUX_PANE"
+fi
+if [ -n "${TMUX:-}" ]; then
+  set -- "$@" -H "{{ .TmuxHeader }}: $TMUX"
+fi
+
+if command -v curl >/dev/null 2>&1 && curl -fsS --max-time 2 -X POST "$@" --data-binary @"$payload_file" "$collector_url"; then
   exit 0
 fi
 exit 0

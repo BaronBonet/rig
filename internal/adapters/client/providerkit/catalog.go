@@ -12,20 +12,30 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
+	"math"
 	"strings"
+	"time"
 
 	"github.com/BaronBonet/rig/internal/core"
 )
 
+// SessionEndTimeout is the hook timeout Rig registers for SessionEnd. Both
+// providers give SessionEnd a shorter default than the forwarder's 2s POST:
+// Claude a shared 1.5s budget, which a per-hook timeout raises, and Codex 1s.
+// 3s is the most Codex allows.
+const SessionEndTimeout = 3 * time.Second
+
 // Binding declares one hook event a provider observes: the event's canonical
 // name (a core.HookEvent* constant), the provider-side matcher restricting
 // when the hook fires (empty = always), and the runtime phase the event
-// drives. A binding without a phase is observed for provider session history
-// only and never drives runtime status.
+// drives. A binding without a phase never drives runtime status itself.
+// Timeout, when set, replaces the provider's default time limit for the hook
+// command; providers take whole seconds, so a fraction rounds up.
 type Binding struct {
 	Event   string
 	Matcher string
 	Phase   core.TaskStatusPhase
+	Timeout time.Duration
 }
 
 // Catalog is a provider's single declaration of the hook events it observes.
@@ -43,10 +53,14 @@ type HookRule struct {
 	Hooks   []HookCommand `json:"hooks"`
 }
 
-// HookCommand is one command invocation registered for a rule.
+// HookCommand is one command invocation registered for a rule. Timeout is its
+// time limit in seconds, or zero for the provider's default. It is a float
+// because Claude accepts any number of seconds, so a hook of the user's own
+// may hold a fraction.
 type HookCommand struct {
-	Type    string `json:"type"`
-	Command string `json:"command"`
+	Type    string  `json:"type"`
+	Command string  `json:"command"`
+	Timeout float64 `json:"timeout,omitempty"`
 }
 
 // HookRules derives the provider's hook registration rules from the catalog.
@@ -56,7 +70,11 @@ func (c Catalog) HookRules(command func(eventName string) string) map[string][]H
 	for _, binding := range c {
 		rules[binding.Event] = append(rules[binding.Event], HookRule{
 			Matcher: binding.Matcher,
-			Hooks:   []HookCommand{{Type: "command", Command: command(binding.Event)}},
+			Hooks: []HookCommand{{
+				Type:    "command",
+				Command: command(binding.Event),
+				Timeout: math.Ceil(binding.Timeout.Seconds()),
+			}},
 		})
 	}
 	return rules

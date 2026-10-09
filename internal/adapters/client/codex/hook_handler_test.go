@@ -48,6 +48,70 @@ func TestNewHookHTTPHandler_DecodesCodexHookAndDelegatesToTaskService(t *testing
 	require.Equal(t, http.StatusAccepted, rec.Code)
 }
 
+func TestNewHookHTTPHandler_DecodesHookProcessIdentity(t *testing.T) {
+	cases := []struct {
+		name       string
+		pane       string
+		tmux       string
+		pid        string
+		wantPane   string
+		wantServer core.TmuxServer
+		wantPID    int
+	}{
+		{
+			name:       "inside tmux",
+			pane:       "%44",
+			tmux:       "/private/tmp/tmux-501/default,4722,3",
+			pid:        "51234",
+			wantPane:   "%44",
+			wantServer: core.TmuxServer{SocketPath: "/private/tmp/tmux-501/default", PID: 4722},
+			wantPID:    51234,
+		},
+		{name: "malformed values", pane: "%44", tmux: "not-tmux", pid: "abc"},
+		{name: "outside tmux"},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			var received core.HookEventInput
+			handler := newHTTPHandler(
+				time.Now,
+				"secret-token",
+				func(_ context.Context, input core.HookEventInput) error {
+					received = input
+					return nil
+				},
+			)
+			req := httptest.NewRequestWithContext(
+				t.Context(),
+				http.MethodPost,
+				"/hook",
+				bytes.NewBufferString(`{"hook_event_name":"SessionStart","session_id":"sess-1"}`),
+			)
+			req.Header.Set("X-Codex-Hook-Event", "SessionStart")
+			req.Header.Set(hookSecretHeader, "secret-token")
+			if tc.pane != "" {
+				req.Header.Set("X-Rig-Tmux-Pane", tc.pane)
+			}
+			if tc.tmux != "" {
+				req.Header.Set("X-Rig-Tmux", tc.tmux)
+			}
+			if tc.pid != "" {
+				req.Header.Set("X-Rig-Hook-Pid", tc.pid)
+			}
+
+			rec := httptest.NewRecorder()
+			handler.ServeHTTP(rec, req)
+
+			require.Equal(t, http.StatusAccepted, rec.Code)
+			require.Equal(t, "sess-1", received.SessionID)
+			require.Equal(t, tc.wantPane, received.TmuxPane)
+			require.Equal(t, tc.wantServer, received.TmuxServer)
+			require.Equal(t, tc.wantPID, received.HookPID)
+		})
+	}
+}
+
 func TestDecodeHookEventInput_DecodesSubagentIdentity(t *testing.T) {
 	now := time.Date(2026, time.April, 20, 11, 0, 0, 0, time.UTC)
 	payload := []byte(`{"agent_id":"agent-456","agent_type":"worker","hook_event_name":"PostToolUse"}`)
@@ -56,6 +120,24 @@ func TestDecodeHookEventInput_DecodesSubagentIdentity(t *testing.T) {
 
 	require.Equal(t, "agent-456", input.AgentID)
 	require.Equal(t, "worker", input.AgentType)
+}
+
+func TestRepositoryHookEventToTaskStatus_SessionEndDrivesNoStatus(t *testing.T) {
+	now := time.Date(2026, time.October, 1, 10, 52, 0, 0, time.UTC)
+	// Codex sends a null transcript path for a session without a rollout file.
+	payload := []byte(`{"cwd":"/tmp/repo-task","hook_event_name":"SessionEnd","reason":"other",` +
+		`"session_id":"session-123","transcript_path":null}`)
+	repo := New(nil, Config{Binary: "codex"}, HookForwardingConfig{})
+
+	input := DecodeHookEventInput(func() time.Time { return now }, "SessionEnd", payload)
+	input.TaskID = "task-123"
+	update, err := repo.HookEventToTaskStatus(input)
+
+	require.NoError(t, err)
+	require.Nil(t, update)
+	require.Equal(t, "session-123", input.SessionID)
+	require.Equal(t, "other", input.EndReason)
+	require.Empty(t, input.TranscriptPath)
 }
 
 func TestNewHookHTTPHandler_RejectsMissingSecret(t *testing.T) {

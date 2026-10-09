@@ -114,11 +114,14 @@ func TestRepositoryBuildWorkspaceBootstrapSpec_EmitsWorkspaceScopedHookSettings(
 	var settings providerkit.HookConfig
 	require.NoError(t, json.Unmarshal(file.Content, &settings))
 	for _, event := range []string{
-		"SessionStart", "UserPromptSubmit", "PreToolUse", "PostToolUse", "Notification", "Stop", "StopFailure",
+		"SessionStart", "SessionEnd", "UserPromptSubmit", "PreToolUse", "PostToolUse", "Notification", "Stop",
+		"StopFailure",
 	} {
 		require.Contains(t, settings.Hooks, event)
 	}
-	require.Equal(t, "startup|resume", settings.Hooks["SessionStart"][0].Matcher)
+	// Every source that starts a conversation in the agent, but not compact,
+	// which can fire mid-turn.
+	require.Equal(t, "startup|resume|clear|fork", settings.Hooks["SessionStart"][0].Matcher)
 	// Tool hooks must fire for every tool, not just Bash, so that non-Bash
 	// work (Read, Edit, ...) keeps the task status at working.
 	require.Empty(t, settings.Hooks["PreToolUse"][0].Matcher)
@@ -135,6 +138,16 @@ func TestRepositoryBuildWorkspaceBootstrapSpec_EmitsWorkspaceScopedHookSettings(
 	require.Contains(t, settings.Hooks["SessionStart"][0].Hooks[0].Command, scriptPath)
 	require.Contains(t, settings.Hooks["Stop"][0].Hooks[0].Command, "'Stop'")
 	require.Contains(t, settings.Hooks["StopFailure"][0].Hooks[0].Command, "'StopFailure'")
+	// SessionEnd fires for every reason, with a timeout above Claude's 1.5s
+	// SessionEnd budget. Other hooks keep Claude's default timeout.
+	require.Equal(t, []providerkit.HookRule{{
+		Hooks: []providerkit.HookCommand{{
+			Type:    "command",
+			Command: "/bin/sh '" + scriptPath + "' 'SessionEnd'",
+			Timeout: 3,
+		}},
+	}}, settings.Hooks["SessionEnd"])
+	require.Zero(t, settings.Hooks["Stop"][0].Hooks[0].Timeout)
 }
 
 func TestRepositoryDoctorReportsMissingForwarderScript(t *testing.T) {
@@ -198,7 +211,7 @@ func TestRepositoryActivityAndTokenUsageDegradeGracefully(t *testing.T) {
 	require.NoError(t, err)
 	require.Nil(t, usage)
 
-	recovered, err := repo.RecoverLatestTaskStatus(t.Context(), core.TaskStatusUpdate{}, nil, time.Time{})
+	recovered, err := repo.RecoverAgentSessionStatus(t.Context(), core.AgentSessionStatus{}, nil, time.Time{})
 	require.NoError(t, err)
 	require.Nil(t, recovered)
 }
@@ -216,8 +229,8 @@ func TestRepositoryBuildWorkspaceBootstrapSpec_MergePreservesUserSettings(t *tes
 	existing := `{
 		"permissions": {"allow": ["Bash(go test *)"]},
 		"hooks": {
-			"SessionEnd": [
-				{"hooks": [{"type": "command", "command": "/bin/sh '` + scriptPath + `' 'SessionEnd'"}]},
+			"PreCompact": [
+				{"hooks": [{"type": "command", "command": "/bin/sh '` + scriptPath + `' 'PreCompact'"}]},
 				{"hooks": [{"type": "command", "command": "/usr/local/bin/my-own-hook"}]}
 			]
 		}
@@ -234,16 +247,54 @@ func TestRepositoryBuildWorkspaceBootstrapSpec_MergePreservesUserSettings(t *tes
 
 	// User content survives.
 	require.Contains(t, settings.Permissions, "allow")
-	// The user's own SessionEnd hook survives; Rig's stale SessionEnd rule is gone.
-	require.Len(t, settings.Hooks["SessionEnd"], 1)
-	require.Contains(t, settings.Hooks["SessionEnd"][0].Hooks[0].Command, "my-own-hook")
+	// The user's own PreCompact hook survives; Rig's stale PreCompact rule is gone.
+	require.Len(t, settings.Hooks["PreCompact"], 1)
+	require.Contains(t, settings.Hooks["PreCompact"][0].Hooks[0].Command, "my-own-hook")
 	// Rig's current catalog events are registered.
 	for _, event := range []string{
-		"SessionStart", "UserPromptSubmit", "PreToolUse", "PostToolUse", "Notification", "Stop", "StopFailure",
+		"SessionStart", "SessionEnd", "UserPromptSubmit", "PreToolUse", "PostToolUse", "Notification", "Stop",
+		"StopFailure",
 	} {
 		require.Contains(t, settings.Hooks, event)
 		require.Contains(t, settings.Hooks[event][0].Hooks[0].Command, scriptPath)
 	}
+}
+
+// A task workspace bootstrapped by an earlier Rig, whose SessionStart did not
+// match /clear and which had no SessionEnd, next to a SessionEnd hook of the
+// user's own.
+func TestRepositoryBuildWorkspaceBootstrapSpec_MergeUpgradesAnEarlierRigRegistration(t *testing.T) {
+	repo, dataDir := newTestRepository(t, subprocess.NewMockRunner(t))
+	scriptPath := filepath.Join(dataDir, "claude", "hooks", "forward-to-rig.sh")
+	rigCommand := func(eventName string) string { return "/bin/sh '" + scriptPath + "' '" + eventName + "'" }
+	existing := `{
+		"hooks": {
+			"SessionStart": [
+				{"matcher": "startup|resume", "hooks": [{"type": "command", "command": "` + rigCommand("SessionStart") + `"}]}
+			],
+			"SessionEnd": [
+				{"hooks": [{"type": "command", "command": "/usr/local/bin/save-notes", "timeout": 1.5}]}
+			]
+		}
+	}`
+
+	spec, err := repo.BuildWorkspaceBootstrapSpec(&core.Task{})
+	require.NoError(t, err)
+	merged, err := spec.Files[0].Merge([]byte(existing))
+	require.NoError(t, err)
+	merged, err = spec.Files[0].Merge(merged)
+	require.NoError(t, err)
+
+	var settings providerkit.HookConfig
+	require.NoError(t, json.Unmarshal(merged, &settings))
+	require.Equal(t, []providerkit.HookRule{{
+		Matcher: "startup|resume|clear|fork",
+		Hooks:   []providerkit.HookCommand{{Type: "command", Command: rigCommand("SessionStart")}},
+	}}, settings.Hooks["SessionStart"])
+	require.Equal(t, []providerkit.HookRule{
+		{Hooks: []providerkit.HookCommand{{Type: "command", Command: "/usr/local/bin/save-notes", Timeout: 1.5}}},
+		{Hooks: []providerkit.HookCommand{{Type: "command", Command: rigCommand("SessionEnd"), Timeout: 3}}},
+	}, settings.Hooks["SessionEnd"])
 }
 
 func TestRepositoryBuildWorkspaceBootstrapSpec_MergeRejectsUnreadableSettings(t *testing.T) {

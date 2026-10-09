@@ -39,17 +39,15 @@ var (
 	fixtureNextPromptAt  = time.Date(2026, 7, 4, 8, 21, 20, 0, time.UTC)
 )
 
-func taskStatus(phase core.TaskStatusPhase, observedAt time.Time) core.TaskStatusUpdate {
-	return core.TaskStatusUpdate{
-		TaskID:       "task-1",
-		Provider:     core.ProviderClaude,
+func agentStatus(phase core.TaskStatusPhase, observedAt time.Time) core.AgentSessionStatus {
+	return core.AgentSessionStatus{
 		Phase:        phase,
 		RawEventName: "PreToolUse",
 		ObservedAt:   observedAt,
 	}
 }
 
-func TestRecoverLatestTaskStatus_InterruptedTurnNeedsInput(t *testing.T) {
+func TestRecoverAgentSessionStatus_InterruptedTurnNeedsInput(t *testing.T) {
 	repo, _ := newTestRepository(t, subprocess.NewMockRunner(t))
 	interruptedToolUse := `{"type":"user","isSidechain":false,"timestamp":"2026-07-04T08:21:10.000Z",` +
 		`"interruptedMessageId":"msg_1","message":{"role":"user",` +
@@ -68,17 +66,15 @@ func TestRecoverLatestTaskStatus_InterruptedTurnNeedsInput(t *testing.T) {
 	} {
 		transcript := writeTranscript(t, lines...)
 
-		recovered, err := repo.RecoverLatestTaskStatus(
+		recovered, err := repo.RecoverAgentSessionStatus(
 			t.Context(),
-			taskStatus(core.TaskStatusPhaseWorking, fixturePreToolUseAt),
+			agentStatus(core.TaskStatusPhaseWorking, fixturePreToolUseAt),
 			[]core.TaskProviderSession{claudeSession(transcript)},
 			time.Time{},
 		)
 
 		require.NoError(t, err, name)
-		require.Equal(t, &core.TaskStatusUpdate{
-			TaskID:       "task-1",
-			Provider:     core.ProviderClaude,
+		require.Equal(t, &core.AgentSessionStatus{
 			Phase:        core.TaskStatusPhaseWaitingForInput,
 			RawEventName: "TranscriptTurnInterrupted",
 			ObservedAt:   fixtureInterruptedAt,
@@ -86,7 +82,7 @@ func TestRecoverLatestTaskStatus_InterruptedTurnNeedsInput(t *testing.T) {
 	}
 }
 
-func TestRecoverLatestTaskStatus_NextPromptHookWinsOverTheInterrupt(t *testing.T) {
+func TestRecoverAgentSessionStatus_NextPromptHookWinsOverTheInterrupt(t *testing.T) {
 	repo, _ := newTestRepository(t, subprocess.NewMockRunner(t))
 	// The next prompt's UserPromptSubmit hook is persisted before Claude Code
 	// writes the prompt to the transcript, and the two race.
@@ -96,9 +92,9 @@ func TestRecoverLatestTaskStatus_NextPromptHookWinsOverTheInterrupt(t *testing.T
 	} {
 		transcript := writeTranscript(t, lines...)
 
-		recovered, err := repo.RecoverLatestTaskStatus(
+		recovered, err := repo.RecoverAgentSessionStatus(
 			t.Context(),
-			taskStatus(core.TaskStatusPhaseWorking, fixtureNextPromptAt),
+			agentStatus(core.TaskStatusPhaseWorking, fixtureNextPromptAt),
 			[]core.TaskProviderSession{claudeSession(transcript)},
 			time.Time{},
 		)
@@ -108,7 +104,7 @@ func TestRecoverLatestTaskStatus_NextPromptHookWinsOverTheInterrupt(t *testing.T
 	}
 }
 
-func TestRecoverLatestTaskStatus_TurnAfterTheInterruptKeepsWorking(t *testing.T) {
+func TestRecoverAgentSessionStatus_TurnAfterTheInterruptKeepsWorking(t *testing.T) {
 	repo, _ := newTestRepository(t, subprocess.NewMockRunner(t))
 	// The daemon missed the next prompt's hooks, but the transcript shows the
 	// agent working on it.
@@ -116,9 +112,9 @@ func TestRecoverLatestTaskStatus_TurnAfterTheInterruptKeepsWorking(t *testing.T)
 		transcriptPrompt, transcriptToolUse, transcriptInterrupt, transcriptNextPrompt, transcriptNextToolUse,
 	)
 
-	recovered, err := repo.RecoverLatestTaskStatus(
+	recovered, err := repo.RecoverAgentSessionStatus(
 		t.Context(),
-		taskStatus(core.TaskStatusPhaseWorking, fixturePreToolUseAt),
+		agentStatus(core.TaskStatusPhaseWorking, fixturePreToolUseAt),
 		[]core.TaskProviderSession{claudeSession(transcript)},
 		time.Time{},
 	)
@@ -127,7 +123,7 @@ func TestRecoverLatestTaskStatus_TurnAfterTheInterruptKeepsWorking(t *testing.T)
 	require.Nil(t, recovered)
 }
 
-func TestRecoverLatestTaskStatus_LocalCommandAfterTheInterruptStillNeedsInput(t *testing.T) {
+func TestRecoverAgentSessionStatus_LocalCommandAfterTheInterruptStillNeedsInput(t *testing.T) {
 	repo, _ := newTestRepository(t, subprocess.NewMockRunner(t))
 	// Local slash commands are recorded as user entries but start no turn.
 	transcript := writeTranscript(t,
@@ -138,9 +134,9 @@ func TestRecoverLatestTaskStatus_LocalCommandAfterTheInterruptStillNeedsInput(t 
 			`"message":{"role":"user","content":"<local-command-stdout>Total cost: $0.12</local-command-stdout>"}}`,
 	)
 
-	recovered, err := repo.RecoverLatestTaskStatus(
+	recovered, err := repo.RecoverAgentSessionStatus(
 		t.Context(),
-		taskStatus(core.TaskStatusPhaseWorking, fixturePreToolUseAt),
+		agentStatus(core.TaskStatusPhaseWorking, fixturePreToolUseAt),
 		[]core.TaskProviderSession{claudeSession(transcript)},
 		time.Time{},
 	)
@@ -151,7 +147,7 @@ func TestRecoverLatestTaskStatus_LocalCommandAfterTheInterruptStillNeedsInput(t 
 	require.Equal(t, fixtureInterruptedAt, recovered.ObservedAt)
 }
 
-func TestRecoverLatestTaskStatus_IgnoresSubagentInterrupts(t *testing.T) {
+func TestRecoverAgentSessionStatus_IgnoresSubagentInterrupts(t *testing.T) {
 	repo, _ := newTestRepository(t, subprocess.NewMockRunner(t))
 	transcript := writeTranscript(t,
 		transcriptPrompt, transcriptToolUse,
@@ -159,9 +155,9 @@ func TestRecoverLatestTaskStatus_IgnoresSubagentInterrupts(t *testing.T) {
 			`"message":{"role":"user","content":[{"type":"text","text":"[Request interrupted by user]"}]}}`,
 	)
 
-	recovered, err := repo.RecoverLatestTaskStatus(
+	recovered, err := repo.RecoverAgentSessionStatus(
 		t.Context(),
-		taskStatus(core.TaskStatusPhaseWorking, fixturePreToolUseAt),
+		agentStatus(core.TaskStatusPhaseWorking, fixturePreToolUseAt),
 		[]core.TaskProviderSession{claudeSession(transcript)},
 		time.Time{},
 	)
@@ -170,7 +166,7 @@ func TestRecoverLatestTaskStatus_IgnoresSubagentInterrupts(t *testing.T) {
 	require.Nil(t, recovered)
 }
 
-func TestRecoverLatestTaskStatus_RepairsOnlyInProgressStatus(t *testing.T) {
+func TestRecoverAgentSessionStatus_RepairsOnlyInProgressStatus(t *testing.T) {
 	repo, _ := newTestRepository(t, subprocess.NewMockRunner(t))
 	transcript := writeTranscript(t, transcriptPrompt, transcriptToolUse, transcriptInterrupt)
 	sessions := []core.TaskProviderSession{claudeSession(transcript)}
@@ -180,8 +176,8 @@ func TestRecoverLatestTaskStatus_RepairsOnlyInProgressStatus(t *testing.T) {
 		core.TaskStatusPhaseWorking,
 		core.TaskStatusPhaseWorkingInBackground,
 	} {
-		recovered, err := repo.RecoverLatestTaskStatus(
-			t.Context(), taskStatus(phase, fixturePreToolUseAt), sessions, time.Time{},
+		recovered, err := repo.RecoverAgentSessionStatus(
+			t.Context(), agentStatus(phase, fixturePreToolUseAt), sessions, time.Time{},
 		)
 		require.NoError(t, err, phase)
 		require.NotNil(t, recovered, phase)
@@ -189,56 +185,23 @@ func TestRecoverLatestTaskStatus_RepairsOnlyInProgressStatus(t *testing.T) {
 	}
 
 	for _, phase := range []core.TaskStatusPhase{core.TaskStatusPhaseWaitingForInput, core.TaskStatusPhaseStopped} {
-		recovered, err := repo.RecoverLatestTaskStatus(
-			t.Context(), taskStatus(phase, fixturePreToolUseAt), sessions, time.Time{},
+		recovered, err := repo.RecoverAgentSessionStatus(
+			t.Context(), agentStatus(phase, fixturePreToolUseAt), sessions, time.Time{},
 		)
 		require.NoError(t, err, phase)
 		require.Nil(t, recovered, phase)
 	}
 }
 
-func TestRecoverLatestTaskStatus_ReadsTheNewestClaudeSessionTranscript(t *testing.T) {
+func TestRecoverAgentSessionStatus_ToleratesMissingTranscripts(t *testing.T) {
 	repo, _ := newTestRepository(t, subprocess.NewMockRunner(t))
-	interrupted := writeTranscript(t, transcriptPrompt, transcriptToolUse, transcriptInterrupt)
-	working := writeTranscript(t, transcriptPrompt, transcriptToolUse)
-	session := func(provider core.Provider, transcriptPath string, lastObservedAt time.Time) core.TaskProviderSession {
-		s := claudeSession(transcriptPath)
-		s.Provider = provider
-		s.LastObservedAt = lastObservedAt
-		return s
-	}
-	older := time.Date(2026, 7, 4, 8, 0, 0, 0, time.UTC)
-	newer := older.Add(time.Minute)
-	newest := newer.Add(time.Minute)
-	current := taskStatus(core.TaskStatusPhaseWorking, fixturePreToolUseAt)
+	current := agentStatus(core.TaskStatusPhaseWorking, fixturePreToolUseAt)
 
-	// A conversation started with /clear replaces the interrupted one.
-	recovered, err := repo.RecoverLatestTaskStatus(t.Context(), current, []core.TaskProviderSession{
-		session(core.ProviderClaude, interrupted, older),
-		session(core.ProviderClaude, working, newer),
-		session(core.ProviderCodex, interrupted, newest),
-	}, time.Time{})
+	recovered, err := repo.RecoverAgentSessionStatus(t.Context(), current, nil, time.Time{})
 	require.NoError(t, err)
 	require.Nil(t, recovered)
 
-	recovered, err = repo.RecoverLatestTaskStatus(t.Context(), current, []core.TaskProviderSession{
-		session(core.ProviderClaude, working, older),
-		session(core.ProviderClaude, interrupted, newer),
-	}, time.Time{})
-	require.NoError(t, err)
-	require.NotNil(t, recovered)
-	require.Equal(t, core.TaskStatusPhaseWaitingForInput, recovered.Phase)
-}
-
-func TestRecoverLatestTaskStatus_ToleratesMissingTranscripts(t *testing.T) {
-	repo, _ := newTestRepository(t, subprocess.NewMockRunner(t))
-	current := taskStatus(core.TaskStatusPhaseWorking, fixturePreToolUseAt)
-
-	recovered, err := repo.RecoverLatestTaskStatus(t.Context(), current, nil, time.Time{})
-	require.NoError(t, err)
-	require.Nil(t, recovered)
-
-	recovered, err = repo.RecoverLatestTaskStatus(t.Context(), current, []core.TaskProviderSession{
+	recovered, err = repo.RecoverAgentSessionStatus(t.Context(), current, []core.TaskProviderSession{
 		claudeSession("/tmp/does-not-exist.jsonl"),
 	}, time.Time{})
 	require.NoError(t, err)

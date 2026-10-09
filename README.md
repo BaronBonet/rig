@@ -19,15 +19,15 @@ a background daemon handles longer running orchestration.
   prepares the workspace, and starts the tmux session.
 - **Multi-provider support**: enable Codex and Claude Code through `rig setup`,
   pick a default provider, cycle providers with `tab` while creating a task, and
-  switch an existing task to another configured provider.
+  start more agents in a task with any configured provider.
 - **Pull request-backed task creation**: pick an open GitHub pull request and
   create a local task workspace for reviewing or continuing that branch.
 - **Isolated workspaces**: every task runs in its own git worktree so parallel
   tasks do not collide with the main checkout or each other.
-- **Tmux sessions**: attach to any task from the TUI, reconnect missing sessions
-  from provider resume metadata, and keep work running outside the foreground
-  `rig` process.
-- **Provider integration**: Rig starts the task's active provider, installs
+- **Tmux sessions**: attach to any task from the TUI, reconnect a lost session
+  with every agent that ran in it, each resuming its own conversation, and keep
+  work running outside the foreground `rig` process.
+- **Provider integration**: Rig starts the task's launch provider, installs
   local hooks, captures session and activity events, and stores compact task
   history for the detail view.
 - **Live observability**: the daemon records task status, recent prompt and
@@ -121,11 +121,28 @@ hooks = true
 ```
 
 Rig installs and updates its own Codex hook forwarding entries automatically
-(in `~/.codex/hooks.json`) during provider setup and when it starts task
-sessions. The forwarding hooks post local Codex events to Rig's background
-daemon; other Codex hooks and plugins can remain enabled. Codex keeps a trust
-record for each hook entry, so when a Rig update adds a forwarding entry (for
-example `SubagentStart`), Codex asks you once to trust it.
+(in `~/.codex/hooks.json`) during provider setup, when its daemon starts, and
+when it starts task sessions. The forwarding hooks post local Codex events to
+Rig's background daemon; other Codex hooks and plugins can remain enabled.
+Codex keeps a trust record for each hook entry, so when a Rig update adds or
+changes a forwarding entry (for example `SubagentStart`, or `SessionEnd` and
+the `clear` start source of `SessionStart`), Codex asks you once to trust it
+after Rig next rewrites the entries.
+
+Rig starts and resumes Codex with `--no-daemon`, so each task's Codex runs its
+own session instead of joining Codex's shared background server. Codex runs
+hooks in the process that owns the session, and only a session running in the
+task's tmux pane reports that pane with its hook events.
+
+A plain `codex` you start yourself joins the shared background server, so Rig
+cannot tell from its hooks which pane it runs in. Rig places such a Codex by
+the task's one Codex pane it is not tracking yet, which works when you start
+Codex agents one at a time. With several Codex agents in one task, start them
+with `codex --no-daemon`, for example through an alias:
+
+```bash
+alias codex='codex --no-daemon'
+```
 
 ### Claude Code
 
@@ -134,10 +151,10 @@ shared forward-to-rig script under `~/.local/share/rig/claude/`; that script
 does nothing by itself. When Rig prepares a task workspace it writes an
 untracked `.claude/settings.local.json` into the task worktree that registers
 Rig's hooks for that workspace only. The file is written into every Rig task
-workspace — not just tasks whose active provider is Claude — so manually
-launching Claude in any Rig task is observed and adopted. If the file already
-exists (Claude Code stores permission decisions in it), Rig merges its hook
-entries in and preserves everything else. Rig's daemon rewrites these entries
+workspace — not just tasks whose launch provider is Claude — so a Claude you
+launch yourself in any Rig task is observed as one of its agents. If the file
+already exists (Claude Code stores permission decisions in it), Rig merges its
+hook entries in and preserves everything else. Rig's daemon rewrites these entries
 in every task workspace when it starts, so hooks added by a Rig update also
 reach existing tasks. Rig never modifies your user-level
 `~/.claude/settings.json`, so Claude sessions outside Rig workspaces are never
@@ -151,11 +168,38 @@ events were lost, for example while the daemon was restarting.
 
 ### Status semantics
 
+Rig tracks every Claude or Codex agent running in a task's tmux panes, and each
+agent has its own status. The task shows its most urgent agent: one that needs
+input, then one working, then one working in the background, then one
+starting. When several agents share the most urgent status, the one that
+changed most recently leads. An agent that exits, or whose pane or window
+closes, stops counting; a task with no running agent shows `stopped`. When
+Claude, or a Codex started with `--no-daemon` as Rig starts it, exits
+cleanly, its `SessionEnd` hook tells Rig at once. Rig notices a killed or
+crashed agent, a closed pane, or the exit of a Codex on its shared background
+server (which keeps the conversation open) while the TUI watches the task.
+Starting a new conversation in an agent, for example with `/clear` or
+`/resume`, keeps it the same agent.
+
+When a task runs two or more agents, each one gets an indented sub-row under
+the task, oldest first, with its provider, its status, and its latest prompt,
+or the window and pane it runs in until it has one. The task row then leaves
+the providers to its sub-rows. A task with one agent looks as it always has.
+
+Pressing `enter` on a task takes you straight to the pane of the agent the task
+shows, in whichever window it runs, so the agent that most needs you is one key
+away. Move onto a sub-row with `j`/`k` and `enter` takes you to that agent
+instead, while the detail panel describes it; task actions such as `x` and `R`
+still act on its task. Inside tmux, Rig switches your client to the pane;
+outside, it selects the pane before attaching. With no agent running, if its
+pane has just closed, or if your terminal runs inside another tmux server than
+the agent, `enter` attaches to the task's tmux session as before.
+
 Task status is eventually consistent with provider hook delivery. Rig does not
 watch tmux keystrokes or infer state from text typed into a task session. If a
 task still shows `needs input` after you submit a prompt, Rig has not yet
 received the next provider hook, such as `UserPromptSubmit`, `PreToolUse`, or
-`PostToolUse`, that marks the task as working.
+`PostToolUse`, that marks the agent as working.
 
 When a Claude task ends its turn while background work it started is still
 running (subagents, background shells, Monitor watches, workflows), Rig shows
@@ -204,8 +248,8 @@ Common TUI keys:
 | `n` | Create a task from a prompt |
 | `tab` | Cycle configured providers while composing a task |
 | `ctrl+p` | Pick a GitHub pull request while creating a task |
-| `enter` | Attach to the selected task's tmux session |
-| `p` | Switch the selected task to another configured provider |
+| `j` / `k` | Move between tasks and their agent sub-rows |
+| `enter` | Jump to the selected agent's pane: on a task row, the agent that most needs you, or the task's tmux session when no agent runs |
 | `r` | Refresh task data |
 | `R` | Retry a failed task creation |
 | `x` | Clean up the selected task's tmux session and worktree |
@@ -226,33 +270,33 @@ rig daemon stop
 rig daemon restart
 ```
 
-## Switching Providers
+## Running More Agents
 
-Each task row and the detail panel show the task's active provider. Press `p`
-on a task to switch it to another configured provider. Switching:
+A task keeps the provider it was created with, its launch provider. To add an
+agent, split a pane in the task's tmux session and run any configured provider
+there, for example `claude` beside a Codex task's agent, or a second `claude`.
+Rig tracks it as another agent of the task, with its own status and sub-row,
+from its first hook event; sending it a prompt is enough. The task's launch
+provider never changes. Hooks from providers you have not configured are
+ignored.
 
-- refuses while the current provider process is still running in the task pane
-  (exit the provider first; Rig never kills an interactive session),
-- bootstraps the existing workspace for the new provider without rerunning
-  repo seeding or setup scripts,
-- launches the new provider with an empty prompt so you decide what context to
-  give it, and
-- records the new active provider only after the launch succeeds — a failed
-  switch leaves the task unchanged.
+Start a Codex you add yourself with `codex --no-daemon`, or through the
+`alias codex='codex --no-daemon'` above: a plain `codex` joins Codex's shared
+background server, and Rig can then only place Codex agents you start one at a
+time.
 
-You can also switch manually: exit the provider in the task session and start
-another configured provider yourself (for example, type `claude` in a Codex
-task's workspace). Rig adopts the manually launched provider as the task's
-active provider when it observes that provider's session-start hook from the
-task workspace. Hooks from providers you have not configured are ignored, and
-late hooks from a previous provider never drive the task's current status.
-
-Tasks whose active provider is no longer configured stay visible so you can
+Tasks whose launch provider is no longer configured stay visible so you can
 browse, inspect, and clean them up; provider-dependent actions on them report a
 clear error until you re-enable the provider with `rig setup`.
 
-Reconnecting a lost tmux session resumes the active provider by its recorded
-session ID when available and launches the provider fresh otherwise.
+Reconnecting a lost tmux session brings back every agent that was running in
+it, each in a pane of the `task` window: the oldest on the left, the rest side
+by side in the order they started. Each resumes its own conversation with its
+own provider; your own split layout is not kept. Agents you exited stay gone.
+An agent whose provider is no longer configured is left out, and Rig names its
+conversation so you can resume it yourself. When no agent is left to restore,
+Rig launches the task's launch provider fresh. Reconnecting never changes the
+task's launch provider.
 
 ## Workspace Seeding
 
@@ -339,17 +383,18 @@ daemon owns task creation, local state, provider hooks, and live update streams.
 | **Background task daemon** | A long-lived `rig` process that creates tasks, starts or resumes providers, records status, and serves updates back to the TUI. |
 | **Unix socket server** | The local control channel between the TUI and daemon. It carries commands such as creating tasks and streams live task updates back to the TUI. |
 | **HTTP hook server** | A loopback-only endpoint used by provider hooks to report session, prompt, tool, and stop events back to Rig. Routes exist for every supported provider. |
-| **SQLite** | The local task database. It stores task records, latest status, activity snippets, token usage, and resume metadata. |
+| **SQLite** | The local task database. It stores task records, agent sessions with their latest status and the conversation Reconnect resumes, activity snippets, and token usage. |
 | **Provider CLI** | The provider (Codex or Claude Code) Rig starts for each task. It runs in an isolated task workspace and sends hook events back to the daemon. |
 
 When you launch `rig`, the foreground process ensures the task daemon is running
 and then opens the TUI. The TUI talks to the daemon over a local Unix socket
 instead of doing task orchestration itself.
 
-When you create a task, the daemon prepares the isolated workspace, starts or
-resumes the task's active provider, records the task in SQLite, and streams
-status updates back to the TUI. Provider hook events are posted to the daemon's
-local HTTP hook server, which updates SQLite and any active TUI subscriptions.
+When you create a task, the daemon prepares the isolated workspace, starts the
+task's provider, records the task in SQLite, and streams status updates back to
+the TUI. Provider hook events are posted to the daemon's local HTTP hook
+server, which updates the agent session each event came from in SQLite and any
+active TUI subscriptions.
 
 This split keeps the terminal UI responsive while task setup, provider
 sessions, and status collection continue in the background.

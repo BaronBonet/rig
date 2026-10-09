@@ -14,16 +14,15 @@ func canEnter(to modelMode, pending pendingOp, setupOnly bool, hasSetup bool) bo
 		return to == modeProviderSetup
 	}
 	if pending != opNone {
-		// One operation at a time: while a create, delete, or switch is in
-		// flight, only the browse list (where its progress renders) is
-		// reachable.
+		// One operation at a time: while a create or a delete is in flight,
+		// only the browse list (where its progress renders) is reachable.
 		return to == modeBrowse
 	}
 	switch to {
 	case modeBrowse, modeProviderSetup:
 		return true
 	default:
-		// Creating, deleting, and switching all need a valid provider setup.
+		// Creating and deleting both need a valid provider setup.
 		return hasSetup
 	}
 }
@@ -43,7 +42,7 @@ func backTarget(mode modelMode, hasSetup bool, setupOnly bool) backDest {
 	case modePRPicker:
 		// Back to the prompt: both modes edit the same task draft.
 		return backDest{to: modePromptInput}
-	case modeCleanupConfirm, modeSwitchProvider:
+	case modeCleanupConfirm:
 		return backDest{to: modeBrowse}
 	case modeProviderSetup:
 		// Provider setup is mandatory: without a valid setup the only way out
@@ -65,7 +64,6 @@ const (
 	familyBrowse modeFamily = iota
 	familyDraft
 	familySetup
-	familySwitch
 )
 
 func familyOf(mode modelMode) modeFamily {
@@ -74,8 +72,6 @@ func familyOf(mode modelMode) modeFamily {
 		return familyDraft
 	case modeProviderSetup:
 		return familySetup
-	case modeSwitchProvider:
-		return familySwitch
 	default: // browse and cleanup confirm own no mode state
 		return familyBrowse
 	}
@@ -101,8 +97,6 @@ func (m *model) clearFamilyState(family modeFamily) {
 		m.draft = taskDraft{}
 	case familySetup:
 		m.setupForm = setupFormState{}
-	case familySwitch:
-		m.providerSwitch = switchState{}
 	}
 }
 

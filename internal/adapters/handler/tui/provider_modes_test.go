@@ -3,6 +3,7 @@ package tui
 import (
 	"errors"
 	"testing"
+	"time"
 
 	"github.com/BaronBonet/rig/internal/core"
 
@@ -226,101 +227,41 @@ func TestModel_PRPickerUsesSelectedProvider(t *testing.T) {
 	require.NotNil(t, frontend.createInput.Source.PullRequest)
 }
 
-func TestModel_SwitchProviderListsOnlyOtherConfiguredProviders(t *testing.T) {
+// Rig no longer starts agents itself: the user splits a pane in the task's
+// Session and runs one there, and Rig picks it up at its first hook.
+func TestModel_PStartsNoAgent(t *testing.T) {
 	frontend := multiProviderFrontend()
-	frontend.listTasks = []*core.Task{
-		{ID: "task-1", DisplayName: "first task", RepoName: "repo-a", Provider: core.ProviderCodex},
+	m := agentsTaskModel(frontend)
+	m = withAgentSessions(t, m, "task-1", claudeAgent(), codexAgent())
+
+	for name, model := range map[string]model{
+		"task row": m,
+		"sub-row":  pressKey(t, m, tea.KeyPressMsg{Code: 'j', Text: "j"}),
+	} {
+		t.Run(name, func(t *testing.T) {
+			next, cmd := model.Update(tea.KeyPressMsg{Text: "p"})
+			got := asModel(t, next)
+
+			require.Nil(t, cmd)
+			require.Equal(t, modeBrowse, got.mode)
+			require.Equal(t, opNone, got.pending)
+			require.Equal(t, model.View().Content, got.View().Content)
+			require.Zero(t, frontend.attachTaskSessionCalls)
+		})
 	}
-
-	m := newLoadedModel(frontend)
-	m.providerSetup = frontend.providerSetup
-
-	next, _ := m.Update(tea.KeyPressMsg{Text: "p"})
-	got := asModel(t, next)
-
-	require.Equal(t, modeSwitchProvider, got.mode)
-	require.Equal(t, []core.Provider{core.ProviderClaude}, got.providerSwitch.options)
-
-	view := stripANSI(got.View().Content)
-	require.Contains(t, view, "Switch this task to:")
-	require.Contains(t, view, "claude")
 }
 
-func TestModel_SwitchProviderReportsWhenNoAlternativeIsConfigured(t *testing.T) {
+func TestModel_ListKeybindsOfferNoNewAgent(t *testing.T) {
 	frontend := newFrontendHarness()
 	frontend.listTasks = []*core.Task{
 		{ID: "task-1", DisplayName: "first task", RepoName: "repo-a", Provider: core.ProviderCodex},
 	}
-
 	m := newLoadedModel(frontend)
 
-	next, _ := m.Update(tea.KeyPressMsg{Text: "p"})
-	got := asModel(t, next)
-
-	require.Equal(t, modeBrowse, got.mode)
-	require.ErrorContains(t, got.err, "no configured alternative provider")
-}
-
-func TestModel_SwitchProviderSuccessUpdatesDisplayedActiveProvider(t *testing.T) {
-	frontend := multiProviderFrontend()
-	frontend.listTasks = []*core.Task{
-		{ID: "task-1", DisplayName: "first task", RepoName: "repo-a", Provider: core.ProviderCodex},
-	}
-	frontend.switchTaskResult = &core.Task{
-		ID:          "task-1",
-		DisplayName: "first task",
-		RepoName:    "repo-a",
-		Provider:    core.ProviderClaude,
-	}
-
-	m := newLoadedModel(frontend)
-	m.providerSetup = frontend.providerSetup
-
-	next, _ := m.Update(tea.KeyPressMsg{Text: "p"})
-	got := asModel(t, next)
-	next, cmd := got.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
-	got = asModel(t, next)
-	require.Equal(t, opSwitching, got.pending)
-	require.NotNil(t, cmd)
-
-	msgs := runBatchCmd(t, cmd)
-	switchedMsg := requireMsgType[taskProviderSwitchedMsg](t, msgs)
-	next, _ = got.Update(switchedMsg)
-	got = asModel(t, next)
-
-	require.Equal(t, "task-1", frontend.switchedTaskID)
-	require.Equal(t, core.ProviderClaude, frontend.switchedProvider)
-	require.Equal(t, modeBrowse, got.mode)
-	require.NoError(t, got.err)
-	require.Equal(t, core.ProviderClaude, got.rows[0].task.Provider)
-
-	view := stripANSI(got.View().Content)
-	require.Contains(t, view, "claude")
-}
-
-func TestModel_SwitchProviderRefusalPreservesActiveProvider(t *testing.T) {
-	frontend := multiProviderFrontend()
-	frontend.listTasks = []*core.Task{
-		{ID: "task-1", DisplayName: "first task", RepoName: "repo-a", Provider: core.ProviderCodex},
-	}
-	frontend.switchTaskErr = errors.New("provider session is still running: exit codex first")
-
-	m := newLoadedModel(frontend)
-	m.providerSetup = frontend.providerSetup
-
-	next, _ := m.Update(tea.KeyPressMsg{Text: "p"})
-	got := asModel(t, next)
-	next, cmd := got.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
-	got = asModel(t, next)
-
-	msgs := runBatchCmd(t, cmd)
-	switchedMsg := requireMsgType[taskProviderSwitchedMsg](t, msgs)
-	next, _ = got.Update(switchedMsg)
-	got = asModel(t, next)
-
-	require.Equal(t, modeBrowse, got.mode)
-	require.ErrorContains(t, got.err, "still running")
-	require.Equal(t, core.ProviderCodex, got.rows[0].task.Provider)
+	keybinds := stripANSI(m.listKeybindText())
+	require.NotContains(t, keybinds, "new agent")
+	require.NotContains(t, keybinds, "p ")
+	require.Contains(t, keybinds, "n new")
 }
 
 func TestModel_SetupOnlyModeQuitsAfterSaving(t *testing.T) {
@@ -358,43 +299,7 @@ func TestProviderStyleDistinguishesClaudeFromCodex(t *testing.T) {
 	require.NotEqual(t, claude.GetForeground(), codex.GetForeground())
 }
 
-func TestModel_StatusFromAdoptedProviderReloadsTasks(t *testing.T) {
-	frontend := multiProviderFrontend()
-	frontend.listTasks = []*core.Task{
-		{ID: "task-1", DisplayName: "first task", RepoName: "repo-a", Provider: core.ProviderClaude},
-	}
-
-	m := newLoadedModel(frontend)
-	m.rows[0].task = &core.Task{
-		ID: "task-1", DisplayName: "first task", RepoName: "repo-a", Provider: core.ProviderCodex,
-	}
-	updates := make(chan core.TaskStatusUpdate, 1)
-
-	// The daemon adopted a manually launched claude session: the live status
-	// carries claude while the row still shows codex.
-	next, cmd := m.Update(taskStatusUpdatedMsg{
-		taskID: "task-1",
-		update: core.TaskStatusUpdate{
-			TaskID:       "task-1",
-			Provider:     core.ProviderClaude,
-			Phase:        core.TaskStatusPhaseStarting,
-			RawEventName: "SessionStart",
-		},
-		updates: updates,
-	})
-	got := asModel(t, next)
-	require.NotNil(t, cmd)
-
-	close(updates)
-	msgs := runBatchCmd(t, cmd)
-	loadedMsg := requireMsgType[tasksLoadedMsg](t, msgs)
-	next, _ = got.Update(loadedMsg)
-	got = asModel(t, next)
-
-	require.Equal(t, core.ProviderClaude, got.rows[0].task.Provider)
-}
-
-func TestModel_StatusFromActiveProviderDoesNotReloadTasks(t *testing.T) {
+func TestModel_StatusFromTheLaunchProviderDoesNotReloadTasks(t *testing.T) {
 	frontend := multiProviderFrontend()
 	frontend.listTasks = []*core.Task{
 		{ID: "task-1", DisplayName: "first task", RepoName: "repo-a", Provider: core.ProviderCodex},
@@ -417,8 +322,48 @@ func TestModel_StatusFromActiveProviderDoesNotReloadTasks(t *testing.T) {
 	close(updates)
 	for _, msg := range runBatchCmd(t, cmd) {
 		_, isLoaded := msg.(tasksLoadedMsg)
-		require.False(t, isLoaded, "status from the active provider must not trigger a task reload")
+		require.False(t, isLoaded, "status from the launch provider must not trigger a task reload")
 	}
+}
+
+// A task launched with Claude runs a Codex agent next to Claude. Both work,
+// so the most recent status change leads and the published provider
+// alternates; the task list is not reloaded for it.
+func TestModel_StatusFromAlternatingProvidersDoesNotReloadTasks(t *testing.T) {
+	frontend := newFrontendHarness()
+	frontend.listTasks = []*core.Task{
+		{ID: "task-1", RepoName: "repo-a", DisplayName: "mixed task", Provider: core.ProviderClaude},
+	}
+	frontend.subscribeTaskStatus = map[string]chan core.TaskStatusUpdate{
+		"task-1": make(chan core.TaskStatusUpdate, 1),
+	}
+	got := newLoadedModel(frontend)
+	before := frontend.listTasksCalls
+	updates := make(chan core.TaskStatusUpdate)
+	close(updates)
+
+	start := time.Date(2026, time.October, 10, 9, 0, 0, 0, time.UTC)
+	for i := range 10 {
+		provider := core.ProviderCodex
+		if i%2 == 1 {
+			provider = core.ProviderClaude
+		}
+		next, cmd := got.Update(taskStatusUpdatedMsg{taskID: "task-1", updates: updates, update: core.TaskStatusUpdate{
+			TaskID:       "task-1",
+			Provider:     provider,
+			Phase:        core.TaskStatusPhaseWorking,
+			RawEventName: core.HookEventPostToolUse,
+			ObservedAt:   start.Add(time.Duration(i) * time.Second),
+		}})
+		got = asModel(t, next)
+		require.NotNil(t, cmd)
+		for _, msg := range runBatchCmd(t, cmd) {
+			_, isLoaded := msg.(tasksLoadedMsg)
+			require.False(t, isLoaded, "a status update must not trigger a task reload")
+		}
+	}
+	require.Equal(t, before, frontend.listTasksCalls)
+	require.Equal(t, core.ProviderClaude, got.rows[0].task.Provider)
 }
 
 func TestModel_ActivityRefreshTickReloadsSelectedTaskActivity(t *testing.T) {

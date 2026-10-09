@@ -115,51 +115,37 @@ func TestRepositoryReadSessionActivity_ReturnsTranscriptActivityAfterTimestamp(t
 	}, events)
 }
 
-func TestRepositoryRecoverLatestTaskStatus_ReturnsTaskCompleteFromNewestTranscript(t *testing.T) {
+func TestRepositoryRecoverAgentSessionStatus_ReturnsTheTranscriptsTaskComplete(t *testing.T) {
 	repo := &repository{}
-	oldPath := writeJSONL(t, []string{
-		`{"timestamp":"2026-04-19T11:00:00Z","type":"event_msg","payload":{"type":"task_complete"}}`,
-	})
-	newPath := writeJSONL(t, []string{
+	path := writeJSONL(t, []string{
 		`{malformed`,
 		`{"timestamp":"2026-04-19T11:02:00Z","type":"event_msg","payload":{"type":"token_count"}}`,
 		`{"timestamp":"2026-04-19T11:03:00Z","type":"response_item","payload":{"type":"task_complete"}}`,
 		`{"timestamp":"2026-04-19T11:04:00Z","type":"event_msg","payload":{"type":"task_complete"}}`,
 	})
-	current := core.TaskStatusUpdate{
-		TaskID:       "task-123",
-		Provider:     core.ProviderCodex,
+	current := core.AgentSessionStatus{
 		Phase:        core.TaskStatusPhaseWorking,
 		RawEventName: "PostToolUse",
 		ObservedAt:   time.Date(2026, time.April, 19, 11, 1, 0, 0, time.UTC),
 	}
 
-	update, err := repo.RecoverLatestTaskStatus(t.Context(), current, []core.TaskProviderSession{
-		{
-			LastObservedAt: time.Date(2026, time.April, 19, 11, 5, 0, 0, time.UTC),
-			TaskID:         "task-123",
-			Provider:       core.ProviderCodex,
-			TranscriptPath: newPath,
-		},
-		{
-			LastObservedAt: time.Date(2026, time.April, 19, 11, 0, 0, 0, time.UTC),
-			TaskID:         "task-123",
-			Provider:       core.ProviderCodex,
-			TranscriptPath: oldPath,
-		},
-	}, time.Time{})
+	update, err := repo.RecoverAgentSessionStatus(t.Context(), current, []core.TaskProviderSession{{
+		LastObservedAt:    time.Date(2026, time.April, 19, 11, 5, 0, 0, time.UTC),
+		TaskID:            "task-123",
+		Provider:          core.ProviderCodex,
+		ProviderSessionID: "session-123",
+		TranscriptPath:    path,
+	}}, time.Time{})
 
 	require.NoError(t, err)
-	require.Equal(t, &core.TaskStatusUpdate{
-		TaskID:       "task-123",
-		Provider:     core.ProviderCodex,
+	require.Equal(t, &core.AgentSessionStatus{
 		Phase:        core.TaskStatusPhaseWaitingForInput,
 		RawEventName: "TranscriptTaskComplete",
 		ObservedAt:   time.Date(2026, time.April, 19, 11, 4, 0, 0, time.UTC),
 	}, update)
 }
 
-func TestRepositoryRecoverLatestTaskStatus_UsesRootTranscriptWhenSubagentTranscriptIsNewer(t *testing.T) {
+func TestRepositoryRecoverAgentSessionStatus_UsesRootTranscriptWhenSubagentTranscriptIsNewer(t *testing.T) {
 	repo := &repository{}
 	rootPath := writeJSONL(t, []string{
 		`{"timestamp":"2026-04-19T11:04:00Z","type":"response_item","payload":{"type":"function_call","name":"exec_command"}}`,
@@ -167,15 +153,13 @@ func TestRepositoryRecoverLatestTaskStatus_UsesRootTranscriptWhenSubagentTranscr
 	subagentPath := writeJSONL(t, []string{
 		`{"timestamp":"2026-04-19T11:05:00Z","type":"event_msg","payload":{"type":"task_complete"}}`,
 	})
-	current := core.TaskStatusUpdate{
-		TaskID:       "task-123",
-		Provider:     core.ProviderCodex,
+	current := core.AgentSessionStatus{
 		Phase:        core.TaskStatusPhaseWorking,
 		RawEventName: "PostToolUse",
 		ObservedAt:   time.Date(2026, time.April, 19, 11, 3, 0, 0, time.UTC),
 	}
 
-	update, err := repo.RecoverLatestTaskStatus(t.Context(), current, []core.TaskProviderSession{
+	update, err := repo.RecoverAgentSessionStatus(t.Context(), current, []core.TaskProviderSession{
 		{
 			LastObservedAt:    time.Date(2026, time.April, 19, 11, 3, 0, 0, time.UTC),
 			TaskID:            "task-123",
@@ -194,16 +178,14 @@ func TestRepositoryRecoverLatestTaskStatus_UsesRootTranscriptWhenSubagentTranscr
 	}, time.Time{})
 
 	require.NoError(t, err)
-	require.Equal(t, &core.TaskStatusUpdate{
-		TaskID:       "task-123",
-		Provider:     core.ProviderCodex,
+	require.Equal(t, &core.AgentSessionStatus{
 		Phase:        core.TaskStatusPhaseWorking,
 		RawEventName: "TranscriptActivity",
 		ObservedAt:   time.Date(2026, time.April, 19, 11, 4, 0, 0, time.UTC),
 	}, update)
 }
 
-func TestRepositoryRecoverLatestTaskStatus_UsesRootTranscriptWhenSessionStartWasMissed(t *testing.T) {
+func TestRepositoryRecoverAgentSessionStatus_UsesRootTranscriptWhenSessionStartWasMissed(t *testing.T) {
 	repo := &repository{}
 	rootPath := writeJSONL(t, []string{
 		`{"timestamp":"2026-04-19T11:00:00Z","type":"session_meta","payload":{"id":"session-123","source":"cli"}}`,
@@ -214,15 +196,13 @@ func TestRepositoryRecoverLatestTaskStatus_UsesRootTranscriptWhenSessionStartWas
 		`{"timestamp":"2026-04-19T11:01:00Z","type":"session_meta","payload":{"id":"session-123","source":"cli"}}`,
 		`{"timestamp":"2026-04-19T11:05:00Z","type":"event_msg","payload":{"type":"task_complete"}}`,
 	})
-	current := core.TaskStatusUpdate{
-		TaskID:       "task-123",
-		Provider:     core.ProviderCodex,
+	current := core.AgentSessionStatus{
 		Phase:        core.TaskStatusPhaseWorking,
 		RawEventName: "PostToolUse",
 		ObservedAt:   time.Date(2026, time.April, 19, 11, 3, 0, 0, time.UTC),
 	}
 
-	update, err := repo.RecoverLatestTaskStatus(t.Context(), current, []core.TaskProviderSession{
+	update, err := repo.RecoverAgentSessionStatus(t.Context(), current, []core.TaskProviderSession{
 		{
 			LastObservedAt:    time.Date(2026, time.April, 19, 11, 3, 0, 0, time.UTC),
 			TaskID:            "task-123",
@@ -240,9 +220,7 @@ func TestRepositoryRecoverLatestTaskStatus_UsesRootTranscriptWhenSessionStartWas
 	}, time.Time{})
 
 	require.NoError(t, err)
-	require.Equal(t, &core.TaskStatusUpdate{
-		TaskID:       "task-123",
-		Provider:     core.ProviderCodex,
+	require.Equal(t, &core.AgentSessionStatus{
 		Phase:        core.TaskStatusPhaseWorking,
 		RawEventName: "TranscriptActivity",
 		ObservedAt:   time.Date(2026, time.April, 19, 11, 4, 0, 0, time.UTC),
@@ -277,21 +255,19 @@ func TestCacheCodexTranscriptKind_BoundsRetainedPaths(t *testing.T) {
 	require.False(t, oldestRetained)
 }
 
-func TestRepositoryRecoverLatestTaskStatus_KeepsWaitingForInputHookDespiteNewerTranscriptActivity(t *testing.T) {
+func TestRepositoryRecoverAgentSessionStatus_KeepsWaitingForInputHookDespiteNewerTranscriptActivity(t *testing.T) {
 	repo := &repository{}
 	path := writeJSONL(t, []string{
 		`{"timestamp":"2026-04-19T11:02:00Z","type":"event_msg","payload":{"type":"task_complete"}}`,
 		`{"timestamp":"2026-04-19T11:04:00Z","type":"response_item","payload":{"type":"function_call","name":"exec_command"}}`,
 	})
-	current := core.TaskStatusUpdate{
-		TaskID:       "task-123",
-		Provider:     core.ProviderCodex,
+	current := core.AgentSessionStatus{
 		Phase:        core.TaskStatusPhaseWaitingForInput,
 		RawEventName: "Stop",
 		ObservedAt:   time.Date(2026, time.April, 19, 11, 3, 0, 0, time.UTC),
 	}
 
-	update, err := repo.RecoverLatestTaskStatus(t.Context(), current, []core.TaskProviderSession{{
+	update, err := repo.RecoverAgentSessionStatus(t.Context(), current, []core.TaskProviderSession{{
 		LastObservedAt: time.Date(2026, time.April, 19, 11, 3, 0, 0, time.UTC),
 		TaskID:         "task-123",
 		Provider:       core.ProviderCodex,
@@ -302,21 +278,19 @@ func TestRepositoryRecoverLatestTaskStatus_KeepsWaitingForInputHookDespiteNewerT
 	require.Nil(t, update)
 }
 
-func TestRepositoryRecoverLatestTaskStatus_DoesNotUseTaskCompleteWhenNewerActivityExists(t *testing.T) {
+func TestRepositoryRecoverAgentSessionStatus_DoesNotUseTaskCompleteWhenNewerActivityExists(t *testing.T) {
 	repo := &repository{}
 	path := writeJSONL(t, []string{
 		`{"timestamp":"2026-04-19T11:04:00Z","type":"event_msg","payload":{"type":"task_complete"}}`,
 		`{"timestamp":"2026-04-19T11:05:00Z","type":"event_msg","payload":{"type":"agent_message","message":"still working"}}`,
 	})
-	current := core.TaskStatusUpdate{
-		TaskID:       "task-123",
-		Provider:     core.ProviderCodex,
+	current := core.AgentSessionStatus{
 		Phase:        core.TaskStatusPhaseWorking,
 		RawEventName: "PostToolUse",
 		ObservedAt:   time.Date(2026, time.April, 19, 11, 3, 0, 0, time.UTC),
 	}
 
-	update, err := repo.RecoverLatestTaskStatus(t.Context(), current, []core.TaskProviderSession{{
+	update, err := repo.RecoverAgentSessionStatus(t.Context(), current, []core.TaskProviderSession{{
 		LastObservedAt: time.Date(2026, time.April, 19, 11, 5, 0, 0, time.UTC),
 		TaskID:         "task-123",
 		Provider:       core.ProviderCodex,
@@ -324,16 +298,14 @@ func TestRepositoryRecoverLatestTaskStatus_DoesNotUseTaskCompleteWhenNewerActivi
 	}}, time.Time{})
 
 	require.NoError(t, err)
-	require.Equal(t, &core.TaskStatusUpdate{
-		TaskID:       "task-123",
-		Provider:     core.ProviderCodex,
+	require.Equal(t, &core.AgentSessionStatus{
 		Phase:        core.TaskStatusPhaseWorking,
 		RawEventName: "TranscriptActivity",
 		ObservedAt:   time.Date(2026, time.April, 19, 11, 5, 0, 0, time.UTC),
 	}, update)
 }
 
-func TestRepositoryRecoverLatestTaskStatus_RecoversNeedsInputAfterInterruptedRootTurn(t *testing.T) {
+func TestRepositoryRecoverAgentSessionStatus_RecoversNeedsInputAfterInterruptedRootTurn(t *testing.T) {
 	repo := &repository{}
 	path := writeJSONL(t, []string{
 		`{"timestamp":"2026-04-19T11:00:00Z","type":"session_meta","payload":{"id":"session-123","source":"cli"}}`,
@@ -341,15 +313,13 @@ func TestRepositoryRecoverLatestTaskStatus_RecoversNeedsInputAfterInterruptedRoo
 		`{"timestamp":"2026-04-19T11:02:00Z","type":"response_item","payload":{"type":"function_call","name":"exec_command"}}`,
 		`{"timestamp":"2026-04-19T11:03:00Z","type":"event_msg","payload":{"type":"turn_aborted","turn_id":"turn-1","reason":"interrupted"}}`,
 	})
-	current := core.TaskStatusUpdate{
-		TaskID:       "task-123",
-		Provider:     core.ProviderCodex,
+	current := core.AgentSessionStatus{
 		Phase:        core.TaskStatusPhaseWorking,
 		RawEventName: "PostToolUse",
 		ObservedAt:   time.Date(2026, time.April, 19, 11, 2, 0, 0, time.UTC),
 	}
 
-	update, err := repo.RecoverLatestTaskStatus(t.Context(), current, []core.TaskProviderSession{{
+	update, err := repo.RecoverAgentSessionStatus(t.Context(), current, []core.TaskProviderSession{{
 		LastObservedAt:    time.Date(2026, time.April, 19, 11, 2, 0, 0, time.UTC),
 		TaskID:            "task-123",
 		Provider:          core.ProviderCodex,
@@ -359,9 +329,7 @@ func TestRepositoryRecoverLatestTaskStatus_RecoversNeedsInputAfterInterruptedRoo
 	}}, time.Time{})
 
 	require.NoError(t, err)
-	require.Equal(t, &core.TaskStatusUpdate{
-		TaskID:       "task-123",
-		Provider:     core.ProviderCodex,
+	require.Equal(t, &core.AgentSessionStatus{
 		Phase:        core.TaskStatusPhaseWaitingForInput,
 		RawEventName: "TranscriptTurnAborted",
 		ObservedAt:   time.Date(2026, time.April, 19, 11, 3, 0, 0, time.UTC),
@@ -375,14 +343,14 @@ var (
 	codexRootStopAt       = time.Date(2026, time.September, 22, 10, 52, 23, 0, time.UTC)
 )
 
-func TestRepositoryRecoverLatestTaskStatus_ReportsSubagentRunningAfterRootStop(t *testing.T) {
+func TestRepositoryRecoverAgentSessionStatus_ReportsSubagentRunningAfterRootStop(t *testing.T) {
 	repo := &repository{}
 	rootPath := writeCodexRootTranscript(t)
 	subagentPath := writeCodexSubagentTranscript(t, "session-root",
 		codexTurnRecord("2026-09-22T10:45:00.100Z", "task_started"),
 	)
 
-	update, err := repo.RecoverLatestTaskStatus(
+	update, err := repo.RecoverAgentSessionStatus(
 		t.Context(),
 		codexRootStopStatus(),
 		codexBackgroundSessions(rootPath, subagentPath),
@@ -390,9 +358,7 @@ func TestRepositoryRecoverLatestTaskStatus_ReportsSubagentRunningAfterRootStop(t
 	)
 
 	require.NoError(t, err)
-	require.Equal(t, &core.TaskStatusUpdate{
-		TaskID:         "task-123",
-		Provider:       core.ProviderCodex,
+	require.Equal(t, &core.AgentSessionStatus{
 		Phase:          core.TaskStatusPhaseWorkingInBackground,
 		RawEventName:   "TranscriptSubagentsRunning",
 		ObservedAt:     codexRootStopAt,
@@ -400,7 +366,7 @@ func TestRepositoryRecoverLatestTaskStatus_ReportsSubagentRunningAfterRootStop(t
 	}, update)
 }
 
-func TestRepositoryRecoverLatestTaskStatus_CountsOnlyRunningSubagents(t *testing.T) {
+func TestRepositoryRecoverAgentSessionStatus_CountsOnlyRunningSubagents(t *testing.T) {
 	repo := &repository{}
 	rootPath := writeCodexRootTranscript(t)
 	running := writeCodexSubagentTranscript(t, "session-root",
@@ -420,7 +386,7 @@ func TestRepositoryRecoverLatestTaskStatus_CountsOnlyRunningSubagents(t *testing
 		codexTurnRecord("2026-09-22T10:51:30Z", "turn_aborted"),
 	)
 
-	update, err := repo.RecoverLatestTaskStatus(
+	update, err := repo.RecoverAgentSessionStatus(
 		t.Context(),
 		codexRootStopStatus(),
 		codexBackgroundSessions(rootPath, running, runningSecondTurn, finished, aborted),
@@ -433,7 +399,7 @@ func TestRepositoryRecoverLatestTaskStatus_CountsOnlyRunningSubagents(t *testing
 	require.Equal(t, core.TaskBackgroundWork{Subagents: 2}, update.BackgroundWork)
 }
 
-func TestRepositoryRecoverLatestTaskStatus_FallsBackToNeedsInputWhenSubagentsFinished(t *testing.T) {
+func TestRepositoryRecoverAgentSessionStatus_FallsBackToNeedsInputWhenSubagentsFinished(t *testing.T) {
 	repo := &repository{}
 	rootPath := writeCodexRootTranscript(t)
 	finished := writeCodexSubagentTranscript(t, "session-root",
@@ -445,7 +411,7 @@ func TestRepositoryRecoverLatestTaskStatus_FallsBackToNeedsInputWhenSubagentsFin
 		codexTurnRecord("2026-09-22T10:53:30Z", "turn_aborted"),
 	)
 
-	update, err := repo.RecoverLatestTaskStatus(
+	update, err := repo.RecoverAgentSessionStatus(
 		t.Context(),
 		codexRootStopStatus(),
 		codexBackgroundSessions(rootPath, finished, aborted),
@@ -456,7 +422,7 @@ func TestRepositoryRecoverLatestTaskStatus_FallsBackToNeedsInputWhenSubagentsFin
 	require.Nil(t, update)
 }
 
-func TestRepositoryRecoverLatestTaskStatus_KeepsPermissionRequestWhileSubagentsRun(t *testing.T) {
+func TestRepositoryRecoverAgentSessionStatus_KeepsPermissionRequestWhileSubagentsRun(t *testing.T) {
 	repo := &repository{}
 	rootPath := writeCodexRootTranscript(t)
 	running := writeCodexSubagentTranscript(t, "session-root",
@@ -466,7 +432,7 @@ func TestRepositoryRecoverLatestTaskStatus_KeepsPermissionRequestWhileSubagentsR
 	current := codexRootStopStatus()
 	current.RawEventName = core.HookEventPermissionRequest
 
-	update, err := repo.RecoverLatestTaskStatus(
+	update, err := repo.RecoverAgentSessionStatus(
 		t.Context(),
 		current,
 		codexBackgroundSessions(rootPath, running),
@@ -477,46 +443,7 @@ func TestRepositoryRecoverLatestTaskStatus_KeepsPermissionRequestWhileSubagentsR
 	require.Nil(t, update)
 }
 
-func TestRepositoryRecoverLatestTaskStatus_IgnoresSubagentsOfOlderRootSession(t *testing.T) {
-	repo := &repository{}
-	oldRootPath := writeJSONL(t, []string{
-		`{"timestamp":"2026-09-21T09:00:00Z","type":"session_meta","payload":{"id":"session-old","source":"cli"}}`,
-	})
-	oldSubagent := writeCodexSubagentTranscript(t, "session-old",
-		codexTurnRecord("2026-09-21T09:05:00Z", "task_started"),
-	)
-	rootPath := writeCodexRootTranscript(t)
-	running := writeCodexSubagentTranscript(t, "session-root",
-		codexTurnRecord("2026-09-22T10:45:00.100Z", "task_started"),
-	)
-	sessions := append([]core.TaskProviderSession{
-		{
-			FirstObservedAt:   time.Date(2026, time.September, 21, 9, 0, 0, 0, time.UTC),
-			LastObservedAt:    time.Date(2026, time.September, 21, 9, 30, 0, 0, time.UTC),
-			TaskID:            "task-123",
-			Provider:          core.ProviderCodex,
-			ProviderSessionID: "session-old",
-			TranscriptPath:    oldRootPath,
-			StartSource:       "startup",
-		},
-		{
-			FirstObservedAt:   time.Date(2026, time.September, 21, 9, 5, 0, 0, time.UTC),
-			LastObservedAt:    time.Date(2026, time.September, 21, 9, 6, 0, 0, time.UTC),
-			TaskID:            "task-123",
-			Provider:          core.ProviderCodex,
-			ProviderSessionID: "session-old",
-			TranscriptPath:    oldSubagent,
-		},
-	}, codexBackgroundSessions(rootPath, running)...)
-
-	update, err := repo.RecoverLatestTaskStatus(t.Context(), codexRootStopStatus(), sessions, codexProcessStartedAt)
-
-	require.NoError(t, err)
-	require.NotNil(t, update)
-	require.Equal(t, core.TaskBackgroundWork{Subagents: 1}, update.BackgroundWork)
-}
-
-func TestRepositoryRecoverLatestTaskStatus_IgnoresSubagentTurnsFromBeforeRootResume(t *testing.T) {
+func TestRepositoryRecoverAgentSessionStatus_IgnoresSubagentTurnsFromBeforeRootResume(t *testing.T) {
 	repo := &repository{}
 	rootPath := writeJSONL(t, []string{
 		`{"timestamp":"2026-09-22T10:40:00Z","type":"session_meta","payload":{"id":"session-root","source":"cli"}}`,
@@ -539,7 +466,7 @@ func TestRepositoryRecoverLatestTaskStatus_IgnoresSubagentTurnsFromBeforeRootRes
 	current := codexRootStopStatus()
 	current.ObservedAt = time.Date(2026, time.September, 22, 14, 30, 0, 0, time.UTC)
 
-	update, err := repo.RecoverLatestTaskStatus(t.Context(), current, sessions, resumedAt)
+	update, err := repo.RecoverAgentSessionStatus(t.Context(), current, sessions, resumedAt)
 
 	require.NoError(t, err)
 	require.NotNil(t, update)
@@ -547,10 +474,8 @@ func TestRepositoryRecoverLatestTaskStatus_IgnoresSubagentTurnsFromBeforeRootRes
 	require.Equal(t, current.ObservedAt, update.ObservedAt)
 }
 
-func codexRootStopStatus() core.TaskStatusUpdate {
-	return core.TaskStatusUpdate{
-		TaskID:       "task-123",
-		Provider:     core.ProviderCodex,
+func codexRootStopStatus() core.AgentSessionStatus {
+	return core.AgentSessionStatus{
 		Phase:        core.TaskStatusPhaseWaitingForInput,
 		RawEventName: core.HookEventStop,
 		ObservedAt:   codexRootStopAt,

@@ -88,6 +88,30 @@ func TestReadSessionActivity_SkipsToolResultsMetaAndSidechainEntries(t *testing.
 	require.Empty(t, events)
 }
 
+// Claude Code writes the turns it starts on its own, such as a task
+// notification when background work reports back, as user entries.
+func TestReadSessionActivity_SkipsUserEntriesClaudeCodeWroteItself(t *testing.T) {
+	repo, _ := newTestRepository(t, subprocess.NewMockRunner(t))
+	transcript := writeTranscript(t,
+		`{"type":"user","promptSource":"typed","timestamp":"2026-07-04T08:21:23.479Z",`+
+			`"message":{"role":"user","content":"run the tests in the background"}}`,
+		`{"type":"user","promptSource":"system","origin":{"kind":"task-notification"},`+
+			`"timestamp":"2026-07-04T08:25:00.000Z","message":{"role":"user",`+
+			`"content":"<task-notification>\n<task-id>bap0vqoch</task-id>\n</task-notification>"}}`,
+		`{"type":"assistant","timestamp":"2026-07-04T08:25:05.000Z",`+
+			`"message":{"id":"msg_1","content":[{"type":"text","text":"The tests passed."}]}}`,
+	)
+
+	events, err := repo.ReadSessionActivity(t.Context(), claudeSession(transcript), time.Time{})
+
+	require.NoError(t, err)
+	require.Len(t, events, 2)
+	require.Equal(t, core.TaskActivityRoleUser, events[0].Role)
+	require.Equal(t, "run the tests in the background", events[0].Text)
+	require.Equal(t, core.TaskActivityRoleAssistant, events[1].Role)
+	require.Equal(t, "The tests passed.", events[1].Text)
+}
+
 func TestReadSessionActivity_RecoversTheAPIErrorThatEndedTheTurn(t *testing.T) {
 	repo, _ := newTestRepository(t, subprocess.NewMockRunner(t))
 	// Claude Code records the API error behind a StopFailure as a synthetic

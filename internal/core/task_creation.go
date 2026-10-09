@@ -2,6 +2,7 @@ package core
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"path/filepath"
 	"strings"
@@ -136,6 +137,7 @@ func (c *taskCreation) retryTaskCreationWithProgress(
 	if !ok {
 		return nil, fmt.Errorf("task creation failed step %q is not retryable", task.CreationStep)
 	}
+	keepExistingSessionOnRetry(steps)
 
 	if err := c.runSteps(ctx, task, reporter, steps, taskCreationStepPersistenceEachStep); err != nil {
 		return task, err
@@ -277,6 +279,25 @@ func (c *taskCreation) creationSteps(
 				return err
 			},
 		},
+	}
+}
+
+// keepExistingSessionOnRetry lets a retried task finish when its Session
+// exists by the time retry starts it: the failed attempt left it, or Enter
+// reconnected it since, so the task's agent already runs there. Retry then
+// neither launches into it nor prefills the prompt.
+func keepExistingSessionOnRetry(steps []taskCreationStepAction) {
+	for i := range steps {
+		if steps[i].step != TaskCreateProgressStartingSession {
+			continue
+		}
+		start := steps[i].run
+		steps[i].run = func(ctx context.Context) error {
+			if err := start(ctx); !errors.Is(err, ErrTaskSessionExists) {
+				return err
+			}
+			return nil
+		}
 	}
 }
 

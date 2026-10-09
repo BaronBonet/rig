@@ -10,9 +10,13 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+// observedTaskObservedAt is when a seeded task's agent was last seen working.
+var observedTaskObservedAt = time.Date(2026, time.July, 29, 12, 0, 0, 0, time.UTC)
+
 func TestTaskStatusObserver_DoesNotPollWithoutLiveInterest(t *testing.T) {
 	svc := newTestTaskService(t)
 	svc.observation.recoveryPollInterval = 5 * time.Millisecond
+	seedObservedTask(t, svc, "task-1")
 
 	time.Sleep(25 * time.Millisecond)
 
@@ -20,18 +24,17 @@ func TestTaskStatusObserver_DoesNotPollWithoutLiveInterest(t *testing.T) {
 	require.Zero(t, svc.sessionClient.batchInspectCalls)
 	svc.sessionClient.mu.Unlock()
 	svc.taskRepo.mu.Lock()
-	require.Empty(t, svc.taskRepo.subscribeCalls)
+	require.Empty(t, svc.taskRepo.agentSessionReads)
 	svc.taskRepo.mu.Unlock()
 }
 
 func TestTaskStatusObserver_SixTasksShareOneBatchedSnapshotPerSerializedCycle(t *testing.T) {
 	svc := newTestTaskService(t)
 	svc.observation.recoveryPollInterval = time.Hour
-	svc.providerRepo.statusRecoveryUpdate = &TaskStatusUpdate{
-		Provider:     ProviderCodex,
+	svc.providerRepo.statusRecoveryUpdate = &AgentSessionStatus{
 		Phase:        TaskStatusPhaseWaitingForInput,
 		RawEventName: "TranscriptTaskComplete",
-		ObservedAt:   time.Date(2026, time.July, 29, 12, 1, 0, 0, time.UTC),
+		ObservedAt:   observedTaskObservedAt.Add(time.Minute),
 	}
 
 	const taskCount = 6
@@ -78,11 +81,6 @@ func TestTaskStatusObserver_SixTasksShareOneBatchedSnapshotPerSerializedCycle(t 
 		require.Positive(t, svc.providerRepo.statusRecoveryCalls[taskID])
 		require.LessOrEqual(t, svc.providerRepo.statusRecoveryCalls[taskID], cycles)
 	}
-	svc.taskRepo.mu.Lock()
-	defer svc.taskRepo.mu.Unlock()
-	for index := range taskCount {
-		require.Equal(t, 1, svc.taskRepo.subscribeCalls[fmt.Sprintf("task-%d", index)])
-	}
 }
 
 func TestTaskStatusObserver_RecoveryWorkerLimitIsTwo(t *testing.T) {
@@ -106,6 +104,7 @@ func TestTaskStatusObserver_RecoveryWorkerLimitIsTwo(t *testing.T) {
 		recoveryPollInterval: time.Hour,
 		recoveryWorkerLimit:  defaultTaskStatusRecoveryWorkerLimit,
 		statusCacheMaxAge:    time.Hour,
+		now:                  time.Now,
 	}
 	observer := &taskStatusObserver{
 		observation: observation,
@@ -156,11 +155,10 @@ func TestTaskStatusObserver_MultipleSubscribersShareRecoveryAndConverge(t *testi
 	svc := newTestTaskService(t)
 	svc.observation.recoveryPollInterval = time.Hour
 	seedObservedTask(t, svc, "task-1")
-	svc.providerRepo.statusRecoveryUpdate = &TaskStatusUpdate{
-		Provider:     ProviderCodex,
+	svc.providerRepo.statusRecoveryUpdate = &AgentSessionStatus{
 		Phase:        TaskStatusPhaseWaitingForInput,
 		RawEventName: "TranscriptTaskComplete",
-		ObservedAt:   time.Date(2026, time.July, 29, 12, 1, 0, 0, time.UTC),
+		ObservedAt:   observedTaskObservedAt.Add(time.Minute),
 	}
 
 	ctx, cancel := context.WithCancel(t.Context())
@@ -174,118 +172,9 @@ func TestTaskStatusObserver_MultipleSubscribersShareRecoveryAndConverge(t *testi
 	secondUpdate := receiveTaskStatus(t, second)
 	require.Equal(t, firstUpdate, secondUpdate)
 
-	svc.taskRepo.mu.Lock()
-	require.Equal(t, 1, svc.taskRepo.subscribeCalls["task-1"])
-	svc.taskRepo.mu.Unlock()
 	svc.providerRepo.mu.Lock()
 	require.Equal(t, 1, svc.providerRepo.statusRecoveryCalls["task-1"])
 	svc.providerRepo.mu.Unlock()
-}
-
-func TestTaskStatusObserver_AdoptsOnlyRemainingLiveConfiguredProvider(t *testing.T) {
-	svc := newTestTaskService(t)
-	svc.observation.recoveryPollInterval = time.Hour
-	svc.providerConfig.setup = multiProviderSetup()
-	svc.sessionClient.inspectState = TaskSessionRuntimeState{
-		Exists:         true,
-		ActiveCommands: []string{"zsh", "codex"},
-	}
-	svc.taskRepo.listTasks = []*Task{{
-		ID:          "task-1",
-		Provider:    ProviderClaude,
-		TmuxSession: "repo_task-1",
-	}}
-	svc.taskRepo.providerSessionsByTask["task-1"] = []TaskProviderSession{{
-		TaskID:            "task-1",
-		Provider:          ProviderCodex,
-		ProviderSessionID: "codex-session",
-		TranscriptPath:    "/tmp/codex-session.jsonl",
-	}}
-	require.NoError(t, svc.taskRepoMock.UpsertTaskStatus(t.Context(), TaskStatusUpdate{
-		TaskID:       "task-1",
-		Provider:     ProviderClaude,
-		Phase:        TaskStatusPhaseWaitingForInput,
-		RawEventName: "Notification",
-		ObservedAt:   time.Date(2026, time.August, 12, 14, 2, 0, 0, time.UTC),
-	}))
-
-	update, err := svc.service.LatestTaskStatus(t.Context(), "task-1")
-
-	require.NoError(t, err)
-	require.Equal(t, ProviderCodex, update.Provider)
-	require.NotNil(t, svc.taskRepo.updatedTask)
-	require.Equal(t, ProviderCodex, svc.taskRepo.updatedTask.Provider)
-}
-
-func TestTaskStatusObserver_NewerHookEvidenceCancelsProviderReconciliation(t *testing.T) {
-	svc := newTestTaskService(t)
-	svc.providerConfig.setup = multiProviderSetup()
-	svc.sessionClient.inspectState = TaskSessionRuntimeState{
-		Exists:         true,
-		ActiveCommands: []string{"codex"},
-	}
-	svc.sessionClient.batchInspectStarted = make(chan struct{}, 1)
-	svc.sessionClient.batchInspectRelease = make(chan struct{})
-	svc.taskRepo.listTasks = []*Task{{
-		ID:          "task-1",
-		Provider:    ProviderClaude,
-		TmuxSession: "repo_task-1",
-	}}
-	require.NoError(t, svc.taskRepoMock.UpsertTaskStatus(t.Context(), TaskStatusUpdate{
-		TaskID:       "task-1",
-		Provider:     ProviderClaude,
-		Phase:        TaskStatusPhaseWaitingForInput,
-		RawEventName: "Notification",
-		ObservedAt:   time.Date(2026, time.August, 12, 14, 2, 0, 0, time.UTC),
-	}))
-	observation := &taskObservation{
-		tasks:                svc.taskRepoMock,
-		tmuxSession:          svc.sessionClientMock,
-		providers:            svc.service.providers,
-		providerConfig:       svc.providerConfigMock,
-		recoveryPollInterval: time.Hour,
-		recoveryWorkerLimit:  defaultTaskStatusRecoveryWorkerLimit,
-		statusCacheMaxAge:    time.Hour,
-	}
-	observer := &taskStatusObserver{
-		observation: observation,
-		tasks:       make(map[string]*observedTaskStatus),
-		wakeCycle:   make(chan struct{}, 1),
-	}
-	observation.statusObserver = observer
-
-	ctx, cancel := context.WithCancel(t.Context())
-	defer cancel()
-	stream, err := observer.SubscribeTaskStatus(ctx, "task-1")
-	require.NoError(t, err)
-	cycleDone := make(chan struct{})
-	go func() {
-		observer.runCycle()
-		close(cycleDone)
-	}()
-	select {
-	case <-svc.sessionClient.batchInspectStarted:
-	case <-time.After(time.Second):
-		t.Fatal("timed out waiting for runtime snapshot")
-	}
-
-	newer := TaskStatusUpdate{
-		TaskID:       "task-1",
-		Provider:     ProviderClaude,
-		Phase:        TaskStatusPhaseStarting,
-		RawEventName: "SessionStart",
-		ObservedAt:   time.Date(2026, time.August, 12, 14, 3, 0, 0, time.UTC),
-	}
-	require.NoError(t, svc.taskRepoMock.UpsertTaskStatus(t.Context(), newer))
-	require.Equal(t, newer, receiveTaskStatus(t, stream))
-	close(svc.sessionClient.batchInspectRelease)
-
-	select {
-	case <-cycleDone:
-	case <-time.After(time.Second):
-		t.Fatal("timed out waiting for reconciliation cycle")
-	}
-	require.Nil(t, svc.taskRepo.updatedTask)
 }
 
 func TestTaskStatusObserver_SuppressesEqualViewsAcrossRecoveryCycles(t *testing.T) {
@@ -361,33 +250,23 @@ func TestTaskStatusObserver_SlowInspectionCannotOverlapCycles(t *testing.T) {
 func TestTaskStatusObserver_SlowSubscriberReceivesConflatedLatestView(t *testing.T) {
 	svc := newTestTaskService(t)
 	svc.observation.recoveryPollInterval = time.Hour
-	svc.taskRepo.listTasks = []*Task{{
-		ID:          "task-1",
-		Provider:    ProviderCodex,
-		TmuxSession: "repo_task-1",
-	}}
+	seedObservedTask(t, svc, "task-1")
 	ctx, cancel := context.WithCancel(t.Context())
 	defer cancel()
 	stream, err := svc.service.SubscribeTaskStatus(ctx, "task-1")
 	require.NoError(t, err)
 
-	var latest TaskStatusUpdate
+	var latest time.Time
 	for index := range 20 {
-		latest = TaskStatusUpdate{
-			TaskID:       "task-1",
-			Provider:     ProviderCodex,
-			Phase:        TaskStatusPhaseWorking,
-			RawEventName: fmt.Sprintf("event-%d", index),
-			ObservedAt:   time.Date(2026, time.July, 29, 12, 0, index, 0, time.UTC),
-		}
-		require.NoError(t, svc.taskRepoMock.UpsertTaskStatus(t.Context(), latest))
+		latest = observedTaskObservedAt.Add(time.Duration(index+1) * time.Second)
+		svc.observedTaskHook(t, "task-1", HookEventPostToolUse, TaskStatusPhaseWorking, latest)
 	}
 
 	deadline := time.After(time.Second)
 	for {
 		select {
 		case update := <-stream:
-			if update == latest {
+			if update.ObservedAt.Equal(latest) {
 				return
 			}
 		case <-deadline:
@@ -405,11 +284,10 @@ func TestTaskStatusObserver_HookEvidenceWinsWhenRecoveryIsInFlight(t *testing.T)
 	svc.providerRepo.mu.Lock()
 	svc.providerRepo.statusRecoveryStarted = recoveryStarted
 	svc.providerRepo.statusRecoveryRelease = recoveryRelease
-	svc.providerRepo.statusRecoveryUpdate = &TaskStatusUpdate{
-		Provider:     ProviderCodex,
+	svc.providerRepo.statusRecoveryUpdate = &AgentSessionStatus{
 		Phase:        TaskStatusPhaseWaitingForInput,
 		RawEventName: "TranscriptTaskComplete",
-		ObservedAt:   time.Date(2026, time.July, 29, 12, 1, 0, 0, time.UTC),
+		ObservedAt:   observedTaskObservedAt.Add(time.Minute),
 	}
 	svc.providerRepo.mu.Unlock()
 
@@ -423,15 +301,15 @@ func TestTaskStatusObserver_HookEvidenceWinsWhenRecoveryIsInFlight(t *testing.T)
 		t.Fatal("timed out waiting for recovery")
 	}
 
-	hook := TaskStatusUpdate{
+	hookAt := observedTaskObservedAt.Add(2 * time.Minute)
+	svc.observedTaskHook(t, "task-1", HookEventPostToolUse, TaskStatusPhaseWorking, hookAt)
+	require.Equal(t, TaskStatusUpdate{
 		TaskID:       "task-1",
 		Provider:     ProviderCodex,
 		Phase:        TaskStatusPhaseWorking,
-		RawEventName: "PostToolUse",
-		ObservedAt:   time.Date(2026, time.July, 29, 12, 2, 0, 0, time.UTC),
-	}
-	require.NoError(t, svc.taskRepoMock.UpsertTaskStatus(t.Context(), hook))
-	require.Equal(t, hook, receiveTaskStatus(t, stream))
+		RawEventName: HookEventPostToolUse,
+		ObservedAt:   hookAt,
+	}, taskLevelStatus(receiveTaskStatus(t, stream)))
 	close(recoveryRelease)
 
 	select {
@@ -439,6 +317,101 @@ func TestTaskStatusObserver_HookEvidenceWinsWhenRecoveryIsInFlight(t *testing.T)
 		require.NotEqual(t, "TranscriptTaskComplete", update.RawEventName)
 	case <-time.After(40 * time.Millisecond):
 	}
+}
+
+func TestTaskStatusObserver_HookEvidenceWinsWhenInspectionIsInFlight(t *testing.T) {
+	svc := newTestTaskService(t)
+	svc.observation.recoveryPollInterval = time.Hour
+	seedObservedTask(t, svc, "task-1")
+	inspectStarted := make(chan struct{}, 1)
+	inspectRelease := make(chan struct{})
+	svc.sessionClient.mu.Lock()
+	svc.sessionClient.batchInspectStarted = inspectStarted
+	svc.sessionClient.batchInspectRelease = inspectRelease
+	svc.sessionClient.mu.Unlock()
+
+	ctx, cancel := context.WithCancel(t.Context())
+	defer cancel()
+	stream, err := svc.service.SubscribeTaskStatus(ctx, "task-1")
+	require.NoError(t, err)
+	select {
+	case <-inspectStarted:
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for the tmux snapshot")
+	}
+
+	// The cycle read the agent working before this Stop arrived.
+	stopAt := observedTaskObservedAt.Add(3 * time.Minute)
+	svc.observedTaskHook(t, "task-1", HookEventStop, TaskStatusPhaseWaitingForInput, stopAt)
+	require.Equal(t, TaskStatusPhaseWaitingForInput, receiveTaskStatus(t, stream).Phase)
+	close(inspectRelease)
+
+	select {
+	case update := <-stream:
+		require.NotEqual(t, TaskStatusPhaseWorking, update.Phase)
+	case <-time.After(40 * time.Millisecond):
+	}
+}
+
+func TestTaskStatusObserver_AHookKeepsAnotherAgentsRecoveredStatus(t *testing.T) {
+	svc := newTestTaskService(t)
+	svc.observation.recoveryPollInterval = time.Hour
+	seedObservedTask(t, svc, "task-1")
+	// A second Codex agent ended its turn, but its subagents are still
+	// running.
+	side := seedObservedAgent(t, svc, "task-1", "session-side", AgentSessionStatus{
+		ObservedAt:   observedTaskObservedAt.Add(time.Minute),
+		RawEventName: HookEventStop,
+		Phase:        TaskStatusPhaseWaitingForInput,
+	})
+	svc.providerRepo.statusRecoveryByConversation = map[string]*AgentSessionStatus{
+		side.ProviderSessionID: {
+			ObservedAt:     observedTaskObservedAt.Add(time.Minute),
+			RawEventName:   "TranscriptSubagentsRunning",
+			Phase:          TaskStatusPhaseWorkingInBackground,
+			BackgroundWork: TaskBackgroundWork{Subagents: 2},
+		},
+	}
+
+	ctx, cancel := context.WithCancel(t.Context())
+	defer cancel()
+	stream, err := svc.service.SubscribeTaskStatus(ctx, "task-1")
+	require.NoError(t, err)
+	require.Equal(t, TaskStatusPhaseWorking, receiveTaskStatus(t, stream).Phase)
+
+	// A hook from the first agent publishes at once; the side agent stays
+	// working in the background rather than falling back to needs input.
+	hookAt := observedTaskObservedAt.Add(2 * time.Minute)
+	svc.observedTaskHook(t, "task-1", HookEventPostToolUse, TaskStatusPhaseWorking, hookAt)
+	update := receiveTaskStatus(t, stream)
+	require.Equal(t, TaskStatusPhaseWorking, update.Phase)
+	require.Equal(t, hookAt, update.ObservedAt)
+}
+
+// A cycle recovered that the agent needs input, as after Claude's Esc
+// interrupt. The agent's next prompt replaces the recovered status at once,
+// not after the next cycle.
+func TestTaskStatusObserver_ANewerHookReplacesTheSameAgentsRecoveredStatus(t *testing.T) {
+	svc := newTestTaskService(t)
+	svc.observation.recoveryPollInterval = time.Hour
+	seedObservedTask(t, svc, "task-1")
+	svc.providerRepo.statusRecoveryUpdate = &AgentSessionStatus{
+		Phase:        TaskStatusPhaseWaitingForInput,
+		RawEventName: "TranscriptTurnInterrupted",
+		ObservedAt:   observedTaskObservedAt.Add(time.Minute),
+	}
+
+	ctx, cancel := context.WithCancel(t.Context())
+	defer cancel()
+	stream, err := svc.service.SubscribeTaskStatus(ctx, "task-1")
+	require.NoError(t, err)
+	require.Equal(t, "TranscriptTurnInterrupted", receiveTaskStatus(t, stream).RawEventName)
+
+	promptAt := observedTaskObservedAt.Add(2 * time.Minute)
+	svc.observedTaskHook(t, "task-1", HookEventUserPromptSubmit, TaskStatusPhaseWorking, promptAt)
+	update := receiveTaskStatus(t, stream)
+	require.Equal(t, TaskStatusPhaseWorking, update.Phase)
+	require.Equal(t, promptAt, update.ObservedAt)
 }
 
 func TestTaskStatusObserver_FreshOneShotReusesCachedSharedView(t *testing.T) {
@@ -456,9 +429,25 @@ func TestTaskStatusObserver_FreshOneShotReusesCachedSharedView(t *testing.T) {
 	svc.sessionClient.mu.Lock()
 	require.Equal(t, 1, svc.sessionClient.batchInspectCalls)
 	svc.sessionClient.mu.Unlock()
-	svc.taskRepo.mu.Lock()
-	require.Equal(t, 1, svc.taskRepo.subscribeCalls["task-1"])
-	svc.taskRepo.mu.Unlock()
+}
+
+func TestTaskStatusObserver_HookEvidenceInvalidatesAnUnwatchedCachedView(t *testing.T) {
+	svc := newTestTaskService(t)
+	svc.observation.recoveryPollInterval = time.Hour
+	svc.observation.statusCacheMaxAge = time.Hour
+	seedObservedTask(t, svc, "task-1")
+
+	first, err := svc.service.LatestTaskStatus(t.Context(), "task-1")
+	require.NoError(t, err)
+	require.Equal(t, TaskStatusPhaseWorking, first.Phase)
+
+	stopAt := observedTaskObservedAt.Add(time.Minute)
+	svc.observedTaskHook(t, "task-1", HookEventStop, TaskStatusPhaseWaitingForInput, stopAt)
+
+	second, err := svc.service.LatestTaskStatus(t.Context(), "task-1")
+	require.NoError(t, err)
+	require.Equal(t, TaskStatusPhaseWaitingForInput, second.Phase)
+	require.Equal(t, stopAt, second.ObservedAt)
 }
 
 func TestTaskStatusObserver_StopsPollingAfterOneShotInterestCompletes(t *testing.T) {
@@ -511,7 +500,7 @@ func TestTaskStatusObserver_UnexpectedRuntimeSnapshotFailureKeepsPersistedView(t
 	require.NoError(t, err)
 	update := receiveTaskStatus(t, stream)
 	require.Equal(t, TaskStatusPhaseWorking, update.Phase)
-	require.Equal(t, "PostToolUse", update.RawEventName)
+	require.Equal(t, HookEventPostToolUse, update.RawEventName)
 }
 
 func TestTaskStatusObserver_ConfirmedDeletionClosesStreamsAndReleasesInterest(t *testing.T) {
@@ -534,26 +523,110 @@ func TestTaskStatusObserver_ConfirmedDeletionClosesStreamsAndReleasesInterest(t 
 	}
 }
 
+// seedObservedTask records a Codex task whose agent runs in a pane of the
+// task's Session and was last seen working, with the conversation history
+// status recovery reads.
 func seedObservedTask(t *testing.T, svc *testTaskServiceHarness, taskID string) {
 	t.Helper()
-	task := &Task{
-		ID:          taskID,
-		Provider:    ProviderCodex,
-		TmuxSession: "repo_" + taskID,
+	svc.taskRepo.listTasks = append(svc.taskRepo.listTasks, &Task{
+		ID:           taskID,
+		Provider:     ProviderCodex,
+		TmuxSession:  "repo_" + taskID,
+		WorktreePath: "/tmp/" + taskID,
+	})
+	seedObservedAgent(t, svc, taskID, "session-"+taskID, AgentSessionStatus{
+		ObservedAt:   observedTaskObservedAt,
+		RawEventName: HookEventPostToolUse,
+		Phase:        TaskStatusPhaseWorking,
+	})
+}
+
+// seedObservedAgent records a Codex agent session for a seeded task in a new
+// pane of the task's Session that runs Codex, with its conversation history.
+func seedObservedAgent(
+	t *testing.T,
+	svc *testTaskServiceHarness,
+	taskID string,
+	providerSessionID string,
+	status AgentSessionStatus,
+) AgentSession {
+	t.Helper()
+	svc.sessionClient.mu.Lock()
+	pane := fmt.Sprintf("%%%d", len(svc.sessionClient.locatePanes)+1)
+	pid := 1000 + len(svc.sessionClient.locatePanes)
+	svc.sessionClient.locateServer = agentTestServer
+	svc.sessionClient.locatePanes = append(svc.sessionClient.locatePanes, TmuxPane{
+		ID:       pane,
+		Session:  "repo_" + taskID,
+		Command:  "zsh",
+		Children: []PaneProcess{{Command: "codex"}},
+	})
+	if svc.sessionClient.locateTaskSessionPanes == nil {
+		svc.sessionClient.locateTaskSessionPanes = make(map[string][]string)
 	}
-	svc.taskRepo.listTasks = append(svc.taskRepo.listTasks, task)
-	svc.taskRepo.providerSessionsByTask[taskID] = []TaskProviderSession{{
+	svc.sessionClient.locateTaskSessionPanes[taskID] = append(svc.sessionClient.locateTaskSessionPanes[taskID], pane)
+	if svc.sessionClient.locatePaneByPID == nil {
+		svc.sessionClient.locatePaneByPID = make(map[int]string)
+	}
+	svc.sessionClient.locatePaneByPID[pid] = pane
+	svc.sessionClient.mu.Unlock()
+
+	session := AgentSession{
+		ID:                "agent-" + providerSessionID,
 		TaskID:            taskID,
 		Provider:          ProviderCodex,
-		ProviderSessionID: "session-" + taskID,
-		TranscriptPath:    "/tmp/" + taskID + ".jsonl",
-	}}
-	require.NoError(t, svc.taskRepoMock.UpsertTaskStatus(t.Context(), TaskStatusUpdate{
-		TaskID:       taskID,
-		Provider:     ProviderCodex,
-		Phase:        TaskStatusPhaseWorking,
-		RawEventName: "PostToolUse",
-		ObservedAt:   time.Date(2026, time.July, 29, 12, 0, 0, 0, time.UTC),
+		TmuxServer:        agentTestServer,
+		TmuxPane:          pane,
+		PaneTrusted:       true,
+		ProviderSessionID: providerSessionID,
+		StartedAt:         observedTaskObservedAt.Add(-time.Hour),
+		Status:            status,
+	}
+	svc.taskRepo.mu.Lock()
+	defer svc.taskRepo.mu.Unlock()
+	svc.taskRepo.agentSessions = append(svc.taskRepo.agentSessions, session)
+	svc.taskRepo.providerSessionsByTask[taskID] = append(svc.taskRepo.providerSessionsByTask[taskID],
+		TaskProviderSession{
+			TaskID:            taskID,
+			Provider:          ProviderCodex,
+			ProviderSessionID: providerSessionID,
+			TranscriptPath:    "/tmp/" + providerSessionID + ".jsonl",
+			StartSource:       "startup",
+		},
+	)
+	return session
+}
+
+// observedTaskHook handles a hook event from a seeded task's first Codex
+// agent, traced to its pane, that its provider maps to phase.
+func (h *testTaskServiceHarness) observedTaskHook(
+	t *testing.T,
+	taskID string,
+	eventName string,
+	phase TaskStatusPhase,
+	occurredAt time.Time,
+) {
+	t.Helper()
+	h.sessionClient.mu.Lock()
+	pane := h.sessionClient.locateTaskSessionPanes[taskID][0]
+	pid := 0
+	for candidate, candidatePane := range h.sessionClient.locatePaneByPID {
+		if candidatePane == pane {
+			pid = candidate
+		}
+	}
+	h.sessionClient.mu.Unlock()
+
+	h.providerRepo.hookUpdate = &TaskStatusUpdate{Phase: phase, RawEventName: eventName}
+	require.NoError(t, h.service.HandleHookEvent(t.Context(), HookEventInput{
+		OccurredAt: occurredAt,
+		Provider:   ProviderCodex,
+		Cwd:        "/tmp/" + taskID,
+		EventName:  eventName,
+		SessionID:  "session-" + taskID,
+		HookPID:    pid,
+		TmuxPane:   pane,
+		TmuxServer: agentTestServer,
 	}))
 }
 

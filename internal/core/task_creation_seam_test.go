@@ -164,6 +164,7 @@ func TestSessionLauncherSeam_PrepareWorkspaceSeedsBeforeBootstrap(t *testing.T) 
 		config,
 		workspace,
 		NewMockTmuxSessionClient(t),
+		nil,
 		true,
 	)
 
@@ -186,6 +187,7 @@ func TestSessionLauncherSeam_BootstrapWorkspaceNeverSeeds(t *testing.T) {
 		NewMockProviderConfigStore(t),
 		workspace,
 		NewMockTmuxSessionClient(t),
+		nil,
 		true,
 	)
 
@@ -214,9 +216,9 @@ func TestSessionLauncherSeam_PrepareWorkspaceBootstrapsOtherConfiguredProviders(
 
 	require.NoError(t, err)
 	require.Equal(t, ProviderCodex, task.Provider)
-	// Claude is not the active provider, but a codex task workspace must still
+	// Claude is not the launch provider, but a codex task workspace must still
 	// register claude's hooks so a manually launched claude session there is
-	// observable and adoptable.
+	// observed as an agent session.
 	require.True(t, h.workspace.bootstrapCalled)
 	require.Len(t, h.workspace.bootstrapSpec.Files, 1)
 	require.Equal(t, ".claude/settings.local.json", h.workspace.bootstrapSpec.Files[0].Path)
