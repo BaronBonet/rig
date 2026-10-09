@@ -1,6 +1,7 @@
 package tui
 
 import (
+	"fmt"
 	"testing"
 
 	"github.com/BaronBonet/rig/internal/core"
@@ -150,6 +151,42 @@ func TestModel_KeyNOpensANewSessionComposerForTheSelectedTask(t *testing.T) {
 	m = pressKeys(t, m, ctrl('w'))
 	require.False(t, m.draft.newWindow)
 	require.Contains(t, stripANSI(m.View().Content), "where     this window, replacing the running session")
+}
+
+func TestModel_NewSessionThatFailsToStartReopensItsComposer(t *testing.T) {
+	frontend := newFrontendHarness()
+	frontend.listTasks = []*core.Task{{
+		ID:             "task-1",
+		DisplayName:    "billing retry",
+		Provider:       core.ProviderCodex,
+		CreationStatus: core.TaskCreationStatusReady,
+	}}
+	frontend.newSessionEvents = []core.TaskCreateEvent{{
+		Err: fmt.Errorf("%w: codex is still working in the task's window", core.ErrProviderSessionActive),
+	}}
+	m := newLoadedModel(frontend)
+	m.launchSettings = launchSettingsFixture()
+
+	m = pressKeys(t, m, tea.KeyPressMsg{Text: "N"}, ctrl('w'))
+	m = pressKeys(t, m, typed("align the rows")...)
+	next, cmd := m.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
+	submitted := asModel(t, next)
+	next, cmd = submitted.Update(requireMsgType[taskCreateEventMsg](t, runBatchCmd(t, cmd)))
+	failed := asModel(t, next)
+
+	require.Equal(t, modePromptInput, failed.mode, "the composer comes back")
+	require.Equal(t, opNone, failed.pending)
+	require.NotNil(t, cmd, "the box takes focus again")
+	require.Equal(t, "align the rows", failed.promptValue(), "the instruction is kept")
+	require.False(t, failed.draft.newWindow, "and so are its options")
+	require.Contains(t, stripANSI(failed.View().Content), "codex is still working in the task's window")
+
+	frontend.newSessionEvents = []core.TaskCreateEvent{{Task: frontend.listTasks[0]}}
+	failed = pressKeys(t, failed, ctrl('w'))
+	_, cmd = failed.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
+	runBatchCmd(t, cmd)
+	require.Equal(t, "align the rows", frontend.newSessionInput.Prompt)
+	require.True(t, frontend.newSessionInput.NewWindow)
 }
 
 func TestModel_NewSessionSubmitStartsASessionOfTheTaskWithAHandoff(t *testing.T) {

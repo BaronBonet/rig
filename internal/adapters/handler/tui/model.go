@@ -157,7 +157,10 @@ type createFlowState struct {
 	// newSession marks a fresh session of an existing task, which has only
 	// the session steps.
 	newSession bool
-	err        error
+	// retry is a fresh session's submitted draft, kept so a session that
+	// fails to start reopens it instead of losing the user's instruction.
+	retry *taskDraft
+	err   error
 }
 
 // setupFormState is the provider setup screen's working state.
@@ -839,8 +842,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case taskCreatedMsg:
 		m.endOp()
 		if msg.err != nil {
-			m.create.err = msg.err
-			return m, nil
+			return m.failCreate(msg.err)
 		}
 
 		m.transition(modeBrowse)
@@ -855,8 +857,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, tea.Batch(cmds...)
 	case taskCreateStreamStartFailedMsg:
 		m.endOp()
-		m.create.err = msg.err
-		return m, nil
+		return m.failCreate(msg.err)
 	case taskCreateEventMsg:
 		switch {
 		case msg.event.Progress != nil:
@@ -864,14 +865,13 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, waitForTaskCreateEventCmd(msg.events)
 		case msg.event.Err != nil:
 			m.endOp()
-			m.create.err = msg.event.Err
 			if msg.event.Task != nil {
 				if index := m.upsertTaskRow(msg.event.Task); index >= 0 {
 					m.selected = index
 				}
 				m.clampSelection()
 			}
-			return m, nil
+			return m.failCreate(msg.event.Err)
 		case msg.event.Task != nil:
 			return m.Update(taskCreatedMsg{task: msg.event.Task})
 		default:
@@ -883,7 +883,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		m.endOp()
 		if m.create.err == nil {
-			m.create.err = errors.New("create task stream closed unexpectedly")
+			return m.failCreate(errors.New("create task stream closed unexpectedly"))
 		}
 		return m, nil
 	case taskOpenedMsg:
@@ -1095,9 +1095,13 @@ func (m model) submitPrompt() (model, tea.Cmd) {
 	forTask := m.draft.forTask
 	handoff := m.draft.handoff
 	newWindow := m.draft.newWindow
+	submitted := m.draft
 	m.transition(modeBrowse)
 	m.beginOp(opCreating)
 	m.create = createFlowState{newSession: forTask != nil}
+	if forTask != nil {
+		m.create.retry = &submitted
+	}
 	m.rememberLaunchDefaults(provider, options)
 
 	if forTask != nil {
@@ -1127,6 +1131,21 @@ func (m model) submitPrompt() (model, tea.Cmd) {
 		}),
 		shimmerTickCmd(),
 	)
+}
+
+// failCreate records a failed creation. A fresh session that fails to start
+// reopens its composer with the user's instruction and options and the error
+// above them, so it can be sent again, in a new window, say.
+func (m model) failCreate(err error) (model, tea.Cmd) {
+	retry := m.create.retry
+	m.create.err = err
+	if retry == nil || !m.transition(modePromptInput) {
+		return m, nil
+	}
+	m.draft = *retry
+	m.draft.err = err
+	m.create = createFlowState{}
+	return m, m.draft.input.Focus()
 }
 
 func (m model) retrySelectedTaskCreation() (model, tea.Cmd) {
