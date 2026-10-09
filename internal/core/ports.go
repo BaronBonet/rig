@@ -400,6 +400,10 @@ type ProviderClient interface {
 	// ExitCommand is the command that, typed at the provider's idle prompt,
 	// ends its interactive session.
 	ExitCommand() string
+	// ClearCommand is the command that, typed at the provider's prompt,
+	// starts a fresh conversation in the same process, or "" when it has
+	// none Rig relies on.
+	ClearCommand() string
 	// TurnMarker is text the provider shows at the foot of its window only
 	// while a turn is running, or "" when it shows none Rig can rely on.
 	TurnMarker() string

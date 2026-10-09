@@ -263,6 +263,12 @@ func (r *repository) ExitCommand() string {
 	return "/quit"
 }
 
+// ClearCommand is empty: no Codex command for a fresh conversation has been
+// verified, so a Codex session is ended and launched anew.
+func (r *repository) ClearCommand() string {
+	return ""
+}
+
 // TurnMarker is empty: no Codex footer has been verified, so its status
 // decides whether it is in a turn.
 func (r *repository) TurnMarker() string {

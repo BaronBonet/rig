@@ -62,7 +62,7 @@ var ConfigEnvVars = []string{configDirEnvVar}
 // flight; HookEventToTaskStatus then reports the task as working in the
 // background instead.
 var hookCatalog = providerkit.Catalog{
-	{Event: core.HookEventSessionStart, Matcher: "startup|resume", Phase: core.TaskStatusPhaseStarting},
+	{Event: core.HookEventSessionStart, Matcher: "startup|resume|clear", Phase: core.TaskStatusPhaseStarting},
 	{Event: core.HookEventUserPromptSubmit, Phase: core.TaskStatusPhaseWorking},
 	{Event: core.HookEventPreToolUse, Phase: core.TaskStatusPhaseWorking},
 	{Event: core.HookEventPostToolUse, Phase: core.TaskStatusPhaseWorking},
@@ -392,6 +392,13 @@ func (r *repository) BuildReconnectTaskSessionLaunchSpec(
 // ExitCommand ends an idle Claude Code session; Enter on the suggestion runs it.
 func (r *repository) ExitCommand() string {
 	return "/exit"
+}
+
+// ClearCommand starts a fresh Claude Code conversation, with a new session
+// and transcript, in the running process: its model, effort, permission mode
+// and MCP servers stay as they were launched.
+func (r *repository) ClearCommand() string {
+	return "/clear"
 }
 
 // TurnMarker is in Claude Code's footer, below its prompt, while a turn runs

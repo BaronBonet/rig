@@ -121,6 +121,56 @@ func TestTaskServiceNewTaskSession_ReplacesAnIdleSessionByEndingItFirst(t *testi
 		svc.sessionClient.prefilledLaunch.PrefillInput)
 }
 
+func TestTaskServiceNewTaskSession_ClearsASessionThatWouldLaunchTheSame(t *testing.T) {
+	svc := newTestTaskService(t)
+	task := readyTaskFixture()
+	task.Model, task.Effort = "gpt-5", "high"
+	svc.taskRepo.listTasks = []*Task{task}
+	svc.providerRepo.clearCommand = "/clear"
+	// The provider stays in the pane: a fresh conversation, same process.
+	svc.sessionClient.inspectState = TaskSessionRuntimeState{Exists: true, ActiveCommands: []string{"codex"}}
+
+	_, err := svc.service.NewTaskSessionWithProgress(t.Context(), NewTaskSessionInput{
+		TaskID: "task-1",
+		Prompt: "continue",
+		Model:  "gpt-5",
+		Effort: "high",
+	}, nil)
+
+	require.NoError(t, err)
+	require.Equal(t, []string{"/clear"}, svc.sessionClient.submittedInputs, "cleared, not exited")
+	require.Nil(t, svc.sessionClient.startedTask, "the running provider is not launched again")
+	require.Equal(t, []string{ContinuationPrompt(task, "continue", "")}, svc.sessionClient.prefilledLaunch.PrefillInput)
+	require.Less(t, indexOf(svc.events, "submit_task_input"), indexOf(svc.events, "prefill_task_session"))
+}
+
+func TestTaskServiceNewTaskSession_EndsASessionToLaunchDifferently(t *testing.T) {
+	for name, input := range map[string]NewTaskSessionInput{
+		"another model":  {Model: "gpt-5-codex", Effort: "high"},
+		"another effort": {Model: "gpt-5", Effort: "low"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			svc := newTestTaskService(t)
+			task := readyTaskFixture()
+			task.Model, task.Effort = "gpt-5", "high"
+			svc.taskRepo.listTasks = []*Task{task}
+			svc.providerRepo.clearCommand = "/clear"
+			svc.sessionClient.inspectState = TaskSessionRuntimeState{Exists: true, ActiveCommands: []string{"codex"}}
+			svc.sessionClient.onSubmit = func(*Task, string) {
+				svc.sessionClient.inspectState = idlePane()
+			}
+			input.TaskID, input.Prompt = "task-1", "continue"
+
+			_, err := svc.service.NewTaskSessionWithProgress(t.Context(), input, nil)
+
+			require.NoError(t, err)
+			require.Equal(t, []string{"/exit"}, svc.sessionClient.submittedInputs,
+				"a running process keeps the options it was launched with")
+			require.Equal(t, "task-1", svc.sessionClient.startedTask.ID)
+		})
+	}
+}
+
 func TestTaskServiceNewTaskSession_RefusesToReplaceASessionThatIsStillWorking(t *testing.T) {
 	svc := newTestTaskService(t)
 	svc.taskRepo.listTasks = []*Task{readyTaskFixture()}

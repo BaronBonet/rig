@@ -95,9 +95,11 @@ func (s *service) newTaskSession(
 	}
 
 	// The handoff is written first, from the session's transcript, so the
-	// session is ended only once there is something to continue from.
+	// session is cleared or ended only once there is something to continue
+	// from.
+	cleared := false
 	if occupant != "" {
-		if err := s.endProviderSession(ctx, task, occupant); err != nil {
+		if cleared, err = s.clearOrEndProviderSession(ctx, task, occupant, provider, options); err != nil {
 			return nil, err
 		}
 	}
@@ -121,7 +123,12 @@ func (s *service) newTaskSession(
 	launchTask.Prompt = prompt
 
 	reportTaskCreateProgress(reporter, TaskCreateProgressStartingSession)
-	if _, err := s.launcher.startSession(ctx, &launchTask); err != nil {
+	// A cleared provider is still running: it is only given the prompt.
+	start := s.launcher.startSession
+	if cleared {
+		start = s.launcher.resumeStartSession
+	}
+	if _, err := start(ctx, &launchTask); err != nil {
 		return nil, err
 	}
 
@@ -216,6 +223,34 @@ func windowFootShows(content string, marker string) bool {
 func (s *service) taskIsMidTurn(ctx context.Context, taskID string) bool {
 	status, err := s.tasks.LatestTaskStatus(ctx, taskID)
 	return err == nil && status != nil && status.Phase == TaskStatusPhaseWorking
+}
+
+// clearOrEndProviderSession readies the Task's window for the next session.
+// A provider that would be launched the same way, the same provider with the
+// same model and effort, starts a fresh conversation in place with its clear
+// command, and reports true; any other is ended, so the next session is
+// launched anew with its own options.
+func (s *service) clearOrEndProviderSession(
+	ctx context.Context,
+	task *Task,
+	occupant Provider,
+	next Provider,
+	options LaunchOptions,
+) (bool, error) {
+	client, err := supportedProviderClient(s.providers, occupant)
+	if err != nil {
+		return false, err
+	}
+	sameLaunch := occupant == next && next == task.Provider &&
+		strings.TrimSpace(options.Model) == task.Launch().Model &&
+		strings.TrimSpace(options.Effort) == task.Launch().Effort
+	if clear := client.ClearCommand(); sameLaunch && clear != "" {
+		if err := s.tmuxSession.SubmitTaskInput(ctx, task, clear); err != nil {
+			return false, fmt.Errorf("clear %s session: %w", occupant, err)
+		}
+		return true, nil
+	}
+	return false, s.endProviderSession(ctx, task, occupant)
 }
 
 // endProviderSession asks the provider idle in the Task's pane to exit, with

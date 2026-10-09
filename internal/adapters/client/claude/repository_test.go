@@ -157,7 +157,7 @@ func TestRepositoryBuildWorkspaceBootstrapSpec_EmitsWorkspaceScopedHookSettings(
 	} {
 		require.Contains(t, settings.Hooks, event)
 	}
-	require.Equal(t, "startup|resume", settings.Hooks["SessionStart"][0].Matcher)
+	require.Equal(t, "startup|resume|clear", settings.Hooks["SessionStart"][0].Matcher)
 	// Tool hooks must fire for every tool, not just Bash, so that non-Bash
 	// work (Read, Edit, ...) keeps the task status at working.
 	require.Empty(t, settings.Hooks["PreToolUse"][0].Matcher)
