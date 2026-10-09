@@ -33,8 +33,10 @@ func (r *repository) ReadSessionActivity(
 			return
 		}
 		// Meta entries are injected context, and sidechain entries belong to
-		// subagents; neither is conversation activity.
-		if entry.IsMeta || entry.IsSidechain {
+		// subagents; neither is conversation activity. A user entry Claude
+		// Code wrote itself is no prompt of the user's, such as a task
+		// notification when background work reports back.
+		if entry.IsMeta || entry.IsSidechain || entry.PromptSource == claudeSystemPromptSource {
 			return
 		}
 
@@ -43,12 +45,17 @@ func (r *repository) ReadSessionActivity(
 	return events, err
 }
 
+// claudeSystemPromptSource is the promptSource of a user entry that Claude
+// Code wrote itself, rather than the user typing it.
+const claudeSystemPromptSource = "system"
+
 type claudeActivityLine struct {
-	Timestamp   time.Time `json:"timestamp"`
-	Type        string    `json:"type"`
-	IsMeta      bool      `json:"isMeta"`
-	IsSidechain bool      `json:"isSidechain"`
-	Message     struct {
+	Timestamp    time.Time `json:"timestamp"`
+	Type         string    `json:"type"`
+	IsMeta       bool      `json:"isMeta"`
+	IsSidechain  bool      `json:"isSidechain"`
+	PromptSource string    `json:"promptSource"`
+	Message      struct {
 		Content json.RawMessage `json:"content"`
 	} `json:"message"`
 }

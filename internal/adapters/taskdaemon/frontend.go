@@ -19,12 +19,12 @@ type frontend struct {
 	socketPath string
 }
 
-func (f *frontend) AttachTaskSession(ctx context.Context, task *core.Task) error {
+func (f *frontend) AttachTaskSession(ctx context.Context, task *core.Task, pane *core.TmuxPaneRef) error {
 	if f.sessions == nil {
 		return fmt.Errorf("task session client not configured")
 	}
 
-	return f.sessions.AttachTaskSession(ctx, task)
+	return f.sessions.AttachTaskSession(ctx, task, pane)
 }
 
 func (f *frontend) GetTaskActivity(ctx context.Context, taskID string, limit int) ([]core.TaskActivityEvent, error) {
@@ -74,14 +74,6 @@ func (f *frontend) SaveProviderSetup(ctx context.Context, setup core.ProviderSet
 
 func (f *frontend) DetectProviders(ctx context.Context) ([]core.ProviderDetection, error) {
 	return callUnary(ctx, f, opDetectProviders, emptyResponse{})
-}
-
-func (f *frontend) SwitchTaskProvider(
-	ctx context.Context,
-	taskID string,
-	provider core.Provider,
-) (*core.Task, error) {
-	return callUnary(ctx, f, opSwitchTaskProvider, switchTaskProviderRequest{TaskID: taskID, Provider: provider})
 }
 
 func (f *frontend) DeleteTask(ctx context.Context, taskID string) error {

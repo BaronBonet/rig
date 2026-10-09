@@ -133,17 +133,200 @@ type TaskStatusUpdate struct {
 	Provider       Provider           `json:"provider"`
 	Phase          TaskStatusPhase    `json:"phase"`
 	BackgroundWork TaskBackgroundWork `json:"background_work"`
+	// LeadAgentSessionID is the live agent session the task's status comes
+	// from: its most urgent one. It is empty while none is live.
+	LeadAgentSessionID string `json:"lead_agent_session_id,omitempty"`
+	// AgentSessions are the task's live agent sessions, oldest first.
+	AgentSessions []LiveAgentSession `json:"agent_sessions,omitempty"`
+}
+
+// LeadAgentSession returns the live agent session the task's status comes
+// from, or nil when none is live.
+func (u *TaskStatusUpdate) LeadAgentSession() *LiveAgentSession {
+	if u == nil || u.LeadAgentSessionID == "" {
+		return nil
+	}
+	for i := range u.AgentSessions {
+		if u.AgentSessions[i].ID == u.LeadAgentSessionID {
+			return &u.AgentSessions[i]
+		}
+	}
+	return nil
+}
+
+// LiveAgentSession is one live agent session as its task's status update
+// carries it.
+type LiveAgentSession struct {
+	ID       string   `json:"id"`
+	Provider Provider `json:"provider"`
+	// Pane is the tmux pane the agent runs in.
+	Pane TmuxPaneRef `json:"pane"`
+	// Location is where the pane sat at the last tmux inspection, or nil
+	// before one has seen it.
+	Location *TmuxPaneLocation `json:"location,omitempty"`
+	// Status is the agent session's status as the task's status was derived
+	// from it: recovered from provider-side state when that applies, and
+	// starting while the agent session has none yet.
+	Status AgentSessionStatus `json:"status"`
+	// LatestPrompt is the newest prompt submitted to the agent, or empty when
+	// there is none.
+	LatestPrompt string `json:"latest_prompt,omitempty"`
+}
+
+// TmuxPaneRef identifies one tmux pane: its server and its pane ID, such as
+// "%44". Pane IDs are unique only while their server runs, so a pane is
+// identified by both.
+type TmuxPaneRef struct {
+	Server TmuxServer `json:"server"`
+	ID     string     `json:"id"`
+}
+
+// TmuxPaneLocation is where a tmux pane sits: its window's index and name,
+// and its index in that window. Windows can be renamed and moved, so a
+// location is only as current as the inspection that found it.
+type TmuxPaneLocation struct {
+	WindowName  string `json:"window_name"`
+	WindowIndex int    `json:"window_index"`
+	PaneIndex   int    `json:"pane_index"`
 }
 
 // TaskSessionRuntimeState is the current tmux-side state of a task session.
 type TaskSessionRuntimeState struct {
-	ActiveCommands []string
-	// CommandStartedAt maps the command of each pane child process to when its
-	// newest process started. Commands without a known start time, such as the
-	// pane's foreground command, are absent.
-	CommandStartedAt                map[string]time.Time
-	Exists                          bool
+	Exists bool
+}
+
+// TmuxServer identifies one running tmux server. Pane IDs are unique only
+// while their server runs and restart at %0 on a new server, so a pane is
+// identified by its server and pane ID together.
+type TmuxServer struct {
+	SocketPath string `json:"socket_path"`
+	PID        int    `json:"pid"`
+}
+
+// IsZero reports whether the server is unknown, as for an agent running
+// outside tmux.
+func (s TmuxServer) IsZero() bool {
+	return s.SocketPath == "" && s.PID == 0
+}
+
+// TmuxPane is one pane of a tmux server inventory.
+type TmuxPane struct {
+	// ID is the server-unique pane ID, such as "%44".
+	ID string
+	// Session is the normalized name of a tmux session the pane is in, as Rig
+	// normalizes task Session names. A pane linked into several sessions,
+	// such as through grouped sessions or linked windows, is listed once,
+	// under a task Session when one of them is.
+	Session    string
+	WindowName string
+	// Command is the pane's foreground process title, which some provider
+	// CLIs rewrite.
+	Command string
+	// Children are the direct children of the pane's root process, typically
+	// the CLI the pane shell is running.
+	Children    []PaneProcess
+	WindowIndex int
+	PaneIndex   int
+	// PID is the pane's root process, or zero when tmux did not report it.
+	PID                             int
 	ChildProcessEvidenceUnavailable bool
+}
+
+// PaneProcess is one direct child of a tmux pane's root process. StartedAt
+// is zero when ps reported no parseable elapsed time.
+type PaneProcess struct {
+	StartedAt time.Time
+	Command   string
+}
+
+// TmuxSnapshot is one shared inspection of the tmux server that hosts task
+// Sessions.
+type TmuxSnapshot struct {
+	// TaskSessionPanes lists the IDs of every pane in each inspected task's
+	// Session, across all its windows, keyed by task ID. Tasks whose Session
+	// is missing are absent.
+	TaskSessionPanes map[string][]string
+	// Server is zero when the server's identity is unknown: no server is
+	// running, it has no panes, or tmux did not expand socket_path and pid.
+	// Zero never means "another server".
+	Server TmuxServer
+	// Panes lists every pane on the server once, in tmux's order.
+	Panes []TmuxPane
+}
+
+// ProcessPane is the tmux pane a process runs in: the pane whose root process
+// is the process or one of its ancestors.
+type ProcessPane struct {
+	// Pane is the pane's ID, or empty when no pane's process tree contains the
+	// process.
+	Pane string
+	// Chain lists the command of every process from the process up to and
+	// including the pane's root process, innermost first. An agent nested in
+	// another agent, such as a codex exec run by Claude, puts two agent CLIs on
+	// the chain.
+	Chain []string
+}
+
+// AgentSession is one agent process, such as a Claude or Codex CLI, running in
+// one tmux pane for a task. Rig records it when it launches the agent, or else
+// from the first hook event it can place in the pane, and keeps the agent's
+// current Provider session and its hook-driven status.
+type AgentSession struct {
+	// StartedAt is when the agent session started, which orders a task's agent
+	// sessions.
+	StartedAt time.Time
+	// EndedAt is zero while the agent session is open.
+	EndedAt time.Time
+	// LaunchedAt is when Rig launched the agent in its current pane. The first
+	// hook event traced to that pane clears it, as the agent then runs, and it
+	// is zero for an agent session a hook event opened. While it is set, a
+	// status cycle gives the agent agentLaunchGrace to start.
+	LaunchedAt time.Time
+	ID         string
+	TaskID     string
+	Provider   Provider
+	// TmuxServer and TmuxPane place the agent. Pane IDs are unique only within
+	// their server, so they identify a pane together. Both are empty for an
+	// agent session without a pane: one Reconnect is restoring, or one an
+	// upgrade made from a task's last conversation.
+	TmuxServer TmuxServer
+	TmuxPane   string
+	// ProviderSessionID is the agent's current Provider session: the
+	// conversation it is running now, which Reconnect resumes. /clear and
+	// /resume replace it.
+	ProviderSessionID string
+	Status            AgentSessionStatus
+	// PaneTrusted reports whether a hook process was traced to the pane
+	// through the process tree. An untrusted pane was bound by the Codex
+	// fallback, because a Codex agent using the shared daemon runs its hooks
+	// outside the pane.
+	PaneTrusted bool
+}
+
+// IsOpen reports whether the agent session has not ended.
+func (s AgentSession) IsOpen() bool {
+	return s.EndedAt.IsZero()
+}
+
+// paneRef is the pane the agent session runs in, with an empty ID while it
+// has none.
+func (s AgentSession) paneRef() TmuxPaneRef {
+	return TmuxPaneRef{Server: s.TmuxServer, ID: s.TmuxPane}
+}
+
+// launching reports whether Rig launched the agent less than agentLaunchGrace
+// before now and no hook event from its pane has arrived since.
+func (s AgentSession) launching(now time.Time) bool {
+	return !s.LaunchedAt.IsZero() && now.Sub(s.LaunchedAt) < agentLaunchGrace
+}
+
+// AgentSessionStatus is an agent session's latest hook-driven runtime status.
+// Phase is empty until an event of its current Provider session maps to one.
+type AgentSessionStatus struct {
+	ObservedAt     time.Time          `json:"observed_at"`
+	RawEventName   string             `json:"raw_event_name"`
+	Phase          TaskStatusPhase    `json:"phase"`
+	BackgroundWork TaskBackgroundWork `json:"background_work"`
 }
 
 type TaskActivityRole string
@@ -156,21 +339,16 @@ const (
 // TaskActivityEvent is the compact persisted read model used by the detail
 // panel to show the last human prompt and recent LLM actions for a task.
 type TaskActivityEvent struct {
-	ObservedAt time.Time        `json:"observed_at"`
-	TaskID     string           `json:"task_id"`
-	TurnID     string           `json:"turn_id"`
-	EventName  string           `json:"event_name"`
-	Role       TaskActivityRole `json:"role"`
-	Text       string           `json:"text"`
-}
-
-// TaskResumeMetadata is the minimal provider runtime state needed to reconnect
-// a task session after its tmux session has been lost.
-type TaskResumeMetadata struct {
 	ObservedAt time.Time `json:"observed_at"`
 	TaskID     string    `json:"task_id"`
-	SessionID  string    `json:"session_id"`
-	Provider   Provider  `json:"provider"`
+	// AgentSessionID is the agent session whose hook event this activity came
+	// from. It is empty for activity Rig could not place in an agent session
+	// and for activity recovered from transcripts.
+	AgentSessionID string           `json:"agent_session_id,omitempty"`
+	TurnID         string           `json:"turn_id"`
+	EventName      string           `json:"event_name"`
+	Role           TaskActivityRole `json:"role"`
+	Text           string           `json:"text"`
 }
 
 type TaskProviderSession struct {
@@ -235,9 +413,10 @@ const (
 // Canonical provider hook event names. HookEventInput.EventName carries these
 // values across the provider seam: provider adapters declare which of them
 // they observe (and forward them by name), and task observation consumes them
-// for status, activity, and provider adoption.
+// for agent sessions, their status, and activity.
 const (
 	HookEventSessionStart      = "SessionStart"
+	HookEventSessionEnd        = "SessionEnd"
 	HookEventUserPromptSubmit  = "UserPromptSubmit"
 	HookEventPreToolUse        = "PreToolUse"
 	HookEventPostToolUse       = "PostToolUse"
@@ -317,7 +496,7 @@ type ProviderDetection struct {
 // This is not a domain object. It is an application-facing integration DTO that
 // describes how the tmux adapter should start the provider's CLI.
 type TaskSessionLaunchSpec struct {
-	// Command is the argv launched in the task's task tmux window, for example
+	// Command is the argv launched in the agent's tmux pane, for example
 	// []string{"codex"}.
 	Command []string
 	// ReadyMarker is the terminal prompt marker emitted by the provider when it is

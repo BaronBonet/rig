@@ -12,7 +12,7 @@ import (
 func TestCanEnterMatrix(t *testing.T) {
 	allModes := []modelMode{
 		modeBrowse, modePromptInput, modePRPicker,
-		modeCleanupConfirm, modeProviderSetup, modeSwitchProvider,
+		modeCleanupConfirm, modeProviderSetup,
 	}
 
 	cases := []struct {
@@ -27,7 +27,7 @@ func TestCanEnterMatrix(t *testing.T) {
 			hasSetup: true,
 			allowed: map[modelMode]bool{
 				modeBrowse: true, modePromptInput: true, modePRPicker: true,
-				modeCleanupConfirm: true, modeProviderSetup: true, modeSwitchProvider: true,
+				modeCleanupConfirm: true, modeProviderSetup: true,
 			},
 		},
 		{
@@ -56,14 +56,6 @@ func TestCanEnterMatrix(t *testing.T) {
 		{
 			name:     "delete pending blocks the same set",
 			pending:  opDeleting,
-			hasSetup: true,
-			allowed: map[modelMode]bool{
-				modeBrowse: true,
-			},
-		},
-		{
-			name:     "switch pending blocks the same set",
-			pending:  opSwitching,
 			hasSetup: true,
 			allowed: map[modelMode]bool{
 				modeBrowse: true,
@@ -100,12 +92,6 @@ func TestBackTargetMatrix(t *testing.T) {
 		{
 			name:     "cleanup confirm returns to browse",
 			mode:     modeCleanupConfirm,
-			hasSetup: true,
-			want:     backDest{to: modeBrowse},
-		},
-		{
-			name:     "switch provider returns to browse",
-			mode:     modeSwitchProvider,
 			hasSetup: true,
 			want:     backDest{to: modeBrowse},
 		},

@@ -28,24 +28,24 @@ var transcriptInterruptMarkers = []string{
 	"[Request interrupted by user for tool use]",
 }
 
-// RecoverLatestTaskStatus repairs the one stale status no Claude hook ends:
+// RecoverAgentSessionStatus repairs the one stale status no Claude hook ends:
 // interrupting a turn fires neither Stop nor any other hook, so the
 // transcript's interrupt marker is the only evidence that the agent is idle.
 // Every other transition is hook-driven: Stop or StopFailure ends a turn, and
 // the next prompt fires UserPromptSubmit.
-func (r *repository) RecoverLatestTaskStatus(
+func (r *repository) RecoverAgentSessionStatus(
 	_ context.Context,
-	current core.TaskStatusUpdate,
-	sessions []core.TaskProviderSession,
+	current core.AgentSessionStatus,
+	conversation []core.TaskProviderSession,
 	_ time.Time,
-) (*core.TaskStatusUpdate, error) {
+) (*core.AgentSessionStatus, error) {
 	switch current.Phase {
 	case core.TaskStatusPhaseStarting, core.TaskStatusPhaseWorking, core.TaskStatusPhaseWorkingInBackground:
 	default:
 		return nil, nil
 	}
 
-	session := newestClaudeTranscriptSession(sessions)
+	session := claudeConversationTranscript(conversation)
 	if session == nil {
 		return nil, nil
 	}
@@ -58,22 +58,19 @@ func (r *repository) RecoverLatestTaskStatus(
 	if !interruptedAt.After(current.ObservedAt) {
 		return nil, nil
 	}
-	return &core.TaskStatusUpdate{
-		TaskID:       current.TaskID,
-		Provider:     current.Provider,
+	return &core.AgentSessionStatus{
 		Phase:        core.TaskStatusPhaseWaitingForInput,
 		RawEventName: "TranscriptTurnInterrupted",
 		ObservedAt:   interruptedAt,
 	}, nil
 }
 
-// newestClaudeTranscriptSession returns the task's most recently observed
-// Claude session with a transcript. Hooks fired inside Claude subagents carry
-// the root session's transcript path, so this is the root agent's transcript;
-// after /clear it is the new conversation's.
-func newestClaudeTranscriptSession(sessions []core.TaskProviderSession) *core.TaskProviderSession {
+// claudeConversationTranscript returns the most recently observed transcript
+// of one Claude conversation. Hooks fired inside Claude subagents carry the
+// root session's transcript path, so this is the root agent's transcript.
+func claudeConversationTranscript(conversation []core.TaskProviderSession) *core.TaskProviderSession {
 	var latest *core.TaskProviderSession
-	for _, session := range sessions {
+	for _, session := range conversation {
 		session.TranscriptPath = strings.TrimSpace(session.TranscriptPath)
 		if session.Provider != core.ProviderClaude || session.TranscriptPath == "" {
 			continue

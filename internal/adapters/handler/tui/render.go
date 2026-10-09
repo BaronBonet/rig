@@ -10,6 +10,7 @@ import (
 	"github.com/BaronBonet/rig/internal/core"
 
 	"charm.land/lipgloss/v2"
+	"github.com/charmbracelet/x/ansi"
 )
 
 const (
@@ -71,6 +72,9 @@ type taskListViewport struct {
 type taskListBlock struct {
 	rowIndex int
 	lines    []string
+	// selectedLine is the index in lines of the selected task row or agent
+	// sub-row, or -1 when the selection is in another block.
+	selectedLine int
 }
 
 func (m model) constrainedListSections(totalWidth int, totalHeight int, baseLineCount int) ([]string, []string, int) {
@@ -140,7 +144,14 @@ func (m model) visibleTaskList(totalWidth int, budget int) taskListViewport {
 	start := selectedBlock
 	end := selectedBlock
 	if blockLineCount(blocks[start:end+1]) > budget {
-		lines := trimBlankEdgeLines(blocks[selectedBlock].lines[:budget])
+		// Keep the selected line in view when a task's agent sub-rows make its
+		// block taller than the budget.
+		block := blocks[selectedBlock]
+		offset := 0
+		if block.selectedLine >= budget {
+			offset = block.selectedLine - budget + 1
+		}
+		lines := trimBlankEdgeLines(block.lines[offset : offset+budget])
 		return taskListViewport{
 			lines:      withTaskListScrollbar(lines, totalWidth, selectedBlock, selectedBlock, len(blocks)),
 			startBlock: selectedBlock,
@@ -193,11 +204,28 @@ func (m model) taskListBlocks(totalWidth int) []taskListBlock {
 		if line1 == "" {
 			continue
 		}
+		selectedLine := -1
+		selectedAgent := ""
+		if index == m.selected {
+			if session := m.selectedAgentSession(); session != nil {
+				selectedAgent = session.ID
+			} else {
+				selectedLine = len(lines)
+			}
+		}
 		lines = append(lines, line1, line2)
+		subRows := agentSubRows(row)
+		for i, session := range subRows {
+			selected := selectedAgent != "" && session.ID == selectedAgent
+			if selected {
+				selectedLine = len(lines)
+			}
+			lines = append(lines, renderAgentSubRow(session, i == len(subRows)-1, selected, totalWidth))
+		}
 		if index < len(m.rows)-1 && repoGroupKey(m.rows[index+1].task) == repoKey {
 			lines = append(lines, "")
 		}
-		blocks = append(blocks, taskListBlock{rowIndex: index, lines: lines})
+		blocks = append(blocks, taskListBlock{rowIndex: index, lines: lines, selectedLine: selectedLine})
 	}
 	return blocks
 }
@@ -306,12 +334,7 @@ func (m model) renderRow(index int, row taskRow, totalWidth int) (string, string
 	}
 	statusCell := padRightVisible(statusText, colWidthStatus)
 	timeCell := padLeftVisible(taskElapsed(row.task), colWidthElapsed)
-
-	rightWidth := colWidthStatus + colWidthElapsed
-	nameWidth := totalWidth - rightWidth - 4
-	if nameWidth < 10 {
-		nameWidth = 10
-	}
+	nameWidth := taskNameWidth(totalWidth)
 
 	name := row.task.DisplayName
 	if strings.TrimSpace(name) == "" {
@@ -319,25 +342,32 @@ func (m model) renderRow(index int, row taskRow, totalWidth int) (string, string
 	}
 	nameCell := padRightVisible(truncateStr(name, nameWidth), nameWidth)
 
-	provider := emptyFallback(string(row.task.Provider), "-")
-	agentCell := padRightVisible(provider, colWidthAgent)
-	prText := prStatusText(row.pullRequest)
-	tokenText := taskTokenUsageRowText(row.tokenUsage)
-	if tokenText != "" {
-		prText += "  " + tokenText
+	line2 := prStatusText(row.pullRequest)
+	if tokenText := taskTokenUsageRowText(row.tokenUsage); tokenText != "" {
+		line2 += "  " + tokenText
+	}
+	// A task with agent sub-rows leaves its providers to them.
+	if agentSubRows(row) == nil {
+		line2 = renderProviderCell(taskProviderNames(row)[0]) + line2
 	}
 
-	if index == m.selected {
+	// With one of its agent sub-rows selected, the task row renders as
+	// unselected.
+	if index == m.selected && m.selectedAgentSession() == nil {
 		line1 := lipgloss.NewStyle().Foreground(colorAccent).Bold(true).Render(nameCell) +
 			statusStyle.Render(statusCell) +
 			primaryStyle.Render(timeCell)
-		line2 := providerStyle(provider).Render(agentCell) + prText
 		return selectedRowStyle.Render(line1), selectedRowStyle.Render(line2)
 	}
 
 	line1 := dimStyle.Render(nameCell) + statusStyle.Render(statusCell) + dimStyle.Render(timeCell)
-	line2 := providerStyle(provider).Render(agentCell) + prText
 	return normalRowStyle.Render(line1), normalRowStyle.Render(line2)
+}
+
+// taskNameWidth is the width of a task row's name column, which ends where
+// its status column starts.
+func taskNameWidth(totalWidth int) int {
+	return max(10, totalWidth-colWidthStatus-colWidthElapsed-4)
 }
 
 func (m model) selectedTaskDetailView() string {
@@ -399,17 +429,29 @@ func (m model) selectedTaskDetailView() string {
 			mutedStyle.Render("time")+"   "+primaryStyle.Bold(true).Render(elapsed)+mutedStyle.Render(" total"),
 		)
 	}
-	if statusText, statusStyle := taskStatusDetailText(row.status); statusText != "" {
+	// With an agent sub-row selected, the session column describes that agent;
+	// on the task row, it names the providers of the task's agents.
+	sessionWidth := totalWidth - detailColWidth - 6
+	status := row.status
+	providers := taskProviderNames(*row)
+	agentSession := m.selectedAgentSession()
+	if agentSession != nil {
+		status = agentSessionStatusUpdate(*agentSession)
+		providers = []string{emptyFallback(string(agentSession.Provider), "-")}
+	}
+	if statusText, statusStyle := taskStatusDetailText(status); statusText != "" {
+		sessionLines = append(sessionLines, detailFieldLines("state", "  ", statusText, statusStyle, sessionWidth)...)
+	}
+	if providers[0] != "-" {
 		sessionLines = append(
 			sessionLines,
-			mutedStyle.Render("state")+"  "+statusStyle.Render(statusText),
+			fitDetailLine(mutedStyle.Render("provider")+"  "+renderProviderNames(providers), sessionWidth),
 		)
 	}
-	if provider := strings.TrimSpace(string(task.Provider)); provider != "" {
-		sessionLines = append(
-			sessionLines,
-			mutedStyle.Render("provider")+"  "+providerStyle(provider).Render(provider),
-		)
+	if agentSession != nil {
+		if pane := agentPaneText(*agentSession); pane != "" {
+			sessionLines = append(sessionLines, detailFieldLines("pane", "   ", pane, dimStyle, sessionWidth)...)
+		}
 	}
 
 	var builder strings.Builder
@@ -489,7 +531,7 @@ func taskActivityPreview(events []core.TaskActivityEvent) (string, []string) {
 
 	start := -1
 	for i := len(events) - 1; i >= 0; i-- {
-		if events[i].Role == core.TaskActivityRoleUser && strings.TrimSpace(events[i].Text) != "" {
+		if events[i].Role == core.TaskActivityRoleUser && terminalSafeText(events[i].Text) != "" {
 			start = i
 			break
 		}
@@ -497,7 +539,7 @@ func taskActivityPreview(events []core.TaskActivityEvent) (string, []string) {
 
 	lastUserPrompt := ""
 	if start >= 0 {
-		lastUserPrompt = strings.TrimSpace(events[start].Text)
+		lastUserPrompt = terminalSafeText(events[start].Text)
 	}
 
 	assistantItems := make([]string, 0, taskActivityPreviewLimit)
@@ -508,7 +550,7 @@ func taskActivityPreview(events []core.TaskActivityEvent) (string, []string) {
 		if events[i].Role != core.TaskActivityRoleAssistant {
 			continue
 		}
-		text := strings.TrimSpace(events[i].Text)
+		text := terminalSafeText(events[i].Text)
 		if text == "" {
 			continue
 		}
@@ -566,7 +608,7 @@ func (m model) promptInputView() string {
 }
 
 func (m model) listKeybindText() string {
-	binds := [][2]string{{"n", "new"}, {"p", "provider"}, {"r", "refresh"}}
+	binds := [][2]string{{"n", "new"}, {"r", "refresh"}}
 	if row := m.selectedRow(); row != nil && row.task != nil &&
 		row.task.CreationStatus == core.TaskCreationStatusFailed {
 		binds = append(binds, [2]string{"R", "retry"})
@@ -634,42 +676,6 @@ func (m model) providerSetupView() string {
 		[2]string{"d", "default"},
 		[2]string{"enter", "save"},
 		[2]string{"q", "quit"},
-	))
-
-	return builder.String()
-}
-
-func (m model) switchProviderView() string {
-	var builder strings.Builder
-	builder.WriteString(m.screenHeader(mutedStyle.Render("switch provider")) + "\n")
-
-	row := m.selectedRow()
-	if row != nil && row.task != nil {
-		current := string(row.task.Provider)
-		builder.WriteString(
-			primaryStyle.Render(emptyFallback(row.task.DisplayName, row.task.ID)) + "\n" +
-				mutedStyle.Render("active provider  ") + providerStyle(current).Render(current) + "\n\n",
-		)
-	}
-
-	if m.pending == opSwitching {
-		builder.WriteString(renderShimmer("Switching provider...", m.shimmerTick) + "\n")
-		return builder.String()
-	}
-
-	builder.WriteString(dimStyle.Render("Switch this task to:") + "\n\n")
-	for index, provider := range m.providerSwitch.options {
-		cursor := "  "
-		if index == m.providerSwitch.selected {
-			cursor = "> "
-		}
-		builder.WriteString(cursor + providerStyle(string(provider)).Render(string(provider)) + "\n")
-	}
-
-	builder.WriteString("\n")
-	builder.WriteString(footerKeybinds(
-		[2]string{"enter", "switch"},
-		[2]string{"esc", "cancel"},
 	))
 
 	return builder.String()
@@ -1202,19 +1208,14 @@ func truncateVisible(value string, max int) string {
 	return clipVisible(value, max-3) + "..."
 }
 
-// clipVisible cuts value to at most max visible columns.
+// clipVisible cuts value to at most max visible columns. It measures
+// graphemes as lipgloss.Width does, so an emoji with a variation selector
+// counts as wide, and it keeps styling escape sequences whole.
 func clipVisible(value string, max int) string {
-	currentWidth := 0
-	var builder strings.Builder
-	for _, r := range value {
-		runeWidth := lipgloss.Width(string(r))
-		if currentWidth+runeWidth > max {
-			break
-		}
-		builder.WriteRune(r)
-		currentWidth += runeWidth
+	if max <= 0 {
+		return ""
 	}
-	return builder.String()
+	return ansi.Truncate(value, max, "")
 }
 
 func emptyFallback(value string, fallback string) string {

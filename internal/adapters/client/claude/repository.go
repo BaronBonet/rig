@@ -3,13 +3,13 @@
 // Hook registration is workspace-scoped: BuildWorkspaceBootstrapSpec writes an
 // untracked .claude/settings.local.json into the task worktree, so Rig hooks
 // fire only inside Rig task workspaces. The file is written into every Rig
-// task workspace regardless of the task's active provider, so a manually
-// launched Claude session in any Rig task is observable and adoptable; when
-// the file already exists (Claude Code stores permission decisions there) Rig
-// merges its hook rules in and preserves the rest. Rig never modifies
-// user-level Claude settings (~/.claude/settings.json); only the shared
-// forward-to-rig script, which does not trigger by itself, is installed at
-// user level.
+// task workspace regardless of the task's launch provider, so a manually
+// launched Claude session in any Rig task is observed as one of its agents;
+// when the file already exists (Claude Code stores permission decisions
+// there) Rig merges its hook rules in and preserves the rest. Rig never
+// modifies user-level Claude settings (~/.claude/settings.json); only the
+// shared forward-to-rig script, which does not trigger by itself, is
+// installed at user level.
 //
 // Running/idle detection was verified against a real Claude CLI (v2.1.200) in
 // tmux: pane_current_command reports the Claude process title, which is the
@@ -45,6 +45,15 @@ const (
 // runtime phase it drives. Registration rules and the hook-to-status mapping
 // are derived from it.
 //
+// SessionStart matches every source that starts a Provider session in the
+// agent: a new session, a resume, /clear and a fork. Not compact: it can fire
+// mid-turn, and SessionStart drives starting, which would reset a working
+// agent.
+//
+// SessionEnd drives no phase: task observation ends the agent session when
+// the agent exits, and keeps it for /clear and /resume. Its timeout lifts
+// Claude's 1.5s SessionEnd budget above the forwarder's POST.
+//
 // Tool hooks are unmatched on purpose: most of Claude's work uses non-Bash
 // tools (Read, Edit, Grep, ...), and every tool event must drive the task's
 // working status.
@@ -57,7 +66,8 @@ const (
 // limit, an overloaded or failed request, or an authentication problem. It is
 // unmatched so that every error type ends the working status.
 var hookCatalog = providerkit.Catalog{
-	{Event: core.HookEventSessionStart, Matcher: "startup|resume", Phase: core.TaskStatusPhaseStarting},
+	{Event: core.HookEventSessionStart, Matcher: "startup|resume|clear|fork", Phase: core.TaskStatusPhaseStarting},
+	{Event: core.HookEventSessionEnd, Timeout: providerkit.SessionEndTimeout},
 	{Event: core.HookEventUserPromptSubmit, Phase: core.TaskStatusPhaseWorking},
 	{Event: core.HookEventPreToolUse, Phase: core.TaskStatusPhaseWorking},
 	{Event: core.HookEventPostToolUse, Phase: core.TaskStatusPhaseWorking},

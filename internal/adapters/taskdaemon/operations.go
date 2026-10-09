@@ -52,11 +52,6 @@ type saveProviderSetupRequest struct {
 	ProviderSetup *core.ProviderSetup `json:"provider_setup"`
 }
 
-type switchTaskProviderRequest struct {
-	TaskID   string        `json:"task_id"`
-	Provider core.Provider `json:"provider"`
-}
-
 func requiredTaskID(command string, taskID string) (string, error) {
 	taskID = strings.TrimSpace(taskID)
 	if taskID == "" {
@@ -151,22 +146,6 @@ var opDetectProviders = unaryOp[emptyResponse, []core.ProviderDetection]{
 	},
 }
 
-var opSwitchTaskProvider = unaryOp[switchTaskProviderRequest, *core.Task]{
-	command:  "switch_task_provider",
-	envelope: "task_provider_switched",
-	call: func(ctx context.Context, svc core.TaskService, req switchTaskProviderRequest) (*core.Task, error) {
-		taskID, err := requiredTaskID("switch_task_provider", req.TaskID)
-		if err != nil {
-			return nil, err
-		}
-		provider := core.Provider(strings.TrimSpace(string(req.Provider)))
-		if provider == "" {
-			return nil, errors.New("switch_task_provider provider required")
-		}
-		return svc.SwitchTaskProvider(ctx, taskID, provider)
-	},
-}
-
 var opDeleteTask = unaryOp[taskIDRequest, emptyResponse]{
 	command:  "delete_task",
 	envelope: "task_deleted",
@@ -235,7 +214,6 @@ var socketUnaryHandlers = map[string]unaryHandler{
 	opGetProviderSetup.command:     serveUnary(opGetProviderSetup),
 	opSaveProviderSetup.command:    serveUnary(opSaveProviderSetup),
 	opDetectProviders.command:      serveUnary(opDetectProviders),
-	opSwitchTaskProvider.command:   serveUnary(opSwitchTaskProvider),
 	opDeleteTask.command:           serveUnary(opDeleteTask),
 	opListTasks.command:            serveUnary(opListTasks),
 	opLatestTaskStatus.command:     serveUnary(opLatestTaskStatus),

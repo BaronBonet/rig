@@ -203,7 +203,22 @@ func TestFrontend_AttachTaskSessionRequiresSessionClient(t *testing.T) {
 
 	client := &frontend{}
 	require.ErrorContains(t,
-		client.AttachTaskSession(context.Background(), &core.Task{ID: "task-1"}),
+		client.AttachTaskSession(context.Background(), &core.Task{ID: "task-1"}, nil),
 		"task session client not configured",
 	)
+}
+
+func TestFrontend_AttachTaskSessionLandsOnTheGivenPane(t *testing.T) {
+	t.Parallel()
+
+	task := &core.Task{ID: "task-1", TmuxSession: "repo_task"}
+	pane := &core.TmuxPaneRef{
+		Server: core.TmuxServer{SocketPath: "/private/tmp/tmux-501/default", PID: 4722},
+		ID:     "%7",
+	}
+	sessions := core.NewMockTmuxSessionClient(t)
+	sessions.EXPECT().AttachTaskSession(context.Background(), task, pane).Return(nil).Once()
+	client := &frontend{sessions: sessions}
+
+	require.NoError(t, client.AttachTaskSession(context.Background(), task, pane))
 }

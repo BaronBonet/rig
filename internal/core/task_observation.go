@@ -3,9 +3,10 @@ package core
 import (
 	"context"
 	"fmt"
-	"path/filepath"
+	"slices"
 	"sort"
 	"strings"
+	"sync"
 	"time"
 )
 
@@ -13,10 +14,11 @@ const defaultTaskStatusRecoveryPollInterval = 2 * time.Second
 const defaultTaskStatusRecoveryWorkerLimit = 2
 
 // taskObservation is the Task observation module: everything Rig derives
-// from provider hook events and provider session history lives here — a
-// task's runtime status (including read-time derivation against the live
-// tmux session and provider-side recovery of stale status), adoption of
-// manually launched provider sessions, persisted activity, and token usage.
+// from provider hook events and provider session history lives here — the
+// agent sessions hook events are attributed to, each agent session's runtime
+// status (including read-time liveness against the live tmux session and
+// provider-side recovery of stale status), the task's runtime status rolled
+// up from them, persisted activity, and token usage.
 type taskObservation struct {
 	tasks          TaskRepository
 	tmuxSession    TmuxSessionClient
@@ -28,6 +30,17 @@ type taskObservation struct {
 	recoveryWorkerLimit  int
 	statusCacheMaxAge    time.Duration
 	statusObserver       *taskStatusObserver
+	// paneTraces caches where hook processes were traced to, and
+	// codexFallbackRetries when the Codex fallback may next inspect tmux for
+	// a conversation it could not place or failed to inspect, keyed by
+	// Provider session ID.
+	paneTraces           *boundedCache[paneTraceKey, paneTrace]
+	codexFallbackRetries *boundedCache[string, time.Time]
+	newAgentSessionID    func() string
+	now                  func() time.Time
+	// agentSessionMu serializes reading and writing agent sessions, because
+	// concurrent hook events can come from the same pane.
+	agentSessionMu sync.Mutex
 }
 
 type taskObservationOptions struct {
@@ -75,6 +88,10 @@ func newTaskObservationWithOptions(
 		recoveryPollInterval: options.recoveryPollInterval,
 		recoveryWorkerLimit:  options.recoveryWorkerLimit,
 		statusCacheMaxAge:    options.statusCacheMaxAge,
+		paneTraces:           newBoundedCache[paneTraceKey, paneTrace](maxPaneTraceEntries),
+		codexFallbackRetries: newBoundedCache[string, time.Time](maxPaneTraceEntries),
+		newAgentSessionID:    newAgentSessionID,
+		now:                  time.Now,
 	}
 	observation.statusObserver = newTaskStatusObserver(observation)
 	return observation
@@ -82,8 +99,8 @@ func newTaskObservationWithOptions(
 
 // supportedProviderClient returns the adapter client for a supported provider
 // without requiring the provider to be configured. Use it for read-side
-// behavior that must keep working for tasks whose active provider is no
-// longer configured.
+// behavior that must keep working for agents whose provider is no longer
+// configured.
 func supportedProviderClient(
 	providers map[Provider]ProviderClient,
 	provider Provider,
@@ -94,39 +111,6 @@ func supportedProviderClient(
 	}
 
 	return providerClient, nil
-}
-
-// recordActiveProvider persists a new active provider on the task record. It
-// runs only after the new provider is known to own the task session, so a
-// failed switch or adoption never changes the recorded active provider.
-func recordActiveProvider(
-	ctx context.Context,
-	tasks TaskRepository,
-	task *Task,
-	provider Provider,
-) (*Task, error) {
-	task.Provider = provider
-	task.UpdatedAt = time.Now().UTC()
-	if err := tasks.UpdateTask(ctx, task); err != nil {
-		return nil, fmt.Errorf("record active provider: %w", err)
-	}
-
-	// A task's runtime status is driven only by its active provider, so a
-	// persisted status row left behind by the previous provider is re-stamped.
-	// A durable status/record provider mismatch would otherwise put every TUI
-	// session into a permanent reload loop until the new provider's first hook
-	// event happened to overwrite the row.
-	update, err := tasks.LatestTaskStatus(ctx, task.ID)
-	if err != nil {
-		return nil, fmt.Errorf("record active provider: read latest status: %w", err)
-	}
-	if update != nil && update.Provider != provider {
-		update.Provider = provider
-		if err := tasks.UpsertTaskStatus(ctx, *update); err != nil {
-			return nil, fmt.Errorf("record active provider: re-stamp status: %w", err)
-		}
-	}
-	return task, nil
 }
 
 func (o *taskObservation) GetTaskActivity(
@@ -237,52 +221,24 @@ func (o *taskObservation) HandleHookEvent(ctx context.Context, input HookEventIn
 		input.TaskID = resolvedTaskID
 	}
 
-	drivesRuntimeStatus := true
-	if task, taskErr := taskByID(ctx, o.tasks, input.TaskID); taskErr == nil && task.Provider != input.Provider {
-		if isProviderAdoptionEvent(input) {
-			// Manual provider adoption: a configured provider started a session in
-			// this task's workspace, so it becomes the active provider immediately.
-			// Rig's tmux session reference is intentionally left untouched.
-			if _, adoptErr := recordActiveProvider(ctx, o.tasks, task, input.Provider); adoptErr != nil {
-				return adoptErr
-			}
-		} else {
-			// Late hooks from a provider that is no longer active may still record
-			// session history and activity, but never drive current runtime status.
-			drivesRuntimeStatus = false
-		}
-	}
-
 	if err := o.recordHookSession(ctx, input); err != nil {
 		return err
-	}
-	if err := o.recordHookActivity(ctx, input); err != nil {
-		return err
-	}
-	if !drivesRuntimeStatus {
-		return nil
 	}
 
 	update, err := providerClient.HookEventToTaskStatus(input)
 	if err != nil {
 		return err
 	}
-	if update == nil {
-		return nil
-	}
-	normalizeProviderHookStatusUpdate(update, input)
-	if update.TaskID == "" {
-		return fmt.Errorf("task status update task ID is required")
+	if update != nil {
+		normalizeProviderHookStatusUpdate(update, input)
 	}
 
-	return o.tasks.UpsertTaskStatus(ctx, *update)
-}
-
-// isProviderAdoptionEvent reports whether a hook event may adopt a manually
-// launched provider as the task's active provider. Only session-start events
-// qualify so that late or stray hooks cannot change the active provider.
-func isProviderAdoptionEvent(input HookEventInput) bool {
-	return strings.TrimSpace(input.EventName) == HookEventSessionStart
+	// The event drives the status of the agent session it came from, whatever
+	// provider the task was created with, and its activity is recorded
+	// against that agent session. Without a task record, task is nil and
+	// there is nothing to place the event in.
+	task, _ := taskByID(ctx, o.tasks, input.TaskID)
+	return o.recordAgentSession(ctx, task, input, update, taskActivityEventFromHookInput(input))
 }
 
 func (o *taskObservation) resolveTaskIDFromCwd(ctx context.Context, cwd string) (string, error) {
@@ -303,42 +259,6 @@ func (o *taskObservation) resolveTaskIDFromCwd(ctx context.Context, cwd string) 
 	}
 
 	return "", ErrUnmanagedHookEvent
-}
-
-// statusResolution is the pure outcome of the runtime-status decision: what a
-// persisted status should become given the live session state.
-type statusResolution int
-
-const (
-	// statusKeep: the persisted phase stands.
-	statusKeep statusResolution = iota
-	// statusStopped: the session or provider process is gone; the task reads
-	// as stopped regardless of the persisted phase.
-	statusStopped
-	// statusTryRecover: the provider is running, so provider-side state may
-	// hold a newer observation than the persisted one.
-	statusTryRecover
-)
-
-// resolveStatus is the runtime-status decision table, kept free of I/O so
-// every row is a value-in/value-out test. The persisted status row is not
-// authoritative: it is one input alongside the live tmux runtime state and
-// the active provider's expected session command.
-func resolveStatus(
-	update *TaskStatusUpdate,
-	runtime TaskSessionRuntimeState,
-	providerCommand string,
-) statusResolution {
-	if update == nil || update.Phase == TaskStatusPhaseStopped {
-		return statusKeep
-	}
-	if taskSessionRunningProvider(runtime, providerCommand) {
-		return statusTryRecover
-	}
-	if runtime.Exists && runtime.ChildProcessEvidenceUnavailable {
-		return statusKeep
-	}
-	return statusStopped
 }
 
 func (o *taskObservation) recoveredTaskActivity(
@@ -372,6 +292,13 @@ func (o *taskObservation) recordHookSession(ctx context.Context, input HookEvent
 	if input.SessionID == "" {
 		return nil
 	}
+	// A SessionEnd adds nothing to its Provider session's history, and Codex
+	// sends one up to 30 minutes after the agent left that Provider session:
+	// recording it could change which transcript token usage and activity
+	// recovery read.
+	if strings.TrimSpace(input.EventName) == HookEventSessionEnd {
+		return nil
+	}
 
 	observedAt := input.OccurredAt
 	if observedAt.IsZero() {
@@ -391,24 +318,29 @@ func (o *taskObservation) recordHookSession(ctx context.Context, input HookEvent
 	}); err != nil {
 		return fmt.Errorf("upsert task provider session: %w", err)
 	}
-	if err := o.tasks.UpsertTaskResumeMetadata(ctx, TaskResumeMetadata{
-		TaskID:     input.TaskID,
-		Provider:   input.Provider,
-		SessionID:  input.SessionID,
-		ObservedAt: input.OccurredAt,
-	}); err != nil {
-		return fmt.Errorf("upsert task resume metadata: %w", err)
-	}
 	return nil
 }
 
-func (o *taskObservation) recordHookActivity(ctx context.Context, input HookEventInput) error {
-	activity := taskActivityEventFromHookInput(input)
+// recordHookActivity records a hook event's activity, if any, against the
+// agent session the event was placed in, or none. An agent session's new
+// prompt changes what its task's status carries, so it marks the task
+// changed. Callers hold agentSessionMu.
+func (o *taskObservation) recordHookActivity(
+	ctx context.Context,
+	activity *TaskActivityEvent,
+	agentSessionID string,
+	changes agentSessionChanges,
+) error {
 	if activity == nil {
 		return nil
 	}
-	if err := o.tasks.RecordTaskActivity(ctx, *activity); err != nil {
+	event := *activity
+	event.AgentSessionID = agentSessionID
+	if err := o.tasks.RecordTaskActivity(ctx, event); err != nil {
 		return fmt.Errorf("record task activity: %w", err)
+	}
+	if agentSessionID != "" && event.Role == TaskActivityRoleUser {
+		changes[event.TaskID] = true
 	}
 	return nil
 }
@@ -426,89 +358,32 @@ func normalizeProviderHookStatusUpdate(update *TaskStatusUpdate, input HookEvent
 	update.TaskID = strings.TrimSpace(update.TaskID)
 }
 
+// taskStatusUpdatesEqual reports whether two updates say the same thing,
+// including about every live agent session, so a side agent's change is
+// published even when the task's own status stays the same.
 func taskStatusUpdatesEqual(left *TaskStatusUpdate, right *TaskStatusUpdate) bool {
 	if left == nil || right == nil {
 		return left == right
 	}
-	return *left == *right
+	return left.ObservedAt.Equal(right.ObservedAt) &&
+		left.TaskID == right.TaskID &&
+		left.RawEventName == right.RawEventName &&
+		left.Provider == right.Provider &&
+		left.Phase == right.Phase &&
+		left.BackgroundWork == right.BackgroundWork &&
+		left.LeadAgentSessionID == right.LeadAgentSessionID &&
+		slices.EqualFunc(left.AgentSessions, right.AgentSessions, liveAgentSessionsEqual)
 }
 
-func taskSessionRunningProvider(runtime TaskSessionRuntimeState, commandName string) bool {
-	if !runtime.Exists {
-		return false
-	}
-
-	expectedCommand := filepath.Base(strings.TrimSpace(commandName))
-	if expectedCommand == "" {
-		return false
-	}
-
-	for _, command := range runtime.ActiveCommands {
-		activeCommand := filepath.Base(strings.TrimSpace(command))
-		if taskSessionCommandsMatch(activeCommand, expectedCommand) {
-			return true
-		}
-	}
-
-	return false
-}
-
-// taskSessionProviderStartedAt returns when the newest process running the
-// provider command started, or zero when process evidence has no start time.
-func taskSessionProviderStartedAt(runtime TaskSessionRuntimeState, commandName string) time.Time {
-	var startedAt time.Time
-	expectedCommand := filepath.Base(strings.TrimSpace(commandName))
-	if expectedCommand == "" {
-		return startedAt
-	}
-
-	for command, commandStartedAt := range runtime.CommandStartedAt {
-		activeCommand := filepath.Base(strings.TrimSpace(command))
-		if taskSessionCommandsMatch(activeCommand, expectedCommand) && commandStartedAt.After(startedAt) {
-			startedAt = commandStartedAt
-		}
-	}
-	return startedAt
-}
-
-// replacementActiveProvider returns the sole configured provider proven to be
-// running after the recorded active provider has exited. Ambiguous or
-// incomplete process evidence never changes durable provider ownership.
-func replacementActiveProvider(
-	runtime TaskSessionRuntimeState,
-	current Provider,
-	configured []Provider,
-	providers map[Provider]ProviderClient,
-) Provider {
-	if !runtime.Exists || runtime.ChildProcessEvidenceUnavailable {
-		return ""
-	}
-
-	currentClient, err := supportedProviderClient(providers, current)
-	if err != nil || strings.TrimSpace(currentClient.TaskSessionCommandName()) == "" {
-		return ""
-	}
-	if taskSessionRunningProvider(runtime, currentClient.TaskSessionCommandName()) {
-		return ""
-	}
-
-	seen := make(map[Provider]bool, len(configured))
-	var replacement Provider
-	for _, provider := range configured {
-		if provider == current || seen[provider] {
-			continue
-		}
-		seen[provider] = true
-		providerClient, err := supportedProviderClient(providers, provider)
-		if err != nil || !taskSessionRunningProvider(runtime, providerClient.TaskSessionCommandName()) {
-			continue
-		}
-		if replacement != "" {
-			return ""
-		}
-		replacement = provider
-	}
-	return replacement
+func liveAgentSessionsEqual(left LiveAgentSession, right LiveAgentSession) bool {
+	sameLocation := left.Location == nil && right.Location == nil ||
+		left.Location != nil && right.Location != nil && *left.Location == *right.Location
+	return left.ID == right.ID &&
+		left.Provider == right.Provider &&
+		left.Pane == right.Pane &&
+		sameLocation &&
+		agentSessionStatusesEqual(left.Status, right.Status) &&
+		left.LatestPrompt == right.LatestPrompt
 }
 
 func taskSessionCommandsMatch(activeCommand, expectedCommand string) bool {

@@ -3,7 +3,6 @@ package core
 import (
 	"context"
 	"fmt"
-	"strings"
 )
 
 func (s *service) GetProviderSetup(ctx context.Context) (*ProviderSetup, error) {
@@ -70,71 +69,4 @@ func (s *service) detectProvider(ctx context.Context, provider Provider) Provide
 
 	detection.Ready = true
 	return detection
-}
-
-func (s *service) SwitchTaskProvider(ctx context.Context, taskID string, provider Provider) (*Task, error) {
-	var task *Task
-	err := s.operations.Run(ctx, taskID, taskOperationSwitch, false, func(ctx context.Context) error {
-		var switchErr error
-		task, switchErr = s.switchTaskProvider(ctx, taskID, provider)
-		return switchErr
-	})
-	return task, err
-}
-
-func (s *service) switchTaskProvider(ctx context.Context, taskID string, provider Provider) (*Task, error) {
-	task, err := taskByID(ctx, s.tasks, taskID)
-	if err != nil {
-		return nil, err
-	}
-
-	provider = Provider(strings.TrimSpace(string(provider)))
-	provider, providerClient, err := s.launcher.resolveProvider(ctx, provider)
-	if err != nil {
-		return nil, err
-	}
-	if provider == task.Provider {
-		return task, nil
-	}
-
-	runtime, err := s.tmuxSession.InspectTaskSession(ctx, task)
-	if err != nil {
-		return nil, fmt.Errorf("inspect task session: %w", err)
-	}
-	if runtime.Exists {
-		// Never kill or corrupt an interactive session: switching refuses unless
-		// the pane is idle or already running the requested provider.
-		if currentClient, currentErr := supportedProviderClient(s.providers, task.Provider); currentErr == nil &&
-			taskSessionRunningProvider(runtime, currentClient.TaskSessionCommandName()) {
-			return nil, fmt.Errorf(
-				"%w: exit %s in the task session before switching",
-				ErrProviderSessionActive,
-				task.Provider,
-			)
-		}
-		if taskSessionRunningProvider(runtime, providerClient.TaskSessionCommandName()) {
-			return recordActiveProvider(ctx, s.tasks, task, provider)
-		}
-	}
-
-	if err := providerClient.EnsureTaskSessionEnvironment(ctx); err != nil {
-		return nil, fmt.Errorf("ensure task session environment: %w", err)
-	}
-
-	// Switching bootstraps the existing workspace for the new provider but
-	// never reruns repo seeding or setup scripts. The client is passed
-	// explicitly because the task record still names the old active provider.
-	if err := s.launcher.bootstrapWorkspace(ctx, providerClient, task); err != nil {
-		return nil, err
-	}
-
-	launch, err := promptlessTaskSessionLaunchSpec(providerClient, task)
-	if err != nil {
-		return nil, fmt.Errorf("build task session launch spec: %w", err)
-	}
-	if err := s.tmuxSession.StartTaskSession(ctx, task, launch); err != nil {
-		return nil, fmt.Errorf("start task session: %w", err)
-	}
-
-	return recordActiveProvider(ctx, s.tasks, task, provider)
 }

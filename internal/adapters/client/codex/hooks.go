@@ -12,6 +12,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/BaronBonet/rig/internal/adapters/client/providerkit"
 	"github.com/BaronBonet/rig/internal/core"
 )
 
@@ -94,6 +95,8 @@ func (h *HTTPHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 
 	input := DecodeHookEventInput(h.now, r.Header.Get("X-Codex-Hook-Event"), body)
+	input.TmuxPane, input.TmuxServer = providerkit.DecodeTmuxHeaders(r.Header)
+	input.HookPID = providerkit.DecodeHookPID(r.Header)
 	if err := h.handle(r.Context(), input); err != nil && !errors.Is(err, core.ErrUnmanagedHookEvent) {
 		http.Error(w, "handle hook event: "+err.Error(), http.StatusInternalServerError)
 		return
@@ -147,6 +150,7 @@ func DecodeHookEventInput(now func() time.Time, headerEventName string, body []b
 	input.Cwd = strings.TrimSpace(payload.Cwd)
 	input.TranscriptPath = strings.TrimSpace(payload.TranscriptPath)
 	input.StartSource = strings.TrimSpace(payload.Source)
+	input.EndReason = strings.TrimSpace(payload.Reason)
 	input.LastAssistantMessage = strings.TrimSpace(payload.LastAssistantMessage)
 	input.PromptText = strings.TrimSpace(payload.Prompt)
 	input.CommandText = strings.TrimSpace(payload.ToolInput.Command)
@@ -179,6 +183,7 @@ type hookPayload struct {
 	Cwd                  string          `json:"cwd"`
 	TranscriptPath       string          `json:"transcript_path"`
 	Source               string          `json:"source"`
+	Reason               string          `json:"reason"`
 	LastAssistantMessage string          `json:"last_assistant_message"`
 	ToolInput            hookToolInput   `json:"tool_input"`
 	ToolResponse         json.RawMessage `json:"tool_response"`

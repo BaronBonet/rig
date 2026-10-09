@@ -76,9 +76,10 @@ type TaskCreateEvent struct {
 type TaskFrontend interface {
 	TaskService
 	// AttachTaskSession attaches the current terminal to an existing task tmux
-	// session for interactive use. This is intentionally client-local behavior,
-	// not part of the daemon socket protocol.
-	AttachTaskSession(ctx context.Context, task *Task) error
+	// session for interactive use, landing on pane when it is set. This is
+	// intentionally client-local behavior, not part of the daemon socket
+	// protocol.
+	AttachTaskSession(ctx context.Context, task *Task, pane *TmuxPaneRef) error
 }
 
 // TaskDaemonHookRoute describes one provider hook endpoint the local task
@@ -117,6 +118,18 @@ type HookEventInput struct {
 	TranscriptPath       string
 	StartSource          string
 	NotificationType     string
+	// EndReason is why a SessionEnd event's Provider session ended, as the
+	// provider reports it, such as Claude's "clear" or "prompt_input_exit".
+	EndReason string
+	// TmuxPane is the ID of the tmux pane the hook's agent runs in, such as
+	// "%44". It and TmuxServer are both empty when the agent runs outside
+	// tmux.
+	TmuxPane   string
+	TmuxServer TmuxServer
+	// HookPID is the process ID of the hook command that forwarded the event,
+	// or zero when unknown. Its ancestors include the agent process that ran
+	// the hook.
+	HookPID int
 	// BackgroundWork is the provider work still in flight when a turn ended.
 	// Only turn-end events carry it.
 	BackgroundWork TaskBackgroundWork
@@ -185,8 +198,12 @@ type TaskService interface {
 	// DeleteTask deletes the task and its local runtime resources while keeping
 	// the Git branch.
 	DeleteTask(ctx context.Context, taskID string) error
-	// ReconnectTaskSession recreates a missing task runtime session from
-	// persisted provider resume metadata.
+	// ReconnectTaskSession recreates a task's missing Session and restores its
+	// open agent sessions there, each resuming its current Provider session
+	// with its own provider, and launches the task's launch provider fresh
+	// when there is nothing to restore. It does nothing while the Session
+	// exists. Once the Session exists, an agent session that cannot be
+	// restored doesn't stop the others, and the error names each one.
 	ReconnectTaskSession(ctx context.Context, taskID string) error
 	// GetProviderSetup returns the user's provider setup, or nil when provider
 	// setup has never completed.
@@ -197,11 +214,6 @@ type TaskService interface {
 	// DetectProviders reports which supported providers pass provider setup
 	// checks on this machine.
 	DetectProviders(ctx context.Context) ([]ProviderDetection, error)
-	// SwitchTaskProvider makes another configured provider the task's active
-	// provider by launching it in the existing task workspace. It refuses while
-	// the current provider process is still running and only records the new
-	// active provider after the new provider launches successfully.
-	SwitchTaskProvider(ctx context.Context, taskID string, provider Provider) (*Task, error)
 }
 
 // HookEventHandler consumes provider hook events inside the daemon process.
@@ -252,24 +264,30 @@ type TaskRepository interface {
 	// GetTaskActivity returns recent persisted activity events for the selected
 	// task detail view, ordered oldest-to-newest within the requested window.
 	GetTaskActivity(ctx context.Context, taskID string, limit int) ([]TaskActivityEvent, error)
-	// UpsertTaskStatus stores the latest known live status for a task.
-	UpsertTaskStatus(ctx context.Context, update TaskStatusUpdate) error
-	// UpsertTaskResumeMetadata stores the latest reconnect metadata for a task.
-	UpsertTaskResumeMetadata(ctx context.Context, metadata TaskResumeMetadata) error
+	// ListLatestAgentSessionPrompts returns the newest prompt activity of each
+	// of a task's open agent sessions. Agent sessions without a prompt have
+	// none.
+	ListLatestAgentSessionPrompts(ctx context.Context, taskID string) ([]TaskActivityEvent, error)
 	// UpsertTaskProviderSession stores a provider session observed for a task.
 	UpsertTaskProviderSession(ctx context.Context, session TaskProviderSession) error
-	// LatestTaskStatus returns the latest known live status for a task, or nil
-	// when no status has been recorded yet.
-	LatestTaskStatus(ctx context.Context, taskID string) (*TaskStatusUpdate, error)
-	// LatestTaskResumeMetadata returns the latest known reconnect metadata for a
-	// task, or nil when none has been recorded yet.
-	LatestTaskResumeMetadata(ctx context.Context, taskID string) (*TaskResumeMetadata, error)
 	// ListTaskProviderSessions returns provider sessions observed for a task.
 	ListTaskProviderSessions(ctx context.Context, taskID string) ([]TaskProviderSession, error)
-	// SubscribeTaskStatus subscribes to live status updates for a task. The
-	// subscription lifetime is owned by ctx; cancelling it removes the
-	// subscription and closes the update channel.
-	SubscribeTaskStatus(ctx context.Context, taskID string) (<-chan TaskStatusUpdate, error)
+	// CreateAgentSession stores a newly opened agent session. At most one open
+	// agent session may hold a given tmux server and pane.
+	CreateAgentSession(ctx context.Context, session AgentSession) error
+	// OpenAgentSessionOnPane returns the open agent session on a tmux server's
+	// pane, or nil when there is none.
+	OpenAgentSessionOnPane(ctx context.Context, server TmuxServer, pane string) (*AgentSession, error)
+	// ListOpenAgentSessions returns a task's open agent sessions, oldest first.
+	ListOpenAgentSessions(ctx context.Context, taskID string) ([]AgentSession, error)
+	// LatestAgentSession returns a task's most recently started agent session,
+	// open or ended, or nil when the task has never had one.
+	LatestAgentSession(ctx context.Context, taskID string) (*AgentSession, error)
+	// UpdateAgentSession stores an open agent session's pane, pane trust,
+	// launch time, current Provider session, and status.
+	UpdateAgentSession(ctx context.Context, session AgentSession) error
+	// EndAgentSession marks an open agent session as ended.
+	EndAgentSession(ctx context.Context, agentSessionID string, endedAt time.Time) error
 }
 
 // ProviderClient wraps provider-specific behavior behind one application
@@ -298,16 +316,19 @@ type ProviderClient interface {
 	// HookEventToTaskStatus normalizes a provider hook event into a task status
 	// update when the event contributes to the live task status stream.
 	HookEventToTaskStatus(input HookEventInput) (*TaskStatusUpdate, error)
-	// RecoverLatestTaskStatus returns a computed replacement for a stale latest
-	// task status when provider-side state contains a newer observation.
-	// providerStartedAt is when the provider process running in the task
-	// session started, or zero when process evidence does not say.
-	RecoverLatestTaskStatus(
+	// RecoverAgentSessionStatus returns a computed replacement for one agent
+	// session's stale status when provider-side state holds a newer
+	// observation. conversation is the Provider session history of the agent
+	// session's current Provider session only: its root transcript and, for
+	// Codex, its subagents' transcripts, which share the session ID.
+	// providerStartedAt is when the agent's process started, or zero when
+	// process evidence does not say.
+	RecoverAgentSessionStatus(
 		ctx context.Context,
-		current TaskStatusUpdate,
-		sessions []TaskProviderSession,
+		current AgentSessionStatus,
+		conversation []TaskProviderSession,
 		providerStartedAt time.Time,
-	) (*TaskStatusUpdate, error)
+	) (*AgentSessionStatus, error)
 	// ReadSessionActivity reads provider-specific user and assistant activity
 	// from one provider transcript after the supplied timestamp.
 	ReadSessionActivity(
@@ -363,18 +384,39 @@ type PullRequestClient interface {
 type TmuxSessionClient interface {
 	// HealthCheck verifies that tmux is available for task sessions.
 	HealthCheck(ctx context.Context) error
-	// StartTaskSession starts the runtime session for a task using the provider's
-	// task session launch spec.
-	StartTaskSession(ctx context.Context, task *Task, launch TaskSessionLaunchSpec) error
-	// AttachTaskSession attaches to an existing task session.
-	AttachTaskSession(ctx context.Context, task *Task) error
+	// StartTaskSession creates the task's tmux session and launches the
+	// provider's task session launch spec in its task window. It returns the
+	// pane it launched in, or a zero pane when tmux did not report one. It
+	// returns ErrTaskSessionExists, and types nothing, when the session already
+	// exists.
+	StartTaskSession(ctx context.Context, task *Task, launch TaskSessionLaunchSpec) (TmuxPaneRef, error)
+	// SplitAgentPane splits a new pane into the window of the task's tmux
+	// session that holds pane beside, or into its task window when beside is
+	// empty, beside the window's other panes, and launches the launch spec's
+	// command, without prefilled input, in it. It returns that pane. Agents
+	// split in one after another sit side by side in that order. A pane whose
+	// launch fails is closed again.
+	SplitAgentPane(ctx context.Context, task *Task, beside string, launch TaskSessionLaunchSpec) (TmuxPaneRef, error)
+	// AttachTaskSession attaches to an existing task session. When pane is set,
+	// the client lands on that pane, in whichever tmux session holds it. A pane
+	// that no longer exists, or a pane ID the client's tmux server gives to
+	// another pane, falls back to the task session.
+	AttachTaskSession(ctx context.Context, task *Task, pane *TmuxPaneRef) error
 	// InspectTaskSession returns the current tmux-side runtime state for the
 	// task session. Missing sessions are reported as Exists=false.
 	InspectTaskSession(ctx context.Context, task *Task) (TaskSessionRuntimeState, error)
-	// InspectTaskSessions returns one shared runtime snapshot for the supplied
-	// tasks. The result is keyed by task ID; missing sessions are included with
-	// Exists=false.
-	InspectTaskSessions(ctx context.Context, tasks []*Task) (map[string]TaskSessionRuntimeState, error)
+	// InspectTaskSessions returns one shared snapshot of the tmux server for
+	// the supplied tasks: the panes of each task's Session keyed by task ID,
+	// with missing sessions absent, plus the server's identity and every pane
+	// on it.
+	InspectTaskSessions(ctx context.Context, tasks []*Task) (TmuxSnapshot, error)
+	// LocateProcessPane inspects the tmux server once, as InspectTaskSessions
+	// does for the supplied task, and returns the pane whose root process is
+	// pid or one of its ancestors, with the commands of the processes in
+	// between. The pane is empty when pid is not positive or no pane's
+	// process tree contains it. Without process evidence the ancestry is
+	// unknown and an error is returned.
+	LocateProcessPane(ctx context.Context, task *Task, pid int) (TmuxSnapshot, ProcessPane, error)
 	// DeleteTaskSession tears down the task session during task deletion.
 	DeleteTaskSession(ctx context.Context, task *Task) error
 }

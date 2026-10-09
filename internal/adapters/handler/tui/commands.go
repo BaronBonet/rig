@@ -51,14 +51,24 @@ func listRepoPullRequestsCmd(
 	}
 }
 
-func openTaskSessionCmd(ctx context.Context, frontend core.TaskFrontend, task *core.Task) tea.Cmd {
+// openTaskSessionCmd attaches to a task's Session, landing on pane when it is
+// set. A missing Session is reconnected first; its agents then run in new
+// panes, so the attach after a reconnect targets the Session. A reconnect
+// that left some agents behind still recreated the Session, so the attach
+// goes ahead and the reconnect's error is shown either way.
+func openTaskSessionCmd(
+	ctx context.Context,
+	frontend core.TaskFrontend,
+	task *core.Task,
+	pane *core.TmuxPaneRef,
+) tea.Cmd {
 	return func() tea.Msg {
-		err := frontend.AttachTaskSession(ctx, task)
+		err := frontend.AttachTaskSession(ctx, task, pane)
 		if errors.Is(err, core.ErrTaskSessionNotFound) && task != nil {
-			if reconnectErr := frontend.ReconnectTaskSession(ctx, task.ID); reconnectErr != nil {
+			reconnectErr := frontend.ReconnectTaskSession(ctx, task.ID)
+			err = frontend.AttachTaskSession(ctx, task, nil)
+			if reconnectErr != nil {
 				err = reconnectErr
-			} else {
-				err = frontend.AttachTaskSession(ctx, task)
 			}
 		}
 		return taskOpenedMsg{err: err}
@@ -121,21 +131,6 @@ func saveProviderSetupCmd(ctx context.Context, frontend core.TaskFrontend, setup
 		return providerSetupSavedMsg{
 			setup: setup,
 			err:   err,
-		}
-	}
-}
-
-func switchTaskProviderCmd(
-	ctx context.Context,
-	frontend core.TaskFrontend,
-	taskID string,
-	provider core.Provider,
-) tea.Cmd {
-	return func() tea.Msg {
-		task, err := frontend.SwitchTaskProvider(ctx, taskID, provider)
-		return taskProviderSwitchedMsg{
-			task: task,
-			err:  err,
 		}
 	}
 }

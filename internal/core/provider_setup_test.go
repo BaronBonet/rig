@@ -27,140 +27,11 @@ func codexTaskFixture() *Task {
 	}
 }
 
-func TestTaskServiceSwitchTaskProvider_LaunchesNewProviderAndUpdatesActiveProvider(t *testing.T) {
-	svc := newTestTaskService(t)
-	svc.providerConfig.setup = multiProviderSetup()
-	svc.taskRepo.listTasks = []*Task{codexTaskFixture()}
-	svc.sessionClient.inspectState = TaskSessionRuntimeState{
-		Exists:         true,
-		ActiveCommands: []string{"zsh"},
-	}
-
-	task, err := svc.service.SwitchTaskProvider(t.Context(), "task-1", ProviderClaude)
-
-	require.NoError(t, err)
-	require.NotNil(t, task)
-	require.Equal(t, ProviderClaude, task.Provider)
-	// Switching launches the new provider with no prompt prefill.
-	require.Equal(t, []string{"claude"}, svc.sessionClient.startedLaunch.Command)
-	require.Empty(t, svc.sessionClient.startedLaunch.PrefillInput)
-	// Switching bootstraps the workspace but never reruns repo seed/setup.
-	require.True(t, svc.workspace.bootstrapCalled)
-	require.False(t, svc.workspace.setupCalled)
-	require.Equal(t, 1, svc.claudeRepo.sessionEnvCalls)
-	require.NotNil(t, svc.taskRepo.updatedTask)
-	require.Equal(t, ProviderClaude, svc.taskRepo.updatedTask.Provider)
-}
-
-func TestTaskServiceSwitchTaskProvider_ReconcilesStaleStatusProvider(t *testing.T) {
-	svc := newTestTaskService(t)
-	svc.providerConfig.setup = multiProviderSetup()
-	svc.taskRepo.listTasks = []*Task{codexTaskFixture()}
-	svc.taskRepo.latestByTask["task-1"] = TaskStatusUpdate{
-		TaskID:       "task-1",
-		Provider:     ProviderCodex,
-		Phase:        TaskStatusPhaseWaitingForInput,
-		RawEventName: "Stop",
-	}
-	svc.sessionClient.inspectState = TaskSessionRuntimeState{
-		Exists:         true,
-		ActiveCommands: []string{"zsh"},
-	}
-
-	_, err := svc.service.SwitchTaskProvider(t.Context(), "task-1", ProviderClaude)
-
-	require.NoError(t, err)
-	// The persisted status row from the previous provider must be re-stamped:
-	// a durable status/record provider mismatch puts every future TUI session
-	// into a permanent reload loop until the new provider emits a hook event.
-	status := svc.taskRepo.latestByTask["task-1"]
-	require.Equal(t, ProviderClaude, status.Provider)
-	require.Equal(t, TaskStatusPhaseWaitingForInput, status.Phase)
-}
-
-func TestTaskServiceSwitchTaskProvider_RefusesWhileCurrentProviderIsRunning(t *testing.T) {
-	svc := newTestTaskService(t)
-	svc.providerConfig.setup = multiProviderSetup()
-	svc.taskRepo.listTasks = []*Task{codexTaskFixture()}
-	svc.sessionClient.inspectState = TaskSessionRuntimeState{
-		Exists:         true,
-		ActiveCommands: []string{"codex"},
-	}
-
-	task, err := svc.service.SwitchTaskProvider(t.Context(), "task-1", ProviderClaude)
-
-	require.ErrorIs(t, err, ErrProviderSessionActive)
-	require.Nil(t, task)
-	require.Nil(t, svc.sessionClient.startedTask)
-	require.Nil(t, svc.taskRepo.updatedTask)
-}
-
-func TestTaskServiceSwitchTaskProvider_FailedLaunchPreservesActiveProvider(t *testing.T) {
-	svc := newTestTaskService(t)
-	svc.providerConfig.setup = multiProviderSetup()
-	svc.taskRepo.listTasks = []*Task{codexTaskFixture()}
-	svc.sessionClient.inspectState = TaskSessionRuntimeState{
-		Exists:         true,
-		ActiveCommands: []string{"zsh"},
-	}
-	svc.sessionClient.startErr = errors.New("tmux send failed")
-
-	task, err := svc.service.SwitchTaskProvider(t.Context(), "task-1", ProviderClaude)
-
-	require.ErrorContains(t, err, "tmux send failed")
-	require.Nil(t, task)
-	require.Nil(t, svc.taskRepo.updatedTask)
-}
-
-func TestTaskServiceSwitchTaskProvider_RejectsUnconfiguredProvider(t *testing.T) {
-	svc := newTestTaskService(t)
-	svc.taskRepo.listTasks = []*Task{codexTaskFixture()}
-
-	task, err := svc.service.SwitchTaskProvider(t.Context(), "task-1", ProviderClaude)
-
-	require.EqualError(t, err, `provider "claude" is not configured: run rig setup to enable it`)
-	require.Nil(t, task)
-	require.Nil(t, svc.sessionClient.startedTask)
-}
-
-func TestTaskServiceSwitchTaskProvider_SameProviderIsANoOp(t *testing.T) {
-	svc := newTestTaskService(t)
-	svc.taskRepo.listTasks = []*Task{codexTaskFixture()}
-
-	task, err := svc.service.SwitchTaskProvider(t.Context(), "task-1", ProviderCodex)
-
-	require.NoError(t, err)
-	require.Equal(t, ProviderCodex, task.Provider)
-	require.Nil(t, svc.sessionClient.startedTask)
-	require.Nil(t, svc.taskRepo.updatedTask)
-}
-
-func TestTaskServiceSwitchTaskProvider_AdoptsProviderAlreadyRunningInPane(t *testing.T) {
-	svc := newTestTaskService(t)
-	svc.providerConfig.setup = multiProviderSetup()
-	svc.taskRepo.listTasks = []*Task{codexTaskFixture()}
-	svc.sessionClient.inspectState = TaskSessionRuntimeState{
-		Exists:         true,
-		ActiveCommands: []string{"claude"},
-	}
-
-	task, err := svc.service.SwitchTaskProvider(t.Context(), "task-1", ProviderClaude)
-
-	require.NoError(t, err)
-	require.Equal(t, ProviderClaude, task.Provider)
-	// The requested provider already owns the pane, so nothing is launched.
-	require.Nil(t, svc.sessionClient.startedTask)
-	require.NotNil(t, svc.taskRepo.updatedTask)
-	require.Equal(t, ProviderClaude, svc.taskRepo.updatedTask.Provider)
-}
-
-func TestTaskServiceHandleHookEvent_SessionStartFromConfiguredProviderAdoptsActiveProvider(t *testing.T) {
+func TestTaskServiceHandleHookEvent_SessionStartFromAnotherProviderLeavesTheTaskAlone(t *testing.T) {
 	svc := newTestTaskService(t)
 	svc.providerConfig.setup = multiProviderSetup()
 	svc.taskRepo.listTasks = []*Task{codexTaskFixture()}
 	svc.claudeRepo.hookUpdate = &TaskStatusUpdate{
-		TaskID:       "task-1",
-		Provider:     ProviderClaude,
 		Phase:        TaskStatusPhaseStarting,
 		RawEventName: "SessionStart",
 	}
@@ -174,24 +45,20 @@ func TestTaskServiceHandleHookEvent_SessionStartFromConfiguredProviderAdoptsActi
 	})
 
 	require.NoError(t, err)
-	require.NotNil(t, svc.taskRepo.updatedTask)
-	require.Equal(t, ProviderClaude, svc.taskRepo.updatedTask.Provider)
-	// Adoption never touches Rig's tmux session reference.
-	require.Equal(t, "repo_task", svc.taskRepo.updatedTask.TmuxSession)
-	status := svc.taskRepo.latestByTask["task-1"]
-	require.Equal(t, ProviderClaude, status.Provider)
-	require.Equal(t, TaskStatusPhaseStarting, status.Phase)
+	// A task is no longer adopted by the provider of a manually started agent:
+	// the agent gets its own agent session instead.
+	require.Nil(t, svc.taskRepo.updatedTask)
+	require.Len(t, svc.taskRepo.savedProviderSessions, 1)
+	require.Equal(t, ProviderClaude, svc.taskRepo.savedProviderSessions[0].Provider)
 }
 
-func TestTaskServiceHandleHookEvent_LateHookFromOldProviderDoesNotDriveRuntimeStatus(t *testing.T) {
+func TestTaskServiceHandleHookEvent_HookFromAnotherProviderRecordsHistory(t *testing.T) {
 	svc := newTestTaskService(t)
 	svc.providerConfig.setup = multiProviderSetup()
 	task := codexTaskFixture()
 	task.Provider = ProviderClaude
 	svc.taskRepo.listTasks = []*Task{task}
 	svc.providerRepo.hookUpdate = &TaskStatusUpdate{
-		TaskID:       "task-1",
-		Provider:     ProviderCodex,
 		Phase:        TaskStatusPhaseWorking,
 		RawEventName: "PostToolUse",
 	}
@@ -205,13 +72,9 @@ func TestTaskServiceHandleHookEvent_LateHookFromOldProviderDoesNotDriveRuntimeSt
 	})
 
 	require.NoError(t, err)
-	// Session history from a configured old provider is still recorded.
 	require.Len(t, svc.taskRepo.savedProviderSessions, 1)
 	require.Equal(t, ProviderCodex, svc.taskRepo.savedProviderSessions[0].Provider)
-	// The active provider and current runtime status stay untouched.
 	require.Nil(t, svc.taskRepo.updatedTask)
-	_, hasStatus := svc.taskRepo.latestByTask["task-1"]
-	require.False(t, hasStatus)
 }
 
 func TestTaskServiceHandleHookEvent_IgnoresHooksFromUnconfiguredProviders(t *testing.T) {

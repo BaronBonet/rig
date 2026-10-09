@@ -20,12 +20,34 @@ const (
 	codexHookPath        = "/codex-hook"
 	legacyCodexHookPath  = "/hook"
 	defaultCodexHooksURL = "http://127.0.0.1:4124" + codexHookPath
+	// noDaemonFlag keeps a Rig-launched Codex off the shared background
+	// app-server. Hooks run in the process that owns the session and see its
+	// environment, so only an embedded session's hooks report the tmux pane
+	// Codex runs in; the shared server's hooks report the pane of whichever
+	// client started the server.
+	noDaemonFlag = "--no-daemon"
 )
 
 // hookCatalog is Codex's hook event catalog: the one declaration of which
 // hook events Rig observes from Codex, how each is matched, and which
 // runtime phase it drives. Registration rules, the required-events health
 // check, and the hook-to-status mapping are derived from it.
+//
+// SessionStart matches every source that starts a Provider session in the
+// agent: a new session, a resume and /clear. Not compact: it can fire
+// mid-turn, and SessionStart drives starting, which would reset a working
+// agent. Not fork either: the model can fork the conversation into a
+// background task and start that task mid-turn, and its SessionStart would
+// move the agent session off the conversation the user is in. A fork the
+// user makes reaches the agent session with its first prompt instead. Until
+// then the agent session stays on the conversation it left; if that one idles
+// out first, its SessionEnd ends the agent session, and the fork's first
+// prompt opens a new one.
+//
+// SessionEnd drives no phase: task observation ends the agent session when
+// its current Provider session ends. Codex runs it for the main thread during
+// teardown, with a 1s default timeout, shorter than the forwarder's POST may
+// take.
 //
 // Tool hooks match Bash only: Codex reports shell commands through Bash tool
 // events, and those are the tool signals Rig ingests for activity and status.
@@ -35,7 +57,8 @@ const (
 // so status recovery can count subagents still running after the root agent's
 // turn ends.
 var hookCatalog = providerkit.Catalog{
-	{Event: core.HookEventSessionStart, Matcher: "startup|resume", Phase: core.TaskStatusPhaseStarting},
+	{Event: core.HookEventSessionStart, Matcher: "startup|resume|clear", Phase: core.TaskStatusPhaseStarting},
+	{Event: core.HookEventSessionEnd, Timeout: providerkit.SessionEndTimeout},
 	{Event: core.HookEventUserPromptSubmit, Phase: core.TaskStatusPhaseWorking},
 	{Event: core.HookEventPreToolUse, Matcher: "Bash", Phase: core.TaskStatusPhaseWorking},
 	{Event: core.HookEventPostToolUse, Matcher: "Bash", Phase: core.TaskStatusPhaseWorking},
@@ -179,7 +202,7 @@ func (r *repository) BuildTaskSessionLaunchSpec(task *core.Task) (core.TaskSessi
 		prefillInput = []string{task.Prompt}
 	}
 
-	command, err := r.codexTaskCommand()
+	command, err := r.codexTaskCommand(noDaemonFlag)
 	if err != nil {
 		return core.TaskSessionLaunchSpec{}, err
 	}
@@ -200,7 +223,7 @@ func (r *repository) BuildReconnectTaskSessionLaunchSpec(
 		return core.TaskSessionLaunchSpec{}, fmt.Errorf("session ID is required")
 	}
 
-	command, err := r.codexTaskCommand("resume", sessionID)
+	command, err := r.codexTaskCommand("resume", noDaemonFlag, sessionID)
 	if err != nil {
 		return core.TaskSessionLaunchSpec{}, err
 	}

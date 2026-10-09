@@ -47,38 +47,15 @@ func updateTaskParams(task *core.Task) generated.UpdateTaskParams {
 	}
 }
 
-func upsertTaskStatusParams(update core.TaskStatusUpdate) generated.UpsertTaskStatusParams {
-	return generated.UpsertTaskStatusParams{
-		TaskID:              update.TaskID,
-		Provider:            string(update.Provider),
-		Phase:               string(update.Phase),
-		RawEventName:        update.RawEventName,
-		ObservedAt:          formatTime(update.ObservedAt),
-		BackgroundSubagents: int64(update.BackgroundWork.Subagents),
-		BackgroundShells:    int64(update.BackgroundWork.Shells),
-		BackgroundMonitors:  int64(update.BackgroundWork.Monitors),
-		BackgroundWorkflows: int64(update.BackgroundWork.Workflows),
-		BackgroundOther:     int64(update.BackgroundWork.Other),
-	}
-}
-
 func insertTaskActivityParams(event core.TaskActivityEvent) generated.InsertTaskActivityParams {
 	return generated.InsertTaskActivityParams{
-		TaskID:     event.TaskID,
-		TurnID:     event.TurnID,
-		EventName:  event.EventName,
-		Role:       string(event.Role),
-		Text:       event.Text,
-		ObservedAt: formatTime(event.ObservedAt),
-	}
-}
-
-func upsertTaskResumeMetadataParams(metadata core.TaskResumeMetadata) generated.UpsertTaskResumeMetadataParams {
-	return generated.UpsertTaskResumeMetadataParams{
-		TaskID:     metadata.TaskID,
-		Provider:   string(metadata.Provider),
-		SessionID:  metadata.SessionID,
-		ObservedAt: formatTime(metadata.ObservedAt),
+		TaskID:         event.TaskID,
+		AgentSessionID: event.AgentSessionID,
+		TurnID:         event.TurnID,
+		EventName:      event.EventName,
+		Role:           string(event.Role),
+		Text:           event.Text,
+		ObservedAt:     formatTime(event.ObservedAt),
 	}
 }
 
@@ -153,31 +130,15 @@ func tasksFromRows(rows []generated.ListTasksRow) []*core.Task {
 	return tasks
 }
 
-func taskStatusUpdateFromRow(row generated.TaskStatus) *core.TaskStatusUpdate {
-	return &core.TaskStatusUpdate{
-		TaskID:       row.TaskID,
-		Provider:     core.Provider(row.Provider),
-		Phase:        core.TaskStatusPhase(row.Phase),
-		RawEventName: row.RawEventName,
-		ObservedAt:   parseTime(row.ObservedAt),
-		BackgroundWork: core.TaskBackgroundWork{
-			Subagents: int(row.BackgroundSubagents),
-			Shells:    int(row.BackgroundShells),
-			Monitors:  int(row.BackgroundMonitors),
-			Workflows: int(row.BackgroundWorkflows),
-			Other:     int(row.BackgroundOther),
-		},
-	}
-}
-
 func taskActivityEventFromRow(row generated.TaskActivity) core.TaskActivityEvent {
 	return core.TaskActivityEvent{
-		TaskID:     row.TaskID,
-		TurnID:     row.TurnID,
-		EventName:  row.EventName,
-		Role:       core.TaskActivityRole(row.Role),
-		Text:       row.Text,
-		ObservedAt: parseTime(row.ObservedAt),
+		TaskID:         row.TaskID,
+		AgentSessionID: row.AgentSessionID,
+		TurnID:         row.TurnID,
+		EventName:      row.EventName,
+		Role:           core.TaskActivityRole(row.Role),
+		Text:           row.Text,
+		ObservedAt:     parseTime(row.ObservedAt),
 	}
 }
 
@@ -187,15 +148,6 @@ func taskActivityEventsFromRows(rows []generated.TaskActivity) []core.TaskActivi
 		events = append(events, taskActivityEventFromRow(row))
 	}
 	return events
-}
-
-func taskResumeMetadataFromRow(row generated.TaskResumeMetadatum) *core.TaskResumeMetadata {
-	return &core.TaskResumeMetadata{
-		TaskID:     row.TaskID,
-		Provider:   core.Provider(row.Provider),
-		SessionID:  row.SessionID,
-		ObservedAt: parseTime(row.ObservedAt),
-	}
 }
 
 func taskProviderSessionFromRow(row generated.ListTaskProviderSessionsRow) core.TaskProviderSession {
@@ -219,4 +171,93 @@ func taskProviderSessionsFromRows(rows []generated.ListTaskProviderSessionsRow) 
 		sessions = append(sessions, taskProviderSessionFromRow(row))
 	}
 	return sessions
+}
+
+func createAgentSessionParams(session core.AgentSession) generated.CreateAgentSessionParams {
+	return generated.CreateAgentSessionParams{
+		ID:                  session.ID,
+		TaskID:              session.TaskID,
+		Provider:            string(session.Provider),
+		TmuxSocketPath:      session.TmuxServer.SocketPath,
+		TmuxServerPid:       int64(session.TmuxServer.PID),
+		TmuxPane:            session.TmuxPane,
+		PaneTrusted:         boolToInt64(session.PaneTrusted),
+		ProviderSessionID:   session.ProviderSessionID,
+		StartedAt:           formatTime(session.StartedAt),
+		EndedAt:             formatTime(session.EndedAt),
+		LaunchedAt:          formatTime(session.LaunchedAt),
+		StatusPhase:         string(session.Status.Phase),
+		StatusRawEventName:  session.Status.RawEventName,
+		StatusObservedAt:    formatTime(session.Status.ObservedAt),
+		BackgroundSubagents: int64(session.Status.BackgroundWork.Subagents),
+		BackgroundShells:    int64(session.Status.BackgroundWork.Shells),
+		BackgroundMonitors:  int64(session.Status.BackgroundWork.Monitors),
+		BackgroundWorkflows: int64(session.Status.BackgroundWork.Workflows),
+		BackgroundOther:     int64(session.Status.BackgroundWork.Other),
+	}
+}
+
+func updateAgentSessionParams(session core.AgentSession) generated.UpdateAgentSessionParams {
+	return generated.UpdateAgentSessionParams{
+		TmuxSocketPath:      session.TmuxServer.SocketPath,
+		TmuxServerPid:       int64(session.TmuxServer.PID),
+		TmuxPane:            session.TmuxPane,
+		LaunchedAt:          formatTime(session.LaunchedAt),
+		PaneTrusted:         boolToInt64(session.PaneTrusted),
+		ProviderSessionID:   session.ProviderSessionID,
+		StatusPhase:         string(session.Status.Phase),
+		StatusRawEventName:  session.Status.RawEventName,
+		StatusObservedAt:    formatTime(session.Status.ObservedAt),
+		BackgroundSubagents: int64(session.Status.BackgroundWork.Subagents),
+		BackgroundShells:    int64(session.Status.BackgroundWork.Shells),
+		BackgroundMonitors:  int64(session.Status.BackgroundWork.Monitors),
+		BackgroundWorkflows: int64(session.Status.BackgroundWork.Workflows),
+		BackgroundOther:     int64(session.Status.BackgroundWork.Other),
+		ID:                  session.ID,
+	}
+}
+
+func agentSessionFromRow(row generated.AgentSession) core.AgentSession {
+	return core.AgentSession{
+		ID:       row.ID,
+		TaskID:   row.TaskID,
+		Provider: core.Provider(row.Provider),
+		TmuxServer: core.TmuxServer{
+			SocketPath: row.TmuxSocketPath,
+			PID:        int(row.TmuxServerPid),
+		},
+		TmuxPane:          row.TmuxPane,
+		PaneTrusted:       row.PaneTrusted != 0,
+		ProviderSessionID: row.ProviderSessionID,
+		StartedAt:         parseTime(row.StartedAt),
+		EndedAt:           parseTime(row.EndedAt),
+		LaunchedAt:        parseTime(row.LaunchedAt),
+		Status: core.AgentSessionStatus{
+			ObservedAt:   parseTime(row.StatusObservedAt),
+			RawEventName: row.StatusRawEventName,
+			Phase:        core.TaskStatusPhase(row.StatusPhase),
+			BackgroundWork: core.TaskBackgroundWork{
+				Subagents: int(row.BackgroundSubagents),
+				Shells:    int(row.BackgroundShells),
+				Monitors:  int(row.BackgroundMonitors),
+				Workflows: int(row.BackgroundWorkflows),
+				Other:     int(row.BackgroundOther),
+			},
+		},
+	}
+}
+
+func agentSessionsFromRows(rows []generated.AgentSession) []core.AgentSession {
+	sessions := make([]core.AgentSession, 0, len(rows))
+	for _, row := range rows {
+		sessions = append(sessions, agentSessionFromRow(row))
+	}
+	return sessions
+}
+
+func boolToInt64(value bool) int64 {
+	if value {
+		return 1
+	}
+	return 0
 }

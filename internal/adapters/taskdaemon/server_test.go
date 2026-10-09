@@ -200,25 +200,6 @@ func (f *fakeTaskService) DetectProviders(context.Context) ([]core.ProviderDetec
 	return f.detections, f.errByOp["detect_providers"]
 }
 
-func (f *fakeTaskService) SwitchTaskProvider(
-	_ context.Context,
-	taskID string,
-	provider core.Provider,
-) (*core.Task, error) {
-	f.mu.Lock()
-	defer f.mu.Unlock()
-	if err := f.errByOp["switch_task_provider"]; err != nil {
-		return nil, err
-	}
-	for _, task := range f.tasks {
-		if task != nil && task.ID == taskID {
-			task.Provider = provider
-			return task, nil
-		}
-	}
-	return nil, errors.New("task not found: " + taskID)
-}
-
 // startTestFrontend serves a fake TaskService on a real Unix socket and
 // returns the real daemon-backed frontend client pointed at it, so tests
 // cross the seam exactly the way the TUI does.
@@ -266,9 +247,16 @@ func TestUnaryOperationsRoundTrip(t *testing.T) {
 	}
 	svc.detections = []core.ProviderDetection{{Provider: core.ProviderCodex, Ready: true}}
 	svc.latest["task-1"] = &core.TaskStatusUpdate{
-		TaskID:   "task-1",
-		Provider: core.ProviderCodex,
-		Phase:    core.TaskStatusPhaseWorking,
+		TaskID:             "task-1",
+		Provider:           core.ProviderCodex,
+		Phase:              core.TaskStatusPhaseWorking,
+		LeadAgentSessionID: "agent-1",
+		AgentSessions: []core.LiveAgentSession{{
+			ID:       "agent-1",
+			Provider: core.ProviderCodex,
+			Pane:     core.TmuxPaneRef{Server: statusTestServer, ID: "%4"},
+			Status:   core.AgentSessionStatus{Phase: core.TaskStatusPhaseWorking},
+		}},
 	}
 
 	client := startTestFrontend(t, svc)
@@ -326,7 +314,7 @@ func TestUnaryOperationsRoundTrip(t *testing.T) {
 	t.Run("latest task status", func(t *testing.T) {
 		update, err := client.LatestTaskStatus(ctx, "task-1")
 		require.NoError(t, err)
-		require.Equal(t, core.TaskStatusPhaseWorking, update.Phase)
+		require.Equal(t, svc.latest["task-1"], update)
 	})
 
 	t.Run("latest task status returns nil update when none published", func(t *testing.T) {
@@ -357,22 +345,6 @@ func TestUnaryOperationsRoundTrip(t *testing.T) {
 		require.NoError(t, err)
 		require.Len(t, detections, 1)
 		require.True(t, detections[0].Ready)
-	})
-
-	t.Run("switch task provider", func(t *testing.T) {
-		task, err := client.SwitchTaskProvider(ctx, "task-2", core.ProviderCodex)
-		require.NoError(t, err)
-		require.Equal(t, core.ProviderCodex, task.Provider)
-	})
-
-	t.Run("switch task provider requires provider", func(t *testing.T) {
-		_, err := client.SwitchTaskProvider(ctx, "task-2", " ")
-		require.ErrorContains(t, err, "provider required")
-	})
-
-	t.Run("switch task provider surfaces service errors", func(t *testing.T) {
-		_, err := client.SwitchTaskProvider(ctx, "no-such-task", core.ProviderCodex)
-		require.ErrorContains(t, err, "task not found")
 	})
 
 	t.Run("reconnect task session", func(t *testing.T) {
@@ -494,6 +466,10 @@ func TestCreateTaskStreamRoundTrip(t *testing.T) {
 	})
 }
 
+// statusTestServer is the tmux server the status round-trip tests' agents
+// run on.
+var statusTestServer = core.TmuxServer{SocketPath: "/tmp/tmux-501/default", PID: 42}
+
 func TestSubscribeTaskStatusRoundTrip(t *testing.T) {
 	t.Parallel()
 
@@ -507,12 +483,40 @@ func TestSubscribeTaskStatusRoundTrip(t *testing.T) {
 		stream, err := client.SubscribeTaskStatus(ctx, "task-1")
 		require.NoError(t, err)
 
+		observedAt := time.Now().UTC()
 		expected := core.TaskStatusUpdate{
-			TaskID:       "task-1",
-			Provider:     core.ProviderCodex,
-			Phase:        core.TaskStatusPhaseWorking,
-			RawEventName: "PreToolUse",
-			ObservedAt:   time.Now().UTC(),
+			TaskID:             "task-1",
+			Provider:           core.ProviderCodex,
+			Phase:              core.TaskStatusPhaseWorking,
+			RawEventName:       "PreToolUse",
+			ObservedAt:         observedAt,
+			LeadAgentSessionID: "agent-2",
+			AgentSessions: []core.LiveAgentSession{
+				{
+					ID:       "agent-1",
+					Provider: core.ProviderClaude,
+					Pane:     core.TmuxPaneRef{Server: statusTestServer, ID: "%3"},
+					Location: &core.TmuxPaneLocation{WindowName: "task"},
+					Status: core.AgentSessionStatus{
+						Phase:          core.TaskStatusPhaseWorkingInBackground,
+						RawEventName:   "Stop",
+						ObservedAt:     observedAt.Add(-time.Minute),
+						BackgroundWork: core.TaskBackgroundWork{Subagents: 2},
+					},
+					LatestPrompt: "add retries",
+				},
+				{
+					ID:       "agent-2",
+					Provider: core.ProviderCodex,
+					Pane:     core.TmuxPaneRef{Server: statusTestServer, ID: "%7"},
+					Location: &core.TmuxPaneLocation{WindowName: "codex", WindowIndex: 1, PaneIndex: 1},
+					Status: core.AgentSessionStatus{
+						Phase:        core.TaskStatusPhaseWorking,
+						RawEventName: "PreToolUse",
+						ObservedAt:   observedAt,
+					},
+				},
+			},
 		}
 		svc.updates <- expected
 
@@ -627,15 +631,21 @@ func TestUnixSocketServer_RejectsUnsupportedCommand(t *testing.T) {
 
 	client := startTestFrontend(t, newFakeTaskService())
 
-	conn, err := dialDaemonSocket(context.Background(), client.socketPath)
-	require.NoError(t, err)
-	defer conn.Close()
-	require.NoError(t, json.NewEncoder(conn).Encode(socketRequest{Command: "no_such_command"}))
+	// Rig no longer starts agent sessions itself, so the daemon stopped
+	// serving that operation.
+	for _, command := range []string{"no_such_command", "start_agent_session"} {
+		t.Run(command, func(t *testing.T) {
+			conn, err := dialDaemonSocket(context.Background(), client.socketPath)
+			require.NoError(t, err)
+			defer conn.Close()
+			require.NoError(t, json.NewEncoder(conn).Encode(socketRequest{Command: command}))
 
-	var resp socketEnvelope
-	require.NoError(t, json.NewDecoder(conn).Decode(&resp))
-	require.Equal(t, socketEnvelopeError, resp.Type)
-	require.Contains(t, resp.Error, "unsupported command")
+			var resp socketEnvelope
+			require.NoError(t, json.NewDecoder(conn).Decode(&resp))
+			require.Equal(t, socketEnvelopeError, resp.Type)
+			require.Contains(t, resp.Error, "unsupported command")
+		})
+	}
 }
 
 func TestUnixSocketServer_SecuresSocketDirectoryAndSocketPermissions(t *testing.T) {

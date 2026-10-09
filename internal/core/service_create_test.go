@@ -2,6 +2,7 @@ package core
 
 import (
 	"errors"
+	"fmt"
 	"testing"
 
 	"github.com/stretchr/testify/mock"
@@ -270,6 +271,73 @@ func TestTaskServiceRetryTaskCreationWithProgress_ResumesPreparingWorkspaceFailu
 	require.Equal(t, 3, svc.taskRepo.updateCount)
 	require.Equal(t, TaskCreationStatusReady, svc.taskRepo.updatedTask.CreationStatus)
 	require.Empty(t, svc.taskRepo.updatedTask.CreationError)
+}
+
+// failedAtStartingSessionTask is a task whose creation failed while starting
+// its Session.
+func failedAtStartingSessionTask() *Task {
+	return &Task{
+		ID:             "task-1",
+		Slug:           "billing-retry-flow",
+		Prompt:         "add billing retry flow",
+		DisplayName:    "billing retry flow",
+		RepoRoot:       "/tmp/repo",
+		RepoName:       "repo",
+		BranchName:     "feat/billing-retry-flow",
+		WorktreePath:   "/tmp/repo_billing-retry-flow",
+		TmuxSession:    "repo_billing-retry-flow",
+		Provider:       ProviderCodex,
+		CreationStatus: TaskCreationStatusFailed,
+		CreationStep:   TaskCreateProgressStartingSession,
+		CreationError:  "start task session: timed out waiting for › prompt",
+	}
+}
+
+// The failed attempt, or Enter's reconnect, left the task's Session running
+// by the time the user retries: its agent already runs there.
+func TestTaskServiceRetryTaskCreationWithProgress_FinishesWhenTheSessionAlreadyExists(t *testing.T) {
+	svc := newTestTaskService(t)
+	svc.taskRepo.listTasks = []*Task{failedAtStartingSessionTask()}
+	svc.sessionClient.startErr = fmt.Errorf("%w: repo_billing-retry-flow", ErrTaskSessionExists)
+
+	task, err := svc.service.RetryTaskCreationWithProgress(t.Context(), "task-1", nil)
+
+	require.NoError(t, err)
+	require.Equal(t, "task-1", task.ID)
+	tasks, err := svc.service.ListTasks(t.Context())
+	require.NoError(t, err)
+	require.Equal(t, TaskCreationStatusReady, tasks[0].CreationStatus)
+	require.Empty(t, tasks[0].CreationError)
+}
+
+// A new task's Session must not exist yet: one that does belongs to
+// something else, so creation fails rather than adopt it.
+func TestTaskServiceCreateTask_FailsWhenItsSessionAlreadyExists(t *testing.T) {
+	svc := newTestTaskService(t)
+	svc.providerRepo.suggestedName = "billing retry flow"
+	svc.sessionClient.startErr = fmt.Errorf("%w: repo_billing-retry-flow", ErrTaskSessionExists)
+
+	_, err := svc.service.CreateTaskWithProgress(t.Context(), CreateTaskInput{
+		Cwd:    "/tmp/repo",
+		Prompt: "add billing retry flow",
+	}, nil)
+
+	require.ErrorIs(t, err, ErrTaskSessionExists)
+	require.Equal(t, TaskCreationStatusFailed, svc.taskRepo.updatedTask.CreationStatus)
+	require.Equal(t, TaskCreateProgressStartingSession, svc.taskRepo.updatedTask.CreationStep)
+}
+
+func TestTaskServiceRetryTaskCreationWithProgress_StillFailsOnOtherSessionStartErrors(t *testing.T) {
+	svc := newTestTaskService(t)
+	svc.taskRepo.listTasks = []*Task{failedAtStartingSessionTask()}
+	svc.sessionClient.startErr = errors.New("tmux send failed")
+
+	_, err := svc.service.RetryTaskCreationWithProgress(t.Context(), "task-1", nil)
+
+	require.ErrorContains(t, err, "tmux send failed")
+	tasks, err := svc.service.ListTasks(t.Context())
+	require.NoError(t, err)
+	require.Equal(t, TaskCreationStatusFailed, tasks[0].CreationStatus)
 }
 
 func TestTaskServiceCreateTask_BootstrapsWorkspaceWhenRepoSetupIsDisabled(t *testing.T) {

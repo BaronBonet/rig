@@ -72,7 +72,7 @@ func TestModel_ViewRendersTaskMetadata(t *testing.T) {
 
 	view := stripANSI(got.View().Content)
 	require.Contains(t, view, "RIG dev")
-	require.Contains(t, view, "n new   p provider   r refresh   space details   x clean   q quit")
+	require.Contains(t, view, "n new   r refresh   space details   x clean   q quit")
 	require.Contains(t, view, "first task")
 	require.Contains(t, view, "repo-a")
 	require.Contains(t, view, "feat/first-task")
@@ -448,49 +448,6 @@ func TestModel_AfterLoadUsesSubscriptionsAsInitialStatusSource(t *testing.T) {
 	require.Equal(t, []string{"task-1", "task-2"}, frontend.subscribeTaskStatusCalls)
 }
 
-func TestModel_StaleStatusProviderMismatchReloadsOnlyOnce(t *testing.T) {
-	frontend := newFrontendHarness()
-	frontend.listTasks = []*core.Task{
-		{ID: "task-1", RepoName: "repo-a", DisplayName: "switched task", Provider: core.ProviderClaude},
-	}
-	frontend.subscribeTaskStatus = map[string]chan core.TaskStatusUpdate{
-		"task-1": make(chan core.TaskStatusUpdate, 1),
-	}
-	m := newLoadedModel(frontend)
-
-	stale := core.TaskStatusUpdate{
-		TaskID:   "task-1",
-		Provider: core.ProviderCodex,
-		Phase:    core.TaskStatusPhaseWaitingForInput,
-	}
-	updates := make(chan core.TaskStatusUpdate)
-	close(updates)
-
-	// First mismatched update: the in-memory record may be stale (daemon-side
-	// adoption), so the task list reloads once.
-	next, cmd := m.Update(taskStatusUpdatedMsg{taskID: "task-1", update: stale, updates: updates})
-	got, ok := next.(model)
-	require.True(t, ok)
-	require.NotNil(t, cmd)
-	msgs := runBatchCmd(t, cmd)
-	loaded := requireMsgType[tasksLoadedMsg](t, msgs)
-	require.Equal(t, 1, frontend.listTasksCalls)
-
-	// The reload returns the same record: the persisted status row is the
-	// stale side of the mismatch, and reloading again cannot fix it.
-	next, _ = got.Update(loaded)
-	got, ok = next.(model)
-	require.True(t, ok)
-
-	next, cmd = got.Update(taskStatusUpdatedMsg{taskID: "task-1", update: stale, updates: updates})
-	_, ok = next.(model)
-	require.True(t, ok)
-	if cmd != nil {
-		runBatchCmd(t, cmd)
-	}
-	require.Equal(t, 1, frontend.listTasksCalls)
-}
-
 func TestModel_ReloadDoesNotDuplicateStatusSubscriptions(t *testing.T) {
 	frontend := newFrontendHarness()
 	frontend.listTasks = []*core.Task{
@@ -508,7 +465,7 @@ func TestModel_ReloadDoesNotDuplicateStatusSubscriptions(t *testing.T) {
 	require.True(t, ok)
 	runBatchCmd(t, cmd)
 
-	// A second load (refresh or adoption reload) must not open another status
+	// A second load, as from a refresh, must not open another status
 	// subscription for a task that already has one.
 	next, cmd = got.Update(loadMsg)
 	_, ok = next.(model)
@@ -1015,7 +972,7 @@ func TestModel_TokenUsageLoadedErrorRendersError(t *testing.T) {
 func TestModel_ErrorSurvivesBackgroundLoadsAndClearsOnNextKeyPress(t *testing.T) {
 	frontend := newFrontendHarness()
 	m := newLoadedModel(frontend)
-	m.err = errors.New("provider switch refused")
+	m.err = errors.New("agent session start failed")
 
 	next, _ := m.Update(taskTokenUsageLoadedMsg{
 		taskID: "task-1",
@@ -1023,12 +980,12 @@ func TestModel_ErrorSurvivesBackgroundLoadsAndClearsOnNextKeyPress(t *testing.T)
 	})
 	got, ok := next.(model)
 	require.True(t, ok)
-	require.ErrorContains(t, got.err, "provider switch refused")
+	require.ErrorContains(t, got.err, "agent session start failed")
 
 	next, _ = got.Update(tasksLoadedMsg{tasks: frontend.listTasks})
 	got, ok = next.(model)
 	require.True(t, ok)
-	require.ErrorContains(t, got.err, "provider switch refused")
+	require.ErrorContains(t, got.err, "agent session start failed")
 
 	next, _ = got.Update(tea.KeyPressMsg{Code: 'j', Text: "j"})
 	got, ok = next.(model)
@@ -1231,6 +1188,100 @@ func TestModel_EnterOpensSelectedTaskAndKeepsRigRunningOnSuccess(t *testing.T) {
 	require.Equal(t, 1, frontend.attachTaskSessionCalls)
 }
 
+// leadAgentPane is the pane withLeadAgent's lead agent session runs in.
+var leadAgentPane = core.TmuxPaneRef{
+	Server: core.TmuxServer{SocketPath: "/tmp/tmux-501/default", PID: 42},
+	ID:     "%7",
+}
+
+// withLeadAgent feeds the model a status update for task-1 whose lead agent
+// session runs in leadAgentPane, next to another agent in %3.
+func withLeadAgent(t *testing.T, m model) model {
+	t.Helper()
+	next, _ := m.Update(taskStatusUpdatedMsg{
+		taskID:  "task-1",
+		updates: make(chan core.TaskStatusUpdate),
+		update: core.TaskStatusUpdate{
+			TaskID:             "task-1",
+			Provider:           core.ProviderCodex,
+			Phase:              core.TaskStatusPhaseWaitingForInput,
+			LeadAgentSessionID: "agent-lead",
+			AgentSessions: []core.LiveAgentSession{
+				{
+					ID:       "agent-other",
+					Provider: core.ProviderClaude,
+					Pane:     core.TmuxPaneRef{Server: leadAgentPane.Server, ID: "%3"},
+				},
+				{ID: "agent-lead", Provider: core.ProviderCodex, Pane: leadAgentPane},
+			},
+		},
+	})
+	return asModel(t, next)
+}
+
+func TestModel_EnterJumpsToTheLeadAgentsPane(t *testing.T) {
+	frontend := newFrontendHarness()
+	frontend.listTasks = []*core.Task{
+		{ID: "task-1", DisplayName: "first task", TmuxSession: "repo_task_1", Provider: core.ProviderCodex},
+	}
+	m := withLeadAgent(t, newLoadedModel(frontend))
+
+	next, cmd := m.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
+	require.NotNil(t, cmd)
+	msg := requireMsgType[taskOpenedMsg](t, runBatchCmd(t, cmd))
+	next, _ = asModel(t, next).Update(msg)
+
+	require.NoError(t, asModel(t, next).err)
+	require.Equal(t, "task-1", frontend.attachedTask.ID)
+	require.Equal(t, []*core.TmuxPaneRef{&leadAgentPane}, frontend.attachedPanes)
+}
+
+func TestModel_EnterAttachesToTheSessionWithoutALiveAgent(t *testing.T) {
+	frontend := newFrontendHarness()
+	frontend.listTasks = []*core.Task{
+		{ID: "task-1", DisplayName: "first task", TmuxSession: "repo_task_1", Provider: core.ProviderCodex},
+	}
+	m := newLoadedModel(frontend)
+	next, _ := m.Update(taskStatusUpdatedMsg{
+		taskID:  "task-1",
+		updates: make(chan core.TaskStatusUpdate),
+		update: core.TaskStatusUpdate{
+			TaskID:   "task-1",
+			Provider: core.ProviderCodex,
+			Phase:    core.TaskStatusPhaseStopped,
+		},
+	})
+
+	_, cmd := asModel(t, next).Update(tea.KeyPressMsg{Code: tea.KeyEnter})
+	require.NotNil(t, cmd)
+	requireMsgType[taskOpenedMsg](t, runBatchCmd(t, cmd))
+
+	require.Equal(t, []*core.TmuxPaneRef{nil}, frontend.attachedPanes)
+}
+
+func TestModel_EnterReconnectsAndAttachesToTheSessionWhenTheLeadAgentsSessionIsGone(t *testing.T) {
+	frontend := newFrontendHarness()
+	frontend.listTasks = []*core.Task{
+		{ID: "task-1", DisplayName: "first task", TmuxSession: "repo_task_1", Provider: core.ProviderCodex},
+	}
+	frontend.attachTaskSessionFn = func(_ context.Context, _ *core.Task, pane *core.TmuxPaneRef) error {
+		if pane != nil {
+			return core.ErrTaskSessionNotFound
+		}
+		return nil
+	}
+	m := withLeadAgent(t, newLoadedModel(frontend))
+
+	_, cmd := m.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
+	require.NotNil(t, cmd)
+	msg := requireMsgType[taskOpenedMsg](t, runBatchCmd(t, cmd))
+
+	require.NoError(t, msg.err)
+	require.Equal(t, 1, frontend.reconnectTaskSessionCalls)
+	// Reconnect starts its agents in new panes, so it lands on the Session.
+	require.Equal(t, []*core.TmuxPaneRef{&leadAgentPane, nil}, frontend.attachedPanes)
+}
+
 func TestModel_OpenTaskFailureShowsErrorAndStaysInList(t *testing.T) {
 	frontend := newFrontendHarness()
 	frontend.listTasks = []*core.Task{
@@ -1263,7 +1314,7 @@ func TestModel_EnterReconnectsWhenSessionIsMissing(t *testing.T) {
 		{ID: "task-1", DisplayName: "first task", TmuxSession: "repo_task_1", Provider: core.ProviderCodex},
 	}
 	attempts := 0
-	frontend.attachTaskSessionFn = func(context.Context, *core.Task) error {
+	frontend.attachTaskSessionFn = func(context.Context, *core.Task, *core.TmuxPaneRef) error {
 		attempts++
 		if attempts == 1 {
 			return core.ErrTaskSessionNotFound
@@ -1297,6 +1348,51 @@ func TestModel_EnterReconnectsWhenSessionIsMissing(t *testing.T) {
 	require.False(t, got.opening)
 	require.Equal(t, 2, frontend.attachTaskSessionCalls)
 	require.Equal(t, 1, frontend.reconnectTaskSessionCalls)
+}
+
+// Reconnect recreated the Session but could not restore one of its agents.
+func TestModel_EnterAttachesAfterAReconnectThatLeftAnAgentBehind(t *testing.T) {
+	frontend := newFrontendHarness()
+	frontend.listTasks = []*core.Task{
+		{ID: "task-1", DisplayName: "first task", TmuxSession: "repo_task_1", Provider: core.ProviderCodex},
+	}
+	attempts := 0
+	frontend.attachTaskSessionFn = func(context.Context, *core.Task, *core.TmuxPaneRef) error {
+		attempts++
+		if attempts == 1 {
+			return core.ErrTaskSessionNotFound
+		}
+		return nil
+	}
+	frontend.reconnectTaskSessionErr = errors.New(
+		`reconnect: codex conversation codex-1 not restored: provider "codex" is not configured`,
+	)
+	m := newLoadedModel(frontend)
+
+	_, cmd := m.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
+	require.NotNil(t, cmd)
+	msg := requireMsgType[taskOpenedMsg](t, runBatchCmd(t, cmd))
+	next, _ := m.Update(msg)
+
+	// The user lands in the Session, and the TUI says which agent is missing.
+	require.Equal(t, 2, frontend.attachTaskSessionCalls)
+	require.ErrorContains(t, asModel(t, next).err, "codex conversation codex-1 not restored")
+}
+
+func TestModel_EnterShowsTheReconnectErrorWhenTheSessionDidNotComeBack(t *testing.T) {
+	frontend := newFrontendHarness()
+	frontend.listTasks = []*core.Task{
+		{ID: "task-1", DisplayName: "first task", TmuxSession: "repo_task_1", Provider: core.ProviderCodex},
+	}
+	frontend.attachTaskSessionErr = core.ErrTaskSessionNotFound
+	frontend.reconnectTaskSessionErr = errors.New("reconnect task session: tmux failed")
+	m := newLoadedModel(frontend)
+
+	_, cmd := m.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
+	require.NotNil(t, cmd)
+	msg := requireMsgType[taskOpenedMsg](t, runBatchCmd(t, cmd))
+
+	require.EqualError(t, msg.err, "reconnect task session: tmux failed")
 }
 
 func TestModel_EnterDoesNotStartAnotherOpenWhileReconnectIsPending(t *testing.T) {
@@ -1870,23 +1966,6 @@ func TestModel_ShimmerTickAdvancesAndReschedulesWhilePending(t *testing.T) {
 	require.True(t, ok)
 }
 
-func TestModel_ShimmerTickAdvancesAndReschedulesWhileSwitching(t *testing.T) {
-	frontend := newFrontendHarness()
-	m := newLoadedModel(frontend)
-	m.pending = opSwitching
-
-	next, cmd := m.Update(shimmerTickMsg{})
-	require.NotNil(t, cmd)
-
-	got, ok := next.(model)
-	require.True(t, ok)
-	require.Equal(t, 1, got.shimmerTick)
-
-	msg := runCmd(t, cmd)
-	_, ok = msg.(shimmerTickMsg)
-	require.True(t, ok)
-}
-
 func TestModel_CleanupRefusedWhileOperationPending(t *testing.T) {
 	frontend := newFrontendHarness()
 	frontend.listTasks = []*core.Task{{ID: "task-1", DisplayName: "Task one"}}
@@ -2048,7 +2127,7 @@ func TestModel_PRPickerEnterCreatesTaskFromSelectedPR(t *testing.T) {
 	require.Equal(t, modeBrowse, pending.mode)
 	require.Equal(t, opCreating, pending.pending)
 	view := stripANSI(pending.View().Content)
-	require.Contains(t, view, "n new   p provider   r refresh   space details   x clean   q quit")
+	require.Contains(t, view, "n new   r refresh   space details   x clean   q quit")
 	require.Contains(t, view, "Creating task from pull request")
 	require.NotContains(t, view, "Suggesting name")
 	require.Less(t, strings.Index(view, "existing task"), strings.Index(view, "Creating task from pull request"))
@@ -2120,7 +2199,7 @@ func TestModel_PRPickerCreateFailureReturnsToBrowseWithProgressAndError(t *testi
 	require.ErrorContains(t, got.create.err, "create failed")
 
 	view = stripANSI(got.View().Content)
-	require.Contains(t, view, "n new   p provider   r refresh   space details   x clean   q quit")
+	require.Contains(t, view, "n new   r refresh   space details   x clean   q quit")
 	require.Contains(t, view, "Creating task from pull request")
 	require.NotContains(t, view, "Creating worktree")
 	require.Contains(t, view, "create failed")
@@ -2311,9 +2390,10 @@ type frontendHarness struct {
 	pullRequestStatusErr        map[string]error
 	pullRequestStatusCalls      []string
 	attachedTask                *core.Task
+	attachedPanes               []*core.TmuxPaneRef
 	attachTaskSessionErr        error
 	attachTaskSessionCalls      int
-	attachTaskSessionFn         func(context.Context, *core.Task) error
+	attachTaskSessionFn         func(context.Context, *core.Task, *core.TmuxPaneRef) error
 	reconnectTaskSessionErr     error
 	reconnectTaskSessionFn      func(context.Context, string) error
 	reconnectTaskSessionCalls   int
@@ -2348,11 +2428,6 @@ type frontendHarness struct {
 	detections                  []core.ProviderDetection
 	detectProvidersErr          error
 	detectProvidersCalls        int
-	switchedTaskID              string
-	switchedProvider            core.Provider
-	switchTaskResult            *core.Task
-	switchTaskErr               error
-	switchTaskCalls             int
 }
 
 func newFrontendHarness() *frontendHarness {
@@ -2392,23 +2467,13 @@ func newFrontendHarness() *frontendHarness {
 			return append([]core.ProviderDetection(nil), frontend.detections...), nil
 		},
 	).Maybe()
-	frontend.mock.EXPECT().SwitchTaskProvider(mock.Anything, mock.Anything, mock.Anything).RunAndReturn(
-		func(_ context.Context, taskID string, provider core.Provider) (*core.Task, error) {
-			frontend.switchTaskCalls++
-			frontend.switchedTaskID = taskID
-			frontend.switchedProvider = provider
-			if frontend.switchTaskErr != nil {
-				return nil, frontend.switchTaskErr
-			}
-			return frontend.switchTaskResult, nil
-		},
-	).Maybe()
-	frontend.mock.EXPECT().AttachTaskSession(mock.Anything, mock.Anything).RunAndReturn(
-		func(ctx context.Context, task *core.Task) error {
+	frontend.mock.EXPECT().AttachTaskSession(mock.Anything, mock.Anything, mock.Anything).RunAndReturn(
+		func(ctx context.Context, task *core.Task, pane *core.TmuxPaneRef) error {
 			frontend.attachTaskSessionCalls++
 			frontend.attachedTask = task
+			frontend.attachedPanes = append(frontend.attachedPanes, pane)
 			if frontend.attachTaskSessionFn != nil {
-				return frontend.attachTaskSessionFn(ctx, task)
+				return frontend.attachTaskSessionFn(ctx, task, pane)
 			}
 			return frontend.attachTaskSessionErr
 		},

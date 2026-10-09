@@ -22,12 +22,14 @@ type taskStatusObserver struct {
 type observedTaskStatus struct {
 	taskID string
 
-	persisted       *TaskStatusUpdate
-	view            *TaskStatusUpdate
-	viewObservedAt  time.Time
-	lastCycleAt     time.Time
-	generation      uint64
-	persistedCancel context.CancelFunc
+	view           *TaskStatusUpdate
+	viewObservedAt time.Time
+	lastCycleAt    time.Time
+	// generation advances whenever hook evidence changes the task's agent
+	// sessions, so a cycle that started before it cannot publish over it.
+	generation uint64
+	// liveView is what the last cycle learned beyond the hook evidence.
+	liveView agentSessionLiveView
 
 	subscribers map[uint64]*taskStatusSubscriber
 	waiters     map[uint64]chan taskStatusResult
@@ -44,20 +46,17 @@ type taskStatusResult struct {
 }
 
 type taskStatusCycleInput struct {
-	taskID              string
-	generation          uint64
-	persisted           *TaskStatusUpdate
-	task                *Task
-	runtime             TaskSessionRuntimeState
-	configuredProviders []Provider
+	taskID     string
+	generation uint64
+	evidence   agentSessionEvidence
+	liveView   agentSessionLiveView
 }
 
 type taskStatusCycleResult struct {
-	taskID              string
-	generation          uint64
-	update              *TaskStatusUpdate
-	expectedProvider    Provider
-	replacementProvider Provider
+	taskID     string
+	generation uint64
+	update     *TaskStatusUpdate
+	liveView   agentSessionLiveView
 }
 
 func newTaskStatusObserver(observation *taskObservation) *taskStatusObserver {
@@ -80,10 +79,7 @@ func (o *taskStatusObserver) LatestTaskStatus(
 	}
 
 	waiter := make(chan taskStatusResult, 1)
-	waiterID, err := o.addWaiter(taskID, waiter)
-	if err != nil {
-		return nil, err
-	}
+	waiterID := o.addWaiter(taskID, waiter)
 	defer o.removeWaiter(taskID, waiterID)
 
 	select {
@@ -102,11 +98,7 @@ func (o *taskStatusObserver) SubscribeTaskStatus(
 	subscriber := &taskStatusSubscriber{updates: make(chan TaskStatusUpdate, 1)}
 
 	o.mu.Lock()
-	state, err := o.ensurePersistedInterestLocked(taskID)
-	if err != nil {
-		o.mu.Unlock()
-		return nil, err
-	}
+	state := o.ensureStateLocked(taskID)
 	if !o.stateHasInterestLocked(state) && !o.cacheFreshLocked(state) {
 		state.lastCycleAt = time.Time{}
 	}
@@ -138,6 +130,43 @@ func (o *taskStatusObserver) ForgetTask(taskID string) {
 	o.requestCycle()
 }
 
+// agentSessionsChanged publishes a subscribed task's Runtime status again
+// after hook evidence changed its agent sessions, with the last cycle's live
+// view. Callers hold the observation's agent session lock, so hook evidence
+// publishes in the order it was recorded. Waiting one-shot reads are left to
+// the cycle they wait for, which checks liveness.
+func (o *taskStatusObserver) agentSessionsChanged(ctx context.Context, taskID string) {
+	o.mu.Lock()
+	state := o.tasks[taskID]
+	if state == nil {
+		o.mu.Unlock()
+		return
+	}
+	state.generation++
+	if len(state.subscribers) == 0 {
+		// The cached view is stale: the next read, or the cycle a waiting read
+		// waits for, rebuilds it.
+		state.viewObservedAt = time.Time{}
+		o.mu.Unlock()
+		return
+	}
+	o.mu.Unlock()
+
+	evidence, err := o.observation.readAgentSessionEvidence(ctx, taskID)
+
+	o.mu.Lock()
+	defer o.mu.Unlock()
+	state = o.tasks[taskID]
+	if state == nil {
+		return
+	}
+	if err != nil || len(state.subscribers) == 0 {
+		state.viewObservedAt = time.Time{}
+		return
+	}
+	o.publishLocked(state, taskStatusView(taskID, evidence, state.liveView))
+}
+
 func (o *taskStatusObserver) freshCachedView(taskID string) (*TaskStatusUpdate, bool) {
 	o.mu.Lock()
 	defer o.mu.Unlock()
@@ -159,14 +188,11 @@ func (o *taskStatusObserver) cacheFreshLocked(state *observedTaskStatus) bool {
 	return time.Since(state.viewObservedAt) <= maxAge
 }
 
-func (o *taskStatusObserver) addWaiter(taskID string, waiter chan taskStatusResult) (uint64, error) {
+func (o *taskStatusObserver) addWaiter(taskID string, waiter chan taskStatusResult) uint64 {
 	o.mu.Lock()
 	defer o.mu.Unlock()
 
-	state, err := o.ensurePersistedInterestLocked(taskID)
-	if err != nil {
-		return 0, err
-	}
+	state := o.ensureStateLocked(taskID)
 	if !o.stateHasInterestLocked(state) && !o.cacheFreshLocked(state) {
 		state.lastCycleAt = time.Time{}
 	}
@@ -174,107 +200,21 @@ func (o *taskStatusObserver) addWaiter(taskID string, waiter chan taskStatusResu
 	waiterID := o.nextID
 	state.waiters[waiterID] = waiter
 	o.requestCycle()
-	return waiterID, nil
+	return waiterID
 }
 
-func (o *taskStatusObserver) ensurePersistedInterestLocked(taskID string) (*observedTaskStatus, error) {
+func (o *taskStatusObserver) ensureStateLocked(taskID string) *observedTaskStatus {
 	state := o.tasks[taskID]
 	if state == nil {
 		state = &observedTaskStatus{
 			taskID:      taskID,
+			liveView:    newAgentSessionLiveView(),
 			subscribers: make(map[uint64]*taskStatusSubscriber),
 			waiters:     make(map[uint64]chan taskStatusResult),
 		}
 		o.tasks[taskID] = state
 	}
-	if state.persistedCancel != nil {
-		return state, nil
-	}
-
-	persistedCtx, cancel := context.WithCancel(context.Background())
-	updates, err := o.observation.tasks.SubscribeTaskStatus(persistedCtx, taskID)
-	if err != nil {
-		cancel()
-		if len(state.subscribers) == 0 && len(state.waiters) == 0 && state.viewObservedAt.IsZero() {
-			delete(o.tasks, taskID)
-		}
-		return nil, err
-	}
-	state.persistedCancel = cancel
-	go o.forwardPersistedUpdates(persistedCtx, taskID, updates)
-	return state, nil
-}
-
-func (o *taskStatusObserver) forwardPersistedUpdates(
-	ctx context.Context,
-	taskID string,
-	updates <-chan TaskStatusUpdate,
-) {
-	for {
-		select {
-		case <-ctx.Done():
-			return
-		case update, ok := <-updates:
-			if !ok {
-				o.persistedStreamClosed(ctx, taskID)
-				return
-			}
-			o.acceptPersistedEvidence(taskID, update)
-		}
-	}
-}
-
-func (o *taskStatusObserver) acceptPersistedEvidence(taskID string, update TaskStatusUpdate) {
-	o.mu.Lock()
-	state := o.tasks[taskID]
-	if state == nil || state.persistedCancel == nil {
-		o.mu.Unlock()
-		return
-	}
-
-	state.generation++
-	state.persisted = cloneTaskStatusUpdate(&update)
-	o.publishLocked(state, &update)
-	o.resolveWaitersLocked(state, taskStatusResult{update: &update})
-	o.releasePersistedInterestIfIdleLocked(state)
-	o.mu.Unlock()
-}
-
-func (o *taskStatusObserver) persistedStreamClosed(streamCtx context.Context, taskID string) {
-	if streamCtx.Err() != nil {
-		return
-	}
-
-	o.mu.Lock()
-	state := o.tasks[taskID]
-	if state == nil || state.persistedCancel == nil {
-		o.mu.Unlock()
-		return
-	}
-	state.persistedCancel()
-	state.persistedCancel = nil
-	hasInterest := o.stateHasInterestLocked(state)
-	o.mu.Unlock()
-	if !hasInterest {
-		return
-	}
-	o.schedulePersistedInterestRetry(taskID)
-}
-
-func (o *taskStatusObserver) schedulePersistedInterestRetry(taskID string) {
-	time.AfterFunc(o.observation.recoveryPollInterval, func() {
-		o.mu.Lock()
-		state := o.tasks[taskID]
-		var retry bool
-		if state != nil && o.stateHasInterestLocked(state) && state.persistedCancel == nil {
-			_, err := o.ensurePersistedInterestLocked(taskID)
-			retry = err != nil
-		}
-		o.mu.Unlock()
-		if retry {
-			o.schedulePersistedInterestRetry(taskID)
-		}
-	})
+	return state
 }
 
 func (o *taskStatusObserver) removeSubscriber(taskID string, subscriberID uint64) {
@@ -285,7 +225,6 @@ func (o *taskStatusObserver) removeSubscriber(taskID string, subscriberID uint64
 			delete(state.subscribers, subscriberID)
 			close(subscriber.updates)
 		}
-		o.releasePersistedInterestIfIdleLocked(state)
 	}
 	o.mu.Unlock()
 	o.requestCycle()
@@ -296,18 +235,9 @@ func (o *taskStatusObserver) removeWaiter(taskID string, waiterID uint64) {
 	state := o.tasks[taskID]
 	if state != nil {
 		delete(state.waiters, waiterID)
-		o.releasePersistedInterestIfIdleLocked(state)
 	}
 	o.mu.Unlock()
 	o.requestCycle()
-}
-
-func (o *taskStatusObserver) releasePersistedInterestIfIdleLocked(state *observedTaskStatus) {
-	if o.stateHasInterestLocked(state) || state.persistedCancel == nil {
-		return
-	}
-	state.persistedCancel()
-	state.persistedCancel = nil
 }
 
 func (o *taskStatusObserver) stateHasInterestLocked(state *observedTaskStatus) bool {
@@ -390,30 +320,40 @@ func (o *taskStatusObserver) runCycle() {
 		return
 	}
 
+	ctx := context.Background()
 	inputs := make([]taskStatusCycleInput, 0, len(taskIDs))
 	for _, taskID := range taskIDs {
-		update, err := o.observation.tasks.LatestTaskStatus(context.Background(), taskID)
+		// The generation is taken before the evidence is read, so hook evidence
+		// recorded after this point discards the cycle's result.
+		input, interested := o.cycleInput(taskID)
+		if !interested {
+			continue
+		}
+		evidence, err := o.observation.readAgentSessionEvidence(ctx, taskID)
 		if err != nil {
 			o.resolveTaskWaiters(taskID, taskStatusResult{err: err})
 			continue
 		}
-		input, interested := o.snapshotPersistedInput(taskID, update)
-		if !interested {
+		if evidence.empty() {
+			// A task without agent sessions has no status, unless a hook
+			// recorded its first one meanwhile.
+			o.acceptCycleResult(ctx, taskStatusCycleResult{
+				taskID:     taskID,
+				generation: input.generation,
+				liveView:   input.liveView,
+			})
 			continue
 		}
-		if input.persisted == nil {
-			o.resolveTaskWaiters(taskID, taskStatusResult{})
-			continue
-		}
+		input.evidence = evidence
 		inputs = append(inputs, input)
 	}
 	if len(inputs) == 0 {
 		return
 	}
 
-	tasks, err := o.observation.tasks.ListTasks(context.Background())
+	tasks, err := o.observation.tasks.ListTasks(ctx)
 	if err != nil {
-		o.publishUnrecovered(inputs)
+		o.publishUnobserved(ctx, inputs)
 		return
 	}
 	taskByID := make(map[string]*Task, len(tasks))
@@ -431,7 +371,6 @@ func (o *taskStatusObserver) runCycle() {
 			o.ForgetTask(input.taskID)
 			continue
 		}
-		input.task = task
 		filtered = append(filtered, input)
 		runtimeTasks = append(runtimeTasks, task)
 	}
@@ -440,12 +379,15 @@ func (o *taskStatusObserver) runCycle() {
 		return
 	}
 
-	runtimeByTask, err := o.observation.tmuxSession.InspectTaskSessions(context.Background(), runtimeTasks)
+	snapshot, err := o.observation.tmuxSession.InspectTaskSessions(ctx, runtimeTasks)
 	if err != nil {
-		o.publishUnrecovered(inputs)
+		o.publishUnobserved(ctx, inputs)
 		return
 	}
-	configuredProviders := o.configuredProviders(context.Background())
+	panes := make(map[string]TmuxPane, len(snapshot.Panes))
+	for _, pane := range snapshot.Panes {
+		panes[pane.ID] = pane
+	}
 
 	jobs := make(chan taskStatusCycleInput)
 	results := make(chan taskStatusCycleResult, len(inputs))
@@ -463,18 +405,7 @@ func (o *taskStatusObserver) runCycle() {
 		go func() {
 			defer workers.Done()
 			for input := range jobs {
-				runtime, ok := runtimeByTask[input.taskID]
-				if !ok {
-					results <- taskStatusCycleResult{
-						taskID:     input.taskID,
-						generation: input.generation,
-						update:     input.persisted,
-					}
-					continue
-				}
-				input.runtime = runtime
-				input.configuredProviders = configuredProviders
-				results <- o.recoverCurrentStatus(context.Background(), input)
+				results <- o.observeTaskStatus(ctx, input, snapshot, panes)
 			}
 		}()
 	}
@@ -488,19 +419,8 @@ func (o *taskStatusObserver) runCycle() {
 	}()
 
 	for result := range results {
-		o.acceptCycleResult(result)
+		o.acceptCycleResult(ctx, result)
 	}
-}
-
-func (o *taskStatusObserver) configuredProviders(ctx context.Context) []Provider {
-	if o.observation.providerConfig == nil {
-		return nil
-	}
-	setup, err := o.observation.providerConfig.GetProviderSetup(ctx)
-	if err != nil || setup == nil {
-		return nil
-	}
-	return configuredProvidersInOrder(*setup)
 }
 
 func (o *taskStatusObserver) interestedTaskIDs() []string {
@@ -516,149 +436,207 @@ func (o *taskStatusObserver) interestedTaskIDs() []string {
 	return taskIDs
 }
 
-func (o *taskStatusObserver) snapshotPersistedInput(
-	taskID string,
-	latest *TaskStatusUpdate,
-) (taskStatusCycleInput, bool) {
+func (o *taskStatusObserver) cycleInput(taskID string) (taskStatusCycleInput, bool) {
 	o.mu.Lock()
 	defer o.mu.Unlock()
 	state := o.tasks[taskID]
 	if !o.stateHasInterestLocked(state) {
 		return taskStatusCycleInput{}, false
 	}
-	if shouldAcceptLatestPersisted(state.persisted, latest) {
-		state.generation++
-		state.persisted = cloneTaskStatusUpdate(latest)
-	}
 	return taskStatusCycleInput{
 		taskID:     taskID,
 		generation: state.generation,
-		persisted:  cloneTaskStatusUpdate(state.persisted),
+		liveView:   state.liveView,
 	}, true
 }
 
-func shouldAcceptLatestPersisted(current, latest *TaskStatusUpdate) bool {
-	if latest == nil {
-		return false
-	}
-	if current == nil {
-		return true
-	}
-	if latest.ObservedAt.After(current.ObservedAt) {
-		return true
-	}
-	return latest.ObservedAt.Equal(current.ObservedAt) && !taskStatusUpdatesEqual(current, latest)
-}
-
-func (o *taskStatusObserver) publishUnrecovered(inputs []taskStatusCycleInput) {
+// publishUnobserved publishes views built from hook evidence and the previous
+// live view when the cycle cannot inspect the tasks' Sessions.
+func (o *taskStatusObserver) publishUnobserved(ctx context.Context, inputs []taskStatusCycleInput) {
 	for _, input := range inputs {
-		o.acceptCycleResult(taskStatusCycleResult{
+		o.acceptCycleResult(ctx, taskStatusCycleResult{
 			taskID:     input.taskID,
 			generation: input.generation,
-			update:     input.persisted,
+			update:     taskStatusView(input.taskID, input.evidence, input.liveView),
+			liveView:   input.liveView,
 		})
 	}
 }
 
-func (o *taskStatusObserver) recoverCurrentStatus(
+// observeTaskStatus checks one task's open agent sessions against the tmux
+// snapshot. It ends those whose agent exited or whose pane closed, keeps lost
+// ones open for Reconnect, recovers stale status for live ones from
+// provider-side state, and builds the task's Runtime status from the rest.
+func (o *taskStatusObserver) observeTaskStatus(
 	ctx context.Context,
 	input taskStatusCycleInput,
+	snapshot TmuxSnapshot,
+	panes map[string]TmuxPane,
 ) taskStatusCycleResult {
-	result := taskStatusCycleResult{
+	sessionExists := len(snapshot.TaskSessionPanes[input.taskID]) > 0
+	liveView := newAgentSessionLiveView()
+	var history []TaskProviderSession
+	historyRead := false
+
+	open := make([]AgentSession, 0, len(input.evidence.open))
+	for _, session := range input.evidence.open {
+		var pane *TmuxPane
+		if found, ok := panes[session.TmuxPane]; ok && session.TmuxPane != "" {
+			pane = &found
+		}
+		providerClient, providerErr := supportedProviderClient(o.observation.providers, session.Provider)
+		providerCommand := ""
+		if providerErr == nil {
+			providerCommand = providerClient.TaskSessionCommandName()
+		}
+
+		// The location is kept for an agent session this cycle ends too: a hook
+		// may have changed it since, so it stays open and the rebased view
+		// still shows where it runs.
+		if pane != nil && (session.TmuxServer.IsZero() || session.TmuxServer == snapshot.Server) {
+			liveView.locations[session.ID] = paneLocation{
+				pane: session.paneRef(),
+				location: TmuxPaneLocation{
+					WindowName:  pane.WindowName,
+					WindowIndex: pane.WindowIndex,
+					PaneIndex:   pane.PaneIndex,
+				},
+			}
+		} else if located, ok := input.liveView.locations[session.ID]; ok {
+			liveView.locations[session.ID] = located
+		}
+
+		liveness := resolveAgentSessionLiveness(
+			session,
+			sessionExists,
+			pane,
+			snapshot.Server,
+			providerCommand,
+			o.observation.now(),
+		)
+		switch liveness {
+		case agentSessionEnded:
+			// An agent session that a hook changed meanwhile, or that fails to
+			// end, stays open in the repository. A hook change also changes
+			// the generation, so the result is rebased onto it.
+			_ = o.observation.endAgentSession(ctx, session)
+			continue
+		case agentSessionLost:
+			liveView.lost[session.ID] = session.paneRef()
+		case agentSessionLaunching:
+			// Its first hook brings its status; until then it is starting, and
+			// its pane has nothing to recover.
+		case agentSessionUnchanged:
+			if input.liveView.isLost(session) {
+				liveView.lost[session.ID] = session.paneRef()
+			} else if recovered, ok := input.liveView.recovered[session.ID]; ok && recovered.appliesTo(session) {
+				liveView.recovered[session.ID] = recovered
+			}
+		case agentSessionLive:
+			if !historyRead {
+				history, _ = o.observation.tasks.ListTaskProviderSessions(ctx, input.taskID)
+				historyRead = true
+			}
+			recovered := recoverAgentSessionStatus(ctx, providerClient, session, history, pane, providerCommand)
+			if recovered != nil {
+				liveView.recovered[session.ID] = *recovered
+			}
+		}
+		open = append(open, session)
+	}
+
+	evidence := agentSessionEvidence{open: open, latest: input.evidence.latest, prompts: input.evidence.prompts}
+	return taskStatusCycleResult{
 		taskID:     input.taskID,
 		generation: input.generation,
-		update:     input.persisted,
+		update:     taskStatusView(input.taskID, evidence, liveView),
+		liveView:   liveView,
 	}
-	if replacement := replacementActiveProvider(
-		input.runtime,
-		input.task.Provider,
-		input.configuredProviders,
-		o.observation.providers,
-	); replacement != "" {
-		result.expectedProvider = input.task.Provider
-		result.replacementProvider = replacement
-		return result
-	}
-
-	update := input.persisted
-	if update == nil || update.Phase == TaskStatusPhaseStopped {
-		return result
-	}
-
-	providerClient, err := supportedProviderClient(o.observation.providers, input.task.Provider)
-	if err != nil {
-		return result
-	}
-
-	switch resolveStatus(update, input.runtime, providerClient.TaskSessionCommandName()) {
-	case statusTryRecover:
-		sessions, listErr := o.observation.tasks.ListTaskProviderSessions(ctx, update.TaskID)
-		if listErr != nil {
-			return result
-		}
-		recovered, recoverErr := providerClient.RecoverLatestTaskStatus(
-			ctx,
-			*update,
-			sessions,
-			taskSessionProviderStartedAt(input.runtime, providerClient.TaskSessionCommandName()),
-		)
-		if recoverErr != nil || recovered == nil {
-			return result
-		}
-		if recovered.ObservedAt.Before(update.ObservedAt) {
-			return result
-		}
-		result.update = recovered
-	case statusStopped:
-		stopped := *update
-		stopped.Phase = TaskStatusPhaseStopped
-		stopped.RawEventName = "TaskSessionStopped"
-		result.update = &stopped
-	}
-	return result
 }
 
-func (o *taskStatusObserver) acceptCycleResult(result taskStatusCycleResult) {
+// recoverAgentSessionStatus asks the agent session's provider for a newer
+// status than its hook-driven one, from the transcripts of its current
+// Provider session only. A recovery older than the hook evidence is
+// discarded.
+func recoverAgentSessionStatus(
+	ctx context.Context,
+	providerClient ProviderClient,
+	session AgentSession,
+	history []TaskProviderSession,
+	pane *TmuxPane,
+	providerCommand string,
+) *recoveredAgentSessionStatus {
+	conversation := conversationHistory(history, session)
+	if providerClient == nil || len(conversation) == 0 {
+		return nil
+	}
+	recovered, err := providerClient.RecoverAgentSessionStatus(
+		ctx,
+		session.Status,
+		conversation,
+		paneProviderStartedAt(pane, providerCommand),
+	)
+	if err != nil || recovered == nil || recovered.ObservedAt.Before(session.Status.ObservedAt) {
+		return nil
+	}
+	return &recoveredAgentSessionStatus{
+		pane:              session.paneRef(),
+		providerSessionID: session.ProviderSessionID,
+		from:              session.Status,
+		status:            *recovered,
+	}
+}
+
+func (o *taskStatusObserver) acceptCycleResult(ctx context.Context, result taskStatusCycleResult) {
 	o.mu.Lock()
 	state := o.tasks[result.taskID]
-	if state == nil || !o.stateHasInterestLocked(state) || state.generation != result.generation {
+	if state == nil || !o.stateHasInterestLocked(state) {
 		o.mu.Unlock()
 		return
 	}
-	if result.replacementProvider != "" {
-		// Reserve a generation before leaving the observer lock. Hook evidence
-		// accepted after the runtime snapshot then invalidates this reconciliation
-		// instead of letting an older tmux view overwrite newer provider evidence.
-		state.generation++
-		reservedGeneration := state.generation
+	if state.generation == result.generation {
+		o.applyCycleLocked(state, result.liveView, result.update)
 		o.mu.Unlock()
-
-		adopted := o.reconcileActiveProvider(context.Background(), result)
-
-		o.mu.Lock()
-		state = o.tasks[result.taskID]
-		if state == nil || !o.stateHasInterestLocked(state) || state.generation != reservedGeneration {
-			o.mu.Unlock()
-			return
-		}
-		if adopted && result.update != nil {
-			result.update = cloneTaskStatusUpdate(result.update)
-			result.update.Provider = result.replacementProvider
-		}
+		return
 	}
-	o.publishLocked(state, result.update)
-	o.resolveWaitersLocked(state, taskStatusResult{update: result.update})
-	o.releasePersistedInterestIfIdleLocked(state)
 	o.mu.Unlock()
+	o.rebaseCycleResult(ctx, result)
 }
 
-func (o *taskStatusObserver) reconcileActiveProvider(ctx context.Context, result taskStatusCycleResult) bool {
-	task, err := taskByID(ctx, o.observation.tasks, result.taskID)
-	if err != nil || task.Provider != result.expectedProvider {
-		return false
+// rebaseCycleResult applies the live view of a cycle that hook evidence
+// overlapped to that newer evidence, rather than discarding the cycle and
+// leaving waiting reads with a view that skipped liveness. Holding the agent
+// session lock orders the rebased view after every hook's publish, so it
+// cannot overwrite newer evidence. The live view carries over safely: a
+// recovered status applies only while the status it came from is current,
+// agent sessions a hook opened are not in it, and those the cycle ended are
+// gone from the evidence.
+func (o *taskStatusObserver) rebaseCycleResult(ctx context.Context, result taskStatusCycleResult) {
+	o.observation.agentSessionMu.Lock()
+	defer o.observation.agentSessionMu.Unlock()
+	evidence, err := o.observation.readAgentSessionEvidence(ctx, result.taskID)
+
+	o.mu.Lock()
+	defer o.mu.Unlock()
+	state := o.tasks[result.taskID]
+	if state == nil || !o.stateHasInterestLocked(state) {
+		return
 	}
-	_, err = recordActiveProvider(ctx, o.observation.tasks, task, result.replacementProvider)
-	return err == nil
+	if err != nil {
+		o.resolveWaitersLocked(state, taskStatusResult{err: err})
+		return
+	}
+	o.applyCycleLocked(state, result.liveView, taskStatusView(result.taskID, evidence, result.liveView))
+}
+
+func (o *taskStatusObserver) applyCycleLocked(
+	state *observedTaskStatus,
+	liveView agentSessionLiveView,
+	update *TaskStatusUpdate,
+) {
+	state.liveView = liveView
+	o.publishLocked(state, update)
+	o.resolveWaitersLocked(state, taskStatusResult{update: update})
 }
 
 func (o *taskStatusObserver) publishLocked(state *observedTaskStatus, update *TaskStatusUpdate) {
@@ -676,7 +654,8 @@ func (o *taskStatusObserver) offerLocked(subscriber *taskStatusSubscriber, updat
 	if subscriber == nil || update == nil || taskStatusUpdatesEqual(subscriber.lastOffered, update) {
 		return
 	}
-	copyUpdate := *update
+	// The subscriber's copy shares nothing with the one kept for dedupe.
+	copyUpdate := *cloneTaskStatusUpdate(update)
 	select {
 	case subscriber.updates <- copyUpdate:
 	default:
@@ -689,7 +668,7 @@ func (o *taskStatusObserver) offerLocked(subscriber *taskStatusSubscriber, updat
 		default:
 		}
 	}
-	subscriber.lastOffered = &copyUpdate
+	subscriber.lastOffered = cloneTaskStatusUpdate(update)
 }
 
 func (o *taskStatusObserver) resolveTaskWaiters(taskID string, result taskStatusResult) {
@@ -697,7 +676,6 @@ func (o *taskStatusObserver) resolveTaskWaiters(taskID string, result taskStatus
 	state := o.tasks[taskID]
 	if state != nil {
 		o.resolveWaitersLocked(state, result)
-		o.releasePersistedInterestIfIdleLocked(state)
 	}
 	o.mu.Unlock()
 }
@@ -713,10 +691,6 @@ func (o *taskStatusObserver) resolveWaitersLocked(state *observedTaskStatus, res
 }
 
 func (o *taskStatusObserver) closeStateLocked(state *observedTaskStatus, cause error) {
-	if state.persistedCancel != nil {
-		state.persistedCancel()
-		state.persistedCancel = nil
-	}
 	for _, subscriber := range state.subscribers {
 		close(subscriber.updates)
 	}
@@ -732,5 +706,21 @@ func cloneTaskStatusUpdate(update *TaskStatusUpdate) *TaskStatusUpdate {
 		return nil
 	}
 	copyUpdate := *update
+	copyUpdate.AgentSessions = cloneLiveAgentSessions(update.AgentSessions)
 	return &copyUpdate
+}
+
+func cloneLiveAgentSessions(sessions []LiveAgentSession) []LiveAgentSession {
+	if sessions == nil {
+		return nil
+	}
+	cloned := make([]LiveAgentSession, len(sessions))
+	for i, session := range sessions {
+		if session.Location != nil {
+			location := *session.Location
+			session.Location = &location
+		}
+		cloned[i] = session
+	}
+	return cloned
 }

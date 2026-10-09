@@ -8,7 +8,6 @@ import (
 	"os"
 	"slices"
 	"strings"
-	"sync"
 	"time"
 
 	"github.com/BaronBonet/rig/internal/adapters/repository/sqlite/generated"
@@ -23,8 +22,6 @@ var errHealthCheckRepositoryOnly = errors.New("sqlite health-check repository on
 type repository struct {
 	queries *generated.Queries
 	db      *sql.DB
-	subs    map[string][]chan core.TaskStatusUpdate
-	mu      sync.Mutex
 }
 
 type healthCheckRepository struct {
@@ -75,7 +72,6 @@ func New(cfg Config) (core.TaskRepository, error) {
 	return &repository{
 		db:      db,
 		queries: generated.New(db),
-		subs:    make(map[string][]chan core.TaskStatusUpdate),
 	}, nil
 }
 
@@ -115,32 +111,47 @@ func (r *healthCheckRepository) GetTaskActivity(context.Context, string, int) ([
 	return nil, errHealthCheckRepositoryOnly
 }
 
-func (r *healthCheckRepository) UpsertTaskStatus(context.Context, core.TaskStatusUpdate) error {
-	return errHealthCheckRepositoryOnly
-}
-
-func (r *healthCheckRepository) UpsertTaskResumeMetadata(context.Context, core.TaskResumeMetadata) error {
-	return errHealthCheckRepositoryOnly
+func (r *healthCheckRepository) ListLatestAgentSessionPrompts(
+	context.Context,
+	string,
+) ([]core.TaskActivityEvent, error) {
+	return nil, errHealthCheckRepositoryOnly
 }
 
 func (r *healthCheckRepository) UpsertTaskProviderSession(context.Context, core.TaskProviderSession) error {
 	return errHealthCheckRepositoryOnly
 }
 
-func (r *healthCheckRepository) LatestTaskStatus(context.Context, string) (*core.TaskStatusUpdate, error) {
-	return nil, errHealthCheckRepositoryOnly
-}
-
-func (r *healthCheckRepository) LatestTaskResumeMetadata(context.Context, string) (*core.TaskResumeMetadata, error) {
-	return nil, errHealthCheckRepositoryOnly
-}
-
 func (r *healthCheckRepository) ListTaskProviderSessions(context.Context, string) ([]core.TaskProviderSession, error) {
 	return nil, errHealthCheckRepositoryOnly
 }
 
-func (r *healthCheckRepository) SubscribeTaskStatus(context.Context, string) (<-chan core.TaskStatusUpdate, error) {
+func (r *healthCheckRepository) CreateAgentSession(context.Context, core.AgentSession) error {
+	return errHealthCheckRepositoryOnly
+}
+
+func (r *healthCheckRepository) OpenAgentSessionOnPane(
+	context.Context,
+	core.TmuxServer,
+	string,
+) (*core.AgentSession, error) {
 	return nil, errHealthCheckRepositoryOnly
+}
+
+func (r *healthCheckRepository) ListOpenAgentSessions(context.Context, string) ([]core.AgentSession, error) {
+	return nil, errHealthCheckRepositoryOnly
+}
+
+func (r *healthCheckRepository) LatestAgentSession(context.Context, string) (*core.AgentSession, error) {
+	return nil, errHealthCheckRepositoryOnly
+}
+
+func (r *healthCheckRepository) UpdateAgentSession(context.Context, core.AgentSession) error {
+	return errHealthCheckRepositoryOnly
+}
+
+func (r *healthCheckRepository) EndAgentSession(context.Context, string, time.Time) error {
+	return errHealthCheckRepositoryOnly
 }
 
 func (r *repository) HealthCheck(ctx context.Context) error {
@@ -267,106 +278,132 @@ func (r *repository) GetTaskActivity(ctx context.Context, taskID string, limit i
 	return events, nil
 }
 
-func (r *repository) UpsertTaskStatus(ctx context.Context, update core.TaskStatusUpdate) error {
-	update.TaskID = strings.TrimSpace(update.TaskID)
-	if update.TaskID == "" {
-		return fmt.Errorf("task status update task ID is required")
-	}
-
-	if err := r.queries.UpsertTaskStatus(ctx, upsertTaskStatusParams(update)); err != nil {
-		return err
-	}
-
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	for _, subscriber := range r.subs[update.TaskID] {
-		offerLatestTaskStatus(subscriber, update)
-	}
-
-	return nil
-}
-
-func offerLatestTaskStatus(subscriber chan core.TaskStatusUpdate, update core.TaskStatusUpdate) {
-	select {
-	case subscriber <- update:
-		return
-	default:
-	}
-
-	// Status is a live view, so evict stale buffered evidence instead of
-	// dropping the newest hook when providers emit a burst of events.
-	select {
-	case <-subscriber:
-	default:
-	}
-	select {
-	case subscriber <- update:
-	default:
-	}
-}
-
-func (r *repository) UpsertTaskResumeMetadata(ctx context.Context, metadata core.TaskResumeMetadata) error {
-	metadata.TaskID = strings.TrimSpace(metadata.TaskID)
-	if metadata.TaskID == "" {
-		return fmt.Errorf("task resume metadata task ID is required")
-	}
-
-	return r.queries.UpsertTaskResumeMetadata(ctx, upsertTaskResumeMetadataParams(metadata))
-}
-
-func (r *repository) LatestTaskStatus(ctx context.Context, taskID string) (*core.TaskStatusUpdate, error) {
-	row, err := r.queries.LatestTaskStatus(ctx, strings.TrimSpace(taskID))
-	if errors.Is(err, sql.ErrNoRows) {
-		return nil, nil
-	}
-	if err != nil {
-		return nil, err
-	}
-
-	return taskStatusUpdateFromRow(row), nil
-}
-
-func (r *repository) LatestTaskResumeMetadata(ctx context.Context, taskID string) (*core.TaskResumeMetadata, error) {
-	row, err := r.queries.LatestTaskResumeMetadata(ctx, strings.TrimSpace(taskID))
-	if errors.Is(err, sql.ErrNoRows) {
-		return nil, nil
-	}
-	if err != nil {
-		return nil, err
-	}
-
-	return taskResumeMetadataFromRow(row), nil
-}
-
-func (r *repository) SubscribeTaskStatus(ctx context.Context, taskID string) (<-chan core.TaskStatusUpdate, error) {
+func (r *repository) ListLatestAgentSessionPrompts(
+	ctx context.Context,
+	taskID string,
+) ([]core.TaskActivityEvent, error) {
 	taskID = strings.TrimSpace(taskID)
-	updates := make(chan core.TaskStatusUpdate, 8)
+	if taskID == "" {
+		return nil, nil
+	}
 
-	r.mu.Lock()
-	r.subs[taskID] = append(r.subs[taskID], updates)
-	r.mu.Unlock()
+	rows, err := r.queries.ListLatestAgentSessionPrompts(ctx, taskID)
+	if err != nil {
+		return nil, err
+	}
+	return taskActivityEventsFromRows(rows), nil
+}
 
-	go func() {
-		<-ctx.Done()
-		r.mu.Lock()
-		defer r.mu.Unlock()
+func (r *repository) CreateAgentSession(ctx context.Context, session core.AgentSession) error {
+	session.ID = strings.TrimSpace(session.ID)
+	if session.ID == "" {
+		return fmt.Errorf("agent session ID is required")
+	}
+	session.TaskID = strings.TrimSpace(session.TaskID)
+	if session.TaskID == "" {
+		return fmt.Errorf("agent session task ID is required")
+	}
+	if strings.TrimSpace(string(session.Provider)) == "" {
+		return fmt.Errorf("agent session provider is required")
+	}
+	if session.StartedAt.IsZero() {
+		session.StartedAt = time.Now().UTC()
+	}
 
-		subscribers := r.subs[taskID]
-		filtered := subscribers[:0]
-		for _, subscriber := range subscribers {
-			if subscriber != updates {
-				filtered = append(filtered, subscriber)
-			}
+	return r.queries.CreateAgentSession(ctx, createAgentSessionParams(session))
+}
+
+func (r *repository) OpenAgentSessionOnPane(
+	ctx context.Context,
+	server core.TmuxServer,
+	pane string,
+) (*core.AgentSession, error) {
+	pane = strings.TrimSpace(pane)
+	if pane == "" {
+		return nil, nil
+	}
+
+	row, err := r.queries.OpenAgentSessionOnPane(ctx, generated.OpenAgentSessionOnPaneParams{
+		TmuxSocketPath: server.SocketPath,
+		TmuxServerPid:  int64(server.PID),
+		TmuxPane:       pane,
+	})
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+
+	session := agentSessionFromRow(row)
+	return &session, nil
+}
+
+func (r *repository) ListOpenAgentSessions(ctx context.Context, taskID string) ([]core.AgentSession, error) {
+	taskID = strings.TrimSpace(taskID)
+	if taskID == "" {
+		return nil, nil
+	}
+
+	rows, err := r.queries.ListOpenAgentSessions(ctx, taskID)
+	if err != nil {
+		return nil, err
+	}
+
+	// Times are stored as RFC 3339 text without trailing zeros, so their text
+	// order is not time order within one second.
+	sessions := agentSessionsFromRows(rows)
+	slices.SortStableFunc(sessions, func(left, right core.AgentSession) int {
+		if order := left.StartedAt.Compare(right.StartedAt); order != 0 {
+			return order
 		}
-		if len(filtered) == 0 {
-			delete(r.subs, taskID)
-		} else {
-			r.subs[taskID] = filtered
-		}
-		close(updates)
-	}()
+		return strings.Compare(left.ID, right.ID)
+	})
+	return sessions, nil
+}
 
-	return updates, nil
+func (r *repository) LatestAgentSession(ctx context.Context, taskID string) (*core.AgentSession, error) {
+	taskID = strings.TrimSpace(taskID)
+	if taskID == "" {
+		return nil, nil
+	}
+
+	row, err := r.queries.LatestAgentSession(ctx, taskID)
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+
+	session := agentSessionFromRow(row)
+	return &session, nil
+}
+
+// UpdateAgentSession leaves an agent session that has already ended
+// unchanged: it may have ended between being read and being updated.
+func (r *repository) UpdateAgentSession(ctx context.Context, session core.AgentSession) error {
+	session.ID = strings.TrimSpace(session.ID)
+	if session.ID == "" {
+		return fmt.Errorf("agent session ID is required")
+	}
+
+	return r.queries.UpdateAgentSession(ctx, updateAgentSessionParams(session))
+}
+
+func (r *repository) EndAgentSession(ctx context.Context, agentSessionID string, endedAt time.Time) error {
+	agentSessionID = strings.TrimSpace(agentSessionID)
+	if agentSessionID == "" {
+		return fmt.Errorf("agent session ID is required")
+	}
+	if endedAt.IsZero() {
+		endedAt = time.Now().UTC()
+	}
+
+	return r.queries.EndAgentSession(ctx, generated.EndAgentSessionParams{
+		EndedAt: formatTime(endedAt),
+		ID:      agentSessionID,
+	})
 }
 
 func openSQLiteDB(path string) (*sql.DB, error) {

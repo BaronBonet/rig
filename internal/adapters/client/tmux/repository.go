@@ -40,47 +40,144 @@ func (r *repository) HealthCheck(ctx context.Context) error {
 	return err
 }
 
-func (r *repository) StartTaskSession(ctx context.Context, task *core.Task, launch core.TaskSessionLaunchSpec) error {
-	// Provider switches launch into an existing idle session; only reconnects
-	// and fresh tasks need a new session created.
-	alreadyExists := r.sessionExists(ctx, task.TmuxSession)
-	if !alreadyExists {
-		if err := r.createSession(ctx, task.TmuxSession, task.WorktreePath); err != nil {
-			return err
-		}
+// StartTaskSession creates the task's session and launches the agent in its
+// task window. It never launches into a session that already exists, where an
+// agent may be running: typed keys would reach that agent.
+func (r *repository) StartTaskSession(
+	ctx context.Context,
+	task *core.Task,
+	launch core.TaskSessionLaunchSpec,
+) (core.TmuxPaneRef, error) {
+	if r.sessionExists(ctx, task.TmuxSession) {
+		return core.TmuxPaneRef{}, fmt.Errorf(
+			"%w: %s",
+			core.ErrTaskSessionExists,
+			normalizedSessionName(task.TmuxSession),
+		)
+	}
+	pane, err := r.createSession(ctx, task.TmuxSession, task.WorktreePath)
+	if err != nil {
+		return core.TmuxPaneRef{}, err
 	}
 
 	if len(launch.Command) == 0 {
-		return nil
+		return pane, nil
 	}
 
-	if err := r.sendKeysToWindow(ctx, task.TmuxSession, taskWindowName, launch.Command); err != nil {
-		if alreadyExists {
-			return err
-		}
-		return r.cleanupStartedSession(ctx, task.TmuxSession, err)
+	if err := r.sendKeys(ctx, exactWindowTarget(task.TmuxSession, taskWindowName), launch.Command); err != nil {
+		return core.TmuxPaneRef{}, r.cleanupStartedSession(ctx, task.TmuxSession, err)
 	}
 
 	if len(launch.PrefillInput) == 0 {
-		return nil
+		return pane, nil
 	}
 
 	if err := r.waitForPrompt(ctx, task.TmuxSession, taskWindowName, launch.ReadyMarker); err != nil {
-		if alreadyExists {
-			return err
-		}
-		return r.cleanupStartedSession(ctx, task.TmuxSession, err)
+		return core.TmuxPaneRef{}, r.cleanupStartedSession(ctx, task.TmuxSession, err)
 	}
 	r.sleep(promptInputSettleDelay)
 
 	if err := r.typeInWindow(ctx, task.TmuxSession, taskWindowName, launch.PrefillInput); err != nil {
-		if alreadyExists {
-			return err
-		}
-		return r.cleanupStartedSession(ctx, task.TmuxSession, err)
+		return core.TmuxPaneRef{}, r.cleanupStartedSession(ctx, task.TmuxSession, err)
 	}
 
-	return nil
+	return pane, nil
+}
+
+// SplitAgentPane opens a pane at the right edge of the window that holds pane
+// beside, or of the task window when beside is empty, spanning the window's
+// height and without selecting it. It evens out the window's panes side by
+// side and launches the agent in the new pane. Splitting at the right edge
+// puts agents split in one after another left to right in that order; the
+// window is found through a pane ID because windows can be renamed. When
+// beside has closed, the task window is split instead.
+func (r *repository) SplitAgentPane(
+	ctx context.Context,
+	task *core.Task,
+	beside string,
+	launch core.TaskSessionLaunchSpec,
+) (core.TmuxPaneRef, error) {
+	if task == nil || strings.TrimSpace(task.TmuxSession) == "" {
+		return core.TmuxPaneRef{}, fmt.Errorf("task tmux session is required")
+	}
+	if len(launch.Command) == 0 {
+		return core.TmuxPaneRef{}, fmt.Errorf("agent launch command is required")
+	}
+	taskWindow := exactWindowTarget(task.TmuxSession, taskWindowName)
+	window := strings.TrimSpace(beside)
+	if window == "" {
+		window = taskWindow
+	}
+
+	result, err := r.splitWindowEdge(ctx, task, window)
+	if window != taskWindow && isMissingPaneError(err, result) {
+		// The right edge is the same whichever pane of the window is split,
+		// so the task window takes the agent where beside would have.
+		window = taskWindow
+		result, err = r.splitWindowEdge(ctx, task, window)
+	}
+	if isMissingWindowError(err, result) {
+		return core.TmuxPaneRef{}, fmt.Errorf("task window %q is gone: %w", taskWindowName, err)
+	}
+	if isMissingSessionError(err, result) {
+		return core.TmuxPaneRef{}, core.ErrTaskSessionNotFound
+	}
+	if err != nil {
+		return core.TmuxPaneRef{}, err
+	}
+	pane, ok := parsePaneRef(result.Stdout)
+	if !ok {
+		err := fmt.Errorf("tmux reported no usable pane for the new agent pane: %q", result.Stdout)
+		if pane.ID == "" {
+			return core.TmuxPaneRef{}, err
+		}
+		return core.TmuxPaneRef{}, r.closeAgentPane(ctx, pane.ID, window, err)
+	}
+	r.evenOutAgentPanes(ctx, pane.ID)
+
+	if err := r.sendKeys(ctx, pane.ID, launch.Command); err != nil {
+		return core.TmuxPaneRef{}, r.closeAgentPane(ctx, pane.ID, window, err)
+	}
+	return pane, nil
+}
+
+// splitWindowEdge opens a detached pane at the right edge of the window that
+// holds target, spanning its height, and reports the new pane.
+func (r *repository) splitWindowEdge(ctx context.Context, task *core.Task, target string) (subprocess.Result, error) {
+	return r.runner.Run(
+		ctx,
+		"",
+		"tmux",
+		"split-window",
+		"-d",
+		"-h",
+		"-f",
+		"-P",
+		"-F",
+		paneRefFormat,
+		"-t",
+		target,
+		"-c",
+		task.WorktreePath,
+	)
+}
+
+// evenOutAgentPanes gives every pane of the window that holds target an equal
+// share of its width. It is best-effort: uneven panes still run their agents.
+func (r *repository) evenOutAgentPanes(ctx context.Context, target string) {
+	_, _ = r.runner.Run(ctx, "", "tmux", "select-layout", "-t", target, "even-horizontal")
+}
+
+// closeAgentPane closes a pane SplitAgentPane opened but could not launch in,
+// so no stray shell is left, and evens out the panes left in its window. It
+// runs even when the caller's context is done.
+func (r *repository) closeAgentPane(ctx context.Context, paneID string, window string, cause error) error {
+	ctx = context.WithoutCancel(ctx)
+	_, closeErr := r.runner.Run(ctx, "", "tmux", "kill-pane", "-t", paneID)
+	if closeErr == nil {
+		r.evenOutAgentPanes(ctx, window)
+	}
+	return errors.Join(cause, closeErr)
 }
 
 func (r *repository) sessionExists(ctx context.Context, sessionName string) bool {
@@ -90,18 +187,29 @@ func (r *repository) sessionExists(ctx context.Context, sessionName string) bool
 		"tmux",
 		"has-session",
 		"-t",
-		exactSessionTarget(sessionName),
+		exactSessionOnlyTarget(sessionName),
 	)
 	return err == nil
 }
 
-func (r *repository) AttachTaskSession(ctx context.Context, task *core.Task) error {
+// AttachTaskSession attaches to the task's Session or, when pane is set, to
+// that pane. A pane that no longer exists falls back to the task's Session,
+// and so does a pane ID that this client's tmux server, such as another
+// server the client runs inside, gives to a different pane.
+func (r *repository) AttachTaskSession(ctx context.Context, task *core.Task, pane *core.TmuxPaneRef) error {
 	if task == nil || strings.TrimSpace(task.TmuxSession) == "" {
 		return fmt.Errorf("task tmux session is required")
 	}
 
+	insideTmux := r.getenv != nil && strings.TrimSpace(r.getenv("TMUX")) != ""
+	if pane != nil && strings.TrimSpace(pane.ID) != "" {
+		if attached, err := r.attachPane(ctx, *pane, insideTmux); attached || err != nil {
+			return err
+		}
+	}
+
 	command := "attach-session"
-	if r.getenv != nil && strings.TrimSpace(r.getenv("TMUX")) != "" {
+	if insideTmux {
 		command = "switch-client"
 	}
 
@@ -119,47 +227,101 @@ func (r *repository) AttachTaskSession(ctx context.Context, task *core.Task) err
 	return err
 }
 
+// attachPane lands the client on an agent's pane. Pane IDs restart on every
+// tmux server, so it first checks that the client's server is the pane's;
+// display-message reports the server even for a pane that no longer exists,
+// which the attach then finds. Inside tmux the client switches to the pane,
+// which selects its session, window and pane at once. Outside, the pane's
+// window and the pane are selected before attaching to the session that
+// holds it: attach-session selects the window of a pane target but not the
+// pane. attached is false, with no error, when the pane cannot be targeted.
+func (r *repository) attachPane(ctx context.Context, pane core.TmuxPaneRef, insideTmux bool) (bool, error) {
+	paneID := strings.TrimSpace(pane.ID)
+	// When tmux cannot say, the task's Session attach reports why.
+	if server, ok := r.clientTmuxServer(ctx, paneID); !ok || server != pane.Server {
+		return false, nil
+	}
+
+	args := []string{"switch-client", "-t", paneID}
+	if !insideTmux {
+		// tmux stops a command sequence at its first failing command.
+		args = []string{"select-window", "-t", paneID, ";", "select-pane", "-t", paneID, ";",
+			"attach-session", "-t", paneID}
+	}
+	result, err := r.runner.Run(ctx, "", "tmux", args...)
+	if isMissingPaneError(err, result) {
+		return false, nil
+	}
+	return err == nil, err
+}
+
+// clientTmuxServer returns the tmux server this client's tmux commands reach,
+// as display-message reports it for target, or false when tmux cannot say.
+func (r *repository) clientTmuxServer(ctx context.Context, target string) (core.TmuxServer, bool) {
+	result, err := r.runner.Run(ctx, "", "tmux", "display-message", "-p", "-t", target, "#{socket_path}\t#{pid}")
+	if err != nil {
+		return core.TmuxServer{}, false
+	}
+	socketPath, serverPID, _ := strings.Cut(strings.TrimRight(result.Stdout, "\r\n"), "\t")
+	return tmuxServer(socketPath, serverPID), true
+}
+
+// InspectTaskSession reports whether the task's session exists, whichever of
+// its windows are still open. Without a tmux server it does not.
 func (r *repository) InspectTaskSession(ctx context.Context, task *core.Task) (core.TaskSessionRuntimeState, error) {
 	if task == nil || strings.TrimSpace(task.TmuxSession) == "" {
 		return core.TaskSessionRuntimeState{}, nil
 	}
 
-	result, err := r.runner.Run(
-		ctx,
-		"",
-		"tmux",
-		"list-panes",
-		"-t",
-		exactWindowTarget(task.TmuxSession, taskWindowName),
-		"-F",
-		"#{pane_current_command}\t#{pane_pid}",
-	)
-	if isMissingSessionError(err, result) {
+	result, err := r.runner.Run(ctx, "", "tmux", "has-session", "-t", exactSessionOnlyTarget(task.TmuxSession))
+	if isMissingSessionError(err, result) || isNoTmuxServerError(err, result) {
 		return core.TaskSessionRuntimeState{}, nil
 	}
 	if err != nil {
 		return core.TaskSessionRuntimeState{}, err
 	}
 
-	commands, panePIDs := panesFromTmuxOutput(result.Stdout)
-	// pane_current_command reports the foreground process title, which some
-	// provider CLIs rewrite (Claude Code sets it to its version string), so the
-	// comm names of each pane's child processes are reported as well.
-	children, childEvidenceAvailable := r.paneChildProcesses(ctx, panePIDs)
-
-	return core.TaskSessionRuntimeState{
-		Exists:                          true,
-		ActiveCommands:                  append(commands, processCommands(children)...),
-		CommandStartedAt:                processCommandStartTimes(children),
-		ChildProcessEvidenceUnavailable: !childEvidenceAvailable,
-	}, nil
+	return core.TaskSessionRuntimeState{Exists: true}, nil
 }
 
-func (r *repository) InspectTaskSessions(
+// paneInventoryFormat lists every pane on the server. socket_path and pid are
+// server-wide, so every line repeats the server's identity.
+const paneInventoryFormat = "#{socket_path}\t#{pid}\t#{session_name}\t#{window_index}\t#{window_name}\t" +
+	"#{pane_index}\t#{pane_id}\t#{pane_current_command}\t#{pane_pid}"
+
+func (r *repository) InspectTaskSessions(ctx context.Context, tasks []*core.Task) (core.TmuxSnapshot, error) {
+	snapshot, _, err := r.inspectServer(ctx, tasks)
+	return snapshot, err
+}
+
+func (r *repository) LocateProcessPane(
+	ctx context.Context,
+	task *core.Task,
+	pid int,
+) (core.TmuxSnapshot, core.ProcessPane, error) {
+	snapshot, processes, err := r.inspectServer(ctx, []*core.Task{task})
+	if err != nil {
+		return core.TmuxSnapshot{}, core.ProcessPane{}, err
+	}
+	if pid <= 0 || len(snapshot.Panes) == 0 {
+		return snapshot, core.ProcessPane{}, nil
+	}
+	if !processes.available {
+		return core.TmuxSnapshot{}, core.ProcessPane{}, fmt.Errorf(
+			"locate pane of process %d: process inventory unavailable",
+			pid,
+		)
+	}
+	return snapshot, processPane(pid, processes.entries, snapshot.Panes), nil
+}
+
+// inspectServer takes one snapshot of the tmux server for the supplied tasks,
+// along with the process inventory it was built from.
+func (r *repository) inspectServer(
 	ctx context.Context,
 	tasks []*core.Task,
-) (map[string]core.TaskSessionRuntimeState, error) {
-	states := make(map[string]core.TaskSessionRuntimeState, len(tasks))
+) (core.TmuxSnapshot, processInventory, error) {
+	var snapshot core.TmuxSnapshot
 	taskIDsBySession := make(map[string][]string, len(tasks))
 	for _, task := range tasks {
 		if task == nil {
@@ -169,137 +331,216 @@ func (r *repository) InspectTaskSessions(
 		if taskID == "" {
 			continue
 		}
-		states[taskID] = core.TaskSessionRuntimeState{}
 		session := normalizedSessionName(strings.TrimSpace(task.TmuxSession))
 		if session != "" {
 			taskIDsBySession[session] = append(taskIDsBySession[session], taskID)
 		}
 	}
 
-	result, err := r.runner.Run(
-		ctx,
-		"",
-		"tmux",
-		"list-panes",
-		"-a",
-		"-F",
-		"#{session_name}\t#{window_name}\t#{pane_current_command}\t#{pane_pid}",
-	)
+	result, err := r.runner.Run(ctx, "", "tmux", "list-panes", "-a", "-F", paneInventoryFormat)
 	if isMissingSessionError(err, result) || isNoTmuxServerError(err, result) {
-		return states, nil
+		return snapshot, processInventory{available: true}, nil
 	}
 	if err != nil {
-		return nil, err
+		return core.TmuxSnapshot{}, processInventory{}, err
 	}
 
 	inventory, complete := parsePaneInventory(result.Stdout)
 	if !complete {
-		return nil, fmt.Errorf("parse tmux pane inventory: incomplete output")
+		return core.TmuxSnapshot{}, processInventory{}, fmt.Errorf("parse tmux pane inventory: incomplete output")
 	}
-	commandsBySession := make(map[string][]string)
-	panePIDsBySession := make(map[string][]string)
-	seenSessions := make(map[string]bool)
-	allPanePIDsPresent := true
+	allPanePIDs := make([]string, 0, len(inventory))
 	for _, pane := range inventory {
-		if pane.window != taskWindowName {
-			continue
-		}
-		if _, tracked := taskIDsBySession[pane.session]; !tracked {
-			continue
-		}
-		seenSessions[pane.session] = true
-		if pane.command != "" {
-			commandsBySession[pane.session] = append(commandsBySession[pane.session], pane.command)
-		}
 		if pane.pid != "" {
-			panePIDsBySession[pane.session] = append(panePIDsBySession[pane.session], pane.pid)
-		} else {
-			allPanePIDsPresent = false
+			allPanePIDs = append(allPanePIDs, pane.pid)
 		}
 	}
+	processes := r.listProcessesForPanes(ctx, allPanePIDs)
+	childProcessesByPID := childProcessesByParentPID(processes.entries, allPanePIDs)
 
-	allPanePIDs := make([]string, 0)
-	for _, panePIDs := range panePIDsBySession {
-		allPanePIDs = append(allPanePIDs, panePIDs...)
+	snapshot.TaskSessionPanes = taskSessionPanes(inventory, taskIDsBySession)
+	snapshot.Server, snapshot.Panes = inventoryPanes(
+		inventory,
+		taskIDsBySession,
+		childProcessesByPID,
+		processes.available,
+	)
+	return snapshot, processes, nil
+}
+
+// taskSessionPanes lists the IDs of every pane in each tracked task's Session,
+// across all its windows, keyed by task ID.
+func taskSessionPanes(inventory []paneInventoryEntry, taskIDsBySession map[string][]string) map[string][]string {
+	panesByTask := make(map[string][]string)
+	listed := make(map[string]bool)
+	for _, entry := range inventory {
+		for _, taskID := range taskIDsBySession[entry.session] {
+			key := taskID + "\x00" + entry.id
+			if listed[key] {
+				continue
+			}
+			listed[key] = true
+			panesByTask[taskID] = append(panesByTask[taskID], entry.id)
+		}
 	}
-	childProcessesByPID, processInventoryAvailable := r.childProcessesByParentPID(ctx, allPanePIDs)
-	childEvidenceAvailable := allPanePIDsPresent && processInventoryAvailable
+	return panesByTask
+}
 
-	for session, taskIDs := range taskIDsBySession {
-		commands := commandsBySession[session]
-		exists := seenSessions[session]
-		if !exists {
+// maxProcessAncestry bounds the walk from a process up to its pane, which also
+// ends a cycle in a malformed process listing. Real chains are a few
+// processes deep: hook forwarder, agent CLI, pane shell.
+const maxProcessAncestry = 64
+
+// processPane walks from pid up through its ancestors to the first pane root
+// process, collecting each process's command on the way. It finds no pane
+// when the walk leaves the process inventory or passes maxProcessAncestry.
+func processPane(pid int, processes []processEntry, panes []core.TmuxPane) core.ProcessPane {
+	paneByRootPID := make(map[int]string, len(panes))
+	for _, pane := range panes {
+		if pane.PID > 0 {
+			paneByRootPID[pane.PID] = pane.ID
+		}
+	}
+	processByPID := make(map[int]processEntry, len(processes))
+	for _, process := range processes {
+		processByPID[process.pid] = process
+	}
+
+	var chain []string
+	for depth := 0; depth < maxProcessAncestry && pid > 0; depth++ {
+		process, listed := processByPID[pid]
+		if listed {
+			chain = append(chain, process.process.Command)
+		}
+		if paneID, ok := paneByRootPID[pid]; ok {
+			return core.ProcessPane{Pane: paneID, Chain: chain}
+		}
+		if !listed {
+			return core.ProcessPane{}
+		}
+		pid = process.ppid
+	}
+	return core.ProcessPane{}
+}
+
+// inventoryPanes returns the server's identity and each pane once. list-panes
+// -a prints a pane once per session and window it is linked into, so grouped
+// sessions and linked windows repeat pane IDs; a repeat replaces the kept
+// entry only when it puts the pane in a task Session and the kept entry does
+// not.
+func inventoryPanes(
+	inventory []paneInventoryEntry,
+	taskIDsBySession map[string][]string,
+	childProcessesByPID map[string][]core.PaneProcess,
+	processInventoryAvailable bool,
+) (core.TmuxServer, []core.TmuxPane) {
+	var server core.TmuxServer
+	panes := make([]core.TmuxPane, 0, len(inventory))
+	positionByID := make(map[string]int, len(inventory))
+	for _, entry := range inventory {
+		if server.IsZero() {
+			server = entry.server
+		}
+		panePID, _ := strconv.Atoi(entry.pid)
+		pane := core.TmuxPane{
+			ID:                              entry.id,
+			Session:                         entry.session,
+			WindowIndex:                     entry.windowIndex,
+			WindowName:                      entry.window,
+			PaneIndex:                       entry.paneIndex,
+			Command:                         entry.command,
+			PID:                             panePID,
+			Children:                        childProcessesByPID[entry.pid],
+			ChildProcessEvidenceUnavailable: entry.pid == "" || !processInventoryAvailable,
+		}
+		position, seen := positionByID[entry.id]
+		if !seen {
+			positionByID[entry.id] = len(panes)
+			panes = append(panes, pane)
 			continue
 		}
-
-		var children []paneChildProcess
-		for _, panePID := range panePIDsBySession[session] {
-			children = append(children, childProcessesByPID[panePID]...)
-		}
-		activeCommands := append(append([]string(nil), commands...), processCommands(children)...)
-		for _, taskID := range taskIDs {
-			states[taskID] = core.TaskSessionRuntimeState{
-				Exists:                          true,
-				ActiveCommands:                  append([]string(nil), activeCommands...),
-				CommandStartedAt:                processCommandStartTimes(children),
-				ChildProcessEvidenceUnavailable: !childEvidenceAvailable,
-			}
+		_, keptInTaskSession := taskIDsBySession[panes[position].Session]
+		_, inTaskSession := taskIDsBySession[entry.session]
+		if inTaskSession && !keptInTaskSession {
+			panes[position] = pane
 		}
 	}
-
-	return states, nil
+	return server, panes
 }
 
-// paneChildProcess is one direct child of a pane's root process, typically the
-// CLI the pane shell is running. startedAt is zero when ps reported no
-// parseable elapsed time.
-type paneChildProcess struct {
-	command   string
-	startedAt time.Time
+// processInventoryColumns lists every process with its PID, parent PID,
+// elapsed time and command name.
+const processInventoryColumns = "pid=,ppid=,etime=,comm="
+
+// processInventory is one ps listing of every process. available is false
+// when ps failed, so the listing proves nothing.
+type processInventory struct {
+	entries   []processEntry
+	available bool
 }
 
-// paneChildProcesses returns the direct children of each pane's root process.
-func (r *repository) paneChildProcesses(ctx context.Context, panePIDs []string) ([]paneChildProcess, bool) {
-	processesByPID, available := r.childProcessesByParentPID(ctx, panePIDs)
-	var processes []paneChildProcess
-	for _, panePID := range panePIDs {
-		processes = append(processes, processesByPID[panePID]...)
-	}
-	return processes, available
+// processEntry is one process of the inventory. parentPID is the parent PID
+// as ps printed it, which matches tmux's pane_pid text.
+type processEntry struct {
+	process   core.PaneProcess
+	parentPID string
+	pid       int
+	ppid      int
 }
 
-func (r *repository) childProcessesByParentPID(
-	ctx context.Context,
-	panePIDs []string,
-) (map[string][]paneChildProcess, bool) {
-	processesByPID := make(map[string][]paneChildProcess)
+// listProcessesForPanes lists every process once. Without panes nothing needs
+// process evidence, so ps does not run.
+func (r *repository) listProcessesForPanes(ctx context.Context, panePIDs []string) processInventory {
 	if len(panePIDs) == 0 {
-		return processesByPID, true
+		return processInventory{available: true}
 	}
 
-	result, err := r.runner.Run(ctx, "", "ps", "-axo", "ppid=,etime=,comm=")
+	result, err := r.runner.Run(ctx, "", "ps", "-axo", processInventoryColumns)
 	if err != nil {
-		return processesByPID, false
+		return processInventory{}
 	}
 
+	now := r.now()
+	inventory := processInventory{available: true}
+	for _, line := range strings.Split(result.Stdout, "\n") {
+		fields := strings.Fields(line)
+		if len(fields) < 4 {
+			continue
+		}
+		pid, pidErr := strconv.Atoi(fields[0])
+		ppid, ppidErr := strconv.Atoi(fields[1])
+		if pidErr != nil || ppidErr != nil {
+			continue
+		}
+		entry := processEntry{
+			process:   core.PaneProcess{Command: strings.Join(fields[3:], " ")},
+			parentPID: fields[1],
+			pid:       pid,
+			ppid:      ppid,
+		}
+		if elapsed, ok := parseProcessElapsedTime(fields[2]); ok {
+			entry.process.StartedAt = now.Add(-elapsed)
+		}
+		inventory.entries = append(inventory.entries, entry)
+	}
+	return inventory
+}
+
+// childProcessesByParentPID groups the direct children of each pane's root
+// process by the pane PID.
+func childProcessesByParentPID(processes []processEntry, panePIDs []string) map[string][]core.PaneProcess {
 	wanted := make(map[string]bool, len(panePIDs))
 	for _, pid := range panePIDs {
 		wanted[pid] = true
 	}
 
-	now := r.now()
-	for _, line := range strings.Split(result.Stdout, "\n") {
-		fields := strings.Fields(line)
-		if len(fields) < 3 || !wanted[fields[0]] {
-			continue
+	processesByPID := make(map[string][]core.PaneProcess)
+	for _, entry := range processes {
+		if wanted[entry.parentPID] {
+			processesByPID[entry.parentPID] = append(processesByPID[entry.parentPID], entry.process)
 		}
-		process := paneChildProcess{command: strings.Join(fields[2:], " ")}
-		if elapsed, ok := parseProcessElapsedTime(fields[1]); ok {
-			process.startedAt = now.Add(-elapsed)
-		}
-		processesByPID[fields[0]] = append(processesByPID[fields[0]], process)
 	}
-	return processesByPID, true
+	return processesByPID
 }
 
 // parseProcessElapsedTime parses ps's etime format, [[dd-]hh:]mm:ss.
@@ -328,32 +569,6 @@ func parseProcessElapsedTime(raw string) (time.Duration, bool) {
 	return time.Duration(days)*24*time.Hour + time.Duration(seconds)*time.Second, true
 }
 
-func processCommands(processes []paneChildProcess) []string {
-	commands := make([]string, 0, len(processes))
-	for _, process := range processes {
-		commands = append(commands, process.command)
-	}
-	return commands
-}
-
-// processCommandStartTimes maps each command to when its newest process
-// started, or returns nil when no process has a known start time.
-func processCommandStartTimes(processes []paneChildProcess) map[string]time.Time {
-	var startedAt map[string]time.Time
-	for _, process := range processes {
-		if process.startedAt.IsZero() {
-			continue
-		}
-		if startedAt == nil {
-			startedAt = make(map[string]time.Time)
-		}
-		if process.startedAt.After(startedAt[process.command]) {
-			startedAt[process.command] = process.startedAt
-		}
-	}
-	return startedAt
-}
-
 func (r *repository) DeleteTaskSession(ctx context.Context, task *core.Task) error {
 	if task == nil || strings.TrimSpace(task.TmuxSession) == "" {
 		return nil
@@ -374,15 +589,20 @@ func (r *repository) DeleteTaskSession(ctx context.Context, task *core.Task) err
 	return err
 }
 
-func (r *repository) createSession(ctx context.Context, sessionName, workingDir string) error {
+// createSession creates a session with its task and editor windows and
+// returns the task window's pane, or a zero pane when tmux did not report it.
+func (r *repository) createSession(ctx context.Context, sessionName, workingDir string) (core.TmuxPaneRef, error) {
 	sessionName = normalizedSessionName(sessionName)
 
-	_, err := r.runner.Run(
+	result, err := r.runner.Run(
 		ctx,
 		"",
 		"tmux",
 		"new-session",
 		"-d",
+		"-P",
+		"-F",
+		paneRefFormat,
 		"-s",
 		sessionName,
 		"-n",
@@ -391,7 +611,13 @@ func (r *repository) createSession(ctx context.Context, sessionName, workingDir 
 		workingDir,
 	)
 	if err != nil {
-		return err
+		return core.TmuxPaneRef{}, err
+	}
+	pane, ok := parsePaneRef(result.Stdout)
+	if !ok {
+		// The task window is known by name, so the launch goes on without the
+		// pane; its agent's first hook event places it instead.
+		pane = core.TmuxPaneRef{}
 	}
 
 	r.sleep(promptSubmitDelay)
@@ -410,19 +636,35 @@ func (r *repository) createSession(ctx context.Context, sessionName, workingDir 
 		workingDir,
 	)
 	if err == nil {
-		return nil
+		return pane, nil
 	}
 
-	_, cleanupErr := r.runner.Run(ctx, "", "tmux", "kill-session", "-t", exactSessionTarget(sessionName))
+	_, cleanupErr := r.runner.Run(
+		context.WithoutCancel(ctx),
+		"",
+		"tmux",
+		"kill-session",
+		"-t",
+		exactSessionTarget(sessionName),
+	)
 	if cleanupErr != nil {
-		return errors.Join(err, cleanupErr)
+		return core.TmuxPaneRef{}, errors.Join(err, cleanupErr)
 	}
 
-	return err
+	return core.TmuxPaneRef{}, err
 }
 
+// cleanupStartedSession kills a session StartTaskSession created but could not
+// launch in. It runs even when the caller's context is done.
 func (r *repository) cleanupStartedSession(ctx context.Context, sessionName string, cause error) error {
-	_, cleanupErr := r.runner.Run(ctx, "", "tmux", "kill-session", "-t", exactSessionTarget(sessionName))
+	_, cleanupErr := r.runner.Run(
+		context.WithoutCancel(ctx),
+		"",
+		"tmux",
+		"kill-session",
+		"-t",
+		exactSessionTarget(sessionName),
+	)
 	if cleanupErr != nil {
 		return errors.Join(cause, cleanupErr)
 	}
@@ -430,7 +672,8 @@ func (r *repository) cleanupStartedSession(ctx context.Context, sessionName stri
 	return cause
 }
 
-func (r *repository) sendKeysToWindow(ctx context.Context, session, window string, command []string) error {
+// sendKeys types command into the target pane's shell and submits it.
+func (r *repository) sendKeys(ctx context.Context, target string, command []string) error {
 	quoted := make([]string, 0, len(command))
 	for _, part := range command {
 		if strings.ContainsRune(part, ' ') {
@@ -446,7 +689,7 @@ func (r *repository) sendKeysToWindow(ctx context.Context, session, window strin
 		"tmux",
 		"send-keys",
 		"-t",
-		exactWindowTarget(session, window),
+		target,
 		strings.Join(quoted, " "),
 		"C-m",
 	)
@@ -536,6 +779,13 @@ func exactSessionTarget(session string) string {
 	return "=" + normalizedSessionName(session)
 }
 
+// exactSessionOnlyTarget names the session itself, and never a window or pane.
+// Without the colon tmux tries a target as a window of the current session
+// first, and reads a dot in the name as a window and pane separator.
+func exactSessionOnlyTarget(session string) string {
+	return exactSessionTarget(session) + ":"
+}
+
 func exactWindowTarget(session, window string) string {
 	return "=" + normalizedSessionName(session) + ":" + window
 }
@@ -544,36 +794,44 @@ func normalizedSessionName(session string) string {
 	return strings.ReplaceAll(session, ":", "-")
 }
 
-func panesFromTmuxOutput(output string) ([]string, []string) {
-	lines := strings.Split(output, "\n")
-	commands := make([]string, 0, len(lines))
-	pids := make([]string, 0, len(lines))
-	for _, line := range lines {
-		line = strings.TrimSpace(line)
-		if line == "" {
-			continue
-		}
-		command, pid, hasPID := strings.Cut(line, "\t")
-		command = strings.TrimSpace(command)
-		if command != "" {
-			commands = append(commands, command)
-		}
-		if hasPID {
-			if pid = strings.TrimSpace(pid); pid != "" {
-				pids = append(pids, pid)
-			}
-		}
+// paneRefFormat reports a pane tmux creates: its ID and its server's
+// identity, as paneInventoryFormat reports them.
+const paneRefFormat = "#{pane_id}\t#{socket_path}\t#{pid}"
+
+// parsePaneRef parses paneRefFormat output. The server stays zero when tmux
+// did not expand its identity, as tmux before 3.2 does not. ok is false when
+// the output is not paneRefFormat; the returned pane then has only the pane
+// ID the output starts with, if any, so the caller can close its window.
+func parsePaneRef(output string) (core.TmuxPaneRef, bool) {
+	line, _, _ := strings.Cut(output, "\n")
+	fields := strings.Split(strings.TrimRight(line, "\r"), "\t")
+	id := strings.TrimSpace(fields[0])
+	if !strings.HasPrefix(id, "%") {
+		return core.TmuxPaneRef{}, false
 	}
-	return commands, pids
+	pane := core.TmuxPaneRef{ID: id}
+	if len(fields) != 3 {
+		return pane, false
+	}
+	pane.Server = tmuxServer(fields[1], fields[2])
+	return pane, true
 }
 
 type paneInventoryEntry struct {
-	session string
-	window  string
-	command string
-	pid     string
+	server      core.TmuxServer
+	session     string
+	window      string
+	id          string
+	command     string
+	pid         string
+	windowIndex int
+	paneIndex   int
 }
 
+// parsePaneInventory parses paneInventoryFormat output. A line missing its
+// session, indexes or pane ID makes the whole inventory incomplete. Windows
+// may have empty names, which rename-window accepts, and tmux versions
+// without socket_path only leave the server identity unknown.
 func parsePaneInventory(output string) ([]paneInventoryEntry, bool) {
 	var inventory []paneInventoryEntry
 	for _, line := range strings.Split(output, "\n") {
@@ -581,22 +839,40 @@ func parsePaneInventory(output string) ([]paneInventoryEntry, bool) {
 			continue
 		}
 		fields := strings.Split(line, "\t")
-		if len(fields) != 4 {
+		if len(fields) != 9 {
 			return nil, false
 		}
-		session := normalizedSessionName(strings.TrimSpace(fields[0]))
-		window := strings.TrimSpace(fields[1])
-		if session == "" || window == "" {
+		session := normalizedSessionName(strings.TrimSpace(fields[2]))
+		window := strings.TrimSpace(fields[4])
+		id := strings.TrimSpace(fields[6])
+		windowIndex, windowIndexErr := strconv.Atoi(strings.TrimSpace(fields[3]))
+		paneIndex, paneIndexErr := strconv.Atoi(strings.TrimSpace(fields[5]))
+		if session == "" || id == "" || windowIndexErr != nil || paneIndexErr != nil {
 			return nil, false
 		}
 		inventory = append(inventory, paneInventoryEntry{
-			session: session,
-			window:  window,
-			command: strings.TrimSpace(fields[2]),
-			pid:     strings.TrimSpace(fields[3]),
+			server:      tmuxServer(fields[0], fields[1]),
+			session:     session,
+			window:      window,
+			id:          id,
+			command:     strings.TrimSpace(fields[7]),
+			pid:         strings.TrimSpace(fields[8]),
+			windowIndex: windowIndex,
+			paneIndex:   paneIndex,
 		})
 	}
 	return inventory, true
+}
+
+// tmuxServer returns the identity of the server at socketPath with the given
+// PID, or zero unless both are valid.
+func tmuxServer(socketPath, pid string) core.TmuxServer {
+	socketPath = strings.TrimSpace(socketPath)
+	serverPID, err := strconv.Atoi(strings.TrimSpace(pid))
+	if socketPath == "" || err != nil || serverPID <= 0 {
+		return core.TmuxServer{}
+	}
+	return core.TmuxServer{SocketPath: socketPath, PID: serverPID}
 }
 
 func isMissingSessionError(err error, result subprocess.Result) bool {
@@ -604,20 +880,38 @@ func isMissingSessionError(err error, result subprocess.Result) bool {
 		return false
 	}
 
-	stderr := result.Stderr
-	if strings.TrimSpace(stderr) == "" {
-		var commandErr subprocess.CommandError
-		if errors.As(err, &commandErr) {
-			stderr = commandErr.Stderr
-		}
-	}
-
-	lower := strings.ToLower(stderr)
+	lower := strings.ToLower(commandStderr(err, result))
 	return strings.Contains(lower, "can't find session") ||
 		strings.Contains(lower, "can't find window") ||
 		strings.Contains(lower, "can't find pane")
 }
 
+// isMissingPaneError reports whether tmux failed because a pane target no
+// longer exists.
+// isMissingWindowError reports tmux finding a target's session but not its
+// window.
+func isMissingWindowError(err error, result subprocess.Result) bool {
+	if err == nil {
+		return false
+	}
+	return strings.Contains(strings.ToLower(commandStderr(err, result)), "can't find window")
+}
+
+func isMissingPaneError(err error, result subprocess.Result) bool {
+	if err == nil {
+		return false
+	}
+	return strings.Contains(strings.ToLower(commandStderr(err, result)), "can't find pane")
+}
+
+// isNoTmuxServerError reports whether tmux failed because no server is
+// running, so no Session can exist. tmux says so in two ways: "error connecting
+// to <socket> (No such file or directory)" when there is no socket file, as
+// after a reboot, and "no server running on <socket>" when a socket file is
+// left behind, as after a crash or kill-server. Other connection failures, such
+// as Permission denied, are not a missing server. The parenthesised reason is
+// strerror text, matched in English: macOS does not localize it, but glibc can
+// translate it on Linux, and a translated reason surfaces as an ordinary error.
 func isNoTmuxServerError(err error, result subprocess.Result) bool {
 	if err == nil {
 		return false
@@ -629,5 +923,19 @@ func isNoTmuxServerError(err error, result subprocess.Result) bool {
 			stderr = strings.ToLower(strings.TrimSpace(commandErr.Stderr))
 		}
 	}
-	return strings.Contains(stderr, "no server running")
+	return strings.Contains(stderr, "no server running") ||
+		(strings.Contains(stderr, "error connecting to") && strings.Contains(stderr, "(no such file or directory)"))
+}
+
+// commandStderr returns a failed tmux command's stderr, from its result or,
+// when the runner reported it only there, from its error.
+func commandStderr(err error, result subprocess.Result) string {
+	if strings.TrimSpace(result.Stderr) != "" {
+		return result.Stderr
+	}
+	var commandErr subprocess.CommandError
+	if errors.As(err, &commandErr) {
+		return commandErr.Stderr
+	}
+	return ""
 }

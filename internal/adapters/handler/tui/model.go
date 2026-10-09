@@ -28,7 +28,6 @@ const (
 	modePRPicker
 	modeCleanupConfirm
 	modeProviderSetup
-	modeSwitchProvider
 )
 
 const defaultBuildVersion = "dev"
@@ -42,7 +41,6 @@ const (
 	opNone pendingOp = iota
 	opCreating
 	opDeleting
-	opSwitching
 )
 
 const taskActivityPreviewLimit = 6
@@ -56,6 +54,9 @@ type model struct {
 	rows          []taskRow
 	providerSetup *core.ProviderSetup
 	selected      int
+	// selectedAgent is the agent session whose sub-row is selected under the
+	// selected task row, or empty when the task row itself is selected.
+	selectedAgent string
 	width         int
 	height        int
 	shimmerTick   int
@@ -68,11 +69,6 @@ type model struct {
 	detailsHidden bool
 	setupOnly     bool
 
-	// adoptionReloads dampens the reload triggered by a status/record provider
-	// mismatch: one reload per observed mismatch. When the mismatch survives a
-	// reload, the stale side is the daemon's status row, not the task list —
-	// reloading again cannot fix it and would loop forever.
-	adoptionReloads map[string]core.Provider
 	// statusSubscribed tracks tasks with a live status subscription so task
 	// reloads do not open a duplicate subscription per reload.
 	statusSubscribed map[string]bool
@@ -81,9 +77,8 @@ type model struct {
 	statusCancels map[string]context.CancelFunc
 
 	// Per-mode state, cleared by transition() when the mode family changes.
-	draft          taskDraft
-	setupForm      setupFormState
-	providerSwitch switchState
+	draft     taskDraft
+	setupForm setupFormState
 
 	// In-flight creation progress; outlives the draft and renders in browse.
 	create createFlowState
@@ -121,12 +116,6 @@ type setupFormState struct {
 	detecting       bool
 	saving          bool
 	err             error
-}
-
-// switchState is the provider switch picker's working state.
-type switchState struct {
-	options  []core.Provider
-	selected int
 }
 
 // providerSetupRow is one supported provider in the provider setup UI.
@@ -223,11 +212,6 @@ type providerSetupSavedMsg struct {
 	setup core.ProviderSetup
 }
 
-type taskProviderSwitchedMsg struct {
-	task *core.Task
-	err  error
-}
-
 type shimmerTickMsg struct{}
 
 type activityRefreshTickMsg struct{}
@@ -250,7 +234,6 @@ func newModel(frontend core.TaskFrontend, launchCwd string, buildVersion string)
 		loading:          true,
 		mode:             modeBrowse,
 		detailsHidden:    true,
-		adoptionReloads:  make(map[string]core.Provider),
 		statusSubscribed: make(map[string]bool),
 		statusCancels:    make(map[string]context.CancelFunc),
 	}
@@ -358,9 +341,6 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if m.mode == modeProviderSetup {
 			return m.updateProviderSetup(msg)
 		}
-		if m.mode == modeSwitchProvider {
-			return m.updateSwitchProvider(msg)
-		}
 
 		if isQuitKey(msg) {
 			return m.quit()
@@ -381,8 +361,6 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				return m.enterProviderSetupMode()
 			}
 			return m.enterPromptInputMode("")
-		case "p":
-			return m.enterSwitchProviderMode()
 		case "S":
 			return m.enterProviderSetupMode()
 		case "r":
@@ -392,16 +370,17 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m.retrySelectedTaskCreation()
 		case "g", "home":
 			m.selected = 0
+			m.selectedAgent = ""
 		case "G", "end":
-			m.selected = len(m.rows) - 1
+			m.selectLastLine()
 		case "pgdown":
 			m.moveSelection(m.taskListPageSize())
 		case "pgup":
 			m.moveSelection(-m.taskListPageSize())
 		case "j", "down":
-			m.moveSelection(1)
+			m.moveCursor(1)
 		case "k", "up":
-			m.moveSelection(-1)
+			m.moveCursor(-1)
 		case " ", "space":
 			m.detailsHidden = !m.detailsHidden
 		case "x":
@@ -418,7 +397,17 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			if row == nil || row.task == nil {
 				return m, nil
 			}
-			cmds := []tea.Cmd{openTaskSessionCmd(m.statusContext, m.frontend, row.task)}
+			// Enter lands on the selected sub-row's agent or, on a task row, on
+			// the agent that most needs the user, when one runs.
+			var pane *core.TmuxPaneRef
+			if session := m.selectedAgentSession(); session != nil {
+				sessionPane := session.Pane
+				pane = &sessionPane
+			} else if lead := row.status.LeadAgentSession(); lead != nil {
+				leadPane := lead.Pane
+				pane = &leadPane
+			}
+			cmds := []tea.Cmd{openTaskSessionCmd(m.statusContext, m.frontend, row.task, pane)}
 			if m.pending == opNone {
 				m.shimmerTick = 0
 				cmds = append(cmds, shimmerTickCmd())
@@ -441,12 +430,18 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if row := m.selectedRow(); row != nil {
 			selectedTaskID = taskID(row.task)
 		}
+		selectedAgent := m.selectedAgent
 		nextRows := rowsFromTasks(msg.tasks)
 		preserveTaskStatuses(nextRows, m.rows)
 		m.reconcileTaskStatusTracking(nextRows)
 		m.rows = nextRows
 		m.clampSelection()
-		m.selectTask(selectedTaskID)
+		if m.selectTask(selectedTaskID) {
+			// The reload keeps each task's status, so the cursor stays on the
+			// same agent sub-row while that agent still runs.
+			m.selectedAgent = selectedAgent
+			m.clampAgentSelection()
+		}
 		return m, tea.Batch(m.afterTasksLoadedCmds()...)
 	case pullRequestStatusLoadedMsg:
 		if msg.err != nil {
@@ -476,26 +471,14 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case taskStatusUpdatedMsg:
 		update := msg.update
 		m.setTaskStatus(msg.taskID, &update)
-		cmds := []tea.Cmd{
+		// A sub-row whose agent ended, or a task down to one agent, leaves the
+		// cursor on the task row.
+		m.clampAgentSelection()
+		return m, tea.Batch(
 			taskActivityCmd(m.statusContext, m.frontend, msg.taskID, taskActivityPreviewLimit),
 			taskTokenUsageCmd(m.statusContext, m.frontend, msg.taskID),
 			waitForTaskStatusCmd(msg.taskID, msg.updates),
-		}
-		// A live status from a different provider than the task record means
-		// the daemon adopted a manually launched provider; reload tasks so the
-		// displayed active provider reflects reality. One reload per observed
-		// mismatch: if it persists after a reload, the daemon's status row is
-		// the stale side and reloading again cannot fix it.
-		if row := m.taskRowByID(msg.taskID); row != nil && row.task != nil && update.Provider != "" {
-			switch {
-			case row.task.Provider == update.Provider:
-				delete(m.adoptionReloads, msg.taskID)
-			case m.adoptionReloads[msg.taskID] != update.Provider:
-				m.adoptionReloads[msg.taskID] = update.Provider
-				cmds = append(cmds, loadTasksCmd(m.statusContext, m.frontend))
-			}
-		}
-		return m, tea.Batch(cmds...)
+		)
 	case taskStatusSubscriptionClosedMsg:
 		m.cancelTaskStatusTracking(msg.taskID)
 		if m.taskRowByID(msg.taskID) == nil {
@@ -540,20 +523,6 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.transition(modeBrowse)
 		m.loading = true
 		return m, loadTasksCmd(m.statusContext, m.frontend)
-	case taskProviderSwitchedMsg:
-		m.endOp()
-		m.transition(modeBrowse)
-		if msg.err != nil {
-			// A failed or refused switch keeps the previous active provider.
-			m.err = msg.err
-			return m, nil
-		}
-		m.err = nil
-		if index := m.upsertTaskRow(msg.task); index >= 0 {
-			m.selected = index
-		}
-		m.clampSelection()
-		return m, tea.Batch(m.taskStatusTrackingCmds(taskID(msg.task))...)
 	case repoPullRequestsLoadedMsg:
 		m.draft.err = msg.err
 		if msg.err != nil {
@@ -637,7 +606,6 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.err = nil
 		m.removeTaskRow(msg.taskID)
 		m.cancelTaskStatusTracking(msg.taskID)
-		delete(m.adoptionReloads, msg.taskID)
 		m.clampSelection()
 		return m, nil
 	case activityRefreshTickMsg:
@@ -675,8 +643,6 @@ func (m model) View() tea.View {
 		body = m.confirmationView()
 	case modeProviderSetup:
 		body = m.providerSetupView()
-	case modeSwitchProvider:
-		body = m.switchProviderView()
 	default:
 		body = m.listView()
 	}
@@ -1006,8 +972,17 @@ func clampIndex(index int, length int) int {
 	return index
 }
 
+// moveSelection moves the selection by whole task rows, landing on a task
+// row rather than an agent sub-row. Past the last task it lands on the list's
+// last line, so it never moves the cursor against its direction.
 func (m *model) moveSelection(delta int) {
-	m.selected = clampIndex(m.selected+delta, len(m.rows))
+	next := clampIndex(m.selected+delta, len(m.rows))
+	if delta > 0 && next == m.selected {
+		m.selectLastLine()
+		return
+	}
+	m.selected = next
+	m.selectedAgent = ""
 }
 
 func (m model) taskListPageSize() int {
@@ -1030,6 +1005,7 @@ func (m model) taskListPageSize() int {
 
 func (m *model) clampSelection() {
 	m.selected = clampIndex(m.selected, len(m.rows))
+	m.clampAgentSelection()
 }
 
 func (m *model) movePRSelection(delta int) {

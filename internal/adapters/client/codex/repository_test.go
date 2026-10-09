@@ -16,7 +16,9 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func TestRepositoryBuildTaskSessionLaunchSpec_StartsCodexAndPrefillsTaskPrompt(t *testing.T) {
+// Rig launches Codex with --no-daemon so its hooks run in the pane's Codex
+// process and report that pane's TMUX_PANE, not the shared server's.
+func TestRepositoryBuildTaskSessionLaunchSpec_StartsCodexWithoutSharedDaemonAndPrefillsTaskPrompt(t *testing.T) {
 	codexHome := t.TempDir()
 	repo := New(subprocess.NewMockRunner(t), Config{Binary: "codex"}, HookForwardingConfig{}).(*repository)
 	repo.codexHomeDir = func() (string, error) { return codexHome, nil }
@@ -24,13 +26,27 @@ func TestRepositoryBuildTaskSessionLaunchSpec_StartsCodexAndPrefillsTaskPrompt(t
 	launch, err := repo.BuildTaskSessionLaunchSpec(&core.Task{Prompt: "add billing retry flow"})
 	require.NoError(t, err)
 	require.Equal(t, core.TaskSessionLaunchSpec{
-		Command:      []string{"env", "CODEX_HOME=" + codexHome, "codex"},
+		Command:      []string{"env", "CODEX_HOME=" + codexHome, "codex", "--no-daemon"},
 		ReadyMarker:  "›",
 		PrefillInput: []string{"add billing retry flow"},
 	}, launch)
 }
 
-func TestRepositoryBuildReconnectTaskSessionLaunchSpec_UsesCodexResume(t *testing.T) {
+func TestRepositoryBuildTaskSessionLaunchSpec_StartsCodexWithoutSharedDaemonWithoutPrompt(t *testing.T) {
+	codexHome := t.TempDir()
+	repo := New(subprocess.NewMockRunner(t), Config{Binary: "codex"}, HookForwardingConfig{}).(*repository)
+	repo.codexHomeDir = func() (string, error) { return codexHome, nil }
+
+	// Promptless reconnects launch without a prompt.
+	launch, err := repo.BuildTaskSessionLaunchSpec(&core.Task{})
+	require.NoError(t, err)
+	require.Equal(t, core.TaskSessionLaunchSpec{
+		Command:     []string{"env", "CODEX_HOME=" + codexHome, "codex", "--no-daemon"},
+		ReadyMarker: "›",
+	}, launch)
+}
+
+func TestRepositoryBuildReconnectTaskSessionLaunchSpec_ResumesCodexWithoutSharedDaemon(t *testing.T) {
 	codexHome := t.TempDir()
 	repo := New(subprocess.NewMockRunner(t), Config{Binary: "codex"}, HookForwardingConfig{}).(*repository)
 	repo.codexHomeDir = func() (string, error) { return codexHome, nil }
@@ -38,7 +54,7 @@ func TestRepositoryBuildReconnectTaskSessionLaunchSpec_UsesCodexResume(t *testin
 	launch, err := repo.BuildReconnectTaskSessionLaunchSpec(&core.Task{}, "sess-1")
 	require.NoError(t, err)
 	require.Equal(t, core.TaskSessionLaunchSpec{
-		Command:     []string{"env", "CODEX_HOME=" + codexHome, "codex", "resume", "sess-1"},
+		Command:     []string{"env", "CODEX_HOME=" + codexHome, "codex", "resume", "--no-daemon", "sess-1"},
 		ReadyMarker: "›",
 	}, launch)
 }
@@ -87,10 +103,23 @@ func TestRepositoryEnsureTaskSessionEnvironment_InstallsRigHooksIntoCodexHome(t 
 	require.Contains(t, cfg.Hooks, "SubagentStart")
 	require.Len(t, cfg.Hooks["SubagentStart"], 1)
 	require.Empty(t, cfg.Hooks["SubagentStart"][0].Matcher)
+	// Every source that starts a conversation in the agent, but not compact,
+	// which can fire mid-turn.
+	require.Equal(t, "startup|resume|clear", cfg.Hooks["SessionStart"][0].Matcher)
 	require.Len(t, cfg.Hooks["PermissionRequest"], 1)
 	require.Empty(t, cfg.Hooks["PermissionRequest"][0].Matcher)
 
 	scriptPath := filepath.Join(tempDir, "hooks", "forward-to-rig.sh")
+	// SessionEnd fires for every reason, with Codex's longest SessionEnd
+	// timeout instead of its 1s default. Other hooks keep Codex's default.
+	require.Equal(t, []providerkit.HookRule{{
+		Hooks: []providerkit.HookCommand{{
+			Type:    "command",
+			Command: repo.commandForEvent(scriptPath, "SessionEnd"),
+			Timeout: 3,
+		}},
+	}}, cfg.Hooks["SessionEnd"])
+	require.Zero(t, cfg.Hooks["Stop"][0].Hooks[0].Timeout)
 	scriptBytes, err := os.ReadFile(scriptPath)
 	require.NoError(t, err)
 	require.Contains(t, string(scriptBytes), "http://127.0.0.1:4124/codex-hook")
@@ -158,7 +187,7 @@ func TestRepositoryDoctorReportsMissingRigHookEvents(t *testing.T) {
 
 	err := repo.Doctor(t.Context())
 
-	require.ErrorContains(t, err, "missing UserPromptSubmit hook")
+	require.ErrorContains(t, err, "missing SessionEnd hook")
 }
 
 func TestRepositoryDoctorReportsMissingSubagentStartHook(t *testing.T) {
@@ -184,6 +213,34 @@ func TestRepositoryDoctorReportsMissingSubagentStartHook(t *testing.T) {
 	err = repo.Doctor(t.Context())
 
 	require.ErrorContains(t, err, "missing SubagentStart hook")
+}
+
+// An install by an earlier Rig has no SessionEnd hook until the next refresh
+// rewrites Rig's entries.
+func TestRepositoryDoctorReportsMissingSessionEndHook(t *testing.T) {
+	tempDir := t.TempDir()
+	runner := subprocess.NewMockRunner(t)
+	runner.EXPECT().Run(mock.Anything, "", "codex", "--version").Return(subprocess.Result{}, nil)
+	repo := New(runner, Config{Binary: "codex"}, HookForwardingConfig{
+		CollectorURL: "http://127.0.0.1:4124/codex-hook",
+	}).(*repository)
+	repo.codexHomeDir = func() (string, error) { return tempDir, nil }
+	require.NoError(t, repo.EnsureTaskSessionEnvironment(t.Context()))
+
+	hooksPath := filepath.Join(tempDir, "hooks.json")
+	hooksJSON, err := os.ReadFile(hooksPath)
+	require.NoError(t, err)
+	var cfg providerkit.HookConfig
+	require.NoError(t, json.Unmarshal(hooksJSON, &cfg))
+	delete(cfg.Hooks, "SessionEnd")
+	hooksJSON, err = json.Marshal(cfg)
+	require.NoError(t, err)
+	require.NoError(t, os.WriteFile(hooksPath, hooksJSON, 0o644))
+
+	require.ErrorContains(t, repo.Doctor(t.Context()), "missing SessionEnd hook")
+
+	require.NoError(t, repo.EnsureTaskSessionEnvironment(t.Context()))
+	require.NoError(t, repo.Doctor(t.Context()))
 }
 
 func TestRepositoryDoctorReportsStaleHookCollectorURL(t *testing.T) {
@@ -290,6 +347,45 @@ func TestRepositoryEnsureTaskSessionEnvironment_ReplacesStaleRigHookRules(t *tes
 	require.Equal(t, "mcp__server__tool", cfg.Hooks["PermissionRequest"][0].Matcher)
 	require.Empty(t, cfg.Hooks["PermissionRequest"][1].Matcher)
 	require.Contains(t, cfg.Hooks["PermissionRequest"][1].Hooks[0].Command, staleScriptPath)
+}
+
+// hooks.json from an earlier Rig, whose SessionStart did not match /clear and
+// which had no SessionEnd, next to a SessionEnd hook of the user's own.
+func TestRepositoryEnsureTaskSessionEnvironment_UpgradesAnEarlierRigRegistration(t *testing.T) {
+	tempDir := t.TempDir()
+	scriptPath := filepath.Join(tempDir, "hooks", "forward-to-rig.sh")
+	repo := New(subprocess.NewMockRunner(t), Config{Binary: "codex"}, HookForwardingConfig{
+		CollectorURL: "http://127.0.0.1:4124/codex-hook",
+	}).(*repository)
+	repo.codexHomeDir = func() (string, error) { return tempDir, nil }
+	rigCommand := func(eventName string) string { return repo.commandForEvent(scriptPath, eventName) }
+	earlier, err := json.Marshal(providerkit.HookConfig{Hooks: map[string][]providerkit.HookRule{
+		"SessionStart": {{
+			Matcher: "startup|resume",
+			Hooks:   []providerkit.HookCommand{{Type: "command", Command: rigCommand("SessionStart")}},
+		}},
+		"SessionEnd": {{
+			Hooks: []providerkit.HookCommand{{Type: "command", Command: "/usr/local/bin/save-notes", Timeout: 2}},
+		}},
+	}})
+	require.NoError(t, err)
+	require.NoError(t, os.WriteFile(filepath.Join(tempDir, "hooks.json"), earlier, 0o644))
+
+	require.NoError(t, repo.EnsureTaskSessionEnvironment(t.Context()))
+	require.NoError(t, repo.EnsureTaskSessionEnvironment(t.Context()))
+
+	hooksJSON, err := os.ReadFile(filepath.Join(tempDir, "hooks.json"))
+	require.NoError(t, err)
+	var cfg providerkit.HookConfig
+	require.NoError(t, json.Unmarshal(hooksJSON, &cfg))
+	require.Equal(t, []providerkit.HookRule{{
+		Matcher: "startup|resume|clear",
+		Hooks:   []providerkit.HookCommand{{Type: "command", Command: rigCommand("SessionStart")}},
+	}}, cfg.Hooks["SessionStart"])
+	require.Equal(t, []providerkit.HookRule{
+		{Hooks: []providerkit.HookCommand{{Type: "command", Command: "/usr/local/bin/save-notes", Timeout: 2}}},
+		{Hooks: []providerkit.HookCommand{{Type: "command", Command: rigCommand("SessionEnd"), Timeout: 3}}},
+	}, cfg.Hooks["SessionEnd"])
 }
 
 func TestRepositorySuggestTaskName_DelegatesToCodexProposal(t *testing.T) {

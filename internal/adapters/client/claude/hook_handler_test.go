@@ -1,6 +1,10 @@
 package claude
 
 import (
+	"bytes"
+	"context"
+	"net/http"
+	"net/http/httptest"
 	"testing"
 	"time"
 
@@ -32,6 +36,87 @@ func TestDecodeHookEventInput_DecodesSessionStartPayload(t *testing.T) {
 	require.Equal(t, "startup", input.StartSource)
 	require.Empty(t, input.TaskID)
 	require.Equal(t, fixedNow(), input.OccurredAt)
+}
+
+func TestDecodeHookEventInput_DecodesSessionEndReason(t *testing.T) {
+	body := []byte(`{
+		"session_id": "sess-1",
+		"transcript_path": "/tmp/transcript.jsonl",
+		"cwd": "/tmp/repo-task",
+		"hook_event_name": "SessionEnd",
+		"reason": "prompt_input_exit"
+	}`)
+
+	input := DecodeHookEventInput(fixedNow, "SessionEnd", body)
+
+	require.Equal(t, "SessionEnd", input.EventName)
+	require.Equal(t, "sess-1", input.SessionID)
+	require.Equal(t, "prompt_input_exit", input.EndReason)
+	require.Empty(t, input.StartSource)
+}
+
+func TestHookHTTPHandler_DecodesHookProcessIdentity(t *testing.T) {
+	cases := []struct {
+		name       string
+		pane       string
+		tmux       string
+		pid        string
+		wantPane   string
+		wantServer core.TmuxServer
+		wantPID    int
+	}{
+		{
+			name:       "inside tmux",
+			pane:       "%44",
+			tmux:       "/private/tmp/tmux-501/default,4722,3",
+			pid:        "51234",
+			wantPane:   "%44",
+			wantServer: core.TmuxServer{SocketPath: "/private/tmp/tmux-501/default", PID: 4722},
+			wantPID:    51234,
+		},
+		{name: "malformed values", pane: "%44", tmux: "not-tmux", pid: "abc"},
+		{name: "outside tmux"},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			var received core.HookEventInput
+			handler := newHTTPHandler(
+				fixedNow,
+				"secret-token",
+				func(_ context.Context, input core.HookEventInput) error {
+					received = input
+					return nil
+				},
+			)
+			req := httptest.NewRequestWithContext(
+				t.Context(),
+				http.MethodPost,
+				claudeHookPath,
+				bytes.NewBufferString(`{"hook_event_name":"SessionStart","session_id":"sess-1"}`),
+			)
+			req.Header.Set("X-Claude-Hook-Event", "SessionStart")
+			req.Header.Set("X-Rig-Hook-Secret", "secret-token")
+			if tc.pane != "" {
+				req.Header.Set("X-Rig-Tmux-Pane", tc.pane)
+			}
+			if tc.tmux != "" {
+				req.Header.Set("X-Rig-Tmux", tc.tmux)
+			}
+			if tc.pid != "" {
+				req.Header.Set("X-Rig-Hook-Pid", tc.pid)
+			}
+
+			rec := httptest.NewRecorder()
+			handler.ServeHTTP(rec, req)
+
+			require.Equal(t, http.StatusAccepted, rec.Code)
+			require.Equal(t, "sess-1", received.SessionID)
+			require.Equal(t, tc.wantPane, received.TmuxPane)
+			require.Equal(t, tc.wantServer, received.TmuxServer)
+			require.Equal(t, tc.wantPID, received.HookPID)
+		})
+	}
 }
 
 func TestDecodeHookEventInput_DecodesPromptAndToolPayloads(t *testing.T) {
@@ -102,6 +187,49 @@ func TestDecodeHookEventInput_ToleratesMalformedPayload(t *testing.T) {
 
 	require.Equal(t, core.ProviderClaude, input.Provider)
 	require.Equal(t, "unknown", input.EventName)
+}
+
+// Claude Code also fires UserPromptSubmit for the turns it starts on its own,
+// with what started the turn as the prompt: a task notification when
+// background work reports back, such as a subagent or shell finishing or a
+// monitor emitting an event, or a message from a background subagent or
+// another Claude session.
+func TestDecodeHookEventInput_ATurnClaudeCodeStartsIsNoPromptButStillMeansWorking(t *testing.T) {
+	cases := map[string]string{
+		"task notification": `<task-notification>\n<task-id>bap0vqoch</task-id>\n` +
+			`<status>completed</status>\n</task-notification>`,
+		"subagent message": `<agent-message from=\"a014a756436d9f22b\"> [Subagent hand-back] ` +
+			`The text below is the final report.</agent-message>`,
+		"cross-session message": `<cross-session-message from=\"sess-2\" from-name=\"review\"> ` +
+			`The review is done.</cross-session-message>`,
+	}
+	repo := &repository{binary: "claude"}
+	for name, prompt := range cases {
+		t.Run(name, func(t *testing.T) {
+			input := DecodeHookEventInput(fixedNow, "UserPromptSubmit", []byte(`{
+				"session_id": "sess-1",
+				"hook_event_name": "UserPromptSubmit",
+				"prompt": "`+prompt+`"
+			}`))
+			require.Equal(t, "UserPromptSubmit", input.EventName)
+			require.Equal(t, "sess-1", input.SessionID, "the payload decodes")
+			require.Empty(t, input.PromptText)
+
+			// The task service resolves the task from the hook's working
+			// directory.
+			input.TaskID = "task-1"
+			update, err := repo.HookEventToTaskStatus(input)
+			require.NoError(t, err)
+			require.NotNil(t, update)
+			require.Equal(t, core.TaskStatusPhaseWorking, update.Phase)
+		})
+	}
+
+	// A prompt that only mentions one of the tags is still the user's.
+	typed := DecodeHookEventInput(fixedNow, "UserPromptSubmit", []byte(`{
+		"prompt": "why did the <task-notification> show up as my prompt?"
+	}`))
+	require.Equal(t, "why did the <task-notification> show up as my prompt?", typed.PromptText)
 }
 
 func TestHookEventToTaskStatus_MapsClaudeEventsToPhases(t *testing.T) {
@@ -252,6 +380,15 @@ func TestHookEventToTaskStatus_IgnoresUnmappedEventsAndMissingTask(t *testing.T)
 	update, err := repo.HookEventToTaskStatus(core.HookEventInput{
 		TaskID:    "task-1",
 		EventName: "SubagentStop",
+	})
+	require.NoError(t, err)
+	require.Nil(t, update)
+
+	// SessionEnd ends or keeps an agent session but drives no phase.
+	update, err = repo.HookEventToTaskStatus(core.HookEventInput{
+		TaskID:    "task-1",
+		EventName: core.HookEventSessionEnd,
+		EndReason: "prompt_input_exit",
 	})
 	require.NoError(t, err)
 	require.Nil(t, update)

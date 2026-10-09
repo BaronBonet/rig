@@ -70,12 +70,14 @@ const (
 
 const maxCodexTranscriptKindCacheEntries = 4096
 
-func (r *repository) RecoverLatestTaskStatus(
+// RecoverAgentSessionStatus recovers one Codex agent session's status from
+// its conversation's transcripts.
+func (r *repository) RecoverAgentSessionStatus(
 	ctx context.Context,
-	current core.TaskStatusUpdate,
-	sessions []core.TaskProviderSession,
+	current core.AgentSessionStatus,
+	conversation []core.TaskProviderSession,
 	providerStartedAt time.Time,
-) (*core.TaskStatusUpdate, error) {
+) (*core.AgentSessionStatus, error) {
 	// Transcript recovery repairs stale in-progress status when a terminal hook
 	// was missed. It must not replace explicit needs-input hook evidence with
 	// root transcript activity: Codex writes activity records around turn
@@ -94,10 +96,10 @@ func (r *repository) RecoverLatestTaskStatus(
 		if strings.TrimSpace(current.RawEventName) != core.HookEventStop {
 			return nil, nil
 		}
-		return r.recoverBackgroundSubagents(ctx, current, sessions, providerStartedAt)
+		return r.recoverBackgroundSubagents(ctx, current, conversation, providerStartedAt)
 	}
 
-	session, err := r.newestRootCodexTranscriptSession(ctx, sessions)
+	session, err := r.rootCodexTranscriptSession(ctx, conversation)
 	if err != nil {
 		return nil, err
 	}
@@ -113,37 +115,33 @@ func (r *repository) RecoverLatestTaskStatus(
 	if status == nil || !status.observedAt.After(current.ObservedAt) {
 		return nil, nil
 	}
-	return &core.TaskStatusUpdate{
-		TaskID:       current.TaskID,
-		Provider:     current.Provider,
+	return &core.AgentSessionStatus{
 		Phase:        status.phase,
 		RawEventName: status.rawEventName,
 		ObservedAt:   status.observedAt,
 	}, nil
 }
 
-// recoverBackgroundSubagents reports a task whose root agent ended its turn as
+// recoverBackgroundSubagents reports an agent whose root agent ended its turn as
 // working in the background while thread-spawned subagents still have an open
 // turn. Codex delivers a finished subagent's result without waking the root
-// agent, so once the last subagent finishes this returns nil and the task
+// agent, so once the last subagent finishes this returns nil and the agent
 // falls back to the persisted needs-input.
 func (r *repository) recoverBackgroundSubagents(
 	ctx context.Context,
-	current core.TaskStatusUpdate,
-	sessions []core.TaskProviderSession,
+	current core.AgentSessionStatus,
+	conversation []core.TaskProviderSession,
 	providerStartedAt time.Time,
-) (*core.TaskStatusUpdate, error) {
-	root, err := r.newestRootCodexTranscriptSession(ctx, sessions)
+) (*core.AgentSessionStatus, error) {
+	root, err := r.rootCodexTranscriptSession(ctx, conversation)
 	if err != nil || root == nil {
 		return nil, err
 	}
-	running, err := r.countRunningSubagents(ctx, *root, sessions, providerStartedAt)
+	running, err := r.countRunningSubagents(ctx, *root, conversation, providerStartedAt)
 	if err != nil || running == 0 {
 		return nil, err
 	}
-	return &core.TaskStatusUpdate{
-		TaskID:       current.TaskID,
-		Provider:     current.Provider,
+	return &core.AgentSessionStatus{
 		Phase:        core.TaskStatusPhaseWorkingInBackground,
 		RawEventName: "TranscriptSubagentsRunning",
 		// The observer discards recoveries older than the persisted evidence.
@@ -220,48 +218,20 @@ func (r *repository) ReadSessionActivity(
 	return events, nil
 }
 
-func newestCodexTranscriptSession(sessions []core.TaskProviderSession) *core.TaskProviderSession {
-	var latest *core.TaskProviderSession
-	for _, session := range sessions {
-		transcriptPath := strings.TrimSpace(session.TranscriptPath)
-		if session.Provider != core.ProviderCodex || transcriptPath == "" {
-			continue
-		}
-
-		session.TranscriptPath = transcriptPath
-		if latest == nil || session.LastObservedAt.After(latest.LastObservedAt) {
-			copy := session
-			latest = &copy
-		}
-	}
-	return latest
-}
-
-func (r *repository) newestRootCodexTranscriptSession(
+// rootCodexTranscriptSession returns the root agent's transcript among one
+// conversation's Provider session history. Subagent hooks carry the root
+// session ID but point at the subagent's own transcript, so a transcript that
+// received SessionStart is preferred: a subagent's task_complete must not make
+// the root agent appear to need input while it is still working.
+func (r *repository) rootCodexTranscriptSession(
 	ctx context.Context,
-	sessions []core.TaskProviderSession,
+	conversation []core.TaskProviderSession,
 ) (*core.TaskProviderSession, error) {
-	latest := newestCodexTranscriptSession(sessions)
-	if latest == nil {
-		return nil, nil
-	}
-
-	// Subagent hooks carry the root session ID but point at the subagent's own
-	// transcript. Prefer the transcript that received SessionStart for the
-	// newest logical session so a subagent's task_complete cannot make the root
-	// task appear to need input while it is still working.
-	latestSessionID := strings.TrimSpace(latest.ProviderSessionID)
-	if latestSessionID == "" {
-		return latest, nil
-	}
-
 	var latestRoot *core.TaskProviderSession
 	var candidates []core.TaskProviderSession
-	for _, session := range sessions {
+	for _, session := range conversation {
 		transcriptPath := strings.TrimSpace(session.TranscriptPath)
-		if session.Provider != core.ProviderCodex ||
-			strings.TrimSpace(session.ProviderSessionID) != latestSessionID ||
-			transcriptPath == "" {
+		if session.Provider != core.ProviderCodex || transcriptPath == "" {
 			continue
 		}
 

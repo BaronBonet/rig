@@ -12,7 +12,8 @@ var (
 	// ErrProviderSetupRequired reports that provider setup has never completed,
 	// so no provider is configured for task work.
 	ErrProviderSetupRequired = errors.New("provider setup required: run rig setup")
-	// ErrProviderSessionActive reports that a provider switch was refused
-	// because the current provider process is still running in the task pane.
-	ErrProviderSessionActive = errors.New("provider session is still running")
+	// ErrTaskSessionExists reports that a task's tmux session could not be
+	// started because it already exists. Rig never types into a Session it
+	// did not just create, where an agent may be running.
+	ErrTaskSessionExists = errors.New("task session already exists")
 )
