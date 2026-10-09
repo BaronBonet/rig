@@ -27,6 +27,7 @@ import (
 	"path/filepath"
 	"strings"
 	"time"
+	"unicode"
 
 	"github.com/BaronBonet/rig/internal/adapters/client/providerkit"
 	"github.com/BaronBonet/rig/internal/core"
@@ -253,7 +254,7 @@ func launchArgs(task *core.Task) []string {
 func (r *repository) BuildTaskSessionLaunchSpec(task *core.Task) (core.TaskSessionLaunchSpec, error) {
 	var prefillInput []string
 	if strings.TrimSpace(task.Prompt) != "" {
-		prefillInput = []string{task.Prompt}
+		prefillInput = []string{pastedPrompt(task.Prompt)}
 	}
 
 	command := append([]string{r.binary}, launchArgs(task)...)
@@ -262,6 +263,25 @@ func (r *repository) BuildTaskSessionLaunchSpec(task *core.Task) (core.TaskSessi
 		ReadyMarker:  readyMarker,
 		PrefillInput: prefillInput,
 	}, nil
+}
+
+// imageExtensions are the file types Claude Code attaches as images when
+// their paths are pasted.
+var imageExtensions = []string{".png", ".jpg", ".jpeg", ".gif", ".webp"}
+
+// pastedPrompt is the prompt as it is pasted into Claude. Claude Code reads a
+// paste that ends in image paths as files dropped on it: it keeps the text
+// before the first path that ends a line and attaches only the last image,
+// dropping everything in between. A zero-width space on a line of its own
+// keeps such a paste plain text and leaves the user's own text untouched.
+func pastedPrompt(prompt string) string {
+	tail := strings.ToLower(strings.TrimRight(prompt, " \t\r\n\"'"))
+	for _, extension := range imageExtensions {
+		if strings.HasSuffix(tail, extension) {
+			return strings.TrimRightFunc(prompt, unicode.IsSpace) + "\n\u200b"
+		}
+	}
+	return prompt
 }
 
 // WriteSessionHandoff runs the previous session once more in print mode,

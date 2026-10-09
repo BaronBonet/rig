@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -37,6 +38,21 @@ func TestRepositoryBuildTaskSessionLaunchSpec_StartsClaudeAndPrefillsTaskPrompt(
 		ReadyMarker:  "❯",
 		PrefillInput: []string{"add billing retry flow"},
 	}, launch)
+}
+
+func TestRepositoryBuildTaskSessionLaunchSpec_EndsAPromptThatEndsInScreenshotsSoClaudeKeepsItAsText(t *testing.T) {
+	repo, _ := newTestRepository(t, subprocess.NewMockRunner(t))
+	prompt := "align the rows:\n- provider: /shots/Screenshot\\ at\\ 09.35.png\n\nkeep the row colour on hover:\n" +
+		"/shots/Screenshot\\ at\\ 09.36.png /shots/Screenshot\\ at\\ 10.19.PNG\n"
+
+	launch, err := repo.BuildTaskSessionLaunchSpec(&core.Task{Prompt: prompt})
+	require.NoError(t, err)
+	require.Equal(t, []string{strings.TrimSpace(prompt) + "\n\u200b"}, launch.PrefillInput)
+
+	launch, err = repo.BuildTaskSessionLaunchSpec(&core.Task{Prompt: "see /shots/a.png for the layout"})
+	require.NoError(t, err)
+	require.Equal(t, []string{"see /shots/a.png for the layout"}, launch.PrefillInput,
+		"a prompt that does not end in an image path is pasted as it is")
 }
 
 func TestRepositoryBuildTaskSessionLaunchSpec_OmitsPrefillForEmptyPrompt(t *testing.T) {
