@@ -21,18 +21,11 @@ func (s *service) shelveTask(ctx context.Context, taskID string) error {
 		return fmt.Errorf("%q is still being created; shelve it once it is ready", task.DisplayName)
 	}
 	group := append([]*Task{task}, s.childTasks(ctx, task.ID)...)
-	for _, member := range group {
-		if s.taskIsWorking(ctx, member.ID) {
-			return fmt.Errorf(
-				"%w: %q is working; shelve it once it is idle",
-				ErrProviderSessionActive,
-				member.DisplayName,
-			)
-		}
-	}
 
-	// The sessions end with the tmux session, or with a child's own window;
-	// their resume metadata stays, so opening the Task later resumes them.
+	// Whether the sessions can go is the user's call, as with replacing one:
+	// a recorded status can outlive its turn. The sessions end with the tmux
+	// session, or with a child's own window; their resume metadata stays, so
+	// opening the Task later resumes them.
 	if err := s.tmuxSession.DeleteTaskSession(ctx, task); err != nil {
 		return fmt.Errorf("close task session: %w", err)
 	}

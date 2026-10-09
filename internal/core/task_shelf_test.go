@@ -56,18 +56,19 @@ func TestTaskServiceShelveTask_AChildClosesOnlyItsWindow(t *testing.T) {
 	require.Equal(t, "task-2", svc.taskRepo.updatedTasks[0].ID)
 }
 
-func TestTaskServiceShelveTask_RefusesWhileASessionOfTheGroupIsWorking(t *testing.T) {
+func TestTaskServiceShelveTask_ShelvesWhateverItsSessionsStatusesSay(t *testing.T) {
+	// A status can outlive its turn: an idle session recorded as working in
+	// the background is shelved like any other.
 	svc := newTestTaskService(t)
 	parent, child := shelfGroupFixture()
 	svc.taskRepo.listTasks = []*Task{parent, child}
+	svc.taskRepo.latestByTask["task-1"] = TaskStatusUpdate{TaskID: "task-1", Phase: TaskStatusPhaseWorking}
 	svc.taskRepo.latestByTask["task-2"] = TaskStatusUpdate{TaskID: "task-2", Phase: TaskStatusPhaseWorkingInBackground}
 
-	err := svc.service.ShelveTask(t.Context(), "task-1")
+	require.NoError(t, svc.service.ShelveTask(t.Context(), "task-1"))
 
-	require.ErrorIs(t, err, ErrProviderSessionActive)
-	require.ErrorContains(t, err, `"session 2" is working`)
-	require.Nil(t, svc.sessionClient.deletedTask)
-	require.Empty(t, svc.taskRepo.updatedTasks)
+	require.Equal(t, "task-1", svc.sessionClient.deletedTask.ID)
+	require.Len(t, svc.taskRepo.updatedTasks, 2)
 }
 
 func TestTaskServiceShelveTask_RefusesATaskStillBeingCreated(t *testing.T) {

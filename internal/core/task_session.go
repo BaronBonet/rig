@@ -154,22 +154,6 @@ func (s *service) sessionOccupant(ctx context.Context, task *Task, next Provider
 	return "", nil
 }
 
-// taskIsWorking reports whether the Task's latest status says its provider is
-// in a turn, has background work in flight, or is still starting. Without a
-// status the provider is taken to be idle.
-func (s *service) taskIsWorking(ctx context.Context, taskID string) bool {
-	status, err := s.tasks.LatestTaskStatus(ctx, taskID)
-	if err != nil || status == nil {
-		return false
-	}
-	switch status.Phase {
-	case TaskStatusPhaseWorking, TaskStatusPhaseWorkingInBackground, TaskStatusPhaseStarting:
-		return true
-	default:
-		return false
-	}
-}
-
 // clearOrEndProviderSession readies the Task's window for the next session.
 // A provider that would be launched the same way, the same provider with the
 // same model and effort, starts a fresh conversation in place with its clear
