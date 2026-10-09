@@ -60,22 +60,14 @@ func (s *service) newTaskSession(
 		return nil, err
 	}
 
-	// Replacing the session ends the provider in the pane first, which is
-	// only done while it sits idle at its prompt: a provider mid-turn is
-	// never cut off.
+	// Replacing the session clears or ends the provider in the pane first.
+	// Whether it can be replaced is the user's call, made with the session in
+	// view: the composer shows its window live.
 	var occupant Provider
 	if !input.NewWindow {
 		occupant, err = s.sessionOccupant(ctx, task, provider)
 		if err != nil {
 			return nil, err
-		}
-		if occupant != "" && s.providerMidTurn(ctx, task, occupant) {
-			return nil, fmt.Errorf(
-				"%w: %s is still working in the task's window; "+
-					"wait for it to finish, or start the session in a new window instead",
-				ErrProviderSessionActive,
-				occupant,
-			)
 		}
 	}
 
@@ -176,53 +168,6 @@ func (s *service) taskIsWorking(ctx context.Context, taskID string) bool {
 	default:
 		return false
 	}
-}
-
-// providerMidTurn reports whether the provider in the Task's own window is in
-// a turn. The window decides when the provider has a turn marker and the
-// window can be read: a turn that is interrupted sends no Stop, so the
-// status it leaves says working long after the provider is back at its
-// prompt. Otherwise the Task's own status decides.
-func (s *service) providerMidTurn(ctx context.Context, task *Task, provider Provider) bool {
-	client, err := supportedProviderClient(s.providers, provider)
-	if err == nil && client.TurnMarker() != "" {
-		if content, captureErr := s.tmuxSession.CaptureTaskSession(ctx, task); captureErr == nil {
-			return windowFootShows(content, client.TurnMarker())
-		}
-	}
-	return s.taskIsMidTurn(ctx, task.ID)
-}
-
-// windowFootLines is how many of a window's last non-blank lines are its
-// foot, the prompt and what sits around it: a turn marker is looked for
-// there, not in the whole conversation, which can quote it. Too wide a foot
-// only refuses a replacement; too narrow a one would end a turn.
-const windowFootLines = 8
-
-func windowFootShows(content string, marker string) bool {
-	lines := strings.Split(content, "\n")
-	seen := 0
-	for i := len(lines) - 1; i >= 0 && seen < windowFootLines; i-- {
-		if strings.TrimSpace(lines[i]) == "" {
-			continue
-		}
-		seen++
-		if strings.Contains(strings.ToLower(lines[i]), strings.ToLower(marker)) {
-			return true
-		}
-	}
-	return false
-}
-
-// taskIsMidTurn reports whether the Task's own latest status says its
-// provider is in a turn; its children's statuses never count. Starting and
-// working in the background both leave the provider at its prompt, and since
-// Claude's status comes from hooks alone, either can stand for days: a resumed
-// session nobody has typed into stays starting, and a background shell that
-// never wakes the agent keeps it working in the background.
-func (s *service) taskIsMidTurn(ctx context.Context, taskID string) bool {
-	status, err := s.tasks.LatestTaskStatus(ctx, taskID)
-	return err == nil && status != nil && status.Phase == TaskStatusPhaseWorking
 }
 
 // clearOrEndProviderSession readies the Task's window for the next session.

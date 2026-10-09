@@ -60,6 +60,25 @@ func claimTaskSessionsCmd(ctx context.Context, frontend core.TaskFrontend, folde
 	}
 }
 
+// sessionPreviewInterval is how often the live view of a session about to be
+// replaced is read again.
+const sessionPreviewInterval = time.Second
+
+// captureSessionPreviewCmd reads the window of the task's session for the
+// composer's live view of it.
+func captureSessionPreviewCmd(ctx context.Context, frontend core.TaskFrontend, task *core.Task, seq int) tea.Cmd {
+	return func() tea.Msg {
+		content, err := frontend.CaptureTaskSession(ctx, task)
+		return sessionPreviewMsg{seq: seq, content: content, err: err}
+	}
+}
+
+func sessionPreviewTickCmd(seq int) tea.Cmd {
+	return tea.Tick(sessionPreviewInterval, func(time.Time) tea.Msg {
+		return sessionPreviewTickMsg{seq: seq}
+	})
+}
+
 func openTaskSessionCmd(ctx context.Context, frontend core.TaskFrontend, task *core.Task) tea.Cmd {
 	return func() tea.Msg {
 		err := frontend.AttachTaskSession(ctx, task)

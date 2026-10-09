@@ -124,6 +124,10 @@ type TaskFrontend interface {
 	// that belong to folder lead back to this rig. Client-local, like
 	// AttachTaskSession.
 	ClaimTaskSessions(ctx context.Context, folder string, tasks []*Task) error
+	// CaptureTaskSession returns what the task's own window shows now, for a
+	// live view of a session about to be replaced. Client-local, like
+	// AttachTaskSession.
+	CaptureTaskSession(ctx context.Context, task *Task) (string, error)
 }
 
 // TaskDaemonHookRoute describes one provider hook endpoint the local task
@@ -404,9 +408,6 @@ type ProviderClient interface {
 	// starts a fresh conversation in the same process, or "" when it has
 	// none Rig relies on.
 	ClearCommand() string
-	// TurnMarker is text the provider shows at the foot of its window only
-	// while a turn is running, or "" when it shows none Rig can rely on.
-	TurnMarker() string
 	// HookEventToTaskStatus normalizes a provider hook event into a task status
 	// update when the event contributes to the live task status stream.
 	HookEventToTaskStatus(input HookEventInput) (*TaskStatusUpdate, error)

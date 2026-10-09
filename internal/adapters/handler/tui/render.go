@@ -595,6 +595,9 @@ func (m model) promptInputView() string {
 	if newSession {
 		builder.WriteString(m.draftHandoffLine() + "\n")
 		builder.WriteString(m.draftWhereLine() + "\n\n")
+		if m.previewingSession() {
+			builder.WriteString(m.sessionPreviewBlock(totalWidth-6) + "\n")
+		}
 		for _, line := range wrapAndTruncate(m.continuationPreview(), totalWidth-4, 6) {
 			builder.WriteString("  " + dimStyle.Render(line) + "\n")
 		}
@@ -635,6 +638,34 @@ func (m model) promptInputView() string {
 	}
 	builder.WriteString(footerKeybinds(binds...))
 
+	return builder.String()
+}
+
+// sessionPreviewLines is how many lines of the session's window, counted up
+// from its last, the live view shows: the prompt and footer, and above them
+// the latest output, enough to see whether a turn is running.
+const sessionPreviewLines = 12
+
+// sessionPreviewBlock shows the window of the session about to be replaced,
+// as it is now, so the user can see whether it is still busy.
+func (m model) sessionPreviewBlock(width int) string {
+	gutter := "  " + mutedStyle.Render("┊") + " "
+	var builder strings.Builder
+	builder.WriteString(mutedStyle.Render("  the session now, live") + "\n")
+	switch {
+	case m.draft.previewErr != nil:
+		builder.WriteString(gutter + errorStyle.Render("cannot read its window: "+m.draft.previewErr.Error()) + "\n")
+	case strings.TrimSpace(m.draft.preview) == "":
+		builder.WriteString(gutter + dimStyle.Render("reading its window...") + "\n")
+	default:
+		lines := strings.Split(strings.TrimRight(m.draft.preview, " \n"), "\n")
+		if len(lines) > sessionPreviewLines {
+			lines = lines[len(lines)-sessionPreviewLines:]
+		}
+		for _, line := range lines {
+			builder.WriteString(gutter + dimStyle.Render(truncateVisible(strings.TrimRight(line, " "), width)) + "\n")
+		}
+	}
 	return builder.String()
 }
 

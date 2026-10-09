@@ -1,7 +1,6 @@
 package core
 
 import (
-	"errors"
 	"testing"
 	"time"
 
@@ -171,23 +170,25 @@ func TestTaskServiceNewTaskSession_EndsASessionToLaunchDifferently(t *testing.T)
 	}
 }
 
-func TestTaskServiceNewTaskSession_RefusesToReplaceASessionThatIsStillWorking(t *testing.T) {
+func TestTaskServiceNewTaskSession_ReplacesASessionWhateverItsStatusSays(t *testing.T) {
+	// Whether the session can go is the user's call, made with its window
+	// in view; a status can outlive its turn.
 	svc := newTestTaskService(t)
 	svc.taskRepo.listTasks = []*Task{readyTaskFixture()}
 	svc.taskRepo.latestByTask["task-1"] = TaskStatusUpdate{TaskID: "task-1", Phase: TaskStatusPhaseWorking}
 	svc.sessionClient.inspectState = TaskSessionRuntimeState{Exists: true, ActiveCommands: []string{"codex"}}
+	svc.sessionClient.onSubmit = func(*Task, string) {
+		svc.sessionClient.inspectState = idlePane()
+	}
 
 	_, err := svc.service.NewTaskSessionWithProgress(t.Context(), NewTaskSessionInput{
 		TaskID: "task-1",
 		Prompt: "continue",
 	}, nil)
 
-	require.ErrorIs(t, err, ErrProviderSessionActive)
-	require.ErrorContains(t, err, "codex is still working in the task's window")
-	require.ErrorContains(t, err, "start the session in a new window instead")
-	require.Empty(t, svc.sessionClient.submittedInputs, "a working provider is never told to exit")
-	require.Nil(t, svc.sessionClient.startedTask)
-	require.Nil(t, svc.taskRepo.updatedTask)
+	require.NoError(t, err)
+	require.Equal(t, []string{"/exit"}, svc.sessionClient.submittedInputs)
+	require.Equal(t, "task-1", svc.sessionClient.startedTask.ID)
 }
 
 func TestTaskServiceNewTaskSession_ReplacesASessionAtItsPromptWhileAChildWorks(t *testing.T) {
@@ -227,68 +228,6 @@ func TestTaskServiceNewTaskSession_ReplacesASessionAtItsPromptWhileAChildWorks(t
 			require.Equal(t, "task-1", svc.sessionClient.startedTask.ID)
 			require.Empty(t, svc.sessionClient.startedTask.TmuxWindow, "the new session takes the parent's own window")
 			require.Equal(t, "task-1", task.ID)
-		})
-	}
-}
-
-// claudeWindow is a Claude window: the conversation, its prompt and the
-// footer below it.
-func claudeWindow(conversation string, footer string) string {
-	return conversation + "\n\n────────\n❯ \n────────\n  ⏵⏵ auto mode on (shift+tab to cycle)" + footer + " · ← for agents\n\n"
-}
-
-func TestTaskServiceNewTaskSession_ReplacesASessionWhoseInterruptedTurnLeftItWorking(t *testing.T) {
-	svc := newTestTaskService(t)
-	svc.taskRepo.listTasks = []*Task{readyTaskFixture()}
-	// An interrupted turn sends no Stop: the status still says working.
-	svc.taskRepo.latestByTask["task-1"] = TaskStatusUpdate{TaskID: "task-1", Phase: TaskStatusPhaseWorking}
-	svc.providerRepo.turnMarker = "esc to interrupt"
-	svc.sessionClient.window = claudeWindow(
-		"● The footer reads esc to interrupt while a turn runs.\n● Bash(git status)\n  ⎿  On branch main\n"+
-			"  Read 1 file, ran 4 shell commands\n  ⎿  Interrupted · What should Claude do instead?", "")
-	svc.sessionClient.inspectState = TaskSessionRuntimeState{Exists: true, ActiveCommands: []string{"codex"}}
-	svc.sessionClient.onSubmit = func(*Task, string) {
-		svc.sessionClient.inspectState = idlePane()
-	}
-
-	_, err := svc.service.NewTaskSessionWithProgress(t.Context(), NewTaskSessionInput{
-		TaskID: "task-1",
-		Prompt: "continue",
-	}, nil)
-
-	require.NoError(t, err)
-	require.Equal(t, []string{"/exit"}, svc.sessionClient.submittedInputs)
-	require.Equal(t, "task-1", svc.sessionClient.startedTask.ID)
-}
-
-func TestTaskServiceNewTaskSession_RefusesWhileTheWindowShowsATurn(t *testing.T) {
-	for name, configure := range map[string]func(*testTaskServiceHarness){
-		"whatever the status says": func(svc *testTaskServiceHarness) {
-			svc.taskRepo.latestByTask["task-1"] = TaskStatusUpdate{
-				TaskID: "task-1",
-				Phase:  TaskStatusPhaseWaitingForInput,
-			}
-			svc.sessionClient.window = claudeWindow("● Reading the files", " · esc to interrupt")
-		},
-		"or by its status when the window cannot be read": func(svc *testTaskServiceHarness) {
-			svc.taskRepo.latestByTask["task-1"] = TaskStatusUpdate{TaskID: "task-1", Phase: TaskStatusPhaseWorking}
-			svc.sessionClient.captureErr = errors.New("capture failed")
-		},
-	} {
-		t.Run(name, func(t *testing.T) {
-			svc := newTestTaskService(t)
-			svc.taskRepo.listTasks = []*Task{readyTaskFixture()}
-			svc.providerRepo.turnMarker = "esc to interrupt"
-			svc.sessionClient.inspectState = TaskSessionRuntimeState{Exists: true, ActiveCommands: []string{"codex"}}
-			configure(svc)
-
-			_, err := svc.service.NewTaskSessionWithProgress(t.Context(), NewTaskSessionInput{
-				TaskID: "task-1",
-				Prompt: "continue",
-			}, nil)
-
-			require.ErrorIs(t, err, ErrProviderSessionActive)
-			require.Empty(t, svc.sessionClient.submittedInputs, "a provider in a turn is never told to exit")
 		})
 	}
 }

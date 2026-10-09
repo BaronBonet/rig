@@ -2,6 +2,7 @@ package tui
 
 import (
 	"fmt"
+	"strings"
 	"testing"
 
 	"github.com/BaronBonet/rig/internal/core"
@@ -151,6 +152,51 @@ func TestModel_KeyNOpensANewSessionComposerForTheSelectedTask(t *testing.T) {
 	m = pressKeys(t, m, ctrl('w'))
 	require.False(t, m.draft.newWindow)
 	require.Contains(t, stripANSI(m.View().Content), "where     this window, replacing the running session")
+}
+
+func TestModel_NewSessionReplacingTheRunningOneShowsItLive(t *testing.T) {
+	frontend := newFrontendHarness()
+	frontend.listTasks = []*core.Task{{
+		ID:             "task-1",
+		DisplayName:    "billing retry",
+		Provider:       core.ProviderClaude,
+		CreationStatus: core.TaskCreationStatusReady,
+	}}
+	var window []string
+	for i := 1; i <= 20; i++ {
+		window = append(window, fmt.Sprintf("output line %02d", i))
+	}
+	frontend.window = strings.Join(append(window, "❯ ", "  esc to interrupt", "", ""), "\n")
+	m := newLoadedModel(frontend)
+	m.launchSettings = launchSettingsFixture()
+
+	m = pressKeys(t, m, tea.KeyPressMsg{Text: "N"})
+	require.NotContains(t, stripANSI(m.View().Content), "the session now", "a new window leaves the session alone")
+
+	next, cmd := m.Update(ctrl('w'))
+	m = asModel(t, next)
+	require.Contains(t, stripANSI(m.View().Content), "reading its window...")
+	next, tick := m.Update(runCmd(t, cmd))
+	m = asModel(t, next)
+	require.Equal(t, "task-1", frontend.capturedTasks[0].ID)
+	view := stripANSI(m.View().Content)
+	require.Contains(t, view, "the session now, live")
+	require.Contains(t, view, "esc to interrupt", "its foot shows whether a turn is running")
+	require.Contains(t, view, "output line 20")
+	require.NotContains(t, view, "output line 05", "only the window's last lines")
+
+	// It is read again on every tick while the composer is set to replace it.
+	frontend.window = "❯ \n  ? for shortcuts\n"
+	next, read := m.Update(runCmd(t, tick))
+	m = asModel(t, next)
+	next, tick = m.Update(runCmd(t, read))
+	m = asModel(t, next)
+	require.Contains(t, stripANSI(m.View().Content), "? for shortcuts")
+
+	m = pressKeys(t, m, ctrl('w'))
+	next, cmd = m.Update(runCmd(t, tick))
+	require.Nil(t, cmd, "a new window ends the live view")
+	require.NotContains(t, stripANSI(asModel(t, next).View().Content), "the session now")
 }
 
 func TestModel_NewSessionThatFailsToStartReopensItsComposer(t *testing.T) {

@@ -68,10 +68,13 @@ type model struct {
 	width          int
 	height         int
 	shimmerTick    int
-	mode           modelMode
-	pending        pendingOp
-	opening        bool
-	launchCwd      string
+	// previewSeq numbers the composer's live views of a session about to be
+	// replaced; readings for an earlier one are dropped.
+	previewSeq int
+	mode       modelMode
+	pending    pendingOp
+	opening    bool
+	launchCwd  string
 	// providerEnv is this rig window's provider configuration, sent with every
 	// request that lists sessions or starts a task so the shared daemon uses
 	// this window's accounts rather than its own.
@@ -146,6 +149,10 @@ type taskDraft struct {
 	// newWindow starts the session alongside the task's running one, in a new
 	// window of its tmux session, as a child task.
 	newWindow bool
+	// preview is what the task's window shows while the session in it is to
+	// be replaced, read live; previewErr is why it could not be read.
+	preview    string
+	previewErr error
 }
 
 // createFlowState is the progress of an in-flight or just-failed task
@@ -252,6 +259,19 @@ type taskCreatedMsg struct {
 
 type taskOpenedMsg struct {
 	err error
+}
+
+// sessionPreviewMsg is one reading of the window of the session a new one
+// would replace; seq ties it to the view that asked for it.
+type sessionPreviewMsg struct {
+	seq     int
+	content string
+	err     error
+}
+
+// sessionPreviewTickMsg asks for the next reading of that window.
+type sessionPreviewTickMsg struct {
+	seq int
 }
 
 type taskCreateStreamStartFailedMsg struct {
@@ -886,6 +906,17 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m.failCreate(errors.New("create task stream closed unexpectedly"))
 		}
 		return m, nil
+	case sessionPreviewMsg:
+		if msg.seq != m.previewSeq || !m.previewingSession() {
+			return m, nil
+		}
+		m.draft.preview, m.draft.previewErr = msg.content, msg.err
+		return m, sessionPreviewTickCmd(msg.seq)
+	case sessionPreviewTickMsg:
+		if msg.seq != m.previewSeq || !m.previewingSession() {
+			return m, nil
+		}
+		return m, captureSessionPreviewCmd(m.statusContext, m.frontend, m.draft.forTask, msg.seq)
 	case taskOpenedMsg:
 		m.opening = false
 		if m.pending == opNone {
@@ -1145,7 +1176,25 @@ func (m model) failCreate(err error) (model, tea.Cmd) {
 	m.draft = *retry
 	m.draft.err = err
 	m.create = createFlowState{}
-	return m, m.draft.input.Focus()
+	return m, tea.Batch(m.draft.input.Focus(), m.startSessionPreview())
+}
+
+// previewingSession reports whether the composer is about to replace a
+// task's session, and so shows that session live.
+func (m model) previewingSession() bool {
+	return m.mode == modePromptInput && m.draft.forTask != nil && !m.draft.newWindow
+}
+
+// startSessionPreview starts a new live view of the session the composer is
+// about to replace, ending any earlier one, or only ends it when the
+// composer leaves the session alone.
+func (m *model) startSessionPreview() tea.Cmd {
+	m.previewSeq++
+	m.draft.preview, m.draft.previewErr = "", nil
+	if !m.previewingSession() {
+		return nil
+	}
+	return captureSessionPreviewCmd(m.statusContext, m.frontend, m.draft.forTask, m.previewSeq)
 }
 
 func (m model) retrySelectedTaskCreation() (model, tea.Cmd) {
@@ -1205,6 +1254,7 @@ func (m model) updatePromptInput(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if typed.String() == "ctrl+w" {
 			if m.draft.forTask != nil {
 				m.draft.newWindow = !m.draft.newWindow
+				return m, m.startSessionPreview()
 			}
 			return m, nil
 		}

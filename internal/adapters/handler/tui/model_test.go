@@ -2347,18 +2347,21 @@ func stripANSI(s string) string {
 type frontendHarness struct {
 	mock *core.MockTaskFrontend
 
-	listTasks                   []*core.Task
-	listTasksContext            context.Context
-	listTasksErr                error
-	listTasksCalls              int
-	listRepoPullRequests        []core.RepoPullRequest
-	listRepoPullRequestsErr     error
-	listRepoPullRequestsCwd     string
-	pullRequestStatus           map[string]*core.PRStatus
-	pullRequestStatusErr        map[string]error
-	pullRequestStatusCalls      []string
-	attachedTask                *core.Task
-	attachTaskSessionErr        error
+	listTasks               []*core.Task
+	listTasksContext        context.Context
+	listTasksErr            error
+	listTasksCalls          int
+	listRepoPullRequests    []core.RepoPullRequest
+	listRepoPullRequestsErr error
+	listRepoPullRequestsCwd string
+	pullRequestStatus       map[string]*core.PRStatus
+	pullRequestStatusErr    map[string]error
+	pullRequestStatusCalls  []string
+	attachedTask            *core.Task
+	attachTaskSessionErr    error
+	// window is what a task's window shows; capturedTasks are those read.
+	window                      string
+	capturedTasks               []*core.Task
 	attachTaskSessionCalls      int
 	attachTaskSessionFn         func(context.Context, *core.Task) error
 	reconnectTaskSessionErr     error
@@ -2512,6 +2515,12 @@ func newFrontendHarness() *frontendHarness {
 				return frontend.attachTaskSessionFn(ctx, task)
 			}
 			return frontend.attachTaskSessionErr
+		},
+	).Maybe()
+	frontend.mock.EXPECT().CaptureTaskSession(mock.Anything, mock.Anything).RunAndReturn(
+		func(_ context.Context, task *core.Task) (string, error) {
+			frontend.capturedTasks = append(frontend.capturedTasks, task)
+			return frontend.window, nil
 		},
 	).Maybe()
 	frontend.mock.EXPECT().ReconnectTaskSession(mock.Anything, mock.Anything).RunAndReturn(
