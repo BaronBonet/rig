@@ -301,6 +301,54 @@ func TestContinuationPrompt_ComposesTheTaskTheHandoffAndTheInstruction(t *testin
 		"First recover where the work stands from the workspace: "+
 		"git status, the recent commits on the branch, and the changed files.",
 		ContinuationPrompt(&Task{Slug: "billing-retry"}, "", ""), "an imported task has only a slug")
+	child := &Task{DisplayName: "search page", Prompt: "Continue the task \"billing retry flow\"", ParentID: "task-1"}
+	require.Equal(t, "Continue the task \"search page\" in a fresh session.\n\n"+
+		"Read the handoff note from the previous session before doing anything else: /notes/h.md\n\n"+
+		"Now:\nadd the filters next",
+		ContinuationPrompt(child, "add the filters next", "/notes/h.md"),
+		"a child task's prompt is its own continuation, not an ask to quote")
+}
+
+func TestTaskServiceNewTaskSession_FromAChildHandsOffFromItsOwnSession(t *testing.T) {
+	svc := newTestTaskService(t)
+	parent := readyTaskFixture()
+	sibling := newChildTaskRecord(parent, ProviderCodex, "search page", "search-page", "s2")
+	sibling.ID = "task-2"
+	sibling.CreationStatus = TaskCreationStatusReady
+	sibling.Prompt = ContinuationPrompt(parent, "add the search page", "/data/rig/handoffs/task-1/old.md")
+	svc.taskRepo.listTasks = []*Task{parent, sibling}
+	svc.sessionClient.inspectState = idlePane()
+	svc.taskRepo.providerSessionsByTask["task-1"] = []TaskProviderSession{
+		{
+			TaskID:            "task-1",
+			Provider:          ProviderCodex,
+			ProviderSessionID: "sess-parent",
+			LastObservedAt:    time.Unix(300, 0),
+		},
+	}
+	svc.taskRepo.providerSessionsByTask["task-2"] = []TaskProviderSession{
+		{TaskID: "task-2", Provider: ProviderCodex, ProviderSessionID: "sess-child", LastObservedAt: time.Unix(200, 0)},
+	}
+	svc.providerRepo.handoffPath = "/data/rig/handoffs/task-2/note.md"
+	svc.providerRepo.suggestedName = "search filters"
+
+	child, err := svc.service.NewTaskSessionWithProgress(t.Context(), NewTaskSessionInput{
+		TaskID:    "task-2",
+		Prompt:    "add the filters",
+		Handoff:   true,
+		NewWindow: true,
+	}, nil)
+
+	require.NoError(t, err)
+	require.Equal(t, "task-1", child.ParentID, "a session of a child joins the same group")
+	require.NotNil(t, svc.providerRepo.handoffSession)
+	require.Equal(t, "sess-child", svc.providerRepo.handoffSession.ProviderSessionID,
+		"the child's own session writes the note, not the parent's")
+	require.Equal(t, "Continue the task \"search page\" in a fresh session.\n\n"+
+		"Read the handoff note from the previous session before doing anything else: "+
+		"/data/rig/handoffs/task-2/note.md\n\n"+
+		"Now:\nadd the filters", child.Prompt, "nothing of the parent's ask or the child's own continuation")
+	require.Equal(t, []string{child.Prompt}, svc.sessionClient.prefilledLaunch.PrefillInput)
 }
 
 func TestTaskServiceNewTaskSession_InANewWindowCreatesAChildTaskAlongsideTheRunningOne(t *testing.T) {

@@ -28,7 +28,8 @@ Use `rig` for the CLI command and Rig for the product or system.
   the Task's session in its window or runs alongside it as a Child task.
 - Continuation prompt: What a new session is asked: the Task and its original
   ask, where to pick up its state (the handoff note, or the workspace), then
-  the user's own instruction for that session.
+  the user's own instruction for that session. A Child task's leaves out the
+  original ask: it picks up from its own handoff note alone.
 - Child task: A Task that is one session of another, its parent: it shares the
   parent's workspace, branch and tmux session, runs in its own window there
   with its own task ID, and has its own status, activity and token usage. It
@@ -163,7 +164,8 @@ Use `rig` for the CLI command and Rig for the product or system.
   closes the Session and removes every Child task's record.
 - A Child task's hooks carry its own Task ID, set on its window, so they are
   never attributed to the parent. A New session of a Child task joins the
-  parent's group.
+  parent's group, and its Handoff note is written by the Child task's own
+  session, not the parent's.
 - Shelving or unshelving a Task moves its Child tasks with it; a Child task
   can also be shelved on its own, which closes only its window.
 - A Rename changes only the Task's display name and original ask; its slug,

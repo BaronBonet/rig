@@ -377,6 +377,9 @@ func (s *service) latestProviderSession(ctx context.Context, task *Task) (*TaskP
 // ContinuationPrompt is what a new session of task is asked: the task and its
 // original ask, where to pick up its state (the handoff note, or the workspace
 // when there is none), and then the user's own instruction for this session.
+// A Child task has no original ask to quote: its prompt is the continuation it
+// was started with, which would nest the parent's ask and a stale handoff note
+// in every session after it, so it picks up from its own handoff note alone.
 func ContinuationPrompt(task *Task, custom string, handoffPath string) string {
 	name := strings.TrimSpace(task.DisplayName)
 	if name == "" {
@@ -384,7 +387,7 @@ func ContinuationPrompt(task *Task, custom string, handoffPath string) string {
 	}
 	var builder strings.Builder
 	builder.WriteString("Continue the task \"" + name + "\" in a fresh session.")
-	if ask := strings.TrimSpace(task.Prompt); ask != "" {
+	if ask := strings.TrimSpace(task.Prompt); ask != "" && !task.IsChild() {
 		builder.WriteString("\n\nOriginal ask:\n" + ask)
 	}
 	if handoffPath = strings.TrimSpace(handoffPath); handoffPath != "" {

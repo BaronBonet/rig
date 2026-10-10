@@ -397,8 +397,9 @@ write handoff notes yet.
   the handoff note is written from it while it is open. This also splits a
   larger task across several sessions at once: each gets the same workspace
   and branch, the handoff note, and its own instruction. A session started
-  from one of these rows joins the same group. `x` on a session row closes
-  only its window; cleaning up the task closes them all.
+  from one of these rows joins the same group and picks up from that row's
+  own handoff note alone, without the task's original ask. `x` on a session
+  row closes only its window; cleaning up the task closes them all.
 - **this window** (`ctrl+w`) replaces it, once the handoff note is written.
   When the new session runs with the same provider, model and effort, Claude
   Code's session is cleared in place with `/clear`, a new session in the same
@@ -444,7 +445,7 @@ Claude session with `/rename` does the same, and the task takes the new title
 at the session's next prompt or turn end. A session renames its task only when
 its title changes, so a name you give in Rig is not undone by an older title.
 
-A rename drops the task's original ask, which every new session (`N`) quotes,
+A rename drops the task's original ask, which new sessions (`N`) of it quote,
 so new sessions are not briefed on what the task was first for; they start
 from the handoff note and the workspace. Only the name changes: the branch,
 worktree and tmux session keep theirs.
