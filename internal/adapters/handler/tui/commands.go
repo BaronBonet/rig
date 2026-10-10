@@ -24,12 +24,15 @@ func activityRefreshTickCmd() tea.Cmd {
 	})
 }
 
-func loadTasksCmd(ctx context.Context, frontend core.TaskFrontend) tea.Cmd {
+// loadTasksCmd lists the tasks. reorder marks a load that arranges the list
+// afresh; it only travels with the answer.
+func loadTasksCmd(ctx context.Context, frontend core.TaskFrontend, reorder bool) tea.Cmd {
 	return func() tea.Msg {
 		tasks, err := frontend.ListTasks(ctx)
 		return tasksLoadedMsg{
-			tasks: tasks,
-			err:   err,
+			tasks:   tasks,
+			err:     err,
+			reorder: reorder,
 		}
 	}
 }
@@ -201,6 +204,19 @@ func switchTaskProviderCmd(
 			err:  err,
 		}
 	}
+}
+
+// orderSettleDeadline is how long after a load that arranged the list its
+// order waits for the first live statuses before settling with what has
+// arrived. A var so tests, which run batched commands synchronously, need not
+// wait it out.
+var orderSettleDeadline = time.Second
+
+// orderSettleTickCmd ends the wait of the load numbered seq for live statuses.
+func orderSettleTickCmd(seq int) tea.Cmd {
+	return tea.Tick(orderSettleDeadline, func(time.Time) tea.Msg {
+		return orderSettleMsg{seq: seq}
+	})
 }
 
 func shimmerTickCmd() tea.Cmd {

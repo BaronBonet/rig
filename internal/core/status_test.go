@@ -16,6 +16,19 @@ func TestTaskStatusPhase_FirstSliceValues(t *testing.T) {
 	require.Equal(t, core.TaskStatusPhaseStopped, core.TaskStatusPhase("stopped"))
 }
 
+func TestTaskStatusPhase_IsWorking(t *testing.T) {
+	for phase, want := range map[core.TaskStatusPhase]bool{
+		core.TaskStatusPhaseStarting:            true,
+		core.TaskStatusPhaseWorking:             true,
+		core.TaskStatusPhaseWorkingInBackground: true,
+		core.TaskStatusPhaseWaitingForInput:     false,
+		core.TaskStatusPhaseStopped:             false,
+		"":                                      false,
+	} {
+		require.Equal(t, want, phase.IsWorking(), "phase %q", phase)
+	}
+}
+
 func TestTaskStatusUpdate_HoldsFirstSliceFields(t *testing.T) {
 	now := time.Date(2026, time.April, 18, 10, 30, 0, 0, time.UTC)
 

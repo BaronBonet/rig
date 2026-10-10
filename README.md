@@ -283,6 +283,23 @@ lies below it, or contains it. A line under the header counts the tasks of
 other folders, and `f` shows or hides them, so a `rig` per client folder stays
 separate.
 
+The list puts the tasks being worked on at the top: those starting, in a turn,
+or working in the background. The rest follow, and in both parts the most
+recently active task comes first, judged by its status, its activity and its
+last change. A task's sessions stay under it (`↳`), and one that is working
+lifts the whole group. Tasks of one repository or folder stay under its header,
+the one with the best-placed task first. The shelf and the list of every folder
+are ordered the same way.
+
+The order is set when rig opens, when you refresh with `r`, and when you switch
+to the shelf (`tab`) or to every folder (`f`). The list appears at once,
+ordered by what rig knows then, and can move once more, within a second, as the
+first live statuses come in. After that, rows hold still while their status and
+activity update, so the list never shuffles under your cursor. A task you
+create is listed as the newest, and a new session of a task lifts its group;
+neither moves the rest, and both take their place by what they are doing at the
+next refresh.
+
 Create a task with `n`, enter a prompt, and press `enter`. While composing,
 press `tab` to cycle through your configured providers (a no-op when only one
 is configured); the selected provider owns the task name suggestion, branch
@@ -318,7 +335,7 @@ Common TUI keys:
 | `tab` | Switch the list between the current tasks and the shelf |
 | `i` | Import a provider session started in this folder outside Rig |
 | `p` | Switch the selected task to another configured provider |
-| `r` | Refresh task data |
+| `r` | Refresh task data and reorder the list |
 | `f` | Show the tasks of every folder, or only this folder's |
 | `R` | Retry a failed task creation |
 | `x` | Clean up the selected task's tmux session and worktree |

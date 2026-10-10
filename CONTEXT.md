@@ -168,6 +168,20 @@ Use `rig` for the CLI command and Rig for the product or system.
   session, not the parent's.
 - Shelving or unshelving a Task moves its Child tasks with it; a Child task
   can also be shelved on its own, which closes only its window.
+- The TUI lists the Tasks that are working first, then the rest, each most
+  recently active first, on the current list and the Shelf alike. A Task is
+  working while its Runtime status is starting, working, or working in the
+  background; its last activity is the latest of its status, its Activity
+  events and its record's update. A task group is listed together, parent
+  first, and ranked by its best member, so a working Child task lifts its
+  whole group. Tasks of one repository or folder stay together, the one with
+  the best-ranked task first.
+- The order is set only when the TUI opens, on a refresh, and when it switches
+  to the Shelf or to every folder: at once, from what is known, and once more
+  when the first Runtime statuses of the listed Tasks have arrived over their
+  subscriptions, or after a short deadline. A live status or Activity event at
+  any other time does not move a row. A Task or Child task new to the list is
+  ranked once, by its record, and holds still from then on.
 - A Rename changes only the Task's display name and original ask; its slug,
   and so its workspace, branch and tmux session, stays. A provider session
   renames its Task only when the title the user gave it changes, so a Rename

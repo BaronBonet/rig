@@ -294,6 +294,7 @@ func TestModel_ViewClearsCreateStatusAfterCreatedTaskIsSelected(t *testing.T) {
 
 func TestModel_ViewKeepsSelectedTaskDetailsVisibleWhenRowsExceedHeight(t *testing.T) {
 	frontend := newFrontendHarness()
+	created := time.Date(2026, time.October, 1, 9, 0, 0, 0, time.UTC)
 	for i := range 20 {
 		suffix := strconv.Itoa(i)
 		frontend.listTasks = append(frontend.listTasks, &core.Task{
@@ -303,6 +304,10 @@ func TestModel_ViewKeepsSelectedTaskDetailsVisibleWhenRowsExceedHeight(t *testin
 			BranchName:   "feat/task-" + suffix,
 			WorktreePath: "/tmp/task-" + suffix,
 			Provider:     core.ProviderCodex,
+			// Creation times keep the tasks in the order they are numbered:
+			// the list shows the most recently active first, and ties fall
+			// to the ID, which would put task-10 before task-2.
+			CreatedAt: created.Add(time.Duration(-i) * time.Minute),
 		})
 	}
 
@@ -445,7 +450,8 @@ func TestModel_AfterLoadUsesSubscriptionsAsInitialStatusSource(t *testing.T) {
 	require.True(t, ok)
 
 	msgs := runBatchCmd(t, cmd)
-	require.Len(t, msgs, 9, "four per task, and the return key's claim")
+	require.Len(t, msgs, 10, "four per task, the return key's claim, and the order's settle deadline")
+	requireMsgType[orderSettleMsg](t, msgs)
 	require.Empty(t, frontend.latestTaskStatusCalls)
 	require.Equal(t, []string{"task-1:6", "task-2:6"}, frontend.getTaskActivityCalls)
 	require.Equal(t, []string{"task-1", "task-2"}, frontend.getTaskTokenUsageCalls)
@@ -1498,6 +1504,7 @@ func TestModel_CreateTaskFromPromptAppendsTaskAndStartsStatusTracking(t *testing
 	next, _ = got.Update(statusMsg)
 	got, ok = next.(model)
 	require.True(t, ok)
+	// The live status shows on the row but does not move it.
 	require.NotNil(t, got.rows[2].status)
 	require.Equal(t, core.TaskStatusPhaseWorking, got.rows[2].status.Phase)
 }
@@ -2300,7 +2307,7 @@ func newLoadedModel(frontend *frontendHarness) model {
 	m := newModel(frontend.mock, "/tmp/repo", "")
 	m.loading = false
 	m.detailsHidden = false
-	m.rows = rowsFromTasks(frontend.listTasks)
+	m.rows = orderRows(rowsFromTasks(frontend.listTasks))
 	m.providerSetup = setup
 	return m
 }

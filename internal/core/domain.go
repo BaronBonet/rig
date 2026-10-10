@@ -236,6 +236,19 @@ const (
 	TaskStatusPhaseStopped             TaskStatusPhase = "stopped"
 )
 
+// IsWorking reports whether the phase means the agent is busy with the Task's
+// work: starting up, in a turn, or woken by background work when that
+// completes. Every other phase, and no status at all, leaves the Task waiting
+// on the user or not running.
+func (p TaskStatusPhase) IsWorking() bool {
+	switch p {
+	case TaskStatusPhaseStarting, TaskStatusPhaseWorking, TaskStatusPhaseWorkingInBackground:
+		return true
+	default:
+		return false
+	}
+}
+
 // TaskBackgroundWork counts the provider background work still in flight when
 // the root agent ended its turn. Providers report the full in-flight set at
 // every turn end, so the counts are replaced, never accumulated.

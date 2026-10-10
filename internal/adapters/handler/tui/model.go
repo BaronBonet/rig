@@ -19,6 +19,10 @@ type taskRow struct {
 	tokenUsage  *core.TaskTokenUsage
 	pullRequest *core.PRStatus
 	worktrees   []core.TaskWorktree
+	// order is where the row ranks, frozen when the row first appeared or the
+	// list was last arranged afresh; live updates to the fields above never
+	// change it, so rows hold still between those moments.
+	order orderKey
 }
 
 type modelMode int
@@ -101,6 +105,9 @@ type model struct {
 	// reload, the stale side is the daemon's status row, not the task list —
 	// reloading again cannot fix it and would loop forever.
 	adoptionReloads map[string]core.Provider
+	// settle is the wait, after a load that arranged the list, for the first
+	// live statuses to arrange it by.
+	settle orderSettle
 	// statusSubscribed tracks tasks with a live status subscription so task
 	// reloads do not open a duplicate subscription per reload.
 	statusSubscribed map[string]bool
@@ -210,6 +217,28 @@ type providerSetupRow struct {
 type tasksLoadedMsg struct {
 	err   error
 	tasks []*core.Task
+	// reorder marks a load that arranges the list afresh: when rig opens, on
+	// a refresh, and when the view changes. Any other load leaves the rows
+	// already listed where they are.
+	reorder bool
+}
+
+// orderSettleMsg ends the wait for live statuses of the load numbered seq.
+type orderSettleMsg struct {
+	seq int
+}
+
+// orderSettle is the one more arrangement a load that arranged the list is
+// owed. It arranges from what is known when it arrives, which is the record
+// and whatever statuses were carried over; the rest of the statuses come in
+// over the subscriptions in the moments after, so once they have, or have had
+// a deadline to, the list is arranged again and then holds still.
+type orderSettle struct {
+	// seq numbers the loads that arranged the list, so the deadline of an
+	// earlier one is ignored.
+	seq int
+	// pending are the listed tasks whose first status has not arrived.
+	pending map[string]bool
 }
 
 type pullRequestStatusLoadedMsg struct {
@@ -377,7 +406,7 @@ func (m model) Init() tea.Cmd {
 	return tea.Batch(
 		getProviderSetupCmd(m.statusContext, m.frontend),
 		getLaunchSettingsCmd(m.statusContext, m.frontend),
-		loadTasksCmd(m.statusContext, m.frontend),
+		m.loadTasks(true),
 		activityRefreshTickCmd(),
 	)
 }
@@ -610,13 +639,13 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m.enterProviderSetupMode()
 		case "r":
 			m.loading = true
-			return m, loadTasksCmd(m.statusContext, m.frontend)
+			return m, m.loadTasks(true)
 		case "f":
 			if m.launchCwd == "" {
 				return m, nil
 			}
 			m.allFolders = !m.allFolders
-			return m, loadTasksCmd(m.statusContext, m.frontend)
+			return m, m.loadTasks(true)
 		case "R":
 			return m.retrySelectedTaskCreation()
 		case "g", "home":
@@ -669,10 +698,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 
-		selectedTaskID := ""
-		if row := m.selectedRow(); row != nil {
-			selectedTaskID = taskID(row.task)
-		}
+		selectedTaskID := m.selectedTaskID()
 		current, shelved := splitShelved(msg.tasks)
 		listed := current
 		if m.showShelf {
@@ -683,12 +709,21 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		shelvedHere, _ := m.scopeTasks(shelved)
 		m.shelvedTasks = len(shelvedHere)
 		nextRows := rowsFromTasks(visible)
-		preserveTaskStatuses(nextRows, m.rows)
+		carryOverRows(nextRows, m.rows)
+		if msg.reorder {
+			// Shown at once, by what is known now; settled once more below.
+			rankRows(nextRows)
+		}
 		m.reconcileTaskStatusTracking(nextRows)
-		m.rows = nextRows
+		m.rows = orderRows(nextRows)
 		m.clampSelection()
 		m.selectTask(selectedTaskID)
 		cmds := m.afterTasksLoadedCmds()
+		if msg.reorder {
+			if settleCmd := m.awaitStatuses(); settleCmd != nil {
+				cmds = append(cmds, settleCmd)
+			}
+		}
 		// Every task, shelf and all folders included: the frontend keeps the
 		// launch folder's.
 		cmds = append(cmds, claimTaskSessionsCmd(m.statusContext, m.frontend, m.launchCwd, msg.tasks))
@@ -726,12 +761,14 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case taskStatusSubscriptionReadyMsg:
 		if msg.err != nil {
 			m.cancelTaskStatusTracking(msg.taskID)
+			m.statusArrived(msg.taskID)
 			return m, nil
 		}
 		return m, waitForTaskStatusCmd(msg.taskID, msg.updates)
 	case taskStatusUpdatedMsg:
 		update := msg.update
 		m.setTaskStatus(msg.taskID, &update)
+		m.statusArrived(msg.taskID)
 		cmds := []tea.Cmd{
 			taskActivityCmd(m.statusContext, m.frontend, msg.taskID, taskActivityPreviewLimit),
 			taskTokenUsageCmd(m.statusContext, m.frontend, msg.taskID),
@@ -749,12 +786,13 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				delete(m.adoptionReloads, msg.taskID)
 			case m.adoptionReloads[msg.taskID] != update.Provider:
 				m.adoptionReloads[msg.taskID] = update.Provider
-				cmds = append(cmds, loadTasksCmd(m.statusContext, m.frontend))
+				cmds = append(cmds, m.loadTasks(false))
 			}
 		}
 		return m, tea.Batch(cmds...)
 	case taskStatusSubscriptionClosedMsg:
 		m.cancelTaskStatusTracking(msg.taskID)
+		m.statusArrived(msg.taskID)
 		if m.taskRowByID(msg.taskID) == nil {
 			return m, nil
 		}
@@ -797,7 +835,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.transition(modeBrowse)
 		m.loading = true
 		return m, tea.Batch(
-			loadTasksCmd(m.statusContext, m.frontend),
+			m.loadTasks(false),
 			getLaunchSettingsCmd(m.statusContext, m.frontend),
 		)
 	case launchSettingsLoadedMsg:
@@ -872,7 +910,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.selected = index
 		}
 		m.clampSelection()
-		cmds := []tea.Cmd{loadTasksCmd(m.statusContext, m.frontend)}
+		cmds := []tea.Cmd{m.loadTasks(false)}
 		cmds = append(cmds, m.taskStatusTrackingCmds(taskID(msg.task))...)
 		return m, tea.Batch(cmds...)
 	case taskCreateStreamStartFailedMsg:
@@ -934,10 +972,14 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.err = msg.err
 			return m, nil
 		}
-		cmds := []tea.Cmd{loadTasksCmd(m.statusContext, m.frontend)}
+		// Opening a task from the shelf leaves it for the current list, a
+		// different view, which is arranged afresh like any other.
 		if msg.open {
 			m.showShelf = false
 			m.opening = true
+		}
+		cmds := []tea.Cmd{m.loadTasks(msg.open)}
+		if msg.open {
 			cmds = append(cmds, openTaskSessionCmd(m.statusContext, m.frontend, msg.task), shimmerTickCmd())
 		}
 		return m, tea.Batch(cmds...)
@@ -949,7 +991,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 		m.transition(modeBrowse)
-		return m, loadTasksCmd(m.statusContext, m.frontend)
+		return m, m.loadTasks(false)
 	case taskDeletedMsg:
 		m.endOp()
 		m.transition(modeBrowse)
@@ -975,6 +1017,11 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			)
 		}
 		return m, tea.Batch(cmds...)
+	case orderSettleMsg:
+		if msg.seq == m.settle.seq && len(m.settle.pending) > 0 {
+			m.settleOrder()
+		}
+		return m, nil
 	case shimmerTickMsg:
 		if m.pending == opNone && !m.opening {
 			return m, nil
@@ -1048,7 +1095,7 @@ func shelfKey(key string) bool {
 func (m model) toggleShelf() (tea.Model, tea.Cmd) {
 	m.showShelf = !m.showShelf
 	m.selected = 0
-	return m, loadTasksCmd(m.statusContext, m.frontend)
+	return m, m.loadTasks(true)
 }
 
 // moveSelectedTask shelves the selected task, or, on the shelf, puts it back
@@ -1065,27 +1112,49 @@ func (m model) moveSelectedTask(open bool) (tea.Model, tea.Cmd) {
 	)
 }
 
+// rowsFromTasks makes a row for each task, in the order given, ranked by what
+// its record says. A row new to the list keeps that rank until the list is
+// arranged afresh.
 func rowsFromTasks(tasks []*core.Task) []taskRow {
 	rows := make([]taskRow, 0, len(tasks))
 	for _, task := range tasks {
 		if task == nil {
 			continue
 		}
-		rows = append(rows, taskRow{task: task})
+		row := taskRow{task: task}
+		row.freezeOrder()
+		rows = append(rows, row)
 	}
-	return groupRowsByRepo(rows)
+	return rows
 }
 
-func preserveTaskStatuses(nextRows []taskRow, currentRows []taskRow) {
-	statuses := make(map[string]*core.TaskStatusUpdate, len(currentRows))
+// carryOverRows gives the reloaded rows what the current ones hold that a
+// reload does not return: the live status, the loaded Activity events and the
+// frozen rank. A row already listed so stays where it is.
+func carryOverRows(nextRows []taskRow, currentRows []taskRow) {
+	current := make(map[string]taskRow, len(currentRows))
 	for _, row := range currentRows {
-		if id := taskID(row.task); id != "" && row.status != nil {
-			statuses[id] = row.status
+		if id := taskID(row.task); id != "" {
+			current[id] = row
 		}
 	}
 
 	for index := range nextRows {
-		nextRows[index].status = statuses[taskID(nextRows[index].task)]
+		previous, ok := current[taskID(nextRows[index].task)]
+		if !ok {
+			continue
+		}
+		nextRows[index].status = previous.status
+		nextRows[index].activity = previous.activity
+		nextRows[index].order = previous.order
+	}
+}
+
+// rankRows ranks every row afresh from its live state, for a load that
+// arranges the list.
+func rankRows(rows []taskRow) {
+	for index := range rows {
+		rows[index].freezeOrder()
 	}
 }
 
@@ -1604,6 +1673,81 @@ func (m *model) selectTask(targetTaskID string) bool {
 	return false
 }
 
+// selectedTaskID is the ID of the selected row's task, or "" with none.
+func (m model) selectedTaskID() string {
+	if row := m.selectedRow(); row != nil {
+		return taskID(row.task)
+	}
+	return ""
+}
+
+// sortRows arranges the rows by their frozen ranks and keeps the selection on
+// the task it was on, not at the same place in the list.
+func (m *model) sortRows() {
+	selectedTaskID := m.selectedTaskID()
+	m.rows = orderRows(m.rows)
+	m.selectTask(selectedTaskID)
+}
+
+// loadTasks loads the tasks. A load that reorders arranges the list afresh,
+// which only happens when rig opens, on a refresh and when the view changes.
+func (m model) loadTasks(reorder bool) tea.Cmd {
+	return loadTasksCmd(m.statusContext, m.frontend, reorder)
+}
+
+// awaitStatuses starts the wait, after a load that arranged the list, for the
+// first live status of every listed task that has none, and returns the
+// deadline that ends it, or nil with nothing to wait for. It replaces any wait
+// still going: its deadline no longer matches and is ignored.
+func (m *model) awaitStatuses() tea.Cmd {
+	m.settle.seq++
+	m.settle.pending = nil
+	pending := make(map[string]bool)
+	for _, row := range m.rows {
+		if id := taskID(row.task); id != "" && row.status == nil {
+			pending[id] = true
+		}
+	}
+	if len(pending) == 0 {
+		return nil
+	}
+	m.settle.pending = pending
+	return orderSettleTickCmd(m.settle.seq)
+}
+
+// statusArrived notes that a task's first live status, or the end of its
+// subscription, has arrived; the last one settles the order.
+func (m *model) statusArrived(id string) {
+	if !m.settle.pending[id] {
+		return
+	}
+	delete(m.settle.pending, id)
+	if len(m.settle.pending) == 0 {
+		m.settleOrder()
+	}
+}
+
+// settleOrder arranges the list once more, by the live state the rows have
+// gathered since the load, keeping the selection on its task. It ends the
+// wait, so nothing moves the rows again until the next refresh or view change.
+func (m *model) settleOrder() {
+	m.settle.pending = nil
+	selectedTaskID := m.selectedTaskID()
+	rankRows(m.rows)
+	m.rows = orderRows(m.rows)
+	m.selectTask(selectedTaskID)
+}
+
+// taskRowIndex is where the task with the given ID is in the list, or -1.
+func (m *model) taskRowIndex(id string) int {
+	for index, row := range m.rows {
+		if taskID(row.task) == id {
+			return index
+		}
+	}
+	return -1
+}
+
 func (m *model) taskRowByID(taskID string) *taskRow {
 	for i := range m.rows {
 		if m.rows[i].task != nil && m.rows[i].task.ID == taskID {
@@ -1613,6 +1757,9 @@ func (m *model) taskRowByID(taskID string) *taskRow {
 	return nil
 }
 
+// setTaskStatus records a task's live status for the row to show. It does not
+// move the row: the list is only arranged afresh when it is opened, refreshed
+// or switched to another view.
 func (m *model) setTaskStatus(taskID string, status *core.TaskStatusUpdate) {
 	if row := m.taskRowByID(taskID); row != nil {
 		row.status = status
@@ -1625,6 +1772,8 @@ func (m *model) setTaskPullRequestStatus(taskID string, status *core.PRStatus) {
 	}
 }
 
+// setTaskActivity records a task's recent Activity events for the row to show;
+// like a status it does not move the row.
 func (m *model) setTaskActivity(taskID string, activity []core.TaskActivityEvent) {
 	if row := m.taskRowByID(taskID); row != nil {
 		row.activity = append([]core.TaskActivityEvent(nil), activity...)
@@ -1650,28 +1799,26 @@ func (m *model) setTaskWorktrees(taskID string, worktrees []core.TaskWorktree) {
 	}
 }
 
+// upsertTaskRow lists task and returns the index it is at, or -1 when it has
+// no ID. A task already listed keeps its row and its place. A new one is
+// ranked once, by its record, so a task just created is the newest and a new
+// Child task lifts its family; it holds still from then on.
 func (m *model) upsertTaskRow(task *core.Task) int {
 	id := taskID(task)
 	if id == "" {
 		return -1
 	}
 
-	for i := range m.rows {
-		if taskID(m.rows[i].task) != id {
-			continue
-		}
-		m.rows[i].task = task
-		return i
+	if index := m.taskRowIndex(id); index >= 0 {
+		m.rows[index].task = task
+		return index
 	}
 
-	m.rows = append(m.rows, taskRow{task: task})
-	m.rows = groupRowsByRepo(m.rows)
-	for i := range m.rows {
-		if taskID(m.rows[i].task) == id {
-			return i
-		}
-	}
-	return -1
+	row := taskRow{task: task}
+	row.freezeOrder()
+	m.rows = append(m.rows, row)
+	m.sortRows()
+	return m.taskRowIndex(id)
 }
 
 func (m *model) advanceCreateProgress(step core.TaskCreateProgressStep) {
@@ -1684,7 +1831,11 @@ func (m *model) advanceCreateProgress(step core.TaskCreateProgressStep) {
 	m.create.active = step
 }
 
+// removeTaskRow drops a task's row; the rest keep their order and nesting. The
+// selection stays on the same task unless it is the one removed, when it stays
+// at the same place in the list.
 func (m *model) removeTaskRow(targetTaskID string) {
+	selectedTaskID := m.selectedTaskID()
 	filtered := m.rows[:0]
 	for _, row := range m.rows {
 		if taskID(row.task) == targetTaskID {
@@ -1693,6 +1844,7 @@ func (m *model) removeTaskRow(targetTaskID string) {
 		filtered = append(filtered, row)
 	}
 	m.rows = filtered
+	m.selectTask(selectedTaskID)
 }
 
 func taskID(task *core.Task) string {
@@ -1773,55 +1925,6 @@ func containsCreateStep(steps []core.TaskCreateProgressStep, target core.TaskCre
 		}
 	}
 	return false
-}
-
-func groupRowsByRepo(rows []taskRow) []taskRow {
-	if len(rows) < 2 {
-		return rows
-	}
-
-	order := make([]string, 0, len(rows))
-	groups := make(map[string][]taskRow, len(rows))
-	for _, row := range rows {
-		key := repoGroupKey(row.task)
-		if _, ok := groups[key]; !ok {
-			order = append(order, key)
-		}
-		groups[key] = append(groups[key], row)
-	}
-
-	grouped := make([]taskRow, 0, len(rows))
-	for _, key := range order {
-		grouped = append(grouped, nestChildRows(groups[key])...)
-	}
-	return grouped
-}
-
-// nestChildRows places each task's sessions right under it, in their own
-// order. A child whose parent is not listed stands on its own.
-func nestChildRows(rows []taskRow) []taskRow {
-	listed := make(map[string]bool, len(rows))
-	for _, row := range rows {
-		listed[taskID(row.task)] = true
-	}
-	children := make(map[string][]taskRow)
-	nested := make([]taskRow, 0, len(rows))
-	for _, row := range rows {
-		if row.task != nil && row.task.IsChild() && listed[row.task.ParentID] {
-			children[row.task.ParentID] = append(children[row.task.ParentID], row)
-			continue
-		}
-		nested = append(nested, row)
-	}
-	if len(children) == 0 {
-		return rows
-	}
-	withChildren := make([]taskRow, 0, len(rows))
-	for _, row := range nested {
-		withChildren = append(withChildren, row)
-		withChildren = append(withChildren, children[taskID(row.task)]...)
-	}
-	return withChildren
 }
 
 func repoGroupKey(task *core.Task) string {
