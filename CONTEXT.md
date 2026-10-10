@@ -21,7 +21,8 @@ Use `rig` for the CLI command and Rig for the product or system.
   submitted.
 - Launch options: The model and effort a Task's provider starts and resumes
   with, chosen when the Task or a new session is composed, kept on the Task,
-  and remembered per provider as the preselection for the next launch.
+  and remembered per provider as the preselection for the next launch. Codex
+  offers the models of the rig window's account.
 - New session: Starting a fresh provider session in an existing Task, in the
   same workspace and tmux session, usually from a handoff note, instead of
   compacting a long conversation or creating another Task. It either replaces

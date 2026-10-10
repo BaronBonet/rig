@@ -20,9 +20,13 @@ func TestTaskServiceGetLaunchSettings_ListsConfiguredProvidersOptionsAndLastUsed
 		"other":        {Model: "x"},
 	}
 
-	settings, err := svc.service.GetLaunchSettings(t.Context())
+	env := ProviderEnv{"CODEX_HOME": "/home/me/.codex-client", "CLAUDE_CONFIG_DIR": ""}
+
+	settings, err := svc.service.GetLaunchSettings(t.Context(), env)
 
 	require.NoError(t, err)
+	require.Equal(t, env, svc.providerRepo.launchOptionsEnv, "codex lists the window's account's models")
+	require.Equal(t, env, svc.claudeRepo.launchOptionsEnv)
 	require.Equal(t, &LaunchSettings{
 		Options: map[Provider]ProviderLaunchOptions{
 			ProviderCodex:  {Models: []string{"gpt-5"}, Efforts: []string{"high"}},
@@ -36,7 +40,7 @@ func TestTaskServiceGetLaunchSettings_RequiresProviderSetup(t *testing.T) {
 	svc := newTestTaskService(t)
 	svc.providerConfig.setup = nil
 
-	_, err := svc.service.GetLaunchSettings(t.Context())
+	_, err := svc.service.GetLaunchSettings(t.Context(), nil)
 
 	require.ErrorIs(t, err, ErrProviderSetupRequired)
 }

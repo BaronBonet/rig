@@ -131,6 +131,27 @@ Rig starts the provider as `env CLAUDE_CONFIG_DIR=… claude` (or
 tmux session, so a provider you start by hand there uses the same account.
 Tasks created before this existed keep using the daemon's environment.
 
+To give a client's folder its own Codex account:
+
+```sh
+# ~/clients/acme/.envrc
+export CODEX_HOME=$HOME/.codex-acme
+```
+
+```sh
+mkdir -p ~/.codex-acme              # Codex refuses a CODEX_HOME that does not exist
+cd ~/clients/acme && direnv allow
+codex login --device-auth           # sign in as the client's account
+```
+
+`--device-auth` lets you sign in from a private browser window, so the
+browser's own ChatGPT login is not reused. Then start that folder's `rig`
+window from a shell inside it. A new Codex home starts without your
+`~/.codex/config.toml`, so it has its own model, MCP servers and plugins.
+Codex asks once per home to trust Rig's hooks, on the first task there.
+For a Claude Code account, export `CLAUDE_CONFIG_DIR` instead and run
+`claude` there once to log in.
+
 ## Provider Hooks
 
 Rig uses provider hooks to capture live task status, recent activity, provider
@@ -138,15 +159,17 @@ session metadata, transcript paths, and token usage.
 
 ### Codex
 
-Enable hooks in `~/.codex/config.toml`:
+Codex runs hooks by default. If you turned them off, turn them back on in
+`config.toml`:
 
 ```toml
 [features]
 hooks = true
 ```
 
-Rig installs and updates its own Codex hook forwarding entries automatically
-(in `~/.codex/hooks.json`) during provider setup and when it starts task
+Rig installs and updates its own Codex hook forwarding entries automatically,
+in the `hooks.json` of the Codex home a task runs with (`~/.codex` unless
+`CODEX_HOME` says otherwise), during provider setup and when it starts task
 sessions. The forwarding hooks post local Codex events to Rig's background
 daemon; other Codex hooks and plugins can remain enabled. Codex keeps a trust
 record for each hook entry, so when a Rig update adds a forwarding entry (for
@@ -369,14 +392,18 @@ rig daemon restart
 While composing a task, `ctrl+t` cycles the model and `ctrl+r` the effort the
 provider starts with; `default` leaves the choice to the provider. Claude Code
 offers its model aliases (`fable`, `opus`, `sonnet`, `haiku`) and efforts
-(`low` to `max`), passed as `claude --model` and `--effort`; Codex offers its
-models and reasoning efforts, passed as `codex -m` and
-`-c model_reasoning_effort=…`. The choice is kept on the task, so a reconnect
-resumes the session with the same options, and shown in the detail view.
+(`low` to `max`), passed as `claude --model` and `--effort`; Codex offers the
+models its account may use and their reasoning efforts, passed as `codex -m`
+and `-c model_reasoning_effort=…`. Codex keeps that list in
+`models_cache.json` in its home, so each rig window offers its own account's
+models; a home Codex has not started with yet offers a built-in list instead.
+The choice is kept on the task, so a reconnect resumes the session with the
+same options, and shown in the detail view.
 
 The options a provider was last launched with are preselected the next time
-you compose with it; they live in `~/.config/rig/config.json` under
-`launch_defaults`, next to provider setup.
+you compose with it, unless the window's account does not offer them; they
+live in `~/.config/rig/config.json` under `launch_defaults`, next to provider
+setup.
 
 ## Sessions per task
 

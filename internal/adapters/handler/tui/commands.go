@@ -116,9 +116,9 @@ func newTaskSessionStreamCmd(ctx context.Context, frontend core.TaskFrontend, in
 	}
 }
 
-func getLaunchSettingsCmd(ctx context.Context, frontend core.TaskFrontend) tea.Cmd {
+func getLaunchSettingsCmd(ctx context.Context, frontend core.TaskFrontend, env core.ProviderEnv) tea.Cmd {
 	return func() tea.Msg {
-		settings, err := frontend.GetLaunchSettings(ctx)
+		settings, err := frontend.GetLaunchSettings(ctx, env)
 		return launchSettingsLoadedMsg{settings: settings, err: err}
 	}
 }

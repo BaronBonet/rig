@@ -185,8 +185,8 @@ func (f *frontend) NewTaskSessionStream(
 	})
 }
 
-func (f *frontend) GetLaunchSettings(ctx context.Context) (*core.LaunchSettings, error) {
-	return callUnary(ctx, f, opGetLaunchSettings, emptyResponse{})
+func (f *frontend) GetLaunchSettings(ctx context.Context, env core.ProviderEnv) (*core.LaunchSettings, error) {
+	return callUnary(ctx, f, opGetLaunchSettings, launchSettingsRequest{Env: env})
 }
 
 func (f *frontend) RetryTaskCreationStream(

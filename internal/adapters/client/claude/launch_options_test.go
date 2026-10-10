@@ -37,7 +37,7 @@ func TestRepositoryLaunchSpecs_PassTheTasksModelAndEffort(t *testing.T) {
 func TestRepositoryLaunchOptions_ListsModelAliasesAndEffortsAndCanWriteHandoffs(t *testing.T) {
 	repo, _ := newTestRepository(t, subprocess.NewMockRunner(t))
 
-	options := repo.LaunchOptions()
+	options := repo.LaunchOptions(nil)
 
 	require.Equal(t, []string{"fable", "opus", "sonnet", "haiku"}, options.Models)
 	require.Equal(t, []string{"low", "medium", "high", "xhigh", "max"}, options.Efforts)

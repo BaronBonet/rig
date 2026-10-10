@@ -139,6 +139,7 @@ type providerClientState struct {
 	launchErr               error
 	launchRequest           TaskSessionLaunchSpec
 	launchOptions           ProviderLaunchOptions
+	launchOptionsEnv        ProviderEnv
 	handoffPath             string
 	handoffErr              error
 	handoffSession          *TaskProviderSession
@@ -614,7 +615,8 @@ func configureProviderClientMock(client *MockProviderClient, state *providerClie
 		return "/exit"
 	}).Maybe()
 	client.EXPECT().ClearCommand().RunAndReturn(func() string { return state.clearCommand }).Maybe()
-	client.EXPECT().LaunchOptions().RunAndReturn(func() ProviderLaunchOptions {
+	client.EXPECT().LaunchOptions(mock.Anything).RunAndReturn(func(env ProviderEnv) ProviderLaunchOptions {
+		state.launchOptionsEnv = env
 		return state.launchOptions
 	}).Maybe()
 	client.EXPECT().WriteSessionHandoff(mock.Anything, mock.Anything, mock.Anything, mock.Anything).RunAndReturn(

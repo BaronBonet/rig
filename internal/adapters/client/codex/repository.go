@@ -55,13 +55,6 @@ var hookCatalog = providerkit.Catalog{
 // suggestions (common CLI noise is rejected by providerkit).
 var titleSkipPrefixes = []string{"tokens used", "openai codex"}
 
-// launchOptions are the models `codex -m` accepts and the reasoning efforts
-// its model_reasoning_effort config takes, in display order.
-var launchOptions = core.ProviderLaunchOptions{
-	Models:  []string{"gpt-5-codex", "gpt-5"},
-	Efforts: []string{"low", "medium", "high"},
-}
-
 type repository struct {
 	runner              subprocess.Runner
 	codexHomeDir        func() (string, error)
@@ -186,13 +179,6 @@ func (r *repository) EnsureTaskSessionEnvironment(_ context.Context, env core.Pr
 
 func (r *repository) BuildWorkspaceBootstrapSpec(_ *core.Task) (core.WorkspaceBootstrapSpec, error) {
 	return core.WorkspaceBootstrapSpec{}, nil
-}
-
-func (r *repository) LaunchOptions() core.ProviderLaunchOptions {
-	return core.ProviderLaunchOptions{
-		Models:  append([]string(nil), launchOptions.Models...),
-		Efforts: append([]string(nil), launchOptions.Efforts...),
-	}
 }
 
 // WriteSessionHandoff is not supported: Codex has no print-mode resume that

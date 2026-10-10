@@ -2440,6 +2440,7 @@ type frontendHarness struct {
 	launchSettings              *core.LaunchSettings
 	launchSettingsErr           error
 	launchSettingsCalls         int
+	launchSettingsEnv           core.ProviderEnv
 	newSessionInput             core.NewTaskSessionInput
 	newSessionEvents            []core.TaskCreateEvent
 	newSessionStreamErr         error
@@ -2485,9 +2486,10 @@ func newFrontendHarness() *frontendHarness {
 			return append([]core.ProviderDetection(nil), frontend.detections...), nil
 		},
 	).Maybe()
-	frontend.mock.EXPECT().GetLaunchSettings(mock.Anything).RunAndReturn(
-		func(context.Context) (*core.LaunchSettings, error) {
+	frontend.mock.EXPECT().GetLaunchSettings(mock.Anything, mock.Anything).RunAndReturn(
+		func(_ context.Context, env core.ProviderEnv) (*core.LaunchSettings, error) {
 			frontend.launchSettingsCalls++
+			frontend.launchSettingsEnv = env
 			if frontend.launchSettingsErr != nil {
 				return nil, frontend.launchSettingsErr
 			}

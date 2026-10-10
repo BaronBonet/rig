@@ -238,7 +238,7 @@ func (r *repository) BuildWorkspaceBootstrapSpec(_ *core.Task) (core.WorkspaceBo
 	}, nil
 }
 
-func (r *repository) LaunchOptions() core.ProviderLaunchOptions {
+func (r *repository) LaunchOptions(core.ProviderEnv) core.ProviderLaunchOptions {
 	return core.ProviderLaunchOptions{
 		Models:  append([]string(nil), launchOptions.Models...),
 		Efforts: append([]string(nil), launchOptions.Efforts...),

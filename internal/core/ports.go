@@ -280,9 +280,10 @@ type TaskService interface {
 	// and streams progress events followed by exactly one terminal result
 	// event. It refuses while a provider is still running in the task session.
 	NewTaskSessionStream(ctx context.Context, input NewTaskSessionInput) (<-chan TaskCreateEvent, error)
-	// GetLaunchSettings returns every configured provider's launch options and
-	// the options each was last launched with.
-	GetLaunchSettings(ctx context.Context) (*LaunchSettings, error)
+	// GetLaunchSettings returns every configured provider's launch options
+	// under the window's provider configuration env, and the options each was
+	// last launched with.
+	GetLaunchSettings(ctx context.Context, env ProviderEnv) (*LaunchSettings, error)
 }
 
 // HookEventHandler consumes provider hook events inside the daemon process.
@@ -381,9 +382,10 @@ type ProviderClient interface {
 	// BuildWorkspaceBootstrapSpec describes the provider-specific files that
 	// should be written into the task workspace before launch.
 	BuildWorkspaceBootstrapSpec(task *Task) (WorkspaceBootstrapSpec, error)
-	// LaunchOptions lists the models and efforts the provider's CLI accepts,
-	// and whether it can write a handoff note from a previous session.
-	LaunchOptions() ProviderLaunchOptions
+	// LaunchOptions lists the models and efforts the provider's CLI accepts
+	// when it runs with env, and whether it can write a handoff note from a
+	// previous session.
+	LaunchOptions(env ProviderEnv) ProviderLaunchOptions
 	// WriteSessionHandoff asks a previous provider session of the task, in
 	// print mode and without touching the task's interactive session, for a
 	// handoff note a fresh session can start from, and returns the path it

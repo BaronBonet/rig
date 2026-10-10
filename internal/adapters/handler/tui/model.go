@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"path/filepath"
+	"slices"
 	"strings"
 
 	"github.com/BaronBonet/rig/internal/core"
@@ -405,7 +406,7 @@ func newModel(frontend core.TaskFrontend, launchCwd string, buildVersion string)
 func (m model) Init() tea.Cmd {
 	return tea.Batch(
 		getProviderSetupCmd(m.statusContext, m.frontend),
-		getLaunchSettingsCmd(m.statusContext, m.frontend),
+		getLaunchSettingsCmd(m.statusContext, m.frontend, m.providerEnv),
 		m.loadTasks(true),
 		activityRefreshTickCmd(),
 	)
@@ -511,14 +512,22 @@ func nextChoice(choices []string, current string) string {
 	return choices[0]
 }
 
-// applyLaunchDefaults preselects the options provider was last launched with.
+// applyLaunchDefaults preselects the options provider was last launched with,
+// leaving out any this window's account does not offer: the last launch may
+// have come from a rig window under another account.
 func (m *model) applyLaunchDefaults(provider core.Provider) {
 	m.draft.model, m.draft.effort = "", ""
 	if m.launchSettings == nil {
 		return
 	}
 	defaults := m.launchSettings.Defaults[provider]
-	m.draft.model, m.draft.effort = defaults.Model, defaults.Effort
+	models, efforts := m.launchChoices(provider)
+	if slices.Contains(models, defaults.Model) {
+		m.draft.model = defaults.Model
+	}
+	if slices.Contains(efforts, defaults.Effort) {
+		m.draft.effort = defaults.Effort
+	}
 }
 
 // rememberLaunchDefaults mirrors what the daemon records on launch, so the
@@ -836,7 +845,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.loading = true
 		return m, tea.Batch(
 			m.loadTasks(false),
-			getLaunchSettingsCmd(m.statusContext, m.frontend),
+			getLaunchSettingsCmd(m.statusContext, m.frontend, m.providerEnv),
 		)
 	case launchSettingsLoadedMsg:
 		// Without settings the composer simply offers no options to cycle.

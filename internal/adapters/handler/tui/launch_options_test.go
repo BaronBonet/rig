@@ -58,6 +58,29 @@ func TestModel_ComposerPreselectsTheProvidersLastLaunchOptions(t *testing.T) {
 	require.Contains(t, view, "ctrl+r cycle")
 }
 
+func TestModel_ComposerSkipsLastLaunchOptionsTheWindowsAccountLacks(t *testing.T) {
+	for name, tc := range map[string]struct {
+		last       core.LaunchOptions
+		wantModel  string
+		wantEffort string
+	}{
+		"model from another account": {core.LaunchOptions{Model: "gpt-6.1-sol", Effort: "high"}, "", "high"},
+		"effort the models lack":     {core.LaunchOptions{Model: "gpt-5", Effort: "ultra"}, "gpt-5", ""},
+	} {
+		t.Run(name, func(t *testing.T) {
+			frontend := newFrontendHarness()
+			m := newLoadedModel(frontend)
+			m.launchSettings = launchSettingsFixture()
+			m.launchSettings.Defaults[core.ProviderCodex] = tc.last
+
+			m = pressKeys(t, m, tea.KeyPressMsg{Text: "n"})
+
+			require.Equal(t, tc.wantModel, m.draft.model)
+			require.Equal(t, tc.wantEffort, m.draft.effort)
+		})
+	}
+}
+
 func TestModel_CtrlTAndCtrlRCycleModelAndEffortAndSubmitSendsThem(t *testing.T) {
 	frontend := newFrontendHarness()
 	frontend.createTaskEvents = []core.TaskCreateEvent{

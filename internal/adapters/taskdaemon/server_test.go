@@ -45,8 +45,9 @@ type fakeTaskService struct {
 	createTask  *core.Task
 	createErr   error
 
-	newSessionInput *core.NewTaskSessionInput
-	launchSettings  *core.LaunchSettings
+	newSessionInput   *core.NewTaskSessionInput
+	launchSettings    *core.LaunchSettings
+	launchSettingsEnv core.ProviderEnv
 
 	updates      chan core.TaskStatusUpdate
 	subscribeErr error
@@ -123,9 +124,10 @@ func (f *fakeTaskService) NewTaskSessionStream(
 	return f.taskCreateResult()
 }
 
-func (f *fakeTaskService) GetLaunchSettings(context.Context) (*core.LaunchSettings, error) {
+func (f *fakeTaskService) GetLaunchSettings(_ context.Context, env core.ProviderEnv) (*core.LaunchSettings, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
+	f.launchSettingsEnv = env
 	return f.launchSettings, f.errByOp["get_launch_settings"]
 }
 

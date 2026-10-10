@@ -21,16 +21,20 @@ func TestGetLaunchSettingsRoundTrip(t *testing.T) {
 		Defaults: map[core.Provider]core.LaunchOptions{core.ProviderClaude: {Model: "opus"}},
 	}
 	client := startTestFrontend(t, svc)
+	env := core.ProviderEnv{"CODEX_HOME": "/home/me/.codex-client", "CLAUDE_CONFIG_DIR": ""}
 
-	settings, err := client.GetLaunchSettings(context.Background())
+	settings, err := client.GetLaunchSettings(context.Background(), env)
 
 	require.NoError(t, err)
 	require.Equal(t, svc.launchSettings, settings)
+	svc.mu.Lock()
+	require.Equal(t, env, svc.launchSettingsEnv, "the window's provider env reaches the service")
+	svc.mu.Unlock()
 
 	svc.mu.Lock()
 	svc.errByOp["get_launch_settings"] = errors.New("config unreadable")
 	svc.mu.Unlock()
-	_, err = client.GetLaunchSettings(context.Background())
+	_, err = client.GetLaunchSettings(context.Background(), nil)
 	require.ErrorContains(t, err, "config unreadable")
 }
 

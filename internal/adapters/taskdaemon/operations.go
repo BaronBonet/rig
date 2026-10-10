@@ -48,6 +48,10 @@ type importableSessionsRequest struct {
 	Folder string           `json:"folder"`
 }
 
+type launchSettingsRequest struct {
+	Env core.ProviderEnv `json:"env,omitempty"`
+}
+
 type importSessionRequest struct {
 	Env     core.ProviderEnv            `json:"env,omitempty"`
 	Session core.ProviderSessionSummary `json:"session"`
@@ -265,11 +269,11 @@ var opSwitchTaskProvider = unaryOp[switchTaskProviderRequest, *core.Task]{
 	},
 }
 
-var opGetLaunchSettings = unaryOp[emptyResponse, *core.LaunchSettings]{
+var opGetLaunchSettings = unaryOp[launchSettingsRequest, *core.LaunchSettings]{
 	command:  "get_launch_settings",
 	envelope: "launch_settings",
-	call: func(ctx context.Context, svc core.TaskService, _ emptyResponse) (*core.LaunchSettings, error) {
-		return svc.GetLaunchSettings(ctx)
+	call: func(ctx context.Context, svc core.TaskService, req launchSettingsRequest) (*core.LaunchSettings, error) {
+		return svc.GetLaunchSettings(ctx, req.Env)
 	},
 }
 

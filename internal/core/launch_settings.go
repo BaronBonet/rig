@@ -2,9 +2,10 @@ package core
 
 import "context"
 
-// GetLaunchSettings returns every configured provider's launch options and
-// the options each was last launched with.
-func (s *service) GetLaunchSettings(ctx context.Context) (*LaunchSettings, error) {
+// GetLaunchSettings returns every configured provider's launch options under
+// env, the window's provider configuration, and the options each was last
+// launched with.
+func (s *service) GetLaunchSettings(ctx context.Context, env ProviderEnv) (*LaunchSettings, error) {
 	setup, err := s.GetProviderSetup(ctx)
 	if err != nil {
 		return nil, err
@@ -22,7 +23,7 @@ func (s *service) GetLaunchSettings(ctx context.Context) (*LaunchSettings, error
 		if err != nil {
 			continue
 		}
-		settings.Options[provider] = providerClient.LaunchOptions()
+		settings.Options[provider] = providerClient.LaunchOptions(env)
 	}
 
 	defaults, err := s.providerConfig.GetLaunchDefaults(ctx)

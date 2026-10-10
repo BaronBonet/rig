@@ -69,3 +69,19 @@ func TestModel_CreatesPullRequestTasksWithTheWindowsProviderEnv(t *testing.T) {
 	require.NotNil(t, frontend.createInput.Source.PullRequest)
 	require.Equal(t, windowEnv, frontend.createInput.ProviderEnv)
 }
+
+func TestModel_LoadsLaunchSettingsWithTheWindowsProviderEnv(t *testing.T) {
+	frontend := newFrontendHarness()
+	m := modelInWindow(frontend)
+
+	runBatchCmd(t, m.Init())
+	require.Equal(t, windowEnv, frontend.launchSettingsEnv, "on start")
+	frontend.launchSettingsEnv = nil
+
+	_, cmd := m.Update(providerSetupSavedMsg{setup: core.ProviderSetup{
+		Configured: []core.Provider{core.ProviderCodex},
+		Default:    core.ProviderCodex,
+	}})
+	runBatchCmd(t, cmd)
+	require.Equal(t, windowEnv, frontend.launchSettingsEnv, "after provider setup")
+}
