@@ -8,10 +8,10 @@ import (
 )
 
 // defaultProviderSessionWait bounds how long a launch blocks waiting for the
-// provider to report its session start before the prompt is typed; the launch
-// then completes and the prompt is typed in the background once the session
-// starts, within defaultProviderSessionLateWait. A folder trust dialog, for
-// example, holds the provider up until the user answers it.
+// provider to report its session start or show its input UI before the prompt
+// is typed. The launch then completes and the prompt is typed in the background
+// once it is ready, within defaultProviderSessionLateWait. A folder trust
+// dialog, for example, holds the provider up until the user answers it.
 const (
 	defaultProviderSessionWait     = 20 * time.Second
 	defaultProviderSessionLateWait = 10 * time.Minute
@@ -30,8 +30,8 @@ type sessionLauncher struct {
 	tmuxSession          TmuxSessionClient
 	enableWorkspaceSetup bool
 	// providerSessionWait bounds the wait for the provider's session-start
-	// hook before a prompt is typed; zero types it on the ready marker alone,
-	// with no background wait.
+	// hook or input UI before a prompt is typed; zero types it on the ready
+	// marker alone, with no background wait.
 	providerSessionWait time.Duration
 	// providerSessionLateWait bounds the background wait after that.
 	providerSessionLateWait time.Duration
@@ -214,11 +214,9 @@ func (l *sessionLauncher) bootstrapWorkspace(
 // startSession launches the task's active provider fresh in the task tmux
 // session, then types the task prompt once the provider is ready.
 //
-// Readiness comes from the provider itself: its session-start hook, which
-// fires once it has loaded the workspace and is past any startup dialog. The
-// pane's ready marker alone is not enough, since a shell prompt may show the
-// same character before the provider has even started and would swallow the
-// prompt.
+// Readiness comes from the provider's session-start hook or its explicit
+// input UI pattern. The pane's ready marker alone is not enough, since a shell
+// prompt may show the same character before the provider has even started.
 func (l *sessionLauncher) startSession(ctx context.Context, task *Task) (*Task, error) {
 	return l.launchSession(ctx, task, false)
 }
@@ -261,27 +259,27 @@ func (l *sessionLauncher) launchSession(ctx context.Context, task *Task, reuseRu
 	// a fresh launch has a session start to wait for.
 	launch.PrefillInput = prefill
 	if reused || l.providerSessionWait <= 0 ||
-		l.awaitProviderSession(ctx, task, knownSessions, l.providerSessionWait) {
+		l.awaitProviderReady(ctx, task, launch, knownSessions, l.providerSessionWait) {
 		if err := l.tmuxSession.PrefillTaskSession(ctx, task, launch); err != nil {
 			return task, fmt.Errorf("type task prompt into the session: %w", err)
 		}
 		return task, nil
 	}
 
-	// The provider has not reported its session yet, most likely a startup
-	// dialog is waiting for the user. The launch is complete; the prompt is
-	// typed once the session starts. The task record keeps it meanwhile.
-	go l.prefillWhenSessionStarts(context.WithoutCancel(ctx), task, launch, knownSessions)
+	// The provider is not ready yet, most likely a startup dialog is waiting
+	// for the user. The launch is complete; the prompt is typed once it is
+	// ready. The task record keeps it meanwhile.
+	go l.prefillWhenReady(context.WithoutCancel(ctx), task, launch, knownSessions)
 	return task, nil
 }
 
-func (l *sessionLauncher) prefillWhenSessionStarts(
+func (l *sessionLauncher) prefillWhenReady(
 	ctx context.Context,
 	task *Task,
 	launch TaskSessionLaunchSpec,
 	known map[string]bool,
 ) {
-	if !l.awaitProviderSession(ctx, task, known, l.providerSessionLateWait) {
+	if !l.awaitProviderReady(ctx, task, launch, known, l.providerSessionLateWait) {
 		return
 	}
 	_ = l.tmuxSession.PrefillTaskSession(ctx, task, launch)
@@ -314,16 +312,17 @@ func (l *sessionLauncher) providerSessionIDs(ctx context.Context, task *Task) ma
 	return known
 }
 
-// awaitProviderSession waits until the task records a provider session that
-// was not known before the launch, or the wait runs out. It reports whether
-// the session was observed.
-func (l *sessionLauncher) awaitProviderSession(
+// awaitProviderReady waits for a new provider session or an input UI the
+// provider explicitly recognizes. Some providers create their session only
+// after the first interaction, so a hook alone cannot gate draft delivery.
+func (l *sessionLauncher) awaitProviderReady(
 	ctx context.Context,
 	task *Task,
+	launch TaskSessionLaunchSpec,
 	known map[string]bool,
 	wait time.Duration,
 ) bool {
-	if l.tasks == nil || wait <= 0 {
+	if wait <= 0 {
 		return false
 	}
 	interval := l.sessionPollInterval
@@ -332,15 +331,24 @@ func (l *sessionLauncher) awaitProviderSession(
 	}
 	deadline := time.Now().Add(wait)
 	for {
-		sessions, err := l.tasks.ListTaskProviderSessions(ctx, task.ID)
-		if err == nil {
-			for _, session := range sessions {
-				if session.Provider != task.Provider {
-					continue
-				}
-				if !known[string(session.Provider)+"/"+strings.TrimSpace(session.ProviderSessionID)] {
-					return true
-				}
+		if launch.ReadyPattern != nil {
+			content, err := l.tmuxSession.CaptureTaskSession(ctx, task)
+			client := l.providers[task.Provider]
+			if err == nil && launch.ReadyPattern.MatchString(content) && client != nil &&
+				l.providerRunning(ctx, task, client) {
+				return true
+			}
+		}
+		var sessions []TaskProviderSession
+		if l.tasks != nil {
+			sessions, _ = l.tasks.ListTaskProviderSessions(ctx, task.ID)
+		}
+		for _, session := range sessions {
+			if session.Provider != task.Provider {
+				continue
+			}
+			if !known[string(session.Provider)+"/"+strings.TrimSpace(session.ProviderSessionID)] {
+				return true
 			}
 		}
 		if !time.Now().Before(deadline) {

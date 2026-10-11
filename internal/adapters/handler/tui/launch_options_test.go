@@ -177,6 +177,27 @@ func TestModel_KeyNOpensANewSessionComposerForTheSelectedTask(t *testing.T) {
 	require.Contains(t, stripANSI(m.View().Content), "where     this window, replacing the running session")
 }
 
+func TestModel_NewCodexSessionSendsTheSelectedModelAndEffort(t *testing.T) {
+	frontend := newFrontendHarness()
+	frontend.listTasks = []*core.Task{{
+		ID: "task-1", Provider: core.ProviderCodex, CreationStatus: core.TaskCreationStatusReady,
+		Model: "gpt-5", Effort: "low",
+	}}
+	frontend.newSessionEvents = []core.TaskCreateEvent{{Task: frontend.listTasks[0]}}
+	m := newLoadedModel(frontend)
+	m.launchSettings = launchSettingsFixture()
+	m = pressKeys(t, m, tea.KeyPressMsg{Text: "N"}, ctrl('t'), ctrl('t'), ctrl('r'))
+	m = pressKeys(t, m, typed("fix the retry loop")...)
+
+	_, cmd := m.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
+	runBatchCmd(t, cmd)
+
+	require.Equal(t, core.NewTaskSessionInput{
+		TaskID: "task-1", Prompt: "fix the retry loop", Provider: core.ProviderCodex,
+		Model: "gpt-5-codex", Effort: "high", NewWindow: true,
+	}, frontend.newSessionInput)
+}
+
 func TestModel_NewSessionHandsOffFromTheTasksProviderToAnother(t *testing.T) {
 	for name, tc := range map[string]struct {
 		taskProvider core.Provider

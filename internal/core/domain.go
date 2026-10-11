@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"time"
 )
@@ -585,6 +586,11 @@ type TaskSessionLaunchSpec struct {
 	// ready to receive interactive input. The tmux session client waits for this
 	// marker before typing PrefillInput into the window.
 	ReadyMarker string
+	// ReadyPattern optionally recognizes the provider's input UI independently
+	// of its session-start hook. Providers whose sessions are created lazily can
+	// use this to receive their draft before the first user interaction. It must
+	// distinguish the input UI from shell prompts and startup dialogs.
+	ReadyPattern *regexp.Regexp
 	// PrefillInput is the text typed into the interactive provider after the
 	// command has started and the ReadyMarker has appeared. For create-task,
 	// this is the drafted task prompt that is placed into the fresh task

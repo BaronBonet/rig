@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"sync"
 
@@ -28,6 +29,14 @@ const (
 // ConfigEnvVars are the variables that choose which Codex home, and so which
 // account, sessions and hooks, a session uses.
 var ConfigEnvVars = []string{codexHomeEnvVar}
+
+// Codex can show its composer before reporting a session-start hook. Recognize
+// its input with either the banner or footer, since startup output can scroll
+// the banner away. Numbered startup dialog selections are not input lines.
+const composerLinePattern = `^›(?:[ \t]*| [[:alpha:]][^\n]*)\n[ \t]*(?:\n|$)`
+
+var readyPattern = regexp.MustCompile(`(?m)(?:OpenAI Codex[^\n]*\n(?s:.*?)` + composerLinePattern +
+	`|` + composerLinePattern + `[ \t]*(?:\? for shortcuts|[^\n]+ · [^\n]+|[0-9]+% context left))`)
 
 // hookCatalog is Codex's hook event catalog: the one declaration of which
 // hook events Rig observes from Codex, how each is matched, and which
@@ -285,6 +294,7 @@ func (r *repository) BuildTaskSessionLaunchSpec(task *core.Task) (core.TaskSessi
 	return core.TaskSessionLaunchSpec{
 		Command:      command,
 		ReadyMarker:  readyMarker,
+		ReadyPattern: readyPattern,
 		PrefillInput: prefillInput,
 	}, nil
 }

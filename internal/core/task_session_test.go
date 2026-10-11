@@ -368,6 +368,7 @@ func TestTaskServiceNewTaskSession_InANewWindowCreatesAChildTaskAlongsideTheRunn
 		TaskID:    "task-1",
 		Prompt:    "add the search page",
 		Model:     "gpt-5",
+		Effort:    "high",
 		NewWindow: true,
 	}, reporter)
 
@@ -388,6 +389,8 @@ func TestTaskServiceNewTaskSession_InANewWindowCreatesAChildTaskAlongsideTheRunn
 	require.Equal(t, WorkspaceKindFolder, child.WorkspaceKind, "never seeded or removed")
 	require.Equal(t, TaskCreationStatusReady, child.CreationStatus)
 	require.Equal(t, "gpt-5", child.Model)
+	require.Equal(t, "high", child.Effort)
+	require.Equal(t, child.Launch(), svc.sessionClient.startedTask.Launch())
 	require.Equal(t, ContinuationPrompt(readyTaskFixture(), "add the search page", ""), child.Prompt,
 		"the composed prompt is the child's own ask, so a retry types it again")
 	require.Equal(t, child.ID, svc.sessionClient.startedTask.ID)

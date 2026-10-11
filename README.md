@@ -332,11 +332,12 @@ from the prompt view to create from a GitHub pull request instead — PR-backed
 tasks use the selected provider too.
 
 The prompt is typed into the provider's input, not submitted, once the
-provider reports that its session has started (its session-start hook), so a
-shell prompt that happens to use the same `❯` character, or a folder trust
-dialog, cannot swallow it. If the provider is still held up by a dialog after
-twenty seconds, the task is created anyway and the prompt is typed as soon as
-the session starts; it also stays on the task's detail view.
+provider is ready. Claude reports this through its session-start hook; Codex
+can also be recognized by its visible input UI, since it may report its
+session only after the first interaction. A shell prompt or a folder trust
+dialog cannot swallow the draft. If the provider is still held up by a dialog
+after twenty seconds, the task is created anyway and the prompt is typed as
+soon as its input is ready; it also stays on the task's detail view.
 
 Common TUI keys:
 

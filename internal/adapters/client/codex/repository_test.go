@@ -26,8 +26,47 @@ func TestRepositoryBuildTaskSessionLaunchSpec_StartsCodexAndPrefillsTaskPrompt(t
 	require.Equal(t, core.TaskSessionLaunchSpec{
 		Command:      []string{"env", "CODEX_HOME=" + codexHome, "codex"},
 		ReadyMarker:  "›",
+		ReadyPattern: readyPattern,
 		PrefillInput: []string{"add billing retry flow"},
 	}, launch)
+}
+
+func TestReadyPattern_RecognizesTheComposerWithoutAUserInteraction(t *testing.T) {
+	for name, tc := range map[string]struct {
+		pane string
+		want bool
+	}{
+		"loading composer": {
+			pane: "  >_ OpenAI Codex (v0.162.1)\n     loading\n\n› Ask Codex to do anything\n\n",
+			want: true,
+		},
+		"ready composer": {
+			pane: "╭─────────────────────────────────────╮\n│ >_ OpenAI Codex (v0.162.1)          │\n" +
+				"│ model: gpt-5 high                  │\n╰─────────────────────────────────────╯\n\n" +
+				"› Write tests for @filename\n\n  gpt-5 high · ~/repo\n",
+			want: true,
+		},
+		"empty composer": {pane: "  >_ OpenAI Codex\n\n› \n\n  ? for shortcuts\n", want: true},
+		"banner scrolled away": {
+			pane: "Some startup output\n\n› Ask Codex to do anything\n\n  gpt-5 high · ~/repo\n",
+			want: true,
+		},
+		"shortcuts footer": {pane: "› Write tests for @filename\n\n  ? for shortcuts\n", want: true},
+		"context footer":   {pane: "› \n\n  100% context left\n", want: true},
+		"shell echo":       {pane: "› env CODEX_HOME=/home/me/.codex codex -m gpt-5\n\n"},
+		"empty shell":      {pane: "› \n\n"},
+		"trust dialog": {
+			pane: "Do you trust the contents of this directory?\n› 1. Yes, continue\n  2. No, quit\n\n",
+		},
+		"dialog below a banner": {
+			pane: "  >_ OpenAI Codex\n\nDo you trust the contents of this directory?\n" +
+				"  1. Yes, continue\n› 2. No, quit\n\nPress enter to continue\n",
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			require.Equal(t, tc.want, readyPattern.MatchString(tc.pane))
+		})
+	}
 }
 
 func TestRepositoryBuildReconnectTaskSessionLaunchSpec_UsesCodexResume(t *testing.T) {
