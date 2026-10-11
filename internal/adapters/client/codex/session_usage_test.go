@@ -476,40 +476,160 @@ func TestRepositoryRecoverAgentSessionStatus_IgnoresSubagentTurnsFromBeforeRootR
 
 // A subagent compacts its own context, so only the root agent's rollout
 // counts, and a compaction appended later is picked up on the next read.
-func TestRepositoryReadConversationCompactions_CountsTheRootRolloutsCompactions(t *testing.T) {
+func TestRepositoryReadConversationUsage_CountsTheRootRolloutsCompactions(t *testing.T) {
 	repo := &repository{}
 	compacted := `{"timestamp":"2026-09-22T10:50:00Z","type":"compacted",` +
 		`"payload":{"message":"","replacement_history":[]}}`
 	contextCompacted := `{"timestamp":"2026-09-22T10:50:00Z","type":"event_msg",` +
 		`"payload":{"type":"context_compacted"}}`
 	rootPath := writeCodexRootTranscript(t)
-	appendTranscript(t, rootPath, compacted+"\n"+contextCompacted+"\n")
+	appendTranscript(t, rootPath, compacted+"\n"+codexTokenCountRecord(8135, "258400")+"\n"+contextCompacted+"\n")
 	subagentPath := writeCodexSubagentTranscript(t, "session-root", compacted, contextCompacted, compacted)
 	conversation := codexBackgroundSessions(rootPath, subagentPath)
 
-	compactions, err := repo.ReadConversationCompactions(t.Context(), conversation)
+	usage, err := repo.ReadConversationUsage(t.Context(), conversation)
 	require.NoError(t, err)
-	require.Equal(t, core.Compactions{Total: 1}, compactions)
+	require.Equal(t, core.Compactions{Total: 1}, usage.Compactions)
+	require.Equal(t, &core.ContextUsage{Tokens: 8135, Window: 258400}, usage.Context)
 
 	appendTranscript(t, rootPath, compacted+"\n")
-	compactions, err = repo.ReadConversationCompactions(t.Context(), conversation)
+	usage, err = repo.ReadConversationUsage(t.Context(), conversation)
 	require.NoError(t, err)
-	require.Equal(t, core.Compactions{Total: 2}, compactions)
+	require.Equal(t, core.Compactions{Total: 2}, usage.Compactions)
 
-	// A rewritten rollout is counted afresh.
+	// A rewritten rollout is counted afresh, and without a token_count it has
+	// no context usage.
 	require.NoError(t, os.WriteFile(rootPath, []byte(compacted+"\n"), 0o644))
-	compactions, err = repo.ReadConversationCompactions(t.Context(), conversation)
+	usage, err = repo.ReadConversationUsage(t.Context(), conversation)
 	require.NoError(t, err)
-	require.Equal(t, core.Compactions{Total: 1}, compactions)
+	require.Equal(t, core.Compactions{Total: 1}, usage.Compactions)
+	require.Nil(t, usage.Context)
 }
 
-func TestRepositoryReadConversationCompactions_ReturnsNoneWithoutARootRollout(t *testing.T) {
-	repo := &repository{}
+// A rollout can end right after a compaction. Codex 0.101 to 0.104 wrote the
+// token_count holding the compacted history's size just before the compacted
+// record, and later versions write it just after, so either way the latest
+// token_count is that size.
+func TestRepositoryReadConversationUsage_ReadsTheContextACompactionLeftAtTheRolloutsEnd(t *testing.T) {
+	compacted := `{"timestamp":"2026-09-22T10:50:00Z","type":"compacted",` +
+		`"payload":{"message":"","replacement_history":[]}}`
+	contextCompacted := `{"timestamp":"2026-09-22T10:50:00Z","type":"event_msg",` +
+		`"payload":{"type":"context_compacted"}}`
+	taskComplete := codexTurnRecord("2026-09-22T10:50:01Z", "task_complete")
+	beforeCompaction := codexTokenCountRecord(161254, "258400")
+	afterCompaction := codexTokenCountRecord(8135, "258400")
+	for name, ending := range map[string][]string{
+		"token_count before compacted": {afterCompaction, compacted, contextCompacted, taskComplete},
+		"token_count after compacted":  {compacted, afterCompaction, contextCompacted, taskComplete},
+	} {
+		t.Run(name, func(t *testing.T) {
+			repo := &repository{}
+			rootPath := writeCodexRootTranscript(t)
+			appendTranscript(t, rootPath, beforeCompaction+"\n"+strings.Join(ending, "\n")+"\n")
 
-	compactions, err := repo.ReadConversationCompactions(t.Context(), nil)
+			usage, err := repo.ReadConversationUsage(t.Context(), codexBackgroundSessions(rootPath))
+
+			require.NoError(t, err)
+			require.Equal(t, core.ConversationUsage{
+				Compactions: core.Compactions{Total: 1},
+				Context:     &core.ContextUsage{Tokens: 8135, Window: 258400},
+			}, usage)
+		})
+	}
+}
+
+// Codex writes a token_count after each compaction that holds the compacted
+// history's size, and token_counts that report only rate limits carry no
+// info.
+func TestRepositoryReadConversationUsage_ReadsTheContextACompactionLeft(t *testing.T) {
+	repo := &repository{}
+	rootPath := filepath.Join("testdata", "codex_rollout_compacted.jsonl")
+
+	usage, err := repo.ReadConversationUsage(t.Context(), codexBackgroundSessions(rootPath))
+	require.NoError(t, err)
+	require.Equal(t, core.ConversationUsage{
+		Compactions: core.Compactions{Total: 1},
+		Context:     &core.ContextUsage{Tokens: 17215, Window: 258400},
+	}, usage)
+
+	tokens, err := repo.ReadSessionTokenUsage(t.Context(), rootPath)
+	require.NoError(t, err)
+	require.Equal(t, &core.SessionTokenUsage{
+		InputTokens:           1569836,
+		CachedInputTokens:     1481344,
+		OutputTokens:          8272,
+		ReasoningOutputTokens: 1064,
+		TotalTokens:           1578108,
+	}, tokens)
+}
+
+// The context is the root agent's: a subagent's token_count says nothing about
+// it. A token_count appended later is picked up on the next read, and one that
+// does not report the window keeps the window known before.
+func TestRepositoryReadConversationUsage_ReadsTheRootRolloutsLatestTokenCount(t *testing.T) {
+	repo := &repository{}
+	rootPath := writeCodexRootTranscript(t)
+	appendTranscript(t, rootPath, codexTokenCountRecord(20664, "258400")+"\n")
+	subagentPath := writeCodexSubagentTranscript(t, "session-root", codexTokenCountRecord(90000, "272000"))
+	conversation := codexBackgroundSessions(rootPath, subagentPath)
+
+	usage, err := repo.ReadConversationUsage(t.Context(), conversation)
+	require.NoError(t, err)
+	require.Equal(t, core.ConversationUsage{Context: &core.ContextUsage{Tokens: 20664, Window: 258400}}, usage)
+
+	appendTranscript(t, rootPath, codexTokenCountRecord(31000, "null")+"\n"+
+		`{"type":"event_msg","payload":{"type":"token_count","info":null,"rate_limits":{"limit_id":"codex"}}}`+"\n")
+	usage, err = repo.ReadConversationUsage(t.Context(), conversation)
+	require.NoError(t, err)
+	require.Equal(t, core.ConversationUsage{Context: &core.ContextUsage{Tokens: 31000, Window: 258400}}, usage)
+}
+
+// A token_count whose latest usage totals nothing says nothing about the
+// context, so the previous context, window included, stands.
+func TestRepositoryReadConversationUsage_KeepsTheContextThroughAZeroTokenCount(t *testing.T) {
+	repo := &repository{}
+	rootPath := writeCodexRootTranscript(t)
+	appendTranscript(t, rootPath, codexTokenCountRecord(31000, "258400")+"\n"+
+		`{"type":"event_msg","payload":{"type":"token_count","info":{`+
+		`"total_token_usage":{"input_tokens":30995,"output_tokens":5,"total_tokens":31000},`+
+		`"last_token_usage":{"input_tokens":0,"output_tokens":0,"total_tokens":0},`+
+		`"model_context_window":272000}}}`+"\n")
+
+	usage, err := repo.ReadConversationUsage(t.Context(), codexBackgroundSessions(rootPath))
 
 	require.NoError(t, err)
-	require.Equal(t, core.Compactions{}, compactions)
+	require.Equal(t, core.ConversationUsage{Context: &core.ContextUsage{Tokens: 31000, Window: 258400}}, usage)
+}
+
+func TestRepositoryReadConversationUsage_ReturnsNoneWithoutARootRollout(t *testing.T) {
+	repo := &repository{}
+
+	usage, err := repo.ReadConversationUsage(t.Context(), nil)
+
+	require.NoError(t, err)
+	require.Equal(t, core.ConversationUsage{}, usage)
+}
+
+func TestRepositoryReadConversationUsage_ReturnsNoneForAMissingRollout(t *testing.T) {
+	repo := &repository{}
+
+	usage, err := repo.ReadConversationUsage(
+		t.Context(),
+		codexBackgroundSessions(filepath.Join(t.TempDir(), "missing.jsonl")),
+	)
+
+	require.NoError(t, err)
+	require.Equal(t, core.ConversationUsage{}, usage)
+}
+
+// codexTokenCountRecord is a token_count event whose latest request put
+// contextTokens in the context window. window is the JSON of its
+// model_context_window.
+func codexTokenCountRecord(contextTokens int, window string) string {
+	usage := `{"input_tokens":` + strconv.Itoa(contextTokens-5) +
+		`,"output_tokens":5,"total_tokens":` + strconv.Itoa(contextTokens) + `}`
+	return `{"timestamp":"2026-09-22T10:55:00Z","type":"event_msg","payload":{"type":"token_count","info":{` +
+		`"total_token_usage":` + usage + `,"last_token_usage":` + usage + `,"model_context_window":` + window + `}}}`
 }
 
 func codexRootStopStatus() core.AgentSessionStatus {

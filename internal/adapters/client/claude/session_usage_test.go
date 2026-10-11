@@ -3,6 +3,7 @@ package claude
 import (
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -89,7 +90,7 @@ func TestReadSessionTokenUsage_ReturnsNilForMissingOrUsageFreeTranscripts(t *tes
 	require.Nil(t, usage)
 }
 
-func TestReadConversationCompactions_CountsCompactBoundariesByTrigger(t *testing.T) {
+func TestReadConversationUsage_CountsCompactBoundariesByTrigger(t *testing.T) {
 	repo, _ := newTestRepository(t, subprocess.NewMockRunner(t))
 	transcript := writeTranscript(t,
 		`{"type":"user","message":{"role":"user","content":"why is \"compact_boundary\" in the logs?"}}`,
@@ -103,23 +104,93 @@ func TestReadConversationCompactions_CountsCompactBoundariesByTrigger(t *testing
 		`not json "compact_boundary"`,
 	)
 
-	compactions, err := repo.ReadConversationCompactions(t.Context(), []core.TaskProviderSession{{
+	usage, err := repo.ReadConversationUsage(t.Context(), []core.TaskProviderSession{{
 		Provider:       core.ProviderClaude,
 		TranscriptPath: transcript,
 	}})
 
 	require.NoError(t, err)
-	require.Equal(t, core.Compactions{Total: 4, Auto: 2, Manual: 1}, compactions)
+	require.Equal(t, core.ConversationUsage{Compactions: core.Compactions{Total: 4, Auto: 2, Manual: 1}}, usage)
 }
 
-func TestReadConversationCompactions_ReturnsNoneWithoutATranscript(t *testing.T) {
+// The context is what the root agent's latest request put in it, output
+// tokens left out, even when that request's tool call mentions
+// compact_boundary. A subagent's request on the sidechain and a synthetic
+// message say nothing about it.
+func TestReadConversationUsage_ReadsTheLatestRequestsContext(t *testing.T) {
+	repo, _ := newTestRepository(t, subprocess.NewMockRunner(t))
+	transcript := writeTranscript(t,
+		claudeAssistantEntry(false, "claude-opus-5-5", 3, 12000, 8000),
+		`{"isSidechain":false,"message":{"model":"claude-opus-5-5","role":"assistant","content":[`+
+			`{"type":"tool_use","name":"Grep","input":{"pattern":"compact_boundary"}}],`+
+			`"usage":{"input_tokens":2,"cache_creation_input_tokens":635,"cache_read_input_tokens":52000,`+
+			`"output_tokens":200}},"type":"assistant"}`,
+		claudeAssistantEntry(true, "claude-opus-5-5", 5, 30000, 90000),
+		claudeAssistantEntry(false, "<synthetic>", 0, 0, 0),
+		`{"type":"user","isSidechain":false,"message":{"role":"user","content":"thanks"}}`,
+	)
+
+	usage, err := repo.ReadConversationUsage(t.Context(), []core.TaskProviderSession{{
+		Provider:       core.ProviderClaude,
+		TranscriptPath: transcript,
+	}})
+
+	require.NoError(t, err)
+	require.Equal(t, core.ConversationUsage{Context: &core.ContextUsage{Tokens: 52637}}, usage)
+}
+
+// A compaction after the root agent's latest request leaves its context
+// unknown until the next request, even though it records the compacted
+// size: that size leaves out the system prompt and tools.
+func TestReadConversationUsage_LeavesTheContextUnknownAfterACompaction(t *testing.T) {
+	repo, _ := newTestRepository(t, subprocess.NewMockRunner(t))
+	fixture, err := os.ReadFile(filepath.Join("testdata", "claude_transcript_compacted.jsonl"))
+	require.NoError(t, err)
+	transcript := filepath.Join(t.TempDir(), "transcript.jsonl")
+	require.NoError(t, os.WriteFile(transcript, fixture, 0o600))
+	conversation := []core.TaskProviderSession{{Provider: core.ProviderClaude, TranscriptPath: transcript}}
+
+	usage, err := repo.ReadConversationUsage(t.Context(), conversation)
+	require.NoError(t, err)
+	require.Equal(t, core.ConversationUsage{Compactions: core.Compactions{Total: 1, Manual: 1}}, usage)
+
+	appendTranscript(t, transcript, claudeAssistantEntry(false, "claude-opus-5-5", 2, 23528, 29055)+"\n")
+	usage, err = repo.ReadConversationUsage(t.Context(), conversation)
+	require.NoError(t, err)
+	require.Equal(t, core.ConversationUsage{
+		Compactions: core.Compactions{Total: 1, Manual: 1},
+		Context:     &core.ContextUsage{Tokens: 52585},
+	}, usage)
+}
+
+func TestReadConversationUsage_ReturnsNoneWithoutATranscript(t *testing.T) {
 	repo, _ := newTestRepository(t, subprocess.NewMockRunner(t))
 
-	compactions, err := repo.ReadConversationCompactions(t.Context(), []core.TaskProviderSession{
+	usage, err := repo.ReadConversationUsage(t.Context(), []core.TaskProviderSession{
 		{Provider: core.ProviderClaude},
 		{Provider: core.ProviderClaude, TranscriptPath: filepath.Join(t.TempDir(), "missing.jsonl")},
 	})
 
 	require.NoError(t, err)
-	require.Equal(t, core.Compactions{}, compactions)
+	require.Equal(t, core.ConversationUsage{}, usage)
+}
+
+// claudeAssistantEntry is an assistant transcript entry for one API request
+// whose usage reports the given input, cache creation and cache read tokens.
+func claudeAssistantEntry(sidechain bool, model string, input int, cacheCreation int, cacheRead int) string {
+	return `{"parentUuid":null,"isSidechain":` + strconv.FormatBool(sidechain) + `,"message":{"model":"` + model +
+		`","type":"message","role":"assistant","content":[{"type":"text","text":"Done."}],"usage":{` +
+		`"input_tokens":` + strconv.Itoa(input) +
+		`,"cache_creation_input_tokens":` + strconv.Itoa(cacheCreation) +
+		`,"cache_read_input_tokens":` + strconv.Itoa(cacheRead) +
+		`,"output_tokens":455}},"type":"assistant"}`
+}
+
+func appendTranscript(t *testing.T, path string, content string) {
+	t.Helper()
+	file, err := os.OpenFile(path, os.O_APPEND|os.O_WRONLY, 0)
+	require.NoError(t, err)
+	_, err = file.WriteString(content)
+	require.NoError(t, err)
+	require.NoError(t, file.Close())
 }

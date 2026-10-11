@@ -938,8 +938,10 @@ func TestRenderRow_LongNameKeepsItsPullRequest(t *testing.T) {
 }
 
 func TestRenderRow_ShowsCompactionsOnlyForAnAgentThatCompacted(t *testing.T) {
+	// Its context column, blank while the agent's context is unknown, comes
+	// between the provider and the marker.
 	compacted := rowContent(model{}.renderRow(0, compactedRow(), 100))
-	require.Contains(t, compacted, "codex  "+iconCompacted+"2")
+	require.Contains(t, compacted, "codex  "+strings.Repeat(" ", colWidthContext)+iconCompacted+"2")
 
 	neverCompacted := compactedRow()
 	neverCompacted.usage = &core.TaskUsage{AgentCompactions: map[string]core.Compactions{"other-agent": {Total: 4}}}
@@ -954,30 +956,127 @@ func TestRenderRow_ShowsCompactionsOnlyForAnAgentThatCompacted(t *testing.T) {
 	require.NotContains(t, rowContent(model{}.renderRow(0, noLiveAgent, 100)), iconCompacted)
 }
 
-func TestRenderRow_NarrowTerminalsDropCompactionsThenProvider(t *testing.T) {
-	row := compactedRow()
+func TestRenderRow_NarrowTerminalsDropContextThenCompactionsThenProvider(t *testing.T) {
+	row := contextRow()
 	row.pullRequests = []core.PullRequest{{State: core.PRStateOpen, Number: 42}}
 
 	wide := rowContent(model{}.renderRow(0, row, 100))
 	require.Contains(t, wide, "codex")
+	require.Contains(t, wide, "41%")
 	require.Contains(t, wide, iconCompacted+"2")
+
+	noContext := rowContent(model{}.renderRow(0, row, 68))
+	require.Contains(t, noContext, "codex")
+	require.NotContains(t, noContext, "%")
+	require.Contains(t, noContext, iconCompacted+"2")
 
 	medium := rowContent(model{}.renderRow(0, row, 62))
 	require.Contains(t, medium, "codex")
+	require.NotContains(t, medium, "%")
 	require.NotContains(t, medium, iconCompacted)
 
 	narrow := rowContent(model{}.renderRow(0, row, 54))
 	require.NotContains(t, narrow, "codex")
+	require.NotContains(t, narrow, "%")
 	require.NotContains(t, narrow, iconCompacted)
 
 	for width := 40; width <= 140; width++ {
+		layout := taskRowLayoutFor(width)
+		// Each column goes only after the one before it in the drop order.
+		require.True(t, !layout.context || layout.compactions, "width %d", width)
+		require.True(t, !layout.compactions || layout.provider, "width %d", width)
+
 		line := model{}.renderRow(0, row, width)
+		require.NotContains(t, line, "\n", "width %d", width)
 		require.Less(t, lipgloss.Width(line), width, "width %d: %q", width, stripANSI(line))
 		view := rowContent(line)
 		require.Contains(t, view, "first task", "width %d", width)
 		require.Contains(t, view, "#42", "width %d", width)
+		require.Equal(t, layout.provider, strings.Contains(view, "codex"), "width %d: %q", width, view)
+		require.Equal(t, layout.context, strings.Contains(view, "41%"), "width %d: %q", width, view)
+		require.Equal(t, layout.compactions, strings.Contains(view, iconCompacted), "width %d: %q", width, view)
 		require.True(t, strings.HasSuffix(view, "15m"), "width %d: %q", width, view)
 	}
+}
+
+// contextRow is compactedRow with its agent's context window 41% full.
+func contextRow() taskRow {
+	row := compactedRow()
+	row.usage.AgentContext = map[string]core.ContextUsage{"agent-1": {Tokens: 106_000, Window: 258_400}}
+	return row
+}
+
+func TestContextPercent(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		context *core.ContextUsage
+		want    int
+		ok      bool
+	}{
+		{"rounds down", &core.ContextUsage{Tokens: 106_000, Window: 258_400}, 41, true},
+		{"rounds down near the next percent", &core.ContextUsage{Tokens: 999, Window: 1000}, 99, true},
+		{"empty", &core.ContextUsage{Tokens: 0, Window: 200_000}, 0, true},
+		{"full", &core.ContextUsage{Tokens: 200_000, Window: 200_000}, 100, true},
+		{"caps a count past the window", &core.ContextUsage{Tokens: 300_000, Window: 258_400}, 100, true},
+		{"unknown window", &core.ContextUsage{Tokens: 128_000}, 0, false},
+		{"no context", nil, 0, false},
+	} {
+		percent, ok := contextPercent(tc.context)
+		require.Equal(t, tc.ok, ok, tc.name)
+		require.Equal(t, tc.want, percent, tc.name)
+	}
+}
+
+func TestRenderContextCell_RightAlignsThePercentInItsColumn(t *testing.T) {
+	for _, tc := range []struct {
+		context *core.ContextUsage
+		want    string
+	}{
+		{&core.ContextUsage{Tokens: 9, Window: 100}, "   9% "},
+		{&core.ContextUsage{Tokens: 41, Window: 100}, "  41% "},
+		{&core.ContextUsage{Tokens: 412, Window: 100}, " 100% "},
+		{&core.ContextUsage{Tokens: 41}, "      "},
+		{nil, "      "},
+	} {
+		cell := stripANSI(renderContextCell(tc.context, mutedStyle))
+		require.Equal(t, tc.want, cell, "%+v", tc.context)
+		require.Equal(t, colWidthContext, lipgloss.Width(cell))
+	}
+}
+
+func TestRenderRow_ShowsItsOnlyAgentsContextBesideItsCompactions(t *testing.T) {
+	// The percentage sits between the provider and the compaction marker, a
+	// space clear of each.
+	line := rowContent(model{}.renderRow(0, contextRow(), 100))
+	require.Contains(t, line, "codex    41% "+iconCompacted+"2")
+
+	full := contextRow()
+	full.usage.AgentContext["agent-1"] = core.ContextUsage{Tokens: 300_000, Window: 258_400}
+	require.Contains(t, rowContent(model{}.renderRow(0, full, 100)), "codex   100% "+iconCompacted+"2")
+
+	// Without a window or a context, the column is blank.
+	unknownWindow := contextRow()
+	unknownWindow.usage.AgentContext["agent-1"] = core.ContextUsage{Tokens: 106_000}
+	noContext := contextRow()
+	noContext.usage.AgentContext = map[string]core.ContextUsage{"other-agent": {Tokens: 1, Window: 2}}
+	for _, row := range []taskRow{unknownWindow, noContext, compactedRow()} {
+		line := rowContent(model{}.renderRow(0, row, 100))
+		require.NotContains(t, line, "%")
+		require.Contains(t, line, "codex  "+strings.Repeat(" ", colWidthContext)+iconCompacted+"2")
+	}
+
+	// It lines up with the context column of a row that has no compactions.
+	uncompacted := contextRow()
+	uncompacted.usage.AgentCompactions = nil
+	require.Equal(
+		t,
+		statusColumn(t, rowContent(model{}.renderRow(0, contextRow(), 100)), "41%"),
+		statusColumn(t, rowContent(model{}.renderRow(0, uncompacted, 100)), "41%"),
+	)
+
+	// Like the compaction marker, it is muted until its task is selected.
+	require.Contains(t, model{selected: 0}.renderRow(0, contextRow(), 100), primaryStyle.Render("41%"))
+	require.Contains(t, model{selected: 1}.renderRow(0, contextRow(), 100), mutedStyle.Render("41%"))
 }
 
 func TestRenderRow_NeedsInputNameStandsOut(t *testing.T) {

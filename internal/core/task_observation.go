@@ -18,7 +18,8 @@ const defaultTaskStatusRecoveryWorkerLimit = 2
 // agent sessions hook events are attributed to, each agent session's runtime
 // status (including read-time liveness against the live tmux session and
 // provider-side recovery of stale status), the task's runtime status rolled
-// up from them, persisted activity, and usage: token usage and compactions.
+// up from them, persisted activity, and usage: token usage, compactions and
+// context usage.
 type taskObservation struct {
 	tasks       TaskRepository
 	tmuxSession TmuxSessionClient
@@ -139,8 +140,8 @@ func (o *taskObservation) GetTaskActivity(
 	return activityWindowWithLastUserPrompt(events, limit), nil
 }
 
-// GetTaskUsage reads a task's token usage and its open agent sessions'
-// compactions from their transcripts.
+// GetTaskUsage reads a task's token usage, and its open agent sessions'
+// compactions and context usage, from their transcripts.
 func (o *taskObservation) GetTaskUsage(ctx context.Context, taskID string) (*TaskUsage, error) {
 	taskID = strings.TrimSpace(taskID)
 	sessions, err := o.tasks.ListTaskProviderSessions(ctx, taskID)
@@ -152,15 +153,15 @@ func (o *taskObservation) GetTaskUsage(ctx context.Context, taskID string) (*Tas
 	if err != nil {
 		return nil, err
 	}
-	compactions, err := o.agentCompactions(ctx, taskID, sessions)
+	agents, err := o.agentConversationUsage(ctx, taskID, sessions)
 	if err != nil {
 		return nil, err
 	}
-	if tokens == nil && len(compactions) == 0 {
+	if tokens == nil && len(agents.compactions) == 0 && len(agents.context) == 0 {
 		return nil, nil
 	}
 
-	return &TaskUsage{Tokens: tokens, AgentCompactions: compactions}, nil
+	return &TaskUsage{Tokens: tokens, AgentCompactions: agents.compactions, AgentContext: agents.context}, nil
 }
 
 // taskTokenUsage sums the token usage of the latest transcript of each of a
@@ -205,22 +206,30 @@ func (o *taskObservation) taskTokenUsage(ctx context.Context, sessions []TaskPro
 	return &total, nil
 }
 
-// agentCompactions counts the compactions of each open agent session's
-// current Provider session, leaving out agent sessions with none. /clear
-// starts a new Provider session, so it starts the count over. An agent whose
-// transcript cannot be read is left out too, as its marker is not worth
-// failing the task's token usage over.
-func (o *taskObservation) agentCompactions(
+// agentUsage is what open agent sessions' transcripts record, by Agent
+// session ID.
+type agentUsage struct {
+	compactions map[string]Compactions
+	context     map[string]ContextUsage
+}
+
+// agentConversationUsage reads the compactions and context usage of each open
+// agent session's current Provider session, leaving out an agent session's
+// compactions when it has none and its context usage when its transcript does
+// not record it. /clear starts a new Provider session, so it starts both
+// over. An agent whose transcript cannot be read is left out too, as its
+// markers are not worth failing the task's token usage over.
+func (o *taskObservation) agentConversationUsage(
 	ctx context.Context,
 	taskID string,
 	history []TaskProviderSession,
-) (map[string]Compactions, error) {
+) (agentUsage, error) {
 	open, err := o.tasks.ListOpenAgentSessions(ctx, taskID)
 	if err != nil {
-		return nil, fmt.Errorf("list open agent sessions: %w", err)
+		return agentUsage{}, fmt.Errorf("list open agent sessions: %w", err)
 	}
 
-	var compactions map[string]Compactions
+	var agents agentUsage
 	for _, session := range open {
 		conversation := conversationHistory(history, session)
 		if len(conversation) == 0 {
@@ -230,16 +239,24 @@ func (o *taskObservation) agentCompactions(
 		if err != nil {
 			continue
 		}
-		count, err := providerClient.ReadConversationCompactions(ctx, conversation)
-		if err != nil || count.Total == 0 {
+		usage, err := providerClient.ReadConversationUsage(ctx, conversation)
+		if err != nil {
 			continue
 		}
-		if compactions == nil {
-			compactions = make(map[string]Compactions)
+		if usage.Compactions.Total > 0 {
+			if agents.compactions == nil {
+				agents.compactions = make(map[string]Compactions)
+			}
+			agents.compactions[session.ID] = usage.Compactions
 		}
-		compactions[session.ID] = count
+		if usage.Context != nil {
+			if agents.context == nil {
+				agents.context = make(map[string]ContextUsage)
+			}
+			agents.context[session.ID] = *usage.Context
+		}
 	}
-	return compactions, nil
+	return agents, nil
 }
 
 func (o *taskObservation) LatestTaskStatus(ctx context.Context, taskID string) (*TaskStatusUpdate, error) {
@@ -378,6 +395,7 @@ func (o *taskObservation) recordHookSession(ctx context.Context, input HookEvent
 		TranscriptPath:    strings.TrimSpace(input.TranscriptPath),
 		StartSource:       strings.TrimSpace(input.StartSource),
 		Model:             strings.TrimSpace(input.Model),
+		ModelSwitch:       strings.TrimSpace(input.EventName) == HookEventPostModelSwitch,
 		Cwd:               strings.TrimSpace(input.Cwd),
 		FirstObservedAt:   observedAt,
 		LastObservedAt:    observedAt,

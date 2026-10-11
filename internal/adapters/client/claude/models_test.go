@@ -56,10 +56,11 @@ func readInitializeFixture(t *testing.T) []string {
 
 // newListModelsRepository returns a repository whose Claude session replays
 // replies. The runner expects Claude's stream-json probe, under a deadline,
-// in a private directory that exists while the session starts.
+// in Rig's private control directory, which exists while the session starts.
 func newListModelsRepository(t *testing.T, replies ...string) (*repository, *fakeLineSession) {
 	t.Helper()
 	session := &fakeLineSession{replies: replies}
+	var controlDir string
 	runner := subprocess.NewMockRunner(t)
 	runner.EXPECT().StartLineSession(mock.Anything, mock.Anything).RunAndReturn(
 		func(ctx context.Context, opts subprocess.StartLineSessionOptions) (subprocess.LineSession, error) {
@@ -75,7 +76,7 @@ func newListModelsRepository(t *testing.T, replies ...string) (*repository, *fak
 				"--setting-sources", "user",
 				"--settings", `{"disableAllHooks":true}`,
 			}, opts.Args)
-			require.True(t, strings.HasPrefix(opts.Cwd, filepath.Join(os.TempDir(), "rig-list-models-")), opts.Cwd)
+			require.Equal(t, controlDir, opts.Cwd)
 			info, err := os.Stat(opts.Cwd)
 			require.NoError(t, err)
 			require.True(t, info.IsDir())
@@ -85,7 +86,8 @@ func newListModelsRepository(t *testing.T, replies ...string) (*repository, *fak
 		},
 	)
 
-	repo, _ := newTestRepository(t, runner)
+	repo, dataDir := newTestRepository(t, runner)
+	controlDir = filepath.Join(dataDir, "claude", "control")
 	return repo, session
 }
 
@@ -116,7 +118,7 @@ func TestRepositoryListModels_MapsTheRecordedModelsWithoutTheDefaultEntry(t *tes
 		`{"type":"control_request","request_id":"` + listModelsRequestID + `","request":{"subtype":"initialize"}}`,
 	}, session.sent)
 	require.True(t, session.closed)
-	require.NoDirExists(t, session.cwd)
+	require.DirExists(t, session.cwd)
 }
 
 func TestRepositoryListModels_TrimsLevelsAndDropsEmptyOnes(t *testing.T) {

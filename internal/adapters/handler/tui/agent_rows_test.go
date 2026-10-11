@@ -479,14 +479,19 @@ func statusColumn(t *testing.T, line string, text string) int {
 }
 
 func TestModel_AgentSubRowTruncatesLongPromptsClearOfTheTaskColumns(t *testing.T) {
-	for name, prompt := range map[string]string{
-		"ascii":              strings.Repeat("retry the flaky integration test ", 4),
-		"variation selector": strings.Repeat("⚠️ fix the retry logic ✔️ ", 6),
+	// A wide character that would straddle the edge is left out whole, which
+	// may end the prompt a cell sooner.
+	for name, test := range map[string]struct {
+		prompt    string
+		wideSlack int
+	}{
+		"ascii":              {prompt: strings.Repeat("retry the flaky integration test ", 4)},
+		"variation selector": {prompt: strings.Repeat("⚠️ fix the retry logic ✔️ ", 6), wideSlack: 1},
 	} {
 		t.Run(name, func(t *testing.T) {
 			m := agentsTaskModel(newFrontendHarness())
 			long := codexAgent()
-			long.LatestPrompt = prompt
+			long.LatestPrompt = test.prompt
 			m = withAgentSessions(t, m, "task-1", claudeAgent(), long)
 
 			// Truncated, the prompt ends a gap short of the provider column of
@@ -494,7 +499,8 @@ func TestModel_AgentSubRowTruncatesLongPromptsClearOfTheTaskColumns(t *testing.T
 			subRow := strings.TrimRight(viewLineContaining(t, m, "└ "+spinnerFrames[0]+" codex"), " ")
 			require.True(t, strings.HasSuffix(subRow, "…"), subRow)
 			providerColumn := statusColumn(t, viewLineContaining(t, m, "second task"), "codex")
-			require.Equal(t, providerColumn-len(nameGap), lipgloss.Width(subRow))
+			require.LessOrEqual(t, lipgloss.Width(subRow), providerColumn-len(nameGap))
+			require.GreaterOrEqual(t, lipgloss.Width(subRow), providerColumn-len(nameGap)-test.wideSlack)
 			for _, line := range strings.Split(m.View().Content, "\n") {
 				require.LessOrEqual(t, lipgloss.Width(line), m.totalWidth(), stripANSI(line))
 			}
@@ -700,11 +706,186 @@ func TestModel_AgentTextNeverReachesTheTerminalRaw(t *testing.T) {
 	require.Contains(t, plain, "done all passing")
 }
 
-// withUsage loads a task's usage into the model as the frontend reports it.
+// withUsage loads a task's compactions into the model as the frontend
+// reports them.
 func withUsage(t *testing.T, m model, taskID string, compactions map[string]core.Compactions) model {
 	t.Helper()
-	next, _ := m.Update(taskUsageLoadedMsg{taskID: taskID, usage: &core.TaskUsage{AgentCompactions: compactions}})
+	return withTaskUsage(t, m, taskID, &core.TaskUsage{AgentCompactions: compactions})
+}
+
+// withTaskUsage loads a task's usage into the model as the frontend reports
+// it.
+func withTaskUsage(t *testing.T, m model, taskID string, usage *core.TaskUsage) model {
+	t.Helper()
+	next, _ := m.Update(taskUsageLoadedMsg{taskID: taskID, usage: usage})
 	return asModel(t, next)
+}
+
+// contextAgentsModel is compactedAgentsModel with each agent's context
+// usage: task-1's Claude agent is 64% full, its Codex agent 9%, and task-2's
+// single agent 41%.
+func contextAgentsModel(t *testing.T, width int) model {
+	t.Helper()
+	m := compactedAgentsModel(t, width)
+	m = withTaskUsage(t, m, "task-1", &core.TaskUsage{
+		AgentCompactions: map[string]core.Compactions{"agent-codex": {Total: 2}},
+		AgentContext: map[string]core.ContextUsage{
+			"agent-claude": {Tokens: 128_000, Window: 200_000},
+			"agent-codex":  {Tokens: 24_500, Window: 258_400},
+		},
+	})
+	return withTaskUsage(t, m, "task-2", &core.TaskUsage{
+		AgentCompactions: map[string]core.Compactions{"agent-sole": {Total: 1, Manual: 1}},
+		AgentContext:     map[string]core.ContextUsage{"agent-sole": {Tokens: 106_000, Window: 258_400}},
+	})
+}
+
+func TestModel_AgentSubRowsShowTheirContextInTheTaskRowsColumn(t *testing.T) {
+	m := contextAgentsModel(t, 96)
+
+	// A task with sub-rows leaves its agents' context to them.
+	require.NotContains(t, viewLineContaining(t, m, "first task"), "%")
+	claudeLine := viewLineContaining(t, m, "fix the flaky retry test")
+	require.Contains(t, claudeLine, "64%")
+	require.NotContains(t, claudeLine, iconCompacted)
+	codexLine := viewLineContaining(t, m, "review the retry change")
+	require.Contains(t, codexLine, "9% "+iconCompacted+"2")
+
+	// Right-aligned, each percentage ends in the single-agent task row's
+	// context column, and the markers after it line up too.
+	taskLine := viewLineContaining(t, m, "second task")
+	require.Contains(t, taskLine, "41% "+iconCompacted+"1")
+	for _, subRow := range []string{claudeLine, codexLine} {
+		require.Equal(t, statusColumn(t, taskLine, "%"), statusColumn(t, subRow, "%"), subRow)
+	}
+	require.Equal(t, statusColumn(t, taskLine, iconCompacted), statusColumn(t, codexLine, iconCompacted))
+
+	// Like its compaction marker, a sub-row's percentage stands out on the
+	// selected line.
+	usage := agentRowUsage{context: &core.ContextUsage{Tokens: 24_500, Window: 258_400}}
+	require.Contains(t, m.renderAgentSubRow(codexAgent(), usage, true, false, 96), mutedStyle.Render("9%"))
+	require.Contains(t, m.renderAgentSubRow(codexAgent(), usage, true, true, 96), primaryStyle.Render("9%"))
+}
+
+func TestModel_AgentSubRowWithoutAKnownWindowLeavesItsContextBlank(t *testing.T) {
+	m := contextAgentsModel(t, 96)
+	m = withTaskUsage(t, m, "task-1", &core.TaskUsage{
+		AgentCompactions: map[string]core.Compactions{"agent-codex": {Total: 2}},
+		AgentContext:     map[string]core.ContextUsage{"agent-codex": {Tokens: 24_500}},
+	})
+
+	require.NotContains(t, viewLineContaining(t, m, "fix the flaky retry test"), "%")
+	codexLine := viewLineContaining(t, m, "review the retry change")
+	require.NotContains(t, codexLine, "%")
+	// Its compaction marker keeps its column.
+	require.Equal(
+		t,
+		statusColumn(t, viewLineContaining(t, m, "second task"), iconCompacted),
+		statusColumn(t, codexLine, iconCompacted),
+	)
+}
+
+func TestModel_ContextMarkersFitEveryWidth(t *testing.T) {
+	for width := 40; width <= 120; width++ {
+		m := contextAgentsModel(t, width)
+		m.detailsHidden = true
+		layout := taskRowLayoutFor(width)
+
+		// The keybind header already overflows the narrowest widths; task rows
+		// and sub-rows stay on one line and never do.
+		lines := strings.Split(m.View().Content, "\n")
+		require.Len(t, lines, 8, "width %d", width)
+		for _, line := range lines[1:] {
+			require.LessOrEqual(t, lipgloss.Width(line), width, "width %d: %q", width, stripANSI(line))
+		}
+
+		// The context column goes first, and sub-rows follow the task rows.
+		view := stripANSI(m.View().Content)
+		require.Equal(t, layout.context, strings.Contains(view, "%"), "width %d", width)
+		require.Equal(t, layout.compactions, strings.Contains(view, iconCompacted), "width %d", width)
+		taskLine := viewLineContaining(t, m, "second task")
+		if layout.context {
+			for _, subRow := range []string{"├", "└"} {
+				require.Equal(
+					t,
+					statusColumn(t, taskLine, "%"),
+					statusColumn(t, viewLineContaining(t, m, subRow), "%"),
+					"width %d", width,
+				)
+			}
+		}
+		if layout.compactions {
+			require.Equal(
+				t,
+				statusColumn(t, taskLine, iconCompacted),
+				statusColumn(t, viewLineContaining(t, m, "└"), iconCompacted),
+				"width %d", width,
+			)
+		}
+	}
+}
+
+// detailContext is the detail panel's context field, without its label.
+func detailContext(t *testing.T, m model) string {
+	t.Helper()
+	_, value, _ := strings.Cut(viewLineContaining(t, m, "context  "), "context  ")
+	return strings.TrimRight(value, " ")
+}
+
+func TestModel_DetailViewShowsTheAgentsContext(t *testing.T) {
+	m := contextAgentsModel(t, 96)
+
+	// On a task with sub-rows, each agent's context is left to it.
+	require.NotContains(t, stripANSI(m.View().Content), "context")
+
+	m = pressKey(t, m, tea.KeyPressMsg{Code: 'j', Text: "j"})
+	require.Equal(t, "agent-claude", m.selectedAgent)
+	require.Equal(t, "64% · 128.0k of 200.0k", detailContext(t, m))
+
+	m = pressKey(t, m, tea.KeyPressMsg{Code: 'j', Text: "j"})
+	require.Equal(t, "agent-codex", m.selectedAgent)
+	require.Equal(t, "9% · 24.5k of 258.4k", detailContext(t, m))
+	// The context comes before the compactions.
+	view := stripANSI(m.View().Content)
+	require.Less(t, strings.Index(view, "context  "), strings.Index(view, "compacted  2×"))
+
+	// A task with one agent shows that agent's context.
+	m = pressKey(t, m, tea.KeyPressMsg{Code: 'j', Text: "j"})
+	require.Equal(t, 1, m.selected)
+	require.Equal(t, "41% · 106.0k of 258.4k", detailContext(t, m))
+
+	// Without a known window, it shows only the tokens, on the task row and
+	// on a sub-row alike.
+	m = withTaskUsage(t, m, "task-1", &core.TaskUsage{
+		AgentContext: map[string]core.ContextUsage{"agent-codex": {Tokens: 24_500}},
+	})
+	m = withTaskUsage(t, m, "task-2", &core.TaskUsage{
+		AgentContext: map[string]core.ContextUsage{"agent-sole": {Tokens: 106_000}},
+	})
+	require.Equal(t, "106.0k", detailContext(t, m))
+	m = pressKey(t, m, tea.KeyPressMsg{Code: 'k', Text: "k"})
+	require.Equal(t, "agent-codex", m.selectedAgent)
+	require.Equal(t, "24.5k", detailContext(t, m))
+
+	// An agent without a recorded context has no context line.
+	m = pressKey(t, m, tea.KeyPressMsg{Code: 'k', Text: "k"})
+	require.Equal(t, "agent-claude", m.selectedAgent)
+	require.NotContains(t, stripANSI(m.View().Content), "context")
+}
+
+func TestContextDetailText(t *testing.T) {
+	for _, tc := range []struct {
+		context core.ContextUsage
+		want    string
+	}{
+		{core.ContextUsage{Tokens: 128_000, Window: 200_000}, "64% · 128.0k of 200.0k"},
+		{core.ContextUsage{Tokens: 128_000, Window: 1_000_000}, "12% · 128.0k of 1.0m"},
+		{core.ContextUsage{Tokens: 300_000, Window: 258_400}, "100% · 300.0k of 258.4k"},
+		{core.ContextUsage{Tokens: 128_000}, "128.0k"},
+		{core.ContextUsage{Tokens: 950}, "950"},
+	} {
+		require.Equal(t, tc.want, contextDetailText(tc.context), "%+v", tc.context)
+	}
 }
 
 // compactedAgentsModel has task-1 with a Claude and a Codex agent, of which
@@ -740,10 +921,16 @@ func TestModel_AgentSubRowShowsItsCompactionsInTheTaskRowsColumn(t *testing.T) {
 	)
 
 	// Like the task row's time, the marker stands out on the selected line.
-	require.Contains(t, m.renderAgentSubRow(codexAgent(), core.Compactions{Total: 3}, true, false, 96),
-		mutedStyle.Render(iconCompacted+"3"))
-	require.Contains(t, m.renderAgentSubRow(codexAgent(), core.Compactions{Total: 3}, true, true, 96),
-		primaryStyle.Render(iconCompacted+"3"))
+	require.Contains(
+		t,
+		m.renderAgentSubRow(codexAgent(), agentRowUsage{compactions: core.Compactions{Total: 3}}, true, false, 96),
+		mutedStyle.Render(iconCompacted+"3"),
+	)
+	require.Contains(
+		t,
+		m.renderAgentSubRow(codexAgent(), agentRowUsage{compactions: core.Compactions{Total: 3}}, true, true, 96),
+		primaryStyle.Render(iconCompacted+"3"),
+	)
 	require.Contains(t, model{selected: 0}.renderRow(0, compactedRow(), 96), primaryStyle.Render(iconCompacted+"2"))
 	require.Contains(t, model{selected: 1}.renderRow(0, compactedRow(), 96), mutedStyle.Render(iconCompacted+"2"))
 }

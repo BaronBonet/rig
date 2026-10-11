@@ -441,8 +441,15 @@ type TaskProviderSession struct {
 	TranscriptPath    string    `json:"transcript_path"`
 	StartSource       string    `json:"start_source"`
 	LastEventName     string    `json:"last_event_name"`
-	Model             string    `json:"model"`
-	Cwd               string    `json:"cwd"`
+	// Model is the latest model the conversation switched to, or else the one
+	// it started with.
+	Model string `json:"model"`
+	Cwd   string `json:"cwd"`
+	// ModelSwitch marks an observed event that switched the conversation to
+	// Model, which then replaces the stored model unless a newer event was
+	// stored. Any other event's model only fills a missing one. It is never
+	// stored, so a stored Provider session never has it set.
+	ModelSwitch bool `json:"-"`
 }
 
 type SessionTokenUsage struct {
@@ -484,14 +491,28 @@ func (u TaskTokenUsage) IsZero() bool {
 }
 
 // TaskUsage is what a task's agents have used: the token usage summed across
-// the task's Provider sessions, and how many times each live Agent session's
-// context was compacted.
+// the task's Provider sessions, how many times each live Agent session's
+// context was compacted, and how full each one's context window is.
 type TaskUsage struct {
 	// Tokens is nil when no transcript reports token usage.
 	Tokens *TaskTokenUsage `json:"tokens,omitempty"`
 	// AgentCompactions holds, by Agent session ID, the compactions of each
 	// open Agent session whose current Provider session was compacted.
 	AgentCompactions map[string]Compactions `json:"agent_compactions,omitempty"`
+	// AgentContext holds, by Agent session ID, the context usage of each open
+	// Agent session whose current Provider session records it.
+	AgentContext map[string]ContextUsage `json:"agent_context,omitempty"`
+}
+
+// ContextUsage is how full a conversation's context window is.
+type ContextUsage struct {
+	// Tokens is what the agent's latest request put in its context. After a
+	// compaction it is Codex's own count of what the compaction left, while a
+	// Claude agent's context is unknown until its next request.
+	Tokens int `json:"tokens"`
+	// Window is the model's context window size in tokens, or 0 when it is
+	// unknown.
+	Window int `json:"window,omitempty"`
 }
 
 // Compactions counts how many times a conversation's context was compacted:
@@ -502,6 +523,14 @@ type Compactions struct {
 	Total  int `json:"total"`
 	Auto   int `json:"auto,omitempty"`
 	Manual int `json:"manual,omitempty"`
+}
+
+// ConversationUsage is what one conversation's transcript records about its
+// root agent's context: how many times it was compacted, and how full it is.
+type ConversationUsage struct {
+	Compactions Compactions
+	// Context is nil when the transcript does not record it yet.
+	Context *ContextUsage
 }
 
 // Provider identifies the supported interactive runtime backing a task.
@@ -527,6 +556,9 @@ const (
 	HookEventNotification      = "Notification"
 	HookEventPermissionRequest = "PermissionRequest"
 	HookEventSubagentStart     = "SubagentStart"
+	// HookEventPostModelSwitch reports that the agent's conversation moved to
+	// another model, which HookEventInput.Model carries.
+	HookEventPostModelSwitch = "PostModelSwitch"
 )
 
 // SupportedProviders returns every provider Rig knows how to integrate with,

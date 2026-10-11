@@ -239,7 +239,38 @@ func (r *repository) UpsertTaskProviderSession(ctx context.Context, session core
 		session.LastObservedAt = session.FirstObservedAt
 	}
 
-	return r.queries.UpsertTaskProviderSession(ctx, upsertTaskProviderSessionParams(session))
+	if !session.ModelSwitch || session.Model == "" {
+		return r.queries.UpsertTaskProviderSession(ctx, upsertTaskProviderSessionParams(session))
+	}
+	return r.upsertSwitchedTaskProviderSession(ctx, session)
+}
+
+// upsertSwitchedTaskProviderSession records a model switch: the upsert, which
+// keeps a stored model, and then the switch's model, unless the Provider
+// session has seen a newer event. Both run in one transaction, so no event
+// stored in between can decide which is newer.
+func (r *repository) upsertSwitchedTaskProviderSession(
+	ctx context.Context,
+	session core.TaskProviderSession,
+) (err error) {
+	tx, err := r.db.BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("begin recording model switch: %w", err)
+	}
+	defer func() {
+		if err != nil {
+			_ = tx.Rollback()
+		}
+	}()
+
+	queries := r.queries.WithTx(tx)
+	if err := queries.UpsertTaskProviderSession(ctx, upsertTaskProviderSessionParams(session)); err != nil {
+		return err
+	}
+	if err := queries.SwitchTaskProviderSessionModel(ctx, switchTaskProviderSessionModelParams(session)); err != nil {
+		return err
+	}
+	return tx.Commit()
 }
 
 func (r *repository) ListTaskProviderSessions(ctx context.Context, taskID string) ([]core.TaskProviderSession, error) {

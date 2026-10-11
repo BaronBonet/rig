@@ -158,6 +158,17 @@ func DecodeHookEventInput(now func() time.Time, headerEventName string, body []b
 	input.AgentType = strings.TrimSpace(payload.AgentType)
 	input.NotificationType = strings.TrimSpace(payload.NotificationType)
 	input.BackgroundWork = backgroundWorkFromTasks(payload.BackgroundTasks)
+	// A model switch carries the model switched to as to_model, which keeps a
+	// [1m] suffix as SessionStart's model does. A subagent's switch says
+	// nothing about the model of the conversation it runs in. The switch's
+	// source says what switched the model, not what started the session.
+	if input.EventName == core.HookEventPostModelSwitch {
+		input.Model = ""
+		if input.AgentID == "" {
+			input.Model = strings.TrimSpace(payload.ToModel)
+		}
+		input.StartSource = ""
+	}
 	return input
 }
 
@@ -258,6 +269,7 @@ type hookPayload struct {
 	AgentID          string               `json:"agent_id"`
 	AgentType        string               `json:"agent_type"`
 	Model            string               `json:"model"`
+	ToModel          string               `json:"to_model"`
 	Cwd              string               `json:"cwd"`
 	TranscriptPath   string               `json:"transcript_path"`
 	Source           string               `json:"source"`

@@ -188,7 +188,7 @@ func TestRepositoryBuildWorkspaceBootstrapSpec_EmitsWorkspaceScopedHookSettings(
 	require.NoError(t, json.Unmarshal(file.Content, &settings))
 	for _, event := range []string{
 		"SessionStart", "SessionEnd", "UserPromptSubmit", "PreToolUse", "PostToolUse", "Notification", "Stop",
-		"StopFailure",
+		"StopFailure", "PostModelSwitch",
 	} {
 		require.Contains(t, settings.Hooks, event)
 	}
@@ -206,6 +206,9 @@ func TestRepositoryBuildWorkspaceBootstrapSpec_EmitsWorkspaceScopedHookSettings(
 	)
 	// Every API error type ends the turn, so StopFailure is unmatched.
 	require.Empty(t, settings.Hooks["StopFailure"][0].Matcher)
+	// A switch to any model records it, so PostModelSwitch is unmatched.
+	require.Empty(t, settings.Hooks["PostModelSwitch"][0].Matcher)
+	require.Contains(t, settings.Hooks["PostModelSwitch"][0].Hooks[0].Command, "'PostModelSwitch'")
 
 	scriptPath := filepath.Join(dataDir, "claude", "hooks", "forward-to-rig.sh")
 	require.Contains(t, settings.Hooks["SessionStart"][0].Hooks[0].Command, scriptPath)

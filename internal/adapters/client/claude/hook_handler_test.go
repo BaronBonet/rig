@@ -5,11 +5,13 @@ import (
 	"context"
 	"net/http"
 	"net/http/httptest"
+	"slices"
 	"testing"
 	"time"
 
 	"github.com/stretchr/testify/require"
 
+	"github.com/BaronBonet/rig/internal/adapters/client/providerkit"
 	"github.com/BaronBonet/rig/internal/core"
 )
 
@@ -53,6 +55,56 @@ func TestDecodeHookEventInput_DecodesSessionEndReason(t *testing.T) {
 	require.Equal(t, "sess-1", input.SessionID)
 	require.Equal(t, "prompt_input_exit", input.EndReason)
 	require.Empty(t, input.StartSource)
+}
+
+func TestDecodeHookEventInput_DecodesTheModelAPostModelSwitchMovedTo(t *testing.T) {
+	// Captured from Claude Code 2.1.296 answering a stream-json set_model
+	// request for opus[1m]. to_model is the resolved model, with its [1m]
+	// suffix kept as SessionStart's model keeps it.
+	body := []byte(`{
+		"session_id": "sess-1",
+		"transcript_path": "/tmp/transcript.jsonl",
+		"cwd": "/tmp/repo-task",
+		"hook_event_name": "PostModelSwitch",
+		"from_model": "claude-sonnet-4-6",
+		"to_model": "claude-opus-5-5[1m]",
+		"requested_model": "opus[1m]",
+		"source": "sdk",
+		"context_tokens": 0,
+		"prompt_cache_warm": false,
+		"cache_ttl": "1h",
+		"estimated_cache_write_usd": 0,
+		"pricing": "catalog"
+	}`)
+
+	input := DecodeHookEventInput(fixedNow, "PostModelSwitch", body)
+
+	require.Equal(t, core.HookEventPostModelSwitch, input.EventName)
+	require.Equal(t, "sess-1", input.SessionID)
+	require.Equal(t, "/tmp/transcript.jsonl", input.TranscriptPath)
+	require.Equal(t, "/tmp/repo-task", input.Cwd)
+	require.Equal(t, "claude-opus-5-5[1m]", input.Model)
+	// Its source says what switched the model, not what started the session.
+	require.Empty(t, input.StartSource)
+	require.Equal(t, fixedNow(), input.OccurredAt)
+}
+
+func TestDecodeHookEventInput_ASubagentsModelSwitchIsNoModelOfTheConversation(t *testing.T) {
+	input := DecodeHookEventInput(fixedNow, "PostModelSwitch", []byte(`{
+		"session_id": "sess-1",
+		"transcript_path": "/tmp/transcript.jsonl",
+		"cwd": "/tmp/repo-task",
+		"hook_event_name": "PostModelSwitch",
+		"agent_id": "agent-7",
+		"agent_type": "Explore",
+		"from_model": "claude-opus-5-5[1m]",
+		"to_model": "claude-haiku-4-5-20251001",
+		"source": "auto"
+	}`))
+
+	require.Equal(t, core.HookEventPostModelSwitch, input.EventName)
+	require.Equal(t, "agent-7", input.AgentID)
+	require.Empty(t, input.Model)
 }
 
 func TestHookHTTPHandler_DecodesHookProcessIdentity(t *testing.T) {
@@ -395,4 +447,24 @@ func TestHookEventToTaskStatus_IgnoresUnmappedEventsAndMissingTask(t *testing.T)
 
 	_, err = repo.HookEventToTaskStatus(core.HookEventInput{EventName: "Stop"})
 	require.ErrorIs(t, err, core.ErrUnmanagedHookEvent)
+}
+
+// Rig observes every model switch, for the model it records, but a switch
+// says nothing about whether the agent is working.
+func TestHookCatalog_ObservesEveryModelSwitchWithoutDrivingStatus(t *testing.T) {
+	index := slices.IndexFunc(hookCatalog, func(binding providerkit.Binding) bool {
+		return binding.Event == core.HookEventPostModelSwitch
+	})
+	require.GreaterOrEqual(t, index, 0)
+	require.Equal(t, providerkit.Binding{Event: core.HookEventPostModelSwitch}, hookCatalog[index])
+
+	repo := &repository{binary: "claude"}
+	update, err := repo.HookEventToTaskStatus(core.HookEventInput{
+		TaskID:     "task-1",
+		EventName:  core.HookEventPostModelSwitch,
+		Model:      "claude-sonnet-4-6",
+		OccurredAt: fixedNow(),
+	})
+	require.NoError(t, err)
+	require.Nil(t, update)
 }
