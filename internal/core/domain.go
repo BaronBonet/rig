@@ -3,6 +3,7 @@ package core
 import (
 	"fmt"
 	"os"
+	"strings"
 	"time"
 )
 
@@ -52,6 +53,27 @@ type RepoContext struct {
 type TaskSuggestion struct {
 	Name       string `json:"name"`
 	BranchType string `json:"branch_type"`
+	// Ticket references the issue or ticket the task works on, such as
+	// "GH #18" or "ABC-123". Empty when the task is not about one.
+	Ticket string `json:"ticket"`
+}
+
+// DisplayName leads the suggested name with the ticket reference, so a task
+// working on a ticket stays recognizable by it. With no description of the
+// work, the ticket reference alone names the task.
+func (s TaskSuggestion) DisplayName() string {
+	ticket := strings.TrimSpace(s.Ticket)
+	name := strings.TrimSpace(s.Name)
+	switch {
+	case ticket == "":
+		return name
+	case name == "":
+		return ticket
+	case strings.EqualFold(name, ticket) || strings.HasPrefix(strings.ToLower(name), strings.ToLower(ticket)+" "):
+		return name
+	default:
+		return ticket + " " + name
+	}
 }
 
 var validBranchTypes = map[string]bool{

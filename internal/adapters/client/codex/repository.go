@@ -126,7 +126,24 @@ func (r *repository) Doctor(ctx context.Context) error {
 	return nil
 }
 
-func (r *repository) SuggestTaskName(ctx context.Context, prompt string) (core.TaskSuggestion, error) {
+// SuggestTaskName names a task with codex exec in the task's repository. The
+// read-only sandbox lets Codex read a ticket the prompt refers to with the
+// user's own tools (gh, tracker MCP servers) without touching the checkout.
+func (r *repository) SuggestTaskName(ctx context.Context, repoRoot string, prompt string) (core.TaskSuggestion, error) {
+	return providerkit.SuggestWithTicketLookup(
+		ctx,
+		func(ctx context.Context, lookupTickets bool) (core.TaskSuggestion, error) {
+			return r.suggestTaskName(ctx, repoRoot, prompt, lookupTickets)
+		},
+	)
+}
+
+func (r *repository) suggestTaskName(
+	ctx context.Context,
+	repoRoot string,
+	prompt string,
+	lookupTickets bool,
+) (core.TaskSuggestion, error) {
 	tmpFile, err := os.CreateTemp("", "rig-codex-name-*.txt")
 	if err != nil {
 		return core.TaskSuggestion{}, err
@@ -135,21 +152,22 @@ func (r *repository) SuggestTaskName(ctx context.Context, prompt string) (core.T
 	_ = tmpFile.Close()
 	defer func() { _ = os.Remove(tmpPath) }()
 
-	fullPrompt := prompts.SuggestTaskPrompt + "\n\nTask description: " + prompt
-
 	result, err := r.runner.Run(
 		ctx,
-		"",
+		repoRoot,
 		r.binary,
 		"exec",
+		"--sandbox",
+		"read-only",
+		"--ephemeral",
 		"--skip-git-repo-check",
 		"--output-last-message",
 		tmpPath,
-		fullPrompt,
+		prompts.SuggestTask(prompt, lookupTickets),
 	)
 
 	fileOutput := readOutputFile(tmpPath)
-	if suggestion, ok := parsePreferredSuggestion(fileOutput, result.Stdout); ok {
+	if suggestion, ok := parsePreferredSuggestion(fileOutput, result.Stdout, !lookupTickets); ok {
 		return suggestion, nil
 	}
 	if err != nil {
@@ -265,10 +283,16 @@ func readOutputFile(path string) string {
 	return string(fileBytes)
 }
 
-func parsePreferredSuggestion(fileOutput, stdout string) (core.TaskSuggestion, bool) {
+// parsePreferredSuggestion reads the suggestion from the last message file
+// before stdout. allowPlainTitle accepts a plain-text line as the title, which
+// is unsafe after a ticket lookup: its last line may be commentary.
+func parsePreferredSuggestion(fileOutput, stdout string, allowPlainTitle bool) (core.TaskSuggestion, bool) {
 	for _, candidate := range []string{fileOutput, stdout} {
 		if suggestion, ok := providerkit.ParseSuggestion(candidate, titleSkipPrefixes); ok {
 			return suggestion, true
+		}
+		if !allowPlainTitle {
+			continue
 		}
 		if title := providerkit.ExtractTitle(candidate, titleSkipPrefixes); title != "" {
 			return core.TaskSuggestion{Name: title, BranchType: "feat"}, true

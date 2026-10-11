@@ -145,25 +145,44 @@ func (r *repository) Doctor(ctx context.Context) error {
 	return nil
 }
 
-func (r *repository) SuggestTaskName(ctx context.Context, prompt string) (core.TaskSuggestion, error) {
-	fullPrompt := prompts.SuggestTaskPrompt + "\n\nTask description: " + prompt
-
-	result, err := r.runner.Run(
+// SuggestTaskName names a task with Claude print mode in the task's
+// repository. The first attempt runs in auto permission mode, so Claude can
+// read a ticket the prompt refers to with the user's own tools (gh, tracker
+// MCP servers) while the auto mode classifier blocks anything risky. Auto mode
+// approves file edits in the working directory without the classifier, so
+// the edit tools are denied outright: a ticket body must never edit the
+// checkout.
+func (r *repository) SuggestTaskName(ctx context.Context, repoRoot string, prompt string) (core.TaskSuggestion, error) {
+	return providerkit.SuggestWithTicketLookup(
 		ctx,
-		"",
-		r.binary,
-		"-p",
-		"--output-format",
-		"text",
-		fullPrompt,
+		func(ctx context.Context, lookupTickets bool) (core.TaskSuggestion, error) {
+			return r.suggestTaskName(ctx, repoRoot, prompt, lookupTickets)
+		},
 	)
+}
+
+func (r *repository) suggestTaskName(
+	ctx context.Context,
+	repoRoot string,
+	prompt string,
+	lookupTickets bool,
+) (core.TaskSuggestion, error) {
+	args := []string{"-p", "--output-format", "text", "--no-session-persistence"}
+	if lookupTickets {
+		args = append(args, "--disallowedTools", "Edit,Write,NotebookEdit", "--permission-mode", "auto")
+	}
+	args = append(args, prompts.SuggestTask(prompt, lookupTickets))
+
+	result, err := r.runner.Run(ctx, repoRoot, r.binary, args...)
 	if suggestion, ok := providerkit.ParseSuggestion(result.Stdout, titleSkipPrefixes); ok {
 		return suggestion, nil
 	}
 	if err != nil {
 		return core.TaskSuggestion{}, fmt.Errorf("claude print mode failed: %w", err)
 	}
-	if title := providerkit.ExtractTitle(result.Stdout, titleSkipPrefixes); title != "" {
+	// A ticket lookup narrates its tool use, so its last plain-text line is
+	// commentary rather than a title.
+	if title := providerkit.ExtractTitle(result.Stdout, titleSkipPrefixes); title != "" && !lookupTickets {
 		return core.TaskSuggestion{Name: title, BranchType: "feat"}, nil
 	}
 
