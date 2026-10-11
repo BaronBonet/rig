@@ -177,6 +177,51 @@ func TestTaskServiceCreateTask_FailsWhenTaskNameSuggestionIsEmpty(t *testing.T) 
 	require.Nil(t, svc.sessionClient.startedTask)
 }
 
+func TestTaskServiceCreateTask_LeadsTaskNameWithReferencedTicket(t *testing.T) {
+	tests := []struct {
+		name            string
+		suggestion      TaskSuggestion
+		wantDisplayName string
+		wantBranchName  string
+	}{
+		{
+			name:            "ticket and description of the work",
+			suggestion:      TaskSuggestion{Name: "Fix the broken thing", BranchType: "fix", Ticket: "GH #18"},
+			wantDisplayName: "GH #18 Fix the broken thing",
+			wantBranchName:  "fix/gh-18-fix-the-broken-thing",
+		},
+		{
+			name:            "ticket whose work is unknown",
+			suggestion:      TaskSuggestion{BranchType: "feat", Ticket: "ABC-123"},
+			wantDisplayName: "ABC-123",
+			wantBranchName:  "feat/abc-123",
+		},
+		{
+			name:            "name already led by the ticket",
+			suggestion:      TaskSuggestion{Name: "abc-123 Add login retries", BranchType: "feat", Ticket: "ABC-123"},
+			wantDisplayName: "abc-123 Add login retries",
+			wantBranchName:  "feat/abc-123-add-login-retries",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			svc := newTestTaskService(t)
+			svc.providerRepo.suggestedSuggestion = tt.suggestion
+
+			task, err := svc.service.CreateTaskWithProgress(t.Context(), CreateTaskInput{
+				Cwd:    "/tmp/repo",
+				Prompt: "implement the ticket",
+			}, nil)
+
+			require.NoError(t, err)
+			require.Equal(t, "/tmp/repo", svc.providerRepo.suggestRepoRoot)
+			require.Equal(t, tt.wantDisplayName, task.DisplayName)
+			require.Equal(t, tt.wantBranchName, task.BranchName)
+		})
+	}
+}
+
 func TestTaskServiceCreateTask_ReturnsErrorWithoutPersistingLifecycleWhenWorkspaceBootstrapSpecFails(t *testing.T) {
 	svc := newTestTaskService(t)
 	svc.providerRepo.suggestedName = "billing retry flow"

@@ -157,7 +157,7 @@ func (c *taskCreation) createTaskFromPrompt(
 	}
 
 	reportTaskCreateProgress(reporter, TaskCreateProgressSuggestingName)
-	suggestion, err := suggestTaskName(ctx, providerClient, input.Prompt)
+	suggestion, err := suggestTaskName(ctx, providerClient, repoCtx.Root, input.Prompt)
 	if err != nil {
 		return nil, err
 	}
@@ -380,13 +380,18 @@ func (c *taskCreation) taskCreateEventStream(
 	return events, nil
 }
 
-func suggestTaskName(ctx context.Context, providerClient ProviderClient, prompt string) (TaskSuggestion, error) {
-	suggestion, err := providerClient.SuggestTaskName(ctx, prompt)
+func suggestTaskName(
+	ctx context.Context,
+	providerClient ProviderClient,
+	repoRoot string,
+	prompt string,
+) (TaskSuggestion, error) {
+	suggestion, err := providerClient.SuggestTaskName(ctx, repoRoot, prompt)
 	if err != nil {
 		return TaskSuggestion{}, fmt.Errorf("suggest task name: %w", err)
 	}
 
-	suggestion.Name = strings.TrimSpace(suggestion.Name)
+	suggestion.Name = suggestion.DisplayName()
 	if suggestion.Name == "" {
 		return TaskSuggestion{}, fmt.Errorf("suggest task name: empty task name")
 	}

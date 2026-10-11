@@ -296,8 +296,10 @@ type ProviderClient interface {
 	// Doctor verifies that the provider dependency and provider-specific Rig
 	// integration are available.
 	Doctor(ctx context.Context) error
-	// SuggestTaskName derives a task display name and branch type from a prompt.
-	SuggestTaskName(ctx context.Context, prompt string) (TaskSuggestion, error)
+	// SuggestTaskName derives a task name, branch type and any referenced issue
+	// or ticket from a prompt. It runs in the task's repository so the provider
+	// can look up a ticket the prompt refers to, on a best effort basis.
+	SuggestTaskName(ctx context.Context, repoRoot string, prompt string) (TaskSuggestion, error)
 	// EnsureTaskSessionEnvironment applies any provider-specific runtime
 	// configuration required before launching or resuming an interactive session.
 	EnsureTaskSessionEnvironment(ctx context.Context) error

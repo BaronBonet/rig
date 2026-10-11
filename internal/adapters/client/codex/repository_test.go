@@ -3,6 +3,7 @@ package codex
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -388,61 +389,100 @@ func TestRepositoryEnsureTaskSessionEnvironment_UpgradesAnEarlierRigRegistration
 	}, cfg.Hooks["SessionEnd"])
 }
 
+func expectCodexSuggestion(runner *subprocess.MockRunner) *subprocess.MockRunner_Run_Call {
+	return runner.EXPECT().Run(
+		mock.Anything,
+		"/repo",
+		"codex",
+		"exec",
+		"--sandbox",
+		"read-only",
+		"--ephemeral",
+		"--skip-git-repo-check",
+		"--output-last-message",
+		mock.Anything,
+		mock.Anything,
+	)
+}
+
 func TestRepositorySuggestTaskName_DelegatesToCodexProposal(t *testing.T) {
 	runner := subprocess.NewMockRunner(t)
-	runner.EXPECT().
-		Run(
-			mock.Anything,
-			"",
-			"codex",
-			"exec",
-			"--skip-git-repo-check",
-			"--output-last-message",
-			mock.Anything,
-			mock.Anything,
-		).
-		RunAndReturn(func(_ context.Context, cwd string, name string, args ...string) (subprocess.Result, error) {
-			require.Empty(t, cwd)
-			require.Equal(t, "codex", name)
-			require.Equal(
-				t,
-				[]string{"exec", "--skip-git-repo-check", "--output-last-message", args[3], args[4]},
-				args,
-			)
-			return subprocess.Result{Stdout: "billing retry flow\n"}, nil
+	expectCodexSuggestion(runner).
+		RunAndReturn(func(ctx context.Context, _ string, _ string, args ...string) (subprocess.Result, error) {
+			_, hasDeadline := ctx.Deadline()
+			require.True(t, hasDeadline, "ticket lookup must be time-boxed")
+			require.Contains(t, args[7], "gh issue view")
+			require.Contains(t, args[7], "Task description: add billing retry flow")
+			return subprocess.Result{Stdout: "{\"name\":\"billing retry flow\",\"branch_type\":\"feat\"}\n"}, nil
 		})
 	repo := New(runner, Config{Binary: "codex"}, HookForwardingConfig{})
 
-	suggestion, err := repo.SuggestTaskName(t.Context(), "add billing retry flow")
+	suggestion, err := repo.SuggestTaskName(t.Context(), "/repo", "add billing retry flow")
 	require.NoError(t, err)
 	require.Equal(t, "billing retry flow", suggestion.Name)
 	require.Equal(t, "feat", suggestion.BranchType)
 }
 
+func TestRepositorySuggestTaskName_AcceptsPlainTextTitleOnlyWithoutTools(t *testing.T) {
+	runner := subprocess.NewMockRunner(t)
+	attempts := 0
+	expectCodexSuggestion(runner).
+		RunAndReturn(func(_ context.Context, _ string, _ string, _ ...string) (subprocess.Result, error) {
+			attempts++
+			if attempts == 1 {
+				return subprocess.Result{Stdout: "I could not find ABC-123, so I named it from the description.\n"}, nil
+			}
+			return subprocess.Result{Stdout: "billing retry flow\n"}, nil
+		}).
+		Times(2)
+	repo := New(runner, Config{Binary: "codex"}, HookForwardingConfig{})
+
+	suggestion, err := repo.SuggestTaskName(t.Context(), "/repo", "add billing retry flow")
+	require.NoError(t, err)
+	require.Equal(t, core.TaskSuggestion{Name: "billing retry flow", BranchType: "feat"}, suggestion)
+}
+
 func TestRepositorySuggestTaskName_PrefersOutputFileOverStdout(t *testing.T) {
 	runner := subprocess.NewMockRunner(t)
-	runner.EXPECT().
-		Run(
-			mock.Anything,
-			"",
-			"codex",
-			"exec",
-			"--skip-git-repo-check",
-			"--output-last-message",
-			mock.Anything,
-			mock.Anything,
-		).
+	expectCodexSuggestion(runner).
 		RunAndReturn(func(_ context.Context, _ string, _ string, args ...string) (subprocess.Result, error) {
 			require.NoError(
 				t,
-				os.WriteFile(args[3], []byte("{\"name\":\"File Result\",\"branch_type\":\"feat\"}\n"), 0o600),
+				os.WriteFile(
+					args[6],
+					[]byte("{\"name\":\"File Result\",\"branch_type\":\"fix\",\"ticket\":\"GH #18\"}\n"),
+					0o600,
+				),
 			)
 			return subprocess.Result{Stdout: "stdout result\n"}, nil
 		})
 	repo := New(runner, Config{Binary: "codex"}, HookForwardingConfig{})
 
-	suggestion, err := repo.SuggestTaskName(t.Context(), "add billing retry flow")
+	suggestion, err := repo.SuggestTaskName(t.Context(), "/repo", "implement issue 18")
 	require.NoError(t, err)
-	require.Equal(t, "File Result", suggestion.Name)
-	require.Equal(t, "feat", suggestion.BranchType)
+	require.Equal(t, core.TaskSuggestion{Name: "File Result", BranchType: "fix", Ticket: "GH #18"}, suggestion)
+}
+
+func TestRepositorySuggestTaskName_NamesWithoutToolsWhenTicketLookupFails(t *testing.T) {
+	runner := subprocess.NewMockRunner(t)
+	var prompts []string
+	expectCodexSuggestion(runner).
+		RunAndReturn(func(_ context.Context, _ string, _ string, args ...string) (subprocess.Result, error) {
+			prompts = append(prompts, args[7])
+			if len(prompts) == 1 {
+				return subprocess.Result{}, errors.New("tracker MCP server timed out")
+			}
+			return subprocess.Result{
+				Stdout: "{\"name\":\"Login retries\",\"branch_type\":\"feat\",\"ticket\":\"ABC-123\"}\n",
+			}, nil
+		}).
+		Times(2)
+	repo := New(runner, Config{Binary: "codex"}, HookForwardingConfig{})
+
+	suggestion, err := repo.SuggestTaskName(t.Context(), "/repo", "implement ABC-123: add login retries")
+	require.NoError(t, err)
+	require.Equal(t, core.TaskSuggestion{Name: "Login retries", BranchType: "feat", Ticket: "ABC-123"}, suggestion)
+	require.Len(t, prompts, 2)
+	require.Contains(t, prompts[0], "gh issue view")
+	require.Contains(t, prompts[1], "Do not use any tools.")
 }

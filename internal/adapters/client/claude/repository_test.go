@@ -1,7 +1,9 @@
 package claude
 
 import (
+	"context"
 	"encoding/json"
+	"errors"
 	"os"
 	"path/filepath"
 	"testing"
@@ -170,32 +172,66 @@ func TestRepositoryDoctorAcceptsInstalledForwarderScript(t *testing.T) {
 	require.NoError(t, repo.Doctor(t.Context()))
 }
 
-func TestRepositorySuggestTaskName_ParsesSuggestionJSON(t *testing.T) {
+func TestRepositorySuggestTaskName_LooksUpTicketsInAutoModeFromRepo(t *testing.T) {
 	runner := subprocess.NewMockRunner(t)
 	runner.EXPECT().Run(
-		mock.Anything, "", "claude", "-p", "--output-format", "text", mock.Anything,
-	).Return(subprocess.Result{
-		Stdout: "thinking...\n{\"name\": \"Billing retry flow\", \"branch_type\": \"fix\"}\n",
-	}, nil)
+		mock.Anything, "/repo", "claude",
+		"-p", "--output-format", "text", "--no-session-persistence",
+		"--disallowedTools", "Edit,Write,NotebookEdit", "--permission-mode", "auto", mock.Anything,
+	).RunAndReturn(func(ctx context.Context, _ string, _ string, args ...string) (subprocess.Result, error) {
+		_, hasDeadline := ctx.Deadline()
+		require.True(t, hasDeadline, "ticket lookup must be time-boxed")
+		require.Contains(t, args[len(args)-1], "gh issue view")
+		require.Contains(t, args[len(args)-1], "Task description: implement issue 18")
+		return subprocess.Result{
+			Stdout: "Looked up GH #18.\n{\"branch_type\": \"fix\", \"ticket\": \"GH #18\", \"name\": \"Fix the broken thing\"}\n",
+		}, nil
+	})
 	repo, _ := newTestRepository(t, runner)
 
-	suggestion, err := repo.SuggestTaskName(t.Context(), "fix billing retries")
+	suggestion, err := repo.SuggestTaskName(t.Context(), "/repo", "implement issue 18")
 
 	require.NoError(t, err)
-	require.Equal(t, core.TaskSuggestion{Name: "Billing retry flow", BranchType: "fix"}, suggestion)
+	require.Equal(t, core.TaskSuggestion{Name: "Fix the broken thing", BranchType: "fix", Ticket: "GH #18"}, suggestion)
 }
 
-func TestRepositorySuggestTaskName_FallsBackToLastTextLine(t *testing.T) {
+func TestRepositorySuggestTaskName_AcceptsPlainTextTitleOnlyWithoutTools(t *testing.T) {
 	runner := subprocess.NewMockRunner(t)
 	runner.EXPECT().Run(
-		mock.Anything, "", "claude", "-p", "--output-format", "text", mock.Anything,
+		mock.Anything, "/repo", "claude",
+		"-p", "--output-format", "text", "--no-session-persistence",
+		"--disallowedTools", "Edit,Write,NotebookEdit", "--permission-mode", "auto", mock.Anything,
+	).Return(subprocess.Result{Stdout: "I could not find ABC-123.\nSo this name comes from the description alone.\n"}, nil)
+	runner.EXPECT().Run(
+		mock.Anything, "/repo", "claude", "-p", "--output-format", "text", "--no-session-persistence", mock.Anything,
 	).Return(subprocess.Result{Stdout: "Billing retry flow\n"}, nil)
 	repo, _ := newTestRepository(t, runner)
 
-	suggestion, err := repo.SuggestTaskName(t.Context(), "fix billing retries")
+	suggestion, err := repo.SuggestTaskName(t.Context(), "/repo", "fix billing retries")
 
 	require.NoError(t, err)
 	require.Equal(t, core.TaskSuggestion{Name: "Billing retry flow", BranchType: "feat"}, suggestion)
+}
+
+func TestRepositorySuggestTaskName_NamesWithoutToolsWhenTicketLookupFails(t *testing.T) {
+	runner := subprocess.NewMockRunner(t)
+	runner.EXPECT().Run(
+		mock.Anything, "/repo", "claude",
+		"-p", "--output-format", "text", "--no-session-persistence",
+		"--disallowedTools", "Edit,Write,NotebookEdit", "--permission-mode", "auto", mock.Anything,
+	).Return(subprocess.Result{}, errors.New("auto mode unavailable"))
+	runner.EXPECT().Run(
+		mock.Anything, "/repo", "claude", "-p", "--output-format", "text", "--no-session-persistence", mock.Anything,
+	).RunAndReturn(func(_ context.Context, _ string, _ string, args ...string) (subprocess.Result, error) {
+		require.Contains(t, args[len(args)-1], "Do not use any tools.")
+		return subprocess.Result{Stdout: "{\"branch_type\": \"feat\", \"ticket\": \"ABC-123\", \"name\": \"\"}\n"}, nil
+	})
+	repo, _ := newTestRepository(t, runner)
+
+	suggestion, err := repo.SuggestTaskName(t.Context(), "/repo", "implement ABC-123")
+
+	require.NoError(t, err)
+	require.Equal(t, core.TaskSuggestion{BranchType: "feat", Ticket: "ABC-123"}, suggestion)
 }
 
 func TestRepositoryActivityAndTokenUsageDegradeGracefully(t *testing.T) {

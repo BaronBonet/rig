@@ -17,6 +17,14 @@ a background daemon handles longer running orchestration.
 - **Prompt-backed task creation**: start a new task from a prompt; the selected
   provider suggests a task name, then Rig creates the branch and worktree,
   prepares the workspace, and starts the tmux session.
+- **Ticket-aware task names**: when the prompt asks to work on an issue or
+  ticket, the provider looks it up with whatever read-only access you've given
+  it (`gh`, a Jira, YouTrack, Linear or Shortcut MCP server) and names the task
+  after it, such as `GH #18 Fix the broken thing`. If the lookup fails, the
+  ticket reference alone names the task. Claude looks tickets up in auto
+  permission mode with its file edit tools denied, and Codex in its read-only
+  sandbox. Neither stops network or MCP tool calls, so as with the task session
+  itself, only allow tools you trust with the tickets you work on.
 - **Multi-provider support**: enable Codex and Claude Code through `rig setup`,
   pick a default provider, cycle providers with `tab` while creating a task, and
   start more agents in a task with any configured provider.

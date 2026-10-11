@@ -21,6 +21,9 @@ Use `rig` for the CLI command and Rig for the product or system.
   `failed`.
 - Creation step: The retryable task setup milestone, such as suggesting a name,
   creating the worktree, preparing the workspace, or starting the session.
+- Ticket reference: The issue or ticket a prompt asks to work on, such as
+  `GH #18` or `ABC-123`. It leads the task name, followed by a description of
+  the work when the provider manages to look the ticket up.
 - Task operation: A lifecycle mutation for one Task, such as retrying creation,
   reconnecting its Session, or deleting it. At most one Task operation may run
   for a Task at a time; unrelated Tasks remain independent.

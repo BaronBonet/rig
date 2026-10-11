@@ -4,7 +4,14 @@ import (
 	"context"
 	"os/exec"
 	"strings"
+	"time"
 )
+
+// pipeCloseDelay bounds how long a run waits for output pipes to close after
+// its process exits or is killed. Without it, a grandchild holding the pipes,
+// such as a binary spawned by an npm CLI wrapper, keeps a cancelled run alive
+// until the grandchild exits on its own.
+const pipeCloseDelay = 2 * time.Second
 
 type Result struct {
 	Stdout string
@@ -68,6 +75,7 @@ func (ExecRunner) Run(ctx context.Context, cwd string, name string, args ...stri
 func (ExecRunner) RunWithStdin(ctx context.Context, opts RunWithStdinOptions) (Result, error) {
 	cmd := exec.CommandContext(ctx, opts.Name, opts.Args...)
 	cmd.Dir = opts.Cwd
+	cmd.WaitDelay = pipeCloseDelay
 	if opts.Stdin != "" {
 		cmd.Stdin = strings.NewReader(opts.Stdin)
 	}

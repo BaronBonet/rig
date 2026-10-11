@@ -146,6 +146,7 @@ type providerClientState struct {
 	suggestErr          error
 	suggestedName       string
 	suggestedSuggestion TaskSuggestion
+	suggestRepoRoot     string
 	sessionEnvErr       error
 	sessionEnvCalls     int
 	// sessionEnvRan runs as each session environment is ensured, as a hook
@@ -549,12 +550,13 @@ func configureProviderClientMock(client *MockProviderClient, state *providerClie
 			return state.healthErr
 		},
 	).Maybe()
-	client.EXPECT().SuggestTaskName(mock.Anything, mock.Anything).RunAndReturn(
-		func(context.Context, string) (TaskSuggestion, error) {
+	client.EXPECT().SuggestTaskName(mock.Anything, mock.Anything, mock.Anything).RunAndReturn(
+		func(_ context.Context, repoRoot string, _ string) (TaskSuggestion, error) {
+			state.suggestRepoRoot = repoRoot
 			if state.suggestErr != nil {
 				return TaskSuggestion{}, state.suggestErr
 			}
-			if state.suggestedSuggestion.Name != "" {
+			if state.suggestedSuggestion != (TaskSuggestion{}) {
 				return state.suggestedSuggestion, nil
 			}
 			return TaskSuggestion{Name: state.suggestedName, BranchType: "feat"}, nil
