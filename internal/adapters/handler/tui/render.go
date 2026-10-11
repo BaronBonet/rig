@@ -15,8 +15,20 @@ import (
 
 const (
 	colWidthAgent   = 7
-	colWidthStatus  = 21
-	colWidthElapsed = 7
+	colWidthTokens  = 11
+	colWidthElapsed = 8
+
+	// rowGutterWidth is a row style's left border and padding plus the
+	// scrollbar column on the right.
+	rowGutterWidth = 4
+	// statusSymbolWidth is a row's status symbol and the space after it.
+	statusSymbolWidth = 2
+	// nameGap separates a task's name from its pull request, and the pull
+	// request from the columns after it.
+	nameGap = "  "
+	// minTaskNameArea is the narrowest name area a task row keeps: below it,
+	// the row drops its token column, then its provider column.
+	minTaskNameArea = 40
 
 	taskListScrollbarTrack = "│"
 	taskListScrollbarThumb = "█"
@@ -200,8 +212,8 @@ func (m model) taskListBlocks(totalWidth int) []taskListBlock {
 			previousRepoKey = repoKey
 		}
 
-		line1, line2 := m.renderRow(index, row, totalWidth)
-		if line1 == "" {
+		rowLine := m.renderRow(index, row, totalWidth)
+		if rowLine == "" {
 			continue
 		}
 		selectedLine := -1
@@ -213,16 +225,19 @@ func (m model) taskListBlocks(totalWidth int) []taskListBlock {
 				selectedLine = len(lines)
 			}
 		}
-		lines = append(lines, line1, line2)
+		lines = append(lines, rowLine)
 		subRows := agentSubRows(row)
 		for i, session := range subRows {
 			selected := selectedAgent != "" && session.ID == selectedAgent
 			if selected {
 				selectedLine = len(lines)
 			}
-			lines = append(lines, renderAgentSubRow(session, i == len(subRows)-1, selected, totalWidth))
+			lines = append(lines, m.renderAgentSubRow(session, i == len(subRows)-1, selected, totalWidth))
 		}
-		if index < len(m.rows)-1 && repoGroupKey(m.rows[index+1].task) == repoKey {
+		// A blank line sets a task with agent sub-rows apart from the tasks
+		// next to it.
+		if index < len(m.rows)-1 && repoGroupKey(m.rows[index+1].task) == repoKey &&
+			(subRows != nil || agentSubRows(m.rows[index+1]) != nil) {
 			lines = append(lines, "")
 		}
 		blocks = append(blocks, taskListBlock{rowIndex: index, lines: lines, selectedLine: selectedLine})
@@ -322,52 +337,128 @@ func (m model) renderRepoHeader(task *core.Task, totalWidth int) string {
 	return headerLabelStyle.Render(truncateStr(name, totalWidth))
 }
 
-func (m model) renderRow(index int, row taskRow, totalWidth int) (string, string) {
+// renderRow renders a task row on one line: its status symbol, its name and
+// pull request, then its provider, tokens and elapsed time on the right.
+func (m model) renderRow(index int, row taskRow, totalWidth int) string {
 	if row.task == nil {
-		return "", ""
+		return ""
 	}
 
-	statusText, statusStyle := taskStatusText(row.status)
-	if failedText, failedStyle := taskCreationFailureStatusText(row.task); failedText != "" {
-		statusText = failedText
-		statusStyle = failedStyle
+	symbol, symbolStyle := m.statusSymbol(row.status)
+	if row.task.CreationStatus == core.TaskCreationStatusFailed {
+		symbol, symbolStyle = iconFailed, errorStyle
 	}
-	statusCell := padRightVisible(statusText, colWidthStatus)
-	timeCell := padLeftVisible(taskElapsed(row.task), colWidthElapsed)
-	nameWidth := taskNameWidth(totalWidth)
 
 	name := row.task.DisplayName
 	if strings.TrimSpace(name) == "" {
 		name = row.task.ID
 	}
-	nameCell := padRightVisible(truncateStr(name, nameWidth), nameWidth)
 
-	line2 := prStatusText(row.pullRequest)
-	if tokenText := taskTokenUsageRowText(row.tokenUsage); tokenText != "" {
-		line2 += "  " + tokenText
+	// A task that needs input stands out from the dimmed rest. The selected
+	// task stands out further, also while the cursor is on one of its agent
+	// sub-rows; the selection border and bold name mark the cursor's line.
+	nameStyle, tokenStyle, timeStyle, rowStyle := dimStyle, mutedStyle, dimStyle, normalRowStyle
+	if needsInput(row.status) {
+		nameStyle = primaryStyle
 	}
-	// A task with agent sub-rows leaves its providers to them.
-	if agentSubRows(row) == nil {
-		line2 = renderProviderCell(taskProviderNames(row)[0]) + line2
-	}
-
-	// With one of its agent sub-rows selected, the task row renders as
-	// unselected.
-	if index == m.selected && m.selectedAgentSession() == nil {
-		line1 := lipgloss.NewStyle().Foreground(colorAccent).Bold(true).Render(nameCell) +
-			statusStyle.Render(statusCell) +
-			primaryStyle.Render(timeCell)
-		return selectedRowStyle.Render(line1), selectedRowStyle.Render(line2)
+	if index == m.selected {
+		onTaskRow := m.selectedAgentSession() == nil
+		nameStyle = lipgloss.NewStyle().Foreground(colorAccent).Bold(onTaskRow)
+		tokenStyle, timeStyle = primaryStyle, primaryStyle
+		if onTaskRow {
+			rowStyle = selectedRowStyle
+		}
 	}
 
-	line1 := dimStyle.Render(nameCell) + statusStyle.Render(statusCell) + dimStyle.Render(timeCell)
-	return normalRowStyle.Render(line1), normalRowStyle.Render(line2)
+	layout := taskRowLayoutFor(totalWidth)
+	line := symbolStyle.Render(symbol) + " " + renderNameAndPR(name, nameStyle, row.pullRequest, layout.nameArea)
+	if layout.provider {
+		// A task with agent sub-rows leaves its providers to them.
+		providerCell := strings.Repeat(" ", colWidthAgent)
+		if agentSubRows(row) == nil {
+			providerCell = renderProviderCell(taskProviderNames(row)[0])
+		}
+		line += providerCell
+	}
+	if layout.tokens {
+		line += padLeftVisible(tokenStyle.Render(taskTokenUsageRowText(row.tokenUsage)), colWidthTokens)
+	}
+	line += padLeftVisible(timeStyle.Render(taskElapsed(row.task)), colWidthElapsed)
+	return rowStyle.Render(line)
 }
 
-// taskNameWidth is the width of a task row's name column, which ends where
-// its status column starts.
-func taskNameWidth(totalWidth int) int {
-	return max(10, totalWidth-colWidthStatus-colWidthElapsed-4)
+// taskRowLayout is which columns a task row has room for, and how wide its
+// name area is.
+type taskRowLayout struct {
+	nameArea int
+	provider bool
+	tokens   bool
+}
+
+// taskRowLayoutFor fits a task row's columns to the terminal: as it narrows,
+// the token column goes first and the provider column next, so the name area
+// keeps minTaskNameArea columns for as long as it can.
+func taskRowLayoutFor(totalWidth int) taskRowLayout {
+	layout := taskRowLayout{
+		nameArea: totalWidth - rowGutterWidth - statusSymbolWidth - colWidthElapsed - colWidthAgent - colWidthTokens,
+		provider: true,
+		tokens:   true,
+	}
+	if layout.nameArea < minTaskNameArea {
+		layout.nameArea += colWidthTokens
+		layout.tokens = false
+	}
+	if layout.nameArea < minTaskNameArea {
+		layout.nameArea += colWidthAgent
+		layout.provider = false
+	}
+	layout.nameArea = max(layout.nameArea, 1)
+	return layout
+}
+
+// renderNameAndPR fills a task row's name area: the name, then its pull
+// request's marker. A long name is truncated so the marker and a gap after
+// it still fit.
+func renderNameAndPR(name string, nameStyle lipgloss.Style, pullRequest *core.PRStatus, width int) string {
+	marker := prRowText(pullRequest)
+	reserved := len(nameGap)
+	if marker != "" {
+		reserved += len(nameGap) + lipgloss.Width(marker)
+	}
+
+	text := nameStyle.Render(truncateStr(name, width-reserved))
+	if marker != "" {
+		text += nameGap + marker
+	}
+	return padRightVisible(text, width)
+}
+
+// prRowText is a task row's pull request marker: its state symbol and number,
+// or nothing without a pull request.
+func prRowText(status *core.PRStatus) string {
+	if status == nil || status.State == core.PRStateNone {
+		return ""
+	}
+
+	icon, style := prStateIconStyle(status.State)
+	if status.Number > 0 {
+		icon += "#" + strconv.Itoa(status.Number)
+	}
+	return style.Render(icon)
+}
+
+// statusSymbol is the symbol a task or agent row shows for its status: a
+// spinner frame while it works, and its status symbol otherwise.
+func (m model) statusSymbol(update *core.TaskStatusUpdate) (string, lipgloss.Style) {
+	symbol, _, style := taskStatusParts(update)
+	if update != nil && update.Phase == core.TaskStatusPhaseWorking {
+		symbol = spinnerFrames[m.spinnerFrame%len(spinnerFrames)]
+	}
+	return symbol, style
+}
+
+func needsInput(update *core.TaskStatusUpdate) bool {
+	return update != nil && update.Phase == core.TaskStatusPhaseWaitingForInput
 }
 
 func (m model) selectedTaskDetailView() string {
@@ -836,55 +927,44 @@ func (m model) confirmationView() string {
 	return builder.String()
 }
 
-func taskStatusText(update *core.TaskStatusUpdate) (string, lipgloss.Style) {
+// taskStatusParts is how a status reads: the one-cell symbol task and agent
+// rows show for it, the label the detail panel adds, and their style. Each
+// state has its own symbol, so a row reads without its label.
+func taskStatusParts(update *core.TaskStatusUpdate) (string, string, lipgloss.Style) {
 	if update == nil {
-		return iconStatusIdle + " no status", dimStyle
+		return iconStatusNone, "no status", dimStyle
 	}
 
 	switch update.Phase {
 	case core.TaskStatusPhaseStarting:
-		return iconStatusProgress + " starting", warningStyle
+		return iconStatusStarting, "starting", warningStyle
 	case core.TaskStatusPhaseWorking:
 		if indicatesCommandActivity(update.RawEventName) {
-			return iconStatusProgress + " working · command", healthyStyle
+			return iconStatusActive, "working · command", healthyStyle
 		}
-		return iconStatusActive + " working", healthyStyle
+		return iconStatusActive, "working", healthyStyle
 	case core.TaskStatusPhaseWorkingInBackground:
-		return iconStatusActive + " " + backgroundWorkSummary(update.BackgroundWork), healthyStyle
+		return iconStatusProgress, "working in background", healthyStyle
 	case core.TaskStatusPhaseWaitingForInput:
-		return iconStatusProgress + " needs input", warningStyle
+		return iconStatusNeedsInput, "needs input", warningStyle
 	case core.TaskStatusPhaseStopped:
-		return iconStatusIdle + " stopped", dimStyle
+		return iconStatusIdle, "stopped", dimStyle
 	default:
-		return iconStatusIdle + " idle", dimStyle
+		return iconStatusIdle, "idle", dimStyle
 	}
 }
 
-// taskStatusDetailText is taskStatusText for the detail panel, which has room
-// to break background work down by kind.
+// taskStatusDetailText is the status as the detail panel states it: its
+// symbol and label, with background work broken down by kind.
 func taskStatusDetailText(update *core.TaskStatusUpdate) (string, lipgloss.Style) {
-	if update == nil || update.Phase != core.TaskStatusPhaseWorkingInBackground {
-		return taskStatusText(update)
+	symbol, label, style := taskStatusParts(update)
+	text := symbol + " " + label
+	if update != nil && update.Phase == core.TaskStatusPhaseWorkingInBackground {
+		if parts := backgroundWorkParts(update.BackgroundWork); len(parts) > 0 {
+			text += " · " + strings.Join(parts, ", ")
+		}
 	}
-
-	text := iconStatusActive + " working in background"
-	if parts := backgroundWorkParts(update.BackgroundWork); len(parts) > 0 {
-		text += " · " + strings.Join(parts, ", ")
-	}
-	return text, healthyStyle
-}
-
-// backgroundWorkSummary names the in-flight work when it is all one kind and
-// sums it otherwise, so the label fits the list's status column.
-func backgroundWorkSummary(work core.TaskBackgroundWork) string {
-	if work.IsZero() {
-		return "working"
-	}
-	parts := backgroundWorkParts(work)
-	if len(parts) == 1 && lipgloss.Width(iconStatusActive+" "+parts[0]+" working") <= colWidthStatus {
-		return parts[0] + " working"
-	}
-	return countNoun(work.Total(), "bg task") + " working"
+	return text, style
 }
 
 func backgroundWorkParts(work core.TaskBackgroundWork) []string {
@@ -915,23 +995,6 @@ func countNoun(count int, noun string) string {
 	return strconv.Itoa(count) + " " + noun + "s"
 }
 
-func taskCreationFailureStatusText(task *core.Task) (string, lipgloss.Style) {
-	if task == nil || task.CreationStatus != core.TaskCreationStatusFailed {
-		return "", lipgloss.Style{}
-	}
-
-	switch task.CreationStep {
-	case core.TaskCreateProgressCreatingWorktree:
-		return iconFailed + " worktree failed", errorStyle
-	case core.TaskCreateProgressPreparingWorkspace:
-		return iconFailed + " setup failed", errorStyle
-	case core.TaskCreateProgressStartingSession:
-		return iconFailed + " session failed", errorStyle
-	default:
-		return iconFailed + " creation failed", errorStyle
-	}
-}
-
 func prStatusText(status *core.PRStatus) string {
 	if status == nil || status.State == core.PRStateNone {
 		return mutedStyle.Render(iconPRNone)
@@ -959,7 +1022,7 @@ func taskTokenUsageRowText(usage *core.TaskTokenUsage) string {
 		return ""
 	}
 
-	return mutedStyle.Render(formatTokenCount(usage.TotalTokens) + " tok")
+	return formatTokenCount(usage.TotalTokens) + " tok"
 }
 
 func taskTokenUsageDetailLines(usage *core.TaskTokenUsage) []string {

@@ -3,6 +3,7 @@ package tui
 import (
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/BaronBonet/rig/internal/core"
 
@@ -105,12 +106,11 @@ func TestModel_ViewShowsAgentSubRowsOnlyForTwoOrMoreLiveAgents(t *testing.T) {
 	require.NotContains(t, stripANSI(single.View().Content), "fix the flaky retry test")
 
 	both := withAgentSessions(t, m, "task-1", claudeAgent(), codexAgent())
+	// Each sub-row leads with its agent's status symbol.
 	claudeLine := viewLineContaining(t, both, "fix the flaky retry test")
-	require.Contains(t, claudeLine, "├ claude")
-	require.Contains(t, claudeLine, "◐ needs input")
+	require.Contains(t, claudeLine, "├ "+iconStatusNeedsInput+" claude")
 	codexLine := viewLineContaining(t, both, "review the retry change")
-	require.Contains(t, codexLine, "└ codex")
-	require.Contains(t, codexLine, "● working")
+	require.Contains(t, codexLine, "└ "+spinnerFrames[0]+" codex")
 
 	// The sub-rows sit between their task and the next task.
 	view := stripANSI(both.View().Content)
@@ -121,19 +121,15 @@ func TestModel_ViewShowsAgentSubRowsOnlyForTwoOrMoreLiveAgents(t *testing.T) {
 	}
 }
 
-func TestModel_AgentSubRowStatusLinesUpWithTheTaskStatusColumn(t *testing.T) {
+func TestModel_AgentSubRowsNestUnderTheirTaskName(t *testing.T) {
 	frontend := newFrontendHarness()
 	m := agentsTaskModel(frontend)
 	m = withAgentSessions(t, m, "task-1", claudeAgent(), codexAgent())
 
-	taskLine := viewLineContaining(t, m, "first task")
-	subRowLine := viewLineContaining(t, m, "review the retry change")
-
-	require.Equal(
-		t,
-		lipgloss.Width(strings.SplitN(taskLine, "◐ needs input", 2)[0]),
-		lipgloss.Width(strings.SplitN(subRowLine, "● working", 2)[0]),
-	)
+	// Each sub-row's branch starts in the column of its task's name.
+	nameColumn := statusColumn(t, viewLineContaining(t, m, "first task"), "first task")
+	require.Equal(t, nameColumn, statusColumn(t, viewLineContaining(t, m, "fix the flaky retry test"), "├"))
+	require.Equal(t, nameColumn, statusColumn(t, viewLineContaining(t, m, "review the retry change"), "└"))
 }
 
 func TestModel_AgentSubRowShowsWhereItRunsBeforeItsFirstPrompt(t *testing.T) {
@@ -154,12 +150,10 @@ func TestModel_AgentSubRowShowsWhereItRunsBeforeItsFirstPrompt(t *testing.T) {
 
 	m = withAgentSessions(t, m, "task-1", unlocated, located, unknown)
 
-	require.Contains(t, viewLineContaining(t, m, "window 2 (review) · pane 1"), "├ codex")
-	require.Contains(t, viewLineContaining(t, m, "pane %3"), "├ claude")
-	unknownLine := viewLineContaining(t, m, "no prompt yet")
-	require.Contains(t, unknownLine, "└ codex")
+	require.Contains(t, viewLineContaining(t, m, "window 2 (review) · pane 1"), "├ "+spinnerFrames[0]+" codex")
+	require.Contains(t, viewLineContaining(t, m, "pane %3"), "├ "+iconStatusNeedsInput+" claude")
 	// Without a status yet, it is starting.
-	require.Contains(t, unknownLine, "◐ starting")
+	require.Contains(t, viewLineContaining(t, m, "no prompt yet"), "└ "+iconStatusStarting+" codex")
 }
 
 func TestModel_CursorStepsThroughAgentSubRows(t *testing.T) {
@@ -214,6 +208,39 @@ func TestModel_CursorStepsThroughAgentSubRows(t *testing.T) {
 	require.Equal(t, cursor{row: 0}, at(m))
 }
 
+func TestModel_TaskRowStaysHighlightedWhileOneOfItsAgentsIsSelected(t *testing.T) {
+	frontend := newFrontendHarness()
+	m := agentsTaskModel(frontend)
+	m = withAgentSessions(t, m, "task-1", claudeAgent(), codexAgent())
+	for i := range m.rows {
+		m.rows[i].task.CreatedAt = time.Now().Add(-15 * time.Minute)
+		m.rows[i].tokenUsage = &core.TaskTokenUsage{TotalTokens: 45200}
+	}
+	taskLine := func(m model, index int) string { return m.renderRow(index, m.rows[index], m.totalWidth()) }
+
+	// On the task row itself, its name, tokens and time stand out.
+	selectedRow := taskLine(m, 0)
+	require.True(t, strings.HasPrefix(stripANSI(selectedRow), "│"))
+	require.Contains(t, selectedRow, lipgloss.NewStyle().Foreground(colorAccent).Bold(true).Render("first task"))
+	require.Contains(t, selectedRow, primaryStyle.Render("45.2k tok"))
+	require.Contains(t, selectedRow, primaryStyle.Render("15m"))
+
+	// On one of its agent sub-rows, the cursor's border moves to the sub-row,
+	// and the task row keeps standing out from the rest.
+	m = pressKey(t, m, tea.KeyPressMsg{Code: 'j', Text: "j"})
+	require.Equal(t, "agent-claude", m.selectedAgent)
+	parentRow := taskLine(m, 0)
+	require.False(t, strings.HasPrefix(stripANSI(parentRow), "│"))
+	require.Contains(t, parentRow, lipgloss.NewStyle().Foreground(colorAccent).Render("first task"))
+	require.Contains(t, parentRow, primaryStyle.Render("45.2k tok"))
+	require.Contains(t, parentRow, primaryStyle.Render("15m"))
+
+	otherRow := taskLine(m, 1)
+	require.Contains(t, otherRow, dimStyle.Render("second task"))
+	require.Contains(t, otherRow, mutedStyle.Render("45.2k tok"))
+	require.Contains(t, otherRow, dimStyle.Render("15m"))
+}
+
 func TestModel_EnterOnAnAgentSubRowJumpsToItsPane(t *testing.T) {
 	frontend := newFrontendHarness()
 	m := agentsTaskModel(frontend)
@@ -255,31 +282,78 @@ func TestModel_TaskActionsOnAnAgentSubRowActOnItsTask(t *testing.T) {
 func TestModel_ProviderCellNamesTheTasksOnlyAgent(t *testing.T) {
 	frontend := newFrontendHarness()
 	m := agentsTaskModel(frontend)
-	line2 := func(m model) string {
-		_, line2 := m.renderRow(0, m.rows[0], m.totalWidth())
-		// The selected row starts with the selection border.
-		return strings.TrimLeft(stripANSI(line2), "│ ")
+	// The task has no elapsed time or tokens, so its provider ends the row.
+	provider := func(m model) string {
+		line := stripANSI(m.renderRow(0, m.rows[0], m.totalWidth()))
+		_, after, found := strings.Cut(line, "first task")
+		require.True(t, found, line)
+		return strings.TrimSpace(after)
 	}
 
-	require.True(t, strings.HasPrefix(line2(m), "codex  —"), line2(m))
+	require.Equal(t, "codex", provider(m))
 
 	// A Codex task whose only agent is Claude shows Claude.
 	claudeOnly := withAgentSessions(t, m, "task-1", claudeAgent())
-	require.True(t, strings.HasPrefix(line2(claudeOnly), "claude —"), line2(claudeOnly))
+	require.Equal(t, "claude", provider(claudeOnly))
 
 	// With sub-rows, each names its own provider and the task row names none.
 	mixed := withAgentSessions(t, m, "task-1", codexAgent(), claudeAgent())
-	require.True(t, strings.HasPrefix(line2(mixed), "—"), line2(mixed))
-	require.NotContains(t, line2(mixed), "claude")
-	require.NotContains(t, line2(mixed), "codex")
+	require.Empty(t, provider(mixed))
 	view := stripANSI(mixed.View().Content)
-	require.Contains(t, view, "├ codex ")
-	require.Contains(t, view, "└ claude ")
+	require.Contains(t, view, "├ "+spinnerFrames[0]+" codex ")
+	require.Contains(t, view, "└ "+iconStatusNeedsInput+" claude ")
 
 	twoCodex := codexAgent()
 	twoCodex.ID = "agent-codex-2"
 	sameProvider := withAgentSessions(t, m, "task-1", codexAgent(), twoCodex)
-	require.True(t, strings.HasPrefix(line2(sameProvider), "—"), line2(sameProvider))
+	require.Empty(t, provider(sameProvider))
+}
+
+func TestTaskListBlocks_SetsTasksWithSubRowsApart(t *testing.T) {
+	m := model{rows: rowsFromTasks([]*core.Task{
+		{ID: "task-1", RepoName: "repo-a", DisplayName: "first task", Provider: core.ProviderCodex},
+		{ID: "task-2", RepoName: "repo-a", DisplayName: "second task", Provider: core.ProviderCodex},
+		{ID: "task-3", RepoName: "repo-a", DisplayName: "third task", Provider: core.ProviderCodex},
+		{ID: "task-4", RepoName: "repo-a", DisplayName: "fourth task", Provider: core.ProviderCodex},
+		{ID: "task-5", RepoName: "repo-b", DisplayName: "fifth task", Provider: core.ProviderCodex},
+	})}
+	for _, index := range []int{1, 2, 4} {
+		m.rows[index].status = &core.TaskStatusUpdate{
+			Phase:         core.TaskStatusPhaseWorking,
+			AgentSessions: []core.LiveAgentSession{claudeAgent(), codexAgent()},
+		}
+	}
+
+	var lines []string
+	for _, block := range m.taskListBlocks(100) {
+		for _, line := range block.lines {
+			lines = append(lines, strings.TrimSpace(strings.TrimLeft(stripANSI(line), "│ ")))
+		}
+	}
+
+	// One blank line sets each task with sub-rows apart from its neighbours;
+	// the repo header and the gap between repos already do at their edges.
+	want := []string{
+		"repo-a",
+		"first task",
+		"",
+		"second task", "├ " + iconStatusNeedsInput + " claude", "└ " + spinnerFrames[0] + " codex",
+		"",
+		"third task", "├ " + iconStatusNeedsInput + " claude", "└ " + spinnerFrames[0] + " codex",
+		"",
+		"fourth task",
+		"",
+		"repo-b",
+		"fifth task", "├ " + iconStatusNeedsInput + " claude", "└ " + spinnerFrames[0] + " codex",
+	}
+	require.Len(t, lines, len(want), strings.Join(lines, "\n"))
+	for i, text := range want {
+		if text == "" {
+			require.Empty(t, lines[i], "line %d", i)
+			continue
+		}
+		require.Contains(t, lines[i], text, "line %d", i)
+	}
 }
 
 func TestModel_DetailViewDescribesTheSelectedAgentSession(t *testing.T) {
@@ -305,7 +379,7 @@ func TestModel_DetailViewDescribesTheSelectedAgentSession(t *testing.T) {
 	require.Equal(t, "agent-claude", m.selectedAgent)
 
 	view = stripANSI(m.View().Content)
-	require.Contains(t, view, "state  ● working in background")
+	require.Contains(t, view, "state  ◐ working in background")
 	require.Contains(t, view, "       2 subagents, 1 shell")
 	require.Contains(t, view, "provider  claude\n")
 	require.Contains(t, view, "pane   window 0 (task) · pane 0")
@@ -408,7 +482,7 @@ func statusColumn(t *testing.T, line string, text string) int {
 	return lipgloss.Width(before)
 }
 
-func TestModel_AgentSubRowTruncatesLongPromptsAndKeepsItsStatusColumn(t *testing.T) {
+func TestModel_AgentSubRowTruncatesLongPromptsClearOfTheTaskColumns(t *testing.T) {
 	for name, prompt := range map[string]string{
 		"ascii":              strings.Repeat("retry the flaky integration test ", 4),
 		"variation selector": strings.Repeat("⚠️ fix the retry logic ✔️ ", 6),
@@ -419,14 +493,12 @@ func TestModel_AgentSubRowTruncatesLongPromptsAndKeepsItsStatusColumn(t *testing
 			long.LatestPrompt = prompt
 			m = withAgentSessions(t, m, "task-1", claudeAgent(), long)
 
-			// Truncated, the prompt stops a column short of the status.
-			subRow := viewLineContaining(t, m, "└ codex")
-			require.Regexp(t, "… +● working", subRow)
-			require.Equal(
-				t,
-				statusColumn(t, viewLineContaining(t, m, "first task"), "◐ needs input"),
-				statusColumn(t, subRow, "● working"),
-			)
+			// Truncated, the prompt ends a gap short of the provider column of
+			// the task rows.
+			subRow := strings.TrimRight(viewLineContaining(t, m, "└ "+spinnerFrames[0]+" codex"), " ")
+			require.True(t, strings.HasSuffix(subRow, "…"), subRow)
+			providerColumn := statusColumn(t, viewLineContaining(t, m, "second task"), "codex")
+			require.Equal(t, providerColumn-len(nameGap), lipgloss.Width(subRow))
 			for _, line := range strings.Split(m.View().Content, "\n") {
 				require.LessOrEqual(t, lipgloss.Width(line), m.totalWidth(), stripANSI(line))
 			}
@@ -441,23 +513,18 @@ func TestModel_AgentSubRowsFitNarrowTerminals(t *testing.T) {
 		m.detailsHidden = true
 		m = withAgentSessions(t, m, "task-1", claudeAgent(), codexAgent())
 
-		// The header and the task rows already overflow the narrowest widths;
-		// sub-rows never do.
-		for _, line := range strings.Split(m.View().Content, "\n") {
-			if plain := stripANSI(line); strings.Contains(plain, "├") || strings.Contains(plain, "└") {
-				require.LessOrEqual(t, lipgloss.Width(line), width, "width %d: %q", width, plain)
-			}
+		// The keybind header already overflows the narrowest widths; task
+		// rows and sub-rows never do.
+		for _, line := range strings.Split(m.View().Content, "\n")[1:] {
+			require.LessOrEqual(t, lipgloss.Width(line), width, "width %d: %q", width, stripANSI(line))
 		}
-		// From 44 columns a sub-row's status lines up with its task's, with
-		// what room is left for the prompt.
-		if width >= 44 {
-			require.Equal(
-				t,
-				statusColumn(t, viewLineContaining(t, m, "first task"), "◐ needs input"),
-				statusColumn(t, viewLineContaining(t, m, "└ codex"), "● working"),
-				"width %d", width,
-			)
-		}
+		// A sub-row still nests under its task's name.
+		require.Equal(
+			t,
+			statusColumn(t, viewLineContaining(t, m, "first task"), "first task"),
+			statusColumn(t, viewLineContaining(t, m, "└"), "└"),
+			"width %d", width,
+		)
 	}
 }
 
@@ -493,11 +560,11 @@ func TestModel_DetailViewFitsTheSelectedAgentInEightyColumns(t *testing.T) {
 	// whole, under it.
 	m := selectBusy(80)
 	view := stripANSI(m.View().Content)
-	require.Contains(t, view, "state  ● working in background\n")
+	require.Contains(t, view, "state  ◐ working in background\n")
 	require.Contains(t, view, "pane   window 3 (claude)\n")
 	require.Equal(
 		t,
-		statusColumn(t, viewLineContaining(t, m, "state  "), "● working"),
+		statusColumn(t, viewLineContaining(t, m, "state  "), "◐ working"),
 		statusColumn(t, viewLineContaining(t, m, "2 subagents"), "2 subagents, 1 shell"),
 	)
 	require.Equal(
@@ -513,7 +580,8 @@ func TestModel_DetailProviderMatchesTheTaskRowsProviderCell(t *testing.T) {
 
 	// A Codex task whose only agent is Claude says Claude in both places.
 	m = withAgentSessions(t, m, "task-1", claudeAgent())
-	require.True(t, strings.HasPrefix(strings.TrimLeft(viewLineContaining(t, m, "—"), "│ "), "claude "))
+	// The task has no elapsed time or tokens, so its provider ends its row.
+	require.True(t, strings.HasSuffix(strings.TrimSpace(viewLineContaining(t, m, "first task")), " claude"))
 	require.Contains(t, stripANSI(m.View().Content), "provider  claude")
 }
 
@@ -567,7 +635,11 @@ func TestModel_AgentSubRowsKeepStartOrderWhicheverAgentLeads(t *testing.T) {
 	})
 	view := stripANSI(asModel(t, next).View().Content)
 
-	require.Less(t, strings.Index(view, "├ claude"), strings.Index(view, "└ codex"))
+	require.Less(
+		t,
+		strings.Index(view, "├ "+iconStatusNeedsInput+" claude"),
+		strings.Index(view, "└ "+spinnerFrames[0]+" codex"),
+	)
 }
 
 func TestModel_ReloadThatMovesTheTaskKeepsTheAgentCursor(t *testing.T) {
@@ -598,7 +670,13 @@ func TestModel_AgentSubRowShowsAToolCallLikeItsTask(t *testing.T) {
 	running.Status = core.AgentSessionStatus{Phase: core.TaskStatusPhaseWorking, RawEventName: "PreToolUse"}
 	m = withAgentSessions(t, m, "task-1", claudeAgent(), running)
 
-	require.Contains(t, viewLineContaining(t, m, "└ codex"), "◐ working · command")
+	// The sub-row spins like any working row, and the detail panel names the
+	// tool call.
+	require.Contains(t, viewLineContaining(t, m, "review the retry change"), "└ "+spinnerFrames[0]+" codex")
+	m = pressKey(t, m, tea.KeyPressMsg{Code: 'j', Text: "j"})
+	m = pressKey(t, m, tea.KeyPressMsg{Code: 'j', Text: "j"})
+	require.Equal(t, "agent-codex", m.selectedAgent)
+	require.Contains(t, stripANSI(m.View().Content), "state  ● working · command")
 }
 
 func TestModel_AgentTextNeverReachesTheTerminalRaw(t *testing.T) {
@@ -620,7 +698,7 @@ func TestModel_AgentTextNeverReachesTheTerminalRaw(t *testing.T) {
 		require.NotContains(t, view, raw)
 	}
 	// A prompt spanning lines shows on one sub-row line.
-	require.Contains(t, viewLineContaining(t, m, "└ codex"), "first line second red line third")
+	require.Contains(t, viewLineContaining(t, m, "└ "+spinnerFrames[0]+" codex"), "first line second red line third")
 	plain := stripANSI(view)
 	require.Contains(t, plain, "run the green suite")
 	require.Contains(t, plain, "done all passing")

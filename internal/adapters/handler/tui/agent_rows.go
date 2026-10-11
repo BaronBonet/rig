@@ -14,15 +14,15 @@ import (
 
 const (
 	// subRowIndent and the branch glyph after it indent an agent sub-row
-	// under its task's two lines.
+	// under its task's name.
 	subRowIndent      = "  "
 	subRowBranchWidth = 2
 	// subRowProviderWidth leaves at least two spaces between the provider and
 	// the free-form prompt after it.
 	subRowProviderWidth = colWidthAgent + 1
 	// subRowLead is what comes before a sub-row's text: its indent, branch
-	// glyph and provider.
-	subRowLead = len(subRowIndent) + subRowBranchWidth + subRowProviderWidth
+	// glyph, status symbol and provider.
+	subRowLead = len(subRowIndent) + subRowBranchWidth + statusSymbolWidth + subRowProviderWidth
 )
 
 // listCursor is one selectable line of the task list: a task row, or one of
@@ -124,38 +124,41 @@ func agentSessionStatusUpdate(session core.LiveAgentSession) *core.TaskStatusUpd
 }
 
 // renderAgentSubRow renders one agent session as an indented sub-row under
-// its task: the provider, the latest prompt or else where the agent runs, and
-// the status in the task row's status column.
-func renderAgentSubRow(session core.LiveAgentSession, last bool, selected bool, totalWidth int) string {
+// its task: its status symbol, its provider, and its latest prompt or else
+// where the agent runs.
+func (m model) renderAgentSubRow(session core.LiveAgentSession, last bool, selected bool, totalWidth int) string {
 	branch := "├"
 	if last {
 		branch = "└"
 	}
 
+	status := agentSessionStatusUpdate(session)
+	symbol, symbolStyle := m.statusSymbol(status)
 	provider := emptyFallback(string(session.Provider), "-")
 	providerCell := padRightVisible(provider, subRowProviderWidth)
-	statusText, statusStyle := taskStatusText(agentSessionStatusUpdate(session))
-	statusCell := padRightVisible(statusText, colWidthStatus)
 
-	// The text column ends where the task row's status column starts. Too
-	// narrow a terminal leaves no room for text rather than overflowing.
-	textWidth := max(0, taskNameWidth(totalWidth)-subRowLead)
+	// The text ends where the task row's name area does, clear of its columns
+	// on the right. Too narrow a terminal leaves no room for text rather than
+	// overflowing.
+	textWidth := max(0, statusSymbolWidth+taskRowLayoutFor(totalWidth).nameArea-subRowLead)
 	text, isPrompt := agentSubRowText(session)
-	// A truncated prompt stops a column short of the status.
-	textCell := padRightVisible(truncateStr(text, textWidth-1), textWidth)
+	text = truncateStr(text, textWidth-len(nameGap))
 
 	textStyle := dimStyle
 	if !isPrompt {
 		textStyle = mutedStyle
+	}
+	if needsInput(status) {
+		textStyle = primaryStyle
 	}
 	if selected {
 		textStyle = lipgloss.NewStyle().Foreground(colorAccent).Bold(true)
 	}
 
 	line := dimStyle.Render(subRowIndent+branch+" ") +
+		symbolStyle.Render(symbol) + " " +
 		providerStyle(provider).Render(providerCell) +
-		textStyle.Render(textCell) +
-		statusStyle.Render(statusCell)
+		textStyle.Render(text)
 	if selected {
 		return selectedRowStyle.Render(line)
 	}

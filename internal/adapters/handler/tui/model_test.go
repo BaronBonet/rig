@@ -145,7 +145,7 @@ func TestModel_ViewRendersFailedCreationTaskWithRetryHint(t *testing.T) {
 
 	view := stripANSI(m.View().Content)
 	require.Contains(t, view, "R retry")
-	require.Contains(t, view, "setup failed")
+	require.Contains(t, view, iconFailed+" first task")
 	require.Contains(t, view, "Failed while preparing workspace")
 	require.Contains(t, view, "setup workspace: docker daemon unavailable")
 }
@@ -171,7 +171,7 @@ func TestModel_ConstrainedViewRendersSessionFailureRetryHint(t *testing.T) {
 
 	view := stripANSI(m.View().Content)
 	require.Contains(t, view, "R retry")
-	require.Contains(t, view, "session failed")
+	require.Contains(t, view, iconFailed+" first task")
 	require.Contains(t, view, "Failed while starting session")
 }
 
@@ -416,9 +416,13 @@ func TestModel_PRStatusShownInOverviewRowsAndDetailPanel(t *testing.T) {
 	require.NotNil(t, got.rows[0].pullRequest)
 	require.Equal(t, core.PRStateOpen, got.rows[0].pullRequest.State)
 
+	// The row shows the pull request's state symbol and number; the detail
+	// panel names the state.
 	view := stripANSI(got.View().Content)
-	require.Contains(t, view, "auth rewrite")
-	require.Contains(t, view, "#42 open")
+	require.Contains(t, view, "auth rewrite  "+iconStatusActive+"#42")
+	require.NotContains(t, view, "open")
+	got.detailsHidden = false
+	require.Contains(t, stripANSI(got.View().Content), "#42 open")
 }
 
 func TestModel_AfterLoadUsesSubscriptionsAsInitialStatusSource(t *testing.T) {
@@ -633,7 +637,7 @@ func TestModel_InitialSubscriptionUpdateRendersPhase(t *testing.T) {
 	require.True(t, ok)
 	require.NotNil(t, got.rows[0].status)
 	require.Equal(t, core.TaskStatusPhaseWorking, got.rows[0].status.Phase)
-	require.Contains(t, stripANSI(got.View().Content), "working")
+	require.Contains(t, stripANSI(got.View().Content), spinnerFrames[0]+" first task")
 }
 
 func TestModel_ViewRendersTaskActivity(t *testing.T) {
@@ -760,41 +764,283 @@ func TestModel_ViewConstrainsTaskActivityColumnsWithLongWords(t *testing.T) {
 	}
 }
 
-func TestRenderRow_CommandStatusKeepsElapsedColumnAligned(t *testing.T) {
-	task := &core.Task{
+// rowContent is a rendered row without styling or its left gutter, which holds
+// the selection border.
+func rowContent(line string) string {
+	return strings.TrimLeft(stripANSI(line), "│ ")
+}
+
+func rowTask() *core.Task {
+	return &core.Task{
 		ID:          "task-1",
 		DisplayName: "first task",
 		Provider:    core.ProviderCodex,
 		CreatedAt:   time.Now().Add(-15 * time.Minute),
 	}
-
-	m := model{selected: 1}
-	idleLine, _ := m.renderRow(0, taskRow{task: task}, 72)
-	commandLine, _ := m.renderRow(0, taskRow{
-		task: task,
-		status: &core.TaskStatusUpdate{
-			TaskID:       task.ID,
-			Phase:        core.TaskStatusPhaseWorking,
-			RawEventName: "PreToolUse",
-		},
-	}, 72)
-
-	idleView := stripANSI(idleLine)
-	commandView := stripANSI(commandLine)
-
-	require.Contains(t, commandView, "working · command")
-	require.Equal(
-		t,
-		lipgloss.Width(strings.SplitN(idleView, "15m", 2)[0]),
-		lipgloss.Width(strings.SplitN(commandView, "15m", 2)[0]),
-	)
 }
 
-func TestTaskStatusText_NoStatusDoesNotRenderIdle(t *testing.T) {
-	statusText, _ := taskStatusText(nil)
+func TestRenderRow_StartsWithASymbolForEachStatus(t *testing.T) {
+	cases := []struct {
+		name   string
+		status *core.TaskStatusUpdate
+		symbol string
+		label  string
+	}{
+		{"no status", nil, iconStatusNone, "no status"},
+		{"starting", &core.TaskStatusUpdate{Phase: core.TaskStatusPhaseStarting}, iconStatusStarting, "starting"},
+		{
+			"background",
+			&core.TaskStatusUpdate{Phase: core.TaskStatusPhaseWorkingInBackground},
+			iconStatusProgress,
+			"background",
+		},
+		{
+			"needs input",
+			&core.TaskStatusUpdate{Phase: core.TaskStatusPhaseWaitingForInput},
+			iconStatusNeedsInput,
+			"needs input",
+		},
+		{"stopped", &core.TaskStatusUpdate{Phase: core.TaskStatusPhaseStopped}, iconStatusIdle, "stopped"},
+	}
+
+	seen := map[string]string{}
+	for _, tc := range cases {
+		for _, selected := range []int{0, 1} {
+			line := rowContent(model{selected: selected}.renderRow(0, taskRow{task: rowTask(), status: tc.status}, 100))
+			require.True(t, strings.HasPrefix(line, tc.symbol+" first task"), "%s: %q", tc.name, line)
+			require.NotContains(t, line, tc.label, tc.name)
+		}
+		if other, ok := seen[tc.symbol]; ok && tc.symbol != iconStatusIdle {
+			t.Fatalf("%s and %s share the symbol %q", tc.name, other, tc.symbol)
+		}
+		seen[tc.symbol] = tc.name
+	}
+}
+
+func TestRenderRow_WorkingStatusSpins(t *testing.T) {
+	for _, rawEvent := range []string{"UserPromptSubmit", "PreToolUse"} {
+		row := taskRow{
+			task:   rowTask(),
+			status: &core.TaskStatusUpdate{Phase: core.TaskStatusPhaseWorking, RawEventName: rawEvent},
+		}
+
+		first := rowContent(model{spinnerFrame: 0}.renderRow(0, row, 100))
+		second := rowContent(model{spinnerFrame: 1}.renderRow(0, row, 100))
+
+		require.True(t, strings.HasPrefix(first, spinnerFrames[0]+" first task"), first)
+		require.True(t, strings.HasPrefix(second, spinnerFrames[1]+" first task"), second)
+		require.NotContains(t, first, "working")
+	}
+}
+
+func TestRenderRow_FailedCreationShowsTheFailedSymbol(t *testing.T) {
+	task := rowTask()
+	task.CreationStatus = core.TaskCreationStatusFailed
+	task.CreationStep = core.TaskCreateProgressStartingSession
+
+	line := rowContent(model{}.renderRow(0, taskRow{task: task}, 100))
+
+	require.True(t, strings.HasPrefix(line, iconFailed+" first task"), line)
+}
+
+func TestRenderRow_PullRequestFollowsTheNameAsSymbolAndNumber(t *testing.T) {
+	cases := map[core.PRState]string{
+		core.PRStateOpen:   iconStatusActive + "#42",
+		core.PRStateDraft:  iconStatusProgress + "#42",
+		core.PRStateMerged: iconDone + "#42",
+		core.PRStateClosed: iconFailed + "#42",
+	}
+	for state, marker := range cases {
+		line := rowContent(model{}.renderRow(0, taskRow{
+			task:        rowTask(),
+			pullRequest: &core.PRStatus{State: state, Number: 42},
+		}, 100))
+
+		require.Contains(t, line, "first task  "+marker, line)
+		require.NotContains(t, line, string(state), line)
+	}
+
+	withoutPR := rowContent(model{}.renderRow(0, taskRow{task: rowTask()}, 100))
+	require.NotContains(t, withoutPR, "#")
+	require.NotContains(t, withoutPR, iconPRNone)
+}
+
+func TestRenderRow_ColumnsFollowTheNameInOrder(t *testing.T) {
+	for _, selected := range []int{0, 1} {
+		line := model{selected: selected}.renderRow(0, taskRow{
+			task:        rowTask(),
+			status:      &core.TaskStatusUpdate{Phase: core.TaskStatusPhaseWaitingForInput},
+			pullRequest: &core.PRStatus{State: core.PRStateOpen, Number: 42},
+			tokenUsage:  &core.TaskTokenUsage{TotalTokens: 45200},
+		}, 120)
+
+		require.Less(t, lipgloss.Width(line), 120)
+		view := rowContent(line)
+		columns := []string{iconStatusNeedsInput, "first task", "#42", "codex", "45.2k tok", "15m"}
+		previous := -1
+		for _, column := range columns {
+			index := strings.Index(view, column)
+			require.Greater(t, index, previous, "%q out of order in %q", column, view)
+			previous = index
+		}
+	}
+}
+
+func TestRenderRow_RightColumnsStayAligned(t *testing.T) {
+	m := model{selected: 2}
+	bare := stripANSI(m.renderRow(0, taskRow{task: rowTask()}, 120))
+	full := stripANSI(m.renderRow(1, taskRow{
+		task:        rowTask(),
+		status:      &core.TaskStatusUpdate{Phase: core.TaskStatusPhaseWaitingForInput},
+		pullRequest: &core.PRStatus{State: core.PRStateMerged, Number: 12345},
+		tokenUsage:  &core.TaskTokenUsage{TotalTokens: 999900},
+	}, 120))
+
+	for _, column := range []string{"codex", "15m"} {
+		require.Equal(
+			t,
+			lipgloss.Width(strings.SplitN(bare, column, 2)[0]),
+			lipgloss.Width(strings.SplitN(full, column, 2)[0]),
+			column,
+		)
+	}
+}
+
+func TestRenderRow_LongNameKeepsItsPullRequest(t *testing.T) {
+	task := rowTask()
+	task.DisplayName = strings.Repeat("very long task name ", 10)
+	task.Provider = core.ProviderClaude
+
+	line := model{}.renderRow(0, taskRow{
+		task:        task,
+		pullRequest: &core.PRStatus{State: core.PRStateOpen, Number: 42},
+	}, 100)
+
+	require.Less(t, lipgloss.Width(line), 100)
+	view := rowContent(line)
+	require.Contains(t, view, "…  "+iconStatusActive+"#42")
+	require.Contains(t, view, "claude")
+	require.Contains(t, view, "15m")
+}
+
+func TestRenderRow_NarrowTerminalsDropTokensThenProvider(t *testing.T) {
+	row := taskRow{
+		task:        rowTask(),
+		pullRequest: &core.PRStatus{State: core.PRStateOpen, Number: 42},
+		tokenUsage:  &core.TaskTokenUsage{TotalTokens: 45200},
+	}
+
+	wide := rowContent(model{}.renderRow(0, row, 100))
+	require.Contains(t, wide, "codex")
+	require.Contains(t, wide, "45.2k tok")
+
+	medium := rowContent(model{}.renderRow(0, row, 66))
+	require.Contains(t, medium, "codex")
+	require.NotContains(t, medium, "tok")
+
+	narrow := rowContent(model{}.renderRow(0, row, 54))
+	require.NotContains(t, narrow, "codex")
+	require.NotContains(t, narrow, "tok")
+
+	for width := 40; width <= 140; width++ {
+		line := model{}.renderRow(0, row, width)
+		require.Less(t, lipgloss.Width(line), width, "width %d: %q", width, stripANSI(line))
+		view := rowContent(line)
+		require.Contains(t, view, "first task", "width %d", width)
+		require.Contains(t, view, "#42", "width %d", width)
+		require.True(t, strings.HasSuffix(view, "15m"), "width %d: %q", width, view)
+	}
+}
+
+func TestRenderRow_NeedsInputNameStandsOut(t *testing.T) {
+	m := model{selected: 1}
+	needsInput := m.renderRow(0, taskRow{
+		task:   rowTask(),
+		status: &core.TaskStatusUpdate{Phase: core.TaskStatusPhaseWaitingForInput},
+	}, 100)
+	stopped := m.renderRow(0, taskRow{
+		task:   rowTask(),
+		status: &core.TaskStatusUpdate{Phase: core.TaskStatusPhaseStopped},
+	}, 100)
+
+	require.Contains(t, needsInput, primaryStyle.Render("first task"))
+	require.Contains(t, stopped, dimStyle.Render("first task"))
+}
+
+func TestTaskListBlocks_PacksTasksWithoutSubRows(t *testing.T) {
+	m := model{rows: rowsFromTasks([]*core.Task{
+		{ID: "task-1", RepoName: "repo-a", DisplayName: "first task", Provider: core.ProviderCodex},
+		{ID: "task-2", RepoName: "repo-a", DisplayName: "second task", Provider: core.ProviderCodex},
+		{ID: "task-3", RepoName: "repo-b", DisplayName: "third task", Provider: core.ProviderCodex},
+	})}
+
+	var lines []string
+	for _, block := range m.taskListBlocks(80) {
+		for _, line := range block.lines {
+			lines = append(lines, stripANSI(line))
+		}
+	}
+
+	require.Len(t, lines, 6)
+	require.Equal(t, "repo-a", lines[0])
+	require.Contains(t, lines[1], "first task")
+	require.Contains(t, lines[2], "second task")
+	require.Empty(t, strings.TrimSpace(lines[3]))
+	require.Equal(t, "repo-b", lines[4])
+	require.Contains(t, lines[5], "third task")
+}
+
+func TestTaskStatusDetailText_NoStatusDoesNotRenderIdle(t *testing.T) {
+	statusText, _ := taskStatusDetailText(nil)
 
 	require.Contains(t, statusText, "no status")
 	require.NotContains(t, statusText, "idle")
+}
+
+func TestModel_SpinnerTurnsOnlyWhileSomethingWorks(t *testing.T) {
+	frontend := newFrontendHarness()
+	frontend.listTasks = []*core.Task{
+		{ID: "task-1", RepoName: "repo", DisplayName: "first task", Provider: core.ProviderCodex},
+	}
+	m := newLoadedModel(frontend)
+	statusMsg := func(phase core.TaskStatusPhase) taskStatusUpdatedMsg {
+		return taskStatusUpdatedMsg{
+			// Without an updates channel, waiting for the next update returns
+			// at once.
+			taskID: "task-1",
+			update: core.TaskStatusUpdate{TaskID: "task-1", Phase: phase},
+		}
+	}
+
+	// A stopped task leaves the spinner off.
+	next, cmd := m.Update(statusMsg(core.TaskStatusPhaseStopped))
+	m = asModel(t, next)
+	require.False(t, m.spinnerRunning)
+	require.Empty(t, msgsOfType[spinnerTickMsg](runBatchCmd(t, cmd)))
+
+	// A working task starts it, and a second update does not start another.
+	next, cmd = m.Update(statusMsg(core.TaskStatusPhaseWorking))
+	m = asModel(t, next)
+	require.True(t, m.spinnerRunning)
+	require.Len(t, msgsOfType[spinnerTickMsg](runBatchCmd(t, cmd)), 1)
+
+	next, cmd = m.Update(statusMsg(core.TaskStatusPhaseWorking))
+	m = asModel(t, next)
+	require.Empty(t, msgsOfType[spinnerTickMsg](runBatchCmd(t, cmd)))
+
+	// Each tick turns it while the task works.
+	next, cmd = m.Update(spinnerTickMsg{})
+	m = asModel(t, next)
+	require.Equal(t, 1, m.spinnerFrame)
+	require.IsType(t, spinnerTickMsg{}, runCmd(t, cmd))
+
+	// Once the task stops, the next tick stops the spinner.
+	next, _ = m.Update(statusMsg(core.TaskStatusPhaseStopped))
+	m = asModel(t, next)
+	next, cmd = m.Update(spinnerTickMsg{})
+	m = asModel(t, next)
+	require.Nil(t, cmd)
+	require.False(t, m.spinnerRunning)
 }
 
 func TestModel_TaskRowUpdatesWhenSubscriptionUpdateArrives(t *testing.T) {
@@ -835,7 +1081,7 @@ func TestModel_TaskRowUpdatesWhenSubscriptionUpdateArrives(t *testing.T) {
 	require.NotNil(t, nextCmd)
 	require.NotNil(t, got.rows[0].status)
 	require.Equal(t, core.TaskStatusPhaseWaitingForInput, got.rows[0].status.Phase)
-	require.Contains(t, stripANSI(got.View().Content), "needs input")
+	require.Contains(t, stripANSI(got.View().Content), iconStatusNeedsInput+" first task")
 }
 
 func TestModel_TaskStatusUpdateReloadsTaskActivity(t *testing.T) {
@@ -887,9 +1133,11 @@ func TestModel_TaskStatusUpdateReloadsTaskActivity(t *testing.T) {
 	require.True(t, ok)
 	require.NotNil(t, followCmd)
 
+	// Activity, tokens, the next update, and the spinner the working task
+	// starts.
 	batchMsg, ok := runCmd(t, followCmd).(tea.BatchMsg)
 	require.True(t, ok)
-	require.Len(t, batchMsg, 3)
+	require.Len(t, batchMsg, 4)
 
 	activityMsg, ok := batchMsg[0]().(taskActivityLoadedMsg)
 	require.True(t, ok)
@@ -1006,7 +1254,7 @@ func TestModel_DetailStatusUsesTaskStatusStyle(t *testing.T) {
 		width: 80,
 	}
 
-	statusText, statusStyle := taskStatusText(status)
+	statusText, statusStyle := taskStatusDetailText(status)
 
 	view := m.selectedTaskDetailView()
 
@@ -1014,36 +1262,30 @@ func TestModel_DetailStatusUsesTaskStatusStyle(t *testing.T) {
 	require.NotContains(t, view, mutedStyle.Render("state")+"  "+primaryStyle.Render(statusText))
 }
 
-func TestTaskStatusText_NamesBackgroundWorkWithinStatusColumn(t *testing.T) {
+func TestTaskStatusDetailText_NamesBackgroundWorkByKind(t *testing.T) {
 	cases := []struct {
 		work   core.TaskBackgroundWork
-		row    string
 		detail string
 	}{
 		{
-			work:   core.TaskBackgroundWork{Subagents: 1},
-			row:    "● 1 subagent working",
-			detail: "● working in background · 1 subagent",
+			work:   core.TaskBackgroundWork{},
+			detail: "◐ working in background",
 		},
 		{
-			work:   core.TaskBackgroundWork{Subagents: 2},
-			row:    "● 2 subagents working",
-			detail: "● working in background · 2 subagents",
+			work:   core.TaskBackgroundWork{Subagents: 1},
+			detail: "◐ working in background · 1 subagent",
 		},
 		{
 			work:   core.TaskBackgroundWork{Shells: 1},
-			row:    "● 1 shell working",
-			detail: "● working in background · 1 shell",
+			detail: "◐ working in background · 1 shell",
 		},
 		{
 			work:   core.TaskBackgroundWork{Subagents: 2, Monitors: 1, Shells: 1},
-			row:    "● 4 bg tasks working",
-			detail: "● working in background · 2 subagents, 1 monitor, 1 shell",
+			detail: "◐ working in background · 2 subagents, 1 monitor, 1 shell",
 		},
 		{
 			work:   core.TaskBackgroundWork{Subagents: 12},
-			row:    "● 12 bg tasks working",
-			detail: "● working in background · 12 subagents",
+			detail: "◐ working in background · 12 subagents",
 		},
 	}
 	for _, tc := range cases {
@@ -1051,11 +1293,6 @@ func TestTaskStatusText_NamesBackgroundWorkWithinStatusColumn(t *testing.T) {
 			Phase:          core.TaskStatusPhaseWorkingInBackground,
 			BackgroundWork: tc.work,
 		}
-
-		row, rowStyle := taskStatusText(status)
-		require.Equal(t, tc.row, row)
-		require.LessOrEqual(t, lipgloss.Width(row), colWidthStatus, row)
-		require.Equal(t, healthyStyle.Render(row), rowStyle.Render(row))
 
 		detail, detailStyle := taskStatusDetailText(status)
 		require.Equal(t, tc.detail, detail)
@@ -2353,6 +2590,17 @@ func runBatchCmd(t *testing.T, cmd tea.Cmd) []tea.Msg {
 		msgs = append(msgs, runCmd(t, batchCmd))
 	}
 	return msgs
+}
+
+// msgsOfType returns the messages of type T among msgs.
+func msgsOfType[T tea.Msg](msgs []tea.Msg) []T {
+	var typed []T
+	for _, msg := range msgs {
+		if match, ok := msg.(T); ok {
+			typed = append(typed, match)
+		}
+	}
+	return typed
 }
 
 func requireMsgType[T tea.Msg](t *testing.T, msgs []tea.Msg) T {
