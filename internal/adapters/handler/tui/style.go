@@ -17,7 +17,7 @@ var (
 	colorHealthy  = lipgloss.Color("#4aba7a")
 	colorWarning  = lipgloss.Color("#c4a24e")
 	colorError    = lipgloss.Color("#c05050")
-	colorCodex    = lipgloss.Color("#5ac4a0")
+	colorCodex    = lipgloss.Color("#59b1cf")
 	colorClaude   = lipgloss.Color("#d97757")
 	colorPRMerged = lipgloss.Color("#9b7ce8")
 )
