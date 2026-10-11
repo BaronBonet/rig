@@ -32,10 +32,17 @@ type fakeTaskService struct {
 	setup      *core.ProviderSetup
 	detections []core.ProviderDetection
 	latest     map[string]*core.TaskStatusUpdate
+	taskAtPath map[string]*core.Task
+	repoDirs   []string
+	repos      []core.KnownRepo
+	// repoDirSuggestions is the repo directory suggested for each working
+	// directory.
+	repoDirSuggestions map[string]string
 
-	createSteps []core.TaskCreateProgressStep
-	createTask  *core.Task
-	createErr   error
+	createSteps  []core.TaskCreateProgressStep
+	createTask   *core.Task
+	createErr    error
+	createInputs []core.CreateTaskInput
 
 	updates      chan core.TaskStatusUpdate
 	subscribeErr error
@@ -54,6 +61,7 @@ func newFakeTaskService() *fakeTaskService {
 		prs:          map[string][]core.RepoPullRequest{},
 		prStatuses:   map[string]*core.PRStatus{},
 		latest:       map[string]*core.TaskStatusUpdate{},
+		taskAtPath:   map[string]*core.Task{},
 		updates:      make(chan core.TaskStatusUpdate, 8),
 		subscribeCtx: make(chan context.Context, 1),
 		errByOp:      map[string]error{},
@@ -85,6 +93,7 @@ func (f *fakeTaskService) CreateTaskStream(
 ) (<-chan core.TaskCreateEvent, error) {
 	f.mu.Lock()
 	f.tasks = append(f.tasks, f.createTask)
+	f.createInputs = append(f.createInputs, input)
 	f.mu.Unlock()
 
 	return f.taskCreateResult()
@@ -137,6 +146,12 @@ func (f *fakeTaskService) ListTasks(context.Context) ([]*core.Task, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	return f.tasks, f.errByOp["list_tasks"]
+}
+
+func (f *fakeTaskService) TaskAtPath(_ context.Context, path string) (*core.Task, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.taskAtPath[path], f.errByOp["task_at_path"]
 }
 
 func (f *fakeTaskService) LatestTaskStatus(_ context.Context, taskID string) (*core.TaskStatusUpdate, error) {
@@ -200,6 +215,34 @@ func (f *fakeTaskService) DetectProviders(context.Context) ([]core.ProviderDetec
 	return f.detections, f.errByOp["detect_providers"]
 }
 
+func (f *fakeTaskService) GetRepoDirs(context.Context) ([]string, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.repoDirs, f.errByOp["get_repo_dirs"]
+}
+
+func (f *fakeTaskService) SaveRepoDirs(_ context.Context, dirs []string) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if err := f.errByOp["save_repo_dirs"]; err != nil {
+		return err
+	}
+	f.repoDirs = dirs
+	return nil
+}
+
+func (f *fakeTaskService) ListRepos(context.Context) ([]core.KnownRepo, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.repos, f.errByOp["list_repos"]
+}
+
+func (f *fakeTaskService) SuggestRepoDir(_ context.Context, cwd string) (string, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.repoDirSuggestions[cwd], f.errByOp["suggest_repo_dir"]
+}
+
 // startTestFrontend serves a fake TaskService on a real Unix socket and
 // returns the real daemon-backed frontend client pointed at it, so tests
 // cross the seam exactly the way the TUI does.
@@ -232,8 +275,9 @@ func TestUnaryOperationsRoundTrip(t *testing.T) {
 	svc := newFakeTaskService()
 	svc.tasks = []*core.Task{
 		{ID: "task-1", DisplayName: "add retries", Provider: core.ProviderCodex},
-		{ID: "task-2", DisplayName: "fix flake", Provider: core.ProviderClaude},
+		{ID: "task-2", DisplayName: "fix flake", Provider: core.ProviderClaude, ParentTaskID: "task-1"},
 	}
+	svc.taskAtPath["/tmp/repo_fix-flake/internal"] = svc.tasks[1]
 	svc.activity["task-1"] = []core.TaskActivityEvent{
 		{TaskID: "task-1", Role: core.TaskActivityRoleUser, Text: "add retries"},
 		{TaskID: "task-1", Role: core.TaskActivityRoleAssistant, Text: "editing main.go"},
@@ -249,6 +293,12 @@ func TestUnaryOperationsRoundTrip(t *testing.T) {
 		Default:    core.ProviderCodex,
 	}
 	svc.detections = []core.ProviderDetection{{Provider: core.ProviderCodex, Ready: true}}
+	svc.repoDirs = []string{"/work"}
+	svc.repos = []core.KnownRepo{
+		{Name: "backend", Root: "/work/backend", TaskCount: 2},
+		{Name: "frontend", Root: "/work/frontend"},
+	}
+	svc.repoDirSuggestions = map[string]string{"/work/backend/internal": "/work"}
 	svc.latest["task-1"] = &core.TaskStatusUpdate{
 		TaskID:             "task-1",
 		Provider:           core.ProviderCodex,
@@ -270,6 +320,19 @@ func TestUnaryOperationsRoundTrip(t *testing.T) {
 		require.NoError(t, err)
 		require.Len(t, tasks, 2)
 		require.Equal(t, "task-1", tasks[0].ID)
+		require.Equal(t, "task-1", tasks[1].ParentTaskID)
+	})
+
+	t.Run("task at path", func(t *testing.T) {
+		task, err := client.TaskAtPath(ctx, "/tmp/repo_fix-flake/internal")
+		require.NoError(t, err)
+		require.Equal(t, svc.tasks[1], task)
+	})
+
+	t.Run("task at path returns nil when no task's worktree contains it", func(t *testing.T) {
+		task, err := client.TaskAtPath(ctx, "/tmp/repo")
+		require.NoError(t, err)
+		require.Nil(t, task)
 	})
 
 	t.Run("get task activity honors limit", func(t *testing.T) {
@@ -350,6 +413,44 @@ func TestUnaryOperationsRoundTrip(t *testing.T) {
 		require.True(t, detections[0].Ready)
 	})
 
+	t.Run("get repo dirs", func(t *testing.T) {
+		dirs, err := client.GetRepoDirs(ctx)
+		require.NoError(t, err)
+		require.Equal(t, []string{"/work"}, dirs)
+	})
+
+	t.Run("save repo dirs", func(t *testing.T) {
+		require.NoError(t, client.SaveRepoDirs(ctx, []string{"~/code", "/work"}))
+		dirs, err := client.GetRepoDirs(ctx)
+		require.NoError(t, err)
+		require.Equal(t, []string{"~/code", "/work"}, dirs)
+	})
+
+	t.Run("save no repo dirs", func(t *testing.T) {
+		require.NoError(t, client.SaveRepoDirs(ctx, nil))
+		dirs, err := client.GetRepoDirs(ctx)
+		require.NoError(t, err)
+		require.Empty(t, dirs)
+	})
+
+	t.Run("list repos", func(t *testing.T) {
+		repos, err := client.ListRepos(ctx)
+		require.NoError(t, err)
+		require.Equal(t, svc.repos, repos)
+	})
+
+	t.Run("suggest repo dir", func(t *testing.T) {
+		suggestion, err := client.SuggestRepoDir(ctx, "/work/backend/internal")
+		require.NoError(t, err)
+		require.Equal(t, "/work", suggestion)
+	})
+
+	t.Run("suggest no repo dir", func(t *testing.T) {
+		suggestion, err := client.SuggestRepoDir(ctx, "/tmp")
+		require.NoError(t, err)
+		require.Empty(t, suggestion)
+	})
+
 	t.Run("reconnect task session", func(t *testing.T) {
 		require.NoError(t, client.ReconnectTaskSession(ctx, "task-1"))
 		svc.mu.Lock()
@@ -376,6 +477,39 @@ func TestUnaryOperationsRoundTrip(t *testing.T) {
 		require.ErrorContains(t, err, "repository offline")
 		svc.mu.Lock()
 		delete(svc.errByOp, "list_tasks")
+		svc.mu.Unlock()
+	})
+
+	t.Run("repo errors surface as client errors", func(t *testing.T) {
+		svc.mu.Lock()
+		svc.errByOp["list_repos"] = errors.New("repository offline")
+		svc.errByOp["save_repo_dirs"] = errors.New(`repo directory "code" must be an absolute path`)
+		svc.errByOp["suggest_repo_dir"] = errors.New("git offline")
+		svc.mu.Unlock()
+		_, err := client.ListRepos(ctx)
+		require.ErrorContains(t, err, "repository offline")
+		_, err = client.SuggestRepoDir(ctx, "/work/backend")
+		require.ErrorContains(t, err, "git offline")
+		require.ErrorContains(
+			t,
+			client.SaveRepoDirs(ctx, []string{"code"}),
+			`repo directory "code" must be an absolute path`,
+		)
+		svc.mu.Lock()
+		delete(svc.errByOp, "list_repos")
+		delete(svc.errByOp, "save_repo_dirs")
+		delete(svc.errByOp, "suggest_repo_dir")
+		svc.mu.Unlock()
+	})
+
+	t.Run("task at path errors surface as client errors", func(t *testing.T) {
+		svc.mu.Lock()
+		svc.errByOp["task_at_path"] = errors.New("repository offline")
+		svc.mu.Unlock()
+		_, err := client.TaskAtPath(ctx, "/tmp/repo_fix-flake")
+		require.ErrorContains(t, err, "repository offline")
+		svc.mu.Lock()
+		delete(svc.errByOp, "task_at_path")
 		svc.mu.Unlock()
 	})
 }
@@ -408,6 +542,35 @@ func TestCreateTaskStreamRoundTrip(t *testing.T) {
 		require.Equal(t, core.TaskCreateProgressCreatingWorktree, got[1].Progress.Step)
 		require.NotNil(t, got[2].Task)
 		require.Equal(t, "task-1", got[2].Task.ID)
+	})
+
+	t.Run("sends the whole input", func(t *testing.T) {
+		svc := newFakeTaskService()
+		svc.createTask = &core.Task{ID: "task-1"}
+		client := startTestFrontend(t, svc)
+		input := core.CreateTaskInput{
+			Source: core.CreateTaskSource{PullRequest: &core.RepoPullRequest{
+				Number:     7,
+				Title:      "retry flow",
+				BranchName: "retries",
+				State:      core.PRStateOpen,
+			}},
+			Cwd:               "/tmp/backend",
+			Prompt:            "call the new endpoint",
+			Provider:          core.ProviderClaude,
+			TargetRepo:        "../frontend",
+			SubmitPrompt:      true,
+			LinkToCallingTask: true,
+		}
+
+		events, err := client.CreateTaskStream(context.Background(), input)
+		require.NoError(t, err)
+		for range events {
+		}
+
+		svc.mu.Lock()
+		defer svc.mu.Unlock()
+		require.Equal(t, []core.CreateTaskInput{input}, svc.createInputs)
 	})
 
 	t.Run("terminal error carries partial task for retry", func(t *testing.T) {

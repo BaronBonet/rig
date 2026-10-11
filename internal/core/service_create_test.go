@@ -3,6 +3,7 @@ package core
 import (
 	"errors"
 	"fmt"
+	"path/filepath"
 	"testing"
 
 	"github.com/stretchr/testify/mock"
@@ -402,7 +403,7 @@ func TestTaskServiceCreateTask_BootstrapsWorkspaceWhenRepoSetupIsDisabled(t *tes
 		},
 		Workspace:            svc.workspaceMock,
 		EnableWorkspaceSetup: false,
-		ProviderConfig:       svc.providerConfigMock,
+		UserConfig:           svc.userConfigMock,
 	})
 
 	task, err := svc.service.CreateTaskWithProgress(t.Context(), CreateTaskInput{
@@ -602,4 +603,431 @@ func TestTaskServiceCreateTaskWithProgress_AllowsNilReporter(t *testing.T) {
 
 	require.NoError(t, err)
 	require.NotNil(t, task)
+}
+
+func TestTaskServiceCreateTask_CreatesTheTaskInTheTargetRepository(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+
+	tests := []struct {
+		name       string
+		cwd        string
+		targetRepo string
+		wantDetect string
+	}{
+		{
+			name:       "no target repository is the repository containing the working directory",
+			cwd:        "/work/backend/internal",
+			wantDetect: "/work/backend/internal",
+		},
+		{
+			name:       "absolute path",
+			cwd:        "/work/backend",
+			targetRepo: "/work/frontend",
+			wantDetect: "/work/frontend",
+		},
+		{
+			name:       "absolute path is cleaned",
+			cwd:        "/work/backend",
+			targetRepo: "/work//frontend/",
+			wantDetect: "/work/frontend",
+		},
+		{
+			name:       "relative path is relative to the working directory",
+			cwd:        "/work/backend",
+			targetRepo: "../frontend",
+			wantDetect: "/work/frontend",
+		},
+		{
+			name:       "dot is the working directory",
+			cwd:        "/work/backend",
+			targetRepo: ".",
+			wantDetect: "/work/backend",
+		},
+		{
+			name:       "relative path below the working directory",
+			cwd:        "/work",
+			targetRepo: "frontend/app",
+			wantDetect: "/work/frontend/app",
+		},
+		{
+			name:       "home directory path",
+			cwd:        "/work/backend",
+			targetRepo: "~/code/frontend",
+			wantDetect: filepath.Join(home, "code", "frontend"),
+		},
+		{
+			name:       "home directory",
+			cwd:        "/work/backend",
+			targetRepo: "~",
+			wantDetect: home,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			svc := newTestTaskService(t)
+			svc.providerRepo.suggestedName = "call the new endpoint"
+			svc.repoClient.repoContext = RepoContext{Root: "/work/frontend", Name: "frontend", BaseBranch: "main"}
+
+			task, err := svc.service.CreateTaskWithProgress(t.Context(), CreateTaskInput{
+				Cwd:        tt.cwd,
+				Prompt:     "call the new endpoint",
+				TargetRepo: tt.targetRepo,
+			}, nil)
+
+			require.NoError(t, err)
+			require.Equal(t, []string{tt.wantDetect}, svc.repoClient.detectedCwds)
+			require.Equal(t, "/work/frontend", task.RepoRoot)
+			require.Equal(t, "frontend", task.RepoName)
+			require.Equal(t, "/work/frontend_call-the-new-endpoint", task.WorktreePath)
+			require.Equal(t, "/work/frontend", svc.providerRepo.suggestRepoRoot)
+			require.Equal(t, "/work/frontend", svc.workspace.repoRoot)
+		})
+	}
+}
+
+// Repository detection maps a worktree to its main repository, so a task
+// created in another task's worktree branches off the main checkout.
+func TestTaskServiceCreateTask_CreatesTheTaskInTheMainRepositoryOfATargetWorktree(t *testing.T) {
+	svc := newTestTaskService(t)
+	svc.providerRepo.suggestedName = "call the new endpoint"
+	svc.repoClient.repoContext = RepoContext{Root: "/work/frontend", Name: "frontend", BaseBranch: "main"}
+
+	task, err := svc.service.CreateTaskWithProgress(t.Context(), CreateTaskInput{
+		Cwd:        "/work/backend",
+		Prompt:     "call the new endpoint",
+		TargetRepo: "../frontend_add-login",
+	}, nil)
+
+	require.NoError(t, err)
+	require.Equal(t, []string{"/work/frontend_add-login"}, svc.repoClient.detectedCwds)
+	require.Equal(t, "/work/frontend", task.RepoRoot)
+	require.Equal(t, "/work/frontend_call-the-new-endpoint", task.WorktreePath)
+}
+
+func TestTaskServiceCreateTask_RejectsATargetRepositoryInAnotherUsersHomeDirectory(t *testing.T) {
+	svc := newTestTaskService(t)
+	svc.providerRepo.suggestedName = "call the new endpoint"
+
+	task, err := svc.service.CreateTaskWithProgress(t.Context(), CreateTaskInput{
+		Cwd:        "/work/backend",
+		Prompt:     "call the new endpoint",
+		TargetRepo: "~alice/frontend",
+	}, nil)
+
+	require.Nil(t, task)
+	require.EqualError(t, err, `repository path "~alice/frontend": only ~ and ~/ expand to the home directory`)
+	require.Empty(t, svc.repoClient.detectedCwds)
+	require.Nil(t, svc.taskRepo.createdTask)
+}
+
+func TestTaskServiceCreateTask_CreatesTheTaskInTheKnownRepositoryTheTargetNames(t *testing.T) {
+	tests := []struct {
+		name       string
+		targetRepo string
+		wantRoot   string
+	}{
+		{name: "repository in a repo directory", targetRepo: "frontend", wantRoot: "/code/frontend"},
+		{name: "name in another case", targetRepo: "FrontEnd", wantRoot: "/code/frontend"},
+		{name: "repository of a task outside every repo directory", targetRepo: "backend", wantRoot: "/work/backend"},
+		{name: "repository named in another case by its tasks", targetRepo: "API", wantRoot: "/work/api"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			svc := newTestTaskService(t)
+			svc.providerRepo.suggestedName = "call the new endpoint"
+			svc.taskRepo.listTasks = []*Task{
+				backendTask(),
+				{ID: "task-api", RepoRoot: "/work/api", RepoName: "Api", WorktreePath: "/work/api_fix"},
+			}
+			svc.userConfig.repoDirs = []string{"/code"}
+			svc.repoClient.checkouts = map[string][]string{"/code": {"/code/frontend", "/code/notes"}}
+			svc.repoClient.repoContext = RepoContext{
+				Root:       tt.wantRoot,
+				Name:       filepath.Base(tt.wantRoot),
+				BaseBranch: "main",
+			}
+
+			task, err := svc.service.CreateTaskWithProgress(t.Context(), CreateTaskInput{
+				Cwd:        "/work/backend_add-retries",
+				Prompt:     "call the new endpoint",
+				TargetRepo: tt.targetRepo,
+			}, nil)
+
+			require.NoError(t, err)
+			require.Equal(t, []string{tt.wantRoot}, svc.repoClient.detectedCwds)
+			require.Equal(t, tt.wantRoot, task.RepoRoot)
+			require.Equal(t, tt.wantRoot+"_call-the-new-endpoint", task.WorktreePath)
+		})
+	}
+}
+
+func TestTaskServiceCreateTask_RejectsARepositoryNameSeveralKnownRepositoriesHave(t *testing.T) {
+	svc := newTestTaskService(t)
+	svc.providerRepo.suggestedName = "call the new endpoint"
+	svc.taskRepo.listTasks = []*Task{{ID: "task-old", RepoRoot: "/work/frontend", RepoName: "frontend"}}
+	svc.userConfig.repoDirs = []string{"/code"}
+	svc.repoClient.checkouts = map[string][]string{"/code": {"/code/Frontend"}}
+
+	task, err := svc.service.CreateTaskWithProgress(t.Context(), CreateTaskInput{
+		Cwd:        "/work/backend",
+		Prompt:     "call the new endpoint",
+		TargetRepo: "frontend",
+	}, nil)
+
+	require.Nil(t, task)
+	require.EqualError(t, err, `2 known repositories are named "frontend", so pass the path of the one you mean `+
+		`with --repo <path>: /code/Frontend, /work/frontend`)
+	require.Empty(t, svc.repoClient.detectedCwds)
+	require.Nil(t, svc.taskRepo.createdTask)
+}
+
+func TestTaskServiceCreateTask_RejectsARepositoryNameNoKnownRepositoryHas(t *testing.T) {
+	svc := newTestTaskService(t)
+	svc.providerRepo.suggestedName = "call the new endpoint"
+	svc.taskRepo.listTasks = []*Task{backendTask()}
+	svc.userConfig.repoDirs = []string{"/code"}
+	svc.repoClient.checkouts = map[string][]string{"/code": {"/code/notes"}}
+
+	task, err := svc.service.CreateTaskWithProgress(t.Context(), CreateTaskInput{
+		Cwd:        "/work/backend",
+		Prompt:     "call the new endpoint",
+		TargetRepo: "frontend",
+	}, nil)
+
+	require.Nil(t, task)
+	require.EqualError(t, err, "no known repository is named \"frontend\": `rig repo list` shows the known "+
+		"repositories, or pass the repository's path instead")
+	require.Empty(t, svc.repoClient.detectedCwds)
+	require.Nil(t, svc.taskRepo.createdTask)
+}
+
+// A known repository may have been moved or deleted since Rig found it.
+func TestTaskServiceCreateTask_AsksForThePathOfAKnownRepositoryThatCannotBeUsed(t *testing.T) {
+	tests := []struct {
+		name      string
+		tasks     []*Task
+		checkouts map[string][]string
+		root      string
+		detectErr string
+	}{
+		{
+			name:      "repository of a task that was moved",
+			tasks:     []*Task{{ID: "task-old", RepoRoot: "/work/frontend", RepoName: "frontend"}},
+			root:      "/work/frontend",
+			detectErr: "chdir /work/frontend: no such file or directory",
+		},
+		{
+			name:      "checkout in a repo directory that is no longer a repository",
+			checkouts: map[string][]string{"/code": {"/code/frontend"}},
+			root:      "/code/frontend",
+			detectErr: "fatal: not a git repository (or any of the parent directories): .git",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			svc := newTestTaskService(t)
+			svc.taskRepo.listTasks = tt.tasks
+			svc.userConfig.repoDirs = []string{"/code"}
+			svc.repoClient.checkouts = tt.checkouts
+			svc.repoClient.detectRepoErr = errors.New(tt.detectErr)
+
+			task, err := svc.service.CreateTaskWithProgress(t.Context(), CreateTaskInput{
+				Cwd:        "/work/backend",
+				Prompt:     "call the new endpoint",
+				TargetRepo: "frontend",
+			}, nil)
+
+			require.Nil(t, task)
+			require.EqualError(t, err, `repository "frontend" at `+tt.root+` cannot be used (`+tt.detectErr+
+				`): if it has moved, pass the repository's path instead`)
+			require.Equal(t, []string{tt.root}, svc.repoClient.detectedCwds)
+			require.Nil(t, svc.taskRepo.createdTask)
+		})
+	}
+}
+
+func TestTaskServiceCreateTask_NamesATargetRepositoryPathThatIsNoRepository(t *testing.T) {
+	svc := newTestTaskService(t)
+	svc.repoClient.detectRepoErr = errors.New("not a git repository")
+
+	task, err := svc.service.CreateTaskWithProgress(t.Context(), CreateTaskInput{
+		Cwd:        "/work/backend",
+		Prompt:     "call the new endpoint",
+		TargetRepo: "../notes",
+	}, nil)
+
+	require.Nil(t, task)
+	require.EqualError(t, err, `repository path "../notes": not a git repository`)
+	require.Equal(t, []string{"/work/notes"}, svc.repoClient.detectedCwds)
+	require.Nil(t, svc.taskRepo.createdTask)
+}
+
+func TestTaskServiceCreateTask_SubmitsThePromptOnlyWhenAsked(t *testing.T) {
+	for _, submit := range []bool{true, false} {
+		t.Run(fmt.Sprintf("submit %t", submit), func(t *testing.T) {
+			svc := newTestTaskService(t)
+			svc.providerRepo.suggestedName = "billing retry flow"
+
+			_, err := svc.service.CreateTaskWithProgress(t.Context(), CreateTaskInput{
+				Cwd:          "/tmp/repo",
+				Prompt:       "add billing retry flow",
+				SubmitPrompt: submit,
+			}, nil)
+
+			require.NoError(t, err)
+			require.Equal(t, TaskSessionLaunchSpec{
+				Command:       []string{"codex"},
+				ReadyMarker:   "›",
+				PrefillInput:  []string{"add billing retry flow"},
+				SubmitPrefill: submit,
+			}, svc.sessionClient.startedLaunch)
+		})
+	}
+}
+
+// The choice to submit belongs to the creation that asked for it, so retrying
+// that creation pastes the prompt in again without submitting it.
+func TestTaskServiceRetryTaskCreation_NeverSubmitsThePrompt(t *testing.T) {
+	svc := newTestTaskService(t)
+	svc.providerRepo.suggestedName = "billing retry flow"
+	svc.sessionClient.startErr = errors.New("tmux failed")
+	failed, err := svc.service.CreateTaskWithProgress(t.Context(), CreateTaskInput{
+		Cwd:          "/tmp/repo",
+		Prompt:       "add billing retry flow",
+		SubmitPrompt: true,
+	}, nil)
+	require.Error(t, err)
+	require.True(t, svc.sessionClient.startedLaunch.SubmitPrefill)
+	svc.taskRepo.listTasks = []*Task{svc.taskRepo.updatedTask}
+	svc.sessionClient.startErr = nil
+	svc.sessionClient.startedLaunch = TaskSessionLaunchSpec{}
+
+	_, err = svc.service.RetryTaskCreationWithProgress(t.Context(), failed.ID, nil)
+
+	require.NoError(t, err)
+	require.Equal(t, []string{"add billing retry flow"}, svc.sessionClient.startedLaunch.PrefillInput)
+	require.False(t, svc.sessionClient.startedLaunch.SubmitPrefill)
+}
+
+func TestTaskServiceReconnectTaskSession_NeverSubmitsThePrompt(t *testing.T) {
+	svc := newTestTaskService(t)
+	svc.providerRepo.suggestedName = "billing retry flow"
+	created, err := svc.service.CreateTaskWithProgress(t.Context(), CreateTaskInput{
+		Cwd:          "/tmp/repo",
+		Prompt:       "add billing retry flow",
+		SubmitPrompt: true,
+	}, nil)
+	require.NoError(t, err)
+	require.True(t, svc.sessionClient.startedLaunch.SubmitPrefill)
+	svc.taskRepo.listTasks = []*Task{svc.taskRepo.updatedTask}
+	svc.sessionClient.inspectState = TaskSessionRuntimeState{Exists: false}
+	svc.sessionClient.startedLaunch = TaskSessionLaunchSpec{}
+
+	require.NoError(t, svc.service.ReconnectTaskSession(t.Context(), created.ID))
+
+	require.Equal(t, []string{"codex"}, svc.sessionClient.startedLaunch.Command)
+	require.False(t, svc.sessionClient.startedLaunch.SubmitPrefill)
+}
+
+// backendTask is a task whose worktree a command creating another task may
+// run in.
+func backendTask() *Task {
+	return &Task{
+		ID:             "task-backend",
+		Slug:           "add-retries",
+		DisplayName:    "Add retries",
+		RepoRoot:       "/work/backend",
+		RepoName:       "backend",
+		BranchName:     "feat/add-retries",
+		WorktreePath:   "/work/backend_add-retries",
+		TmuxSession:    "backend_add-retries",
+		Provider:       ProviderCodex,
+		CreationStatus: TaskCreationStatusReady,
+	}
+}
+
+func TestTaskServiceCreateTask_LinksTheTaskItIsCreatedFrom(t *testing.T) {
+	backendRepo := RepoContext{Root: "/work/backend", Name: "backend", BaseBranch: "main"}
+	frontendRepo := RepoContext{Root: "/work/frontend", Name: "frontend", BaseBranch: "main"}
+
+	tests := []struct {
+		name       string
+		input      CreateTaskInput
+		repo       RepoContext
+		wantParent string
+	}{
+		{
+			name:       "from the calling task's worktree root",
+			input:      CreateTaskInput{Cwd: "/work/backend_add-retries", LinkToCallingTask: true},
+			repo:       backendRepo,
+			wantParent: "task-backend",
+		},
+		{
+			name:       "from a subdirectory of the calling task's worktree",
+			input:      CreateTaskInput{Cwd: "/work/backend_add-retries/internal/api", LinkToCallingTask: true},
+			repo:       backendRepo,
+			wantParent: "task-backend",
+		},
+		{
+			name: "in another repository",
+			input: CreateTaskInput{
+				Cwd:               "/work/backend_add-retries",
+				TargetRepo:        "../frontend",
+				LinkToCallingTask: true,
+			},
+			repo:       frontendRepo,
+			wantParent: "task-backend",
+		},
+		{
+			name: "from a pull request",
+			input: CreateTaskInput{
+				Cwd:               "/work/backend_add-retries",
+				LinkToCallingTask: true,
+				Source: CreateTaskSource{PullRequest: &RepoPullRequest{
+					Number:     7,
+					Title:      "Retry flow",
+					BranchName: "feat/retry-flow",
+				}},
+			},
+			repo:       backendRepo,
+			wantParent: "task-backend",
+		},
+		{
+			name:  "not from outside any task's worktree",
+			input: CreateTaskInput{Cwd: "/work/backend", LinkToCallingTask: true},
+			repo:  backendRepo,
+		},
+		{
+			name:  "not from a directory beside the worktree that shares its name as a prefix",
+			input: CreateTaskInput{Cwd: "/work/backend_add-retries-ui/src", LinkToCallingTask: true},
+			repo:  backendRepo,
+		},
+		{
+			name:  "not when linking is off",
+			input: CreateTaskInput{Cwd: "/work/backend_add-retries/internal/api"},
+			repo:  backendRepo,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			svc := newTestTaskService(t)
+			svc.providerRepo.suggestedName = "call the new endpoint"
+			svc.repoClient.repoContext = tt.repo
+			svc.taskRepo.listTasks = []*Task{backendTask()}
+			input := tt.input
+			input.Prompt = "call the new endpoint"
+
+			task, err := svc.service.CreateTaskWithProgress(t.Context(), input, nil)
+
+			require.NoError(t, err)
+			require.Equal(t, tt.repo.Root, task.RepoRoot)
+			require.Equal(t, tt.wantParent, task.ParentTaskID)
+			require.Equal(t, tt.wantParent, svc.taskRepo.createdTask.ParentTaskID)
+		})
+	}
 }

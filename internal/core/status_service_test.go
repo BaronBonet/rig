@@ -597,6 +597,24 @@ func TestTaskStatusService_HandleHookEventResolvesTaskIDAndPublishesMappedUpdate
 	}, taskLevelStatus(*update))
 }
 
+// Reconnect restores a task's agents at its worktree root, so an agent
+// started in a subdirectory, which could not resume there, is not the task's.
+func TestTaskStatusService_HandleHookEventIgnoresAnAgentBelowTheWorktreeRoot(t *testing.T) {
+	svc := newTestTaskService(t)
+	svc.taskRepo.listTasks = []*Task{codexTaskFixture()}
+
+	err := svc.service.HandleHookEvent(t.Context(), HookEventInput{
+		OccurredAt: time.Now().UTC(),
+		EventName:  "SessionStart",
+		Provider:   ProviderCodex,
+		SessionID:  "codex-sess-1",
+		Cwd:        "/tmp/repo-task/web",
+	})
+
+	require.ErrorIs(t, err, ErrUnmanagedHookEvent)
+	require.Empty(t, svc.taskRepo.savedProviderSessions)
+}
+
 func TestTaskServiceHandleHookEvent_RecordsMultipleProviderSessionsForTask(t *testing.T) {
 	svc := newTestTaskService(t)
 	svc.taskRepo.listTasks = []*Task{{

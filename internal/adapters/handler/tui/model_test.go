@@ -1781,6 +1781,8 @@ func TestModel_CreateTaskFromPromptAppendsTaskAndStartsStatusTracking(t *testing
 	require.Equal(t, "fix the retry loop", frontend.createInput.Prompt)
 	require.Equal(t, core.ProviderCodex, frontend.createInput.Provider)
 	require.Empty(t, frontend.createInput.Source.PullRequest)
+	// Tasks created in the TUI are never linked to a parent task.
+	require.False(t, frontend.createInput.LinkToCallingTask)
 	require.Equal(t, 1, frontend.createTaskStreamCalls)
 
 	frontend.listTasks = append(frontend.listTasks, createdTask)
@@ -2401,6 +2403,7 @@ func TestModel_PRPickerEnterCreatesTaskFromSelectedPR(t *testing.T) {
 	require.NotNil(t, frontend.createInput.Source.PullRequest)
 	require.Equal(t, 42, frontend.createInput.Source.PullRequest.Number)
 	require.Equal(t, "feat/auth", frontend.createInput.Source.PullRequest.BranchName)
+	require.False(t, frontend.createInput.LinkToCallingTask)
 }
 
 func TestModel_PRPickerCreateFailureReturnsToBrowseWithProgressAndError(t *testing.T) {
@@ -2699,6 +2702,14 @@ type frontendHarness struct {
 	detections                  []core.ProviderDetection
 	detectProvidersErr          error
 	detectProvidersCalls        int
+	repoDirs                    []string
+	getRepoDirsErr              error
+	getRepoDirsCalls            int
+	savedRepoDirs               [][]string
+	saveRepoDirsErr             error
+	repoDirSuggestion           string
+	suggestRepoDirErr           error
+	suggestRepoDirCwds          []string
 }
 
 func newFrontendHarness() *frontendHarness {
@@ -2736,6 +2747,30 @@ func newFrontendHarness() *frontendHarness {
 				return nil, frontend.detectProvidersErr
 			}
 			return append([]core.ProviderDetection(nil), frontend.detections...), nil
+		},
+	).Maybe()
+	frontend.mock.EXPECT().GetRepoDirs(mock.Anything).RunAndReturn(
+		func(context.Context) ([]string, error) {
+			frontend.getRepoDirsCalls++
+			if frontend.getRepoDirsErr != nil {
+				return nil, frontend.getRepoDirsErr
+			}
+			return append([]string(nil), frontend.repoDirs...), nil
+		},
+	).Maybe()
+	frontend.mock.EXPECT().SaveRepoDirs(mock.Anything, mock.Anything).RunAndReturn(
+		func(_ context.Context, dirs []string) error {
+			frontend.savedRepoDirs = append(frontend.savedRepoDirs, append([]string(nil), dirs...))
+			return frontend.saveRepoDirsErr
+		},
+	).Maybe()
+	frontend.mock.EXPECT().SuggestRepoDir(mock.Anything, mock.Anything).RunAndReturn(
+		func(_ context.Context, cwd string) (string, error) {
+			frontend.suggestRepoDirCwds = append(frontend.suggestRepoDirCwds, cwd)
+			if frontend.suggestRepoDirErr != nil {
+				return "", frontend.suggestRepoDirErr
+			}
+			return frontend.repoDirSuggestion, nil
 		},
 	).Maybe()
 	frontend.mock.EXPECT().AttachTaskSession(mock.Anything, mock.Anything, mock.Anything).RunAndReturn(

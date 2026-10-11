@@ -189,10 +189,7 @@ func spawnTaskDaemonProcess(ctx context.Context, execPath string, env []string, 
 		return err
 	}
 
-	cmd := exec.CommandContext(context.WithoutCancel(ctx), execPath)
-	if len(env) > 0 {
-		cmd.Env = append(os.Environ(), env...)
-	}
+	cmd := taskDaemonCommand(ctx, execPath, os.Environ(), taskDaemonWorkingDir(), env)
 
 	devNull, err := os.OpenFile(os.DevNull, os.O_RDWR, 0)
 	if err != nil {
@@ -219,6 +216,56 @@ func spawnTaskDaemonProcess(ctx context.Context, execPath string, env []string, 
 	}()
 
 	return nil
+}
+
+// callerSessionEnvKeys are the environment variables an agent sets for the
+// commands it runs. A daemon started by such a command, as `rig task create`
+// run by an agent does, must not pass them on to the agents it launches: with
+// CLAUDECODE set, claude refuses to start as a nested session. The user's own
+// provider configuration, such as CODEX_HOME, is kept.
+var callerSessionEnvKeys = map[string]bool{
+	"CLAUDECODE":                     true,
+	"CLAUDE_CODE_ENTRYPOINT":         true,
+	"CLAUDE_CODE_SSE_PORT":           true,
+	"CODEX_SANDBOX":                  true,
+	"CODEX_SANDBOX_NETWORK_DISABLED": true,
+	"CODEX_THREAD_ID":                true,
+}
+
+// taskDaemonCommand builds the command that starts the daemon: the caller's
+// environment without its agent session variables, plus env, run from dir
+// rather than the caller's working directory, which may be a task worktree
+// deleted later.
+func taskDaemonCommand(
+	ctx context.Context,
+	execPath string,
+	environ []string,
+	dir string,
+	env []string,
+) *exec.Cmd {
+	cmd := exec.CommandContext(context.WithoutCancel(ctx), execPath)
+	cmd.Dir = dir
+	cmd.Env = make([]string, 0, len(environ)+len(env))
+	for _, entry := range environ {
+		key, _, _ := strings.Cut(entry, "=")
+		if callerSessionEnvKeys[key] {
+			continue
+		}
+		cmd.Env = append(cmd.Env, entry)
+	}
+	cmd.Env = append(cmd.Env, env...)
+
+	return cmd
+}
+
+// taskDaemonWorkingDir is the directory the daemon runs from: the user's home
+// directory, or the root directory when it is unknown.
+func taskDaemonWorkingDir() string {
+	home, err := os.UserHomeDir()
+	if err != nil || home == "" {
+		return string(filepath.Separator)
+	}
+	return home
 }
 
 func waitForHealthyTaskDaemon(ctx context.Context, socketPath string) error {

@@ -2,7 +2,9 @@ package git
 
 import (
 	"context"
+	"io/fs"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"testing"
 
@@ -192,4 +194,118 @@ func TestRepositoryRemoveTaskWorkspace_PrunesStaleWorktreeMetadataWhenPathIsMiss
 		WorktreePath: worktreePath,
 	})
 	require.NoError(t, err)
+}
+
+// runGit runs git in dir, isolated from the user's and the system's git
+// config.
+func runGit(t *testing.T, dir string, args ...string) {
+	t.Helper()
+	cmd := exec.CommandContext(t.Context(), "git", args...)
+	cmd.Dir = dir
+	cmd.Env = append(os.Environ(), "GIT_CONFIG_GLOBAL="+os.DevNull, "GIT_CONFIG_NOSYSTEM=1")
+	out, err := cmd.CombinedOutput()
+	require.NoError(t, err, "git %v: %s", args, out)
+}
+
+// initRepo makes a git repository with one commit at dir.
+func initRepo(t *testing.T, dir string) {
+	t.Helper()
+	require.NoError(t, os.MkdirAll(dir, 0o750))
+	runGit(t, dir, "init", "--quiet")
+	runGit(t, dir, "-c", "user.name=rig", "-c", "user.email=rig@example.com",
+		"commit", "--quiet", "--allow-empty", "-m", "init")
+}
+
+// physicalTempDir returns a temporary directory with its symlinks resolved,
+// as /var is a symlink on macOS.
+func physicalTempDir(t *testing.T) string {
+	t.Helper()
+	dir, err := filepath.EvalSymlinks(t.TempDir())
+	require.NoError(t, err)
+	return dir
+}
+
+func TestRepositoryListRepoCheckouts_ListsOnlyThePrimaryCheckouts(t *testing.T) {
+	code := physicalTempDir(t)
+	initRepo(t, filepath.Join(code, "frontend"))
+	initRepo(t, filepath.Join(code, "backend"))
+	runGit(t, filepath.Join(code, "backend"), "worktree", "add", "--quiet", "-b", "feat/retries",
+		filepath.Join(code, "backend_add-retries"))
+	initRepo(t, filepath.Join(code, ".dotfiles"))
+	require.NoError(t, os.Mkdir(filepath.Join(code, "notes"), 0o750))
+	require.NoError(t, os.WriteFile(filepath.Join(code, "README.md"), []byte("code\n"), 0o600))
+	initRepo(t, filepath.Join(code, "tools", "nested"))
+	require.FileExists(t, filepath.Join(code, "backend_add-retries", ".git"))
+
+	// The listing reads the filesystem alone, so the runner is never called.
+	checkouts, err := New(subprocess.NewMockRunner(t)).ListRepoCheckouts(context.Background(), code)
+
+	require.NoError(t, err)
+	require.Equal(t, []string{filepath.Join(code, "backend"), filepath.Join(code, "frontend")}, checkouts)
+}
+
+func TestRepositoryListRepoCheckouts_ListsTheCheckoutsWithTheirSymlinksResolved(t *testing.T) {
+	root := physicalTempDir(t)
+	initRepo(t, filepath.Join(root, "disk", "frontend"))
+	require.NoError(t, os.Symlink(filepath.Join(root, "disk"), filepath.Join(root, "code")))
+
+	checkouts, err := New(subprocess.NewMockRunner(t)).ListRepoCheckouts(
+		context.Background(),
+		filepath.Join(root, "code"),
+	)
+
+	require.NoError(t, err)
+	require.Equal(t, []string{filepath.Join(root, "disk", "frontend")}, checkouts)
+}
+
+// A symlink to a checkout lists the checkout at the place it links to, as
+// git reports its root.
+func TestRepositoryListRepoCheckouts_ListsSymlinkedCheckoutsWhereTheyLinkTo(t *testing.T) {
+	root := physicalTempDir(t)
+	code := filepath.Join(root, "code")
+	initRepo(t, filepath.Join(code, "backend"))
+	initRepo(t, filepath.Join(root, "ssd", "frontend"))
+	require.NoError(t, os.Mkdir(filepath.Join(root, "ssd", "notes"), 0o750))
+	require.NoError(t, os.Symlink(filepath.Join(root, "ssd", "frontend"), filepath.Join(code, "frontend")))
+	require.NoError(t, os.Symlink(filepath.Join(root, "ssd", "notes"), filepath.Join(code, "notes")))
+	require.NoError(t, os.Symlink(filepath.Join(code, "backend"), filepath.Join(code, "backend-link")))
+	require.NoError(t, os.Symlink(filepath.Join(root, "moved"), filepath.Join(code, "broken")))
+
+	checkouts, err := New(subprocess.NewMockRunner(t)).ListRepoCheckouts(context.Background(), code)
+
+	require.NoError(t, err)
+	require.Equal(t, []string{filepath.Join(code, "backend"), filepath.Join(root, "ssd", "frontend")}, checkouts)
+}
+
+// On a case-insensitive filesystem a repo directory may be typed in any case,
+// but git reports a repository's root in the case on disk.
+func TestRepositoryListRepoCheckouts_ListsTheCheckoutsInTheCaseOnDisk(t *testing.T) {
+	root := physicalTempDir(t)
+	initRepo(t, filepath.Join(root, "Code", "frontend"))
+	if _, err := os.Stat(filepath.Join(root, "CODE")); err != nil {
+		t.Skip("the temporary directory's filesystem is case-sensitive")
+	}
+
+	checkouts, err := New(subprocess.NewMockRunner(t)).ListRepoCheckouts(
+		context.Background(),
+		filepath.Join(root, "code"),
+	)
+
+	require.NoError(t, err)
+	require.Equal(t, []string{filepath.Join(root, "Code", "frontend")}, checkouts)
+}
+
+func TestRepositoryListRepoCheckouts_ListsNothingInADirectoryWithoutCheckouts(t *testing.T) {
+	checkouts, err := New(subprocess.NewMockRunner(t)).ListRepoCheckouts(context.Background(), t.TempDir())
+
+	require.NoError(t, err)
+	require.Empty(t, checkouts)
+}
+
+func TestRepositoryListRepoCheckouts_FailsWhenTheDirectoryDoesNotExist(t *testing.T) {
+	missing := filepath.Join(t.TempDir(), "moved")
+
+	_, err := New(subprocess.NewMockRunner(t)).ListRepoCheckouts(context.Background(), missing)
+
+	require.ErrorIs(t, err, fs.ErrNotExist)
 }

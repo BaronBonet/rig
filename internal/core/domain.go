@@ -33,6 +33,12 @@ type Task struct {
 	CreationStatus TaskCreationStatus     `json:"creation_status"`
 	CreationStep   TaskCreateProgressStep `json:"creation_step"`
 	CreationError  string                 `json:"creation_error"`
+	// ParentTaskID is the task this task was created from, its parent task,
+	// or empty when it has none. It is set only at creation, may be in
+	// another repository, and is never changed afterwards, except that
+	// deleting the parent clears it. A task's children are the tasks whose
+	// ParentTaskID is its ID.
+	ParentTaskID string `json:"parent_task_id"`
 }
 
 type TaskCreationStatus string
@@ -48,6 +54,18 @@ type RepoContext struct {
 	Root       string `json:"root"`
 	Name       string `json:"name"`
 	BaseBranch string `json:"base_branch"`
+}
+
+// KnownRepo is a Known repository: one Rig can create a task in by name,
+// because a task is in it or it sits directly inside a repo directory.
+type KnownRepo struct {
+	// Name is the repository's name: its tasks' repository name, or else
+	// the base name of its root.
+	Name string `json:"name"`
+	// Root is the absolute path to the repository's main checkout.
+	Root string `json:"root"`
+	// TaskCount is the number of existing tasks in the repository.
+	TaskCount int `json:"task_count"`
 }
 
 type TaskSuggestion struct {
@@ -563,4 +581,9 @@ type TaskSessionLaunchSpec struct {
 	// this is the drafted task prompt that is placed into the fresh task
 	// session without being submitted.
 	PrefillInput []string
+	// SubmitPrefill submits PrefillInput once it is typed, as pressing Enter
+	// would, so the agent starts on it at once. Core sets it only for an
+	// initial task creation that asked to submit its prompt; retrying a
+	// failed creation and Reconnect never set it.
+	SubmitPrefill bool
 }

@@ -76,6 +76,23 @@ func (f *frontend) DetectProviders(ctx context.Context) ([]core.ProviderDetectio
 	return callUnary(ctx, f, opDetectProviders, emptyResponse{})
 }
 
+func (f *frontend) GetRepoDirs(ctx context.Context) ([]string, error) {
+	return callUnary(ctx, f, opGetRepoDirs, emptyResponse{})
+}
+
+func (f *frontend) SaveRepoDirs(ctx context.Context, dirs []string) error {
+	_, err := callUnary(ctx, f, opSaveRepoDirs, saveRepoDirsRequest{RepoDirs: dirs})
+	return err
+}
+
+func (f *frontend) ListRepos(ctx context.Context) ([]core.KnownRepo, error) {
+	return callUnary(ctx, f, opListRepos, emptyResponse{})
+}
+
+func (f *frontend) SuggestRepoDir(ctx context.Context, cwd string) (string, error) {
+	return callUnary(ctx, f, opSuggestRepoDir, suggestRepoDirRequest{Cwd: cwd})
+}
+
 func (f *frontend) DeleteTask(ctx context.Context, taskID string) error {
 	_, err := callUnary(ctx, f, opDeleteTask, taskIDRequest{TaskID: taskID})
 	return err
@@ -83,6 +100,10 @@ func (f *frontend) DeleteTask(ctx context.Context, taskID string) error {
 
 func (f *frontend) ListTasks(ctx context.Context) ([]*core.Task, error) {
 	return callUnary(ctx, f, opListTasks, emptyResponse{})
+}
+
+func (f *frontend) TaskAtPath(ctx context.Context, path string) (*core.Task, error) {
+	return callUnary(ctx, f, opTaskAtPath, taskAtPathRequest{Path: path})
 }
 
 func (f *frontend) LatestTaskStatus(ctx context.Context, taskID string) (*core.TaskStatusUpdate, error) {

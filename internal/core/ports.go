@@ -34,10 +34,26 @@ type CreateTaskSource struct {
 }
 
 type CreateTaskInput struct {
-	Source   CreateTaskSource `json:"source"`
-	Cwd      string           `json:"cwd"`
-	Prompt   string           `json:"prompt"`
-	Provider Provider         `json:"provider"`
+	Source CreateTaskSource `json:"source"`
+	// Cwd is the caller's working directory.
+	Cwd      string   `json:"cwd"`
+	Prompt   string   `json:"prompt"`
+	Provider Provider `json:"provider"`
+	// TargetRepo names the repository to create the task in, by path or by
+	// name. A path contains a path separator or starts with ~ or a dot; a
+	// relative one is relative to Cwd. Empty means the repository containing
+	// Cwd.
+	TargetRepo string `json:"target_repo"`
+	// SubmitPrompt submits the prompt to the new task's agent once it is
+	// pasted in, so the agent starts on it at once. Without it the prompt
+	// waits there for the user. Only this creation submits it: the choice is
+	// not stored on the task, so retrying a failed creation or Reconnect never
+	// submits.
+	SubmitPrompt bool `json:"submit_prompt"`
+	// LinkToCallingTask makes the task whose worktree contains Cwd, if any,
+	// the new task's parent task, whatever repository the new task is in.
+	// The CLI sets it unless told not to; the TUI never does.
+	LinkToCallingTask bool `json:"link_to_calling_task"`
 }
 
 type TaskCreateProgressStep string
@@ -189,6 +205,10 @@ type TaskService interface {
 	GetTaskUsage(ctx context.Context, taskID string) (*TaskUsage, error)
 	// ListTasks returns all known tasks.
 	ListTasks(ctx context.Context) ([]*Task, error)
+	// TaskAtPath returns the task whose worktree contains path, its worktree
+	// root or anything below it, or nil when no task's worktree does. It is
+	// how a command run inside a task finds that task.
+	TaskAtPath(ctx context.Context, path string) (*Task, error)
 	// LatestTaskStatus returns the latest published live status for a task, or
 	// nil when no status has been published yet.
 	LatestTaskStatus(ctx context.Context, taskID string) (*TaskStatusUpdate, error)
@@ -215,6 +235,25 @@ type TaskService interface {
 	// DetectProviders reports which supported providers pass provider setup
 	// checks on this machine.
 	DetectProviders(ctx context.Context) ([]ProviderDetection, error)
+	// GetRepoDirs returns the user's repo directories, or none when none were
+	// saved.
+	GetRepoDirs(ctx context.Context) ([]string, error)
+	// SaveRepoDirs saves the user's repo directories, replacing any saved
+	// before. Each must be an absolute path, or ~ or a path starting with ~/,
+	// which expand to the home directory. Blank entries and repeats are
+	// dropped, and a directory need not exist. Provider setup must have
+	// completed first.
+	SaveRepoDirs(ctx context.Context, dirs []string) error
+	// ListRepos returns the known repositories: the repositories of existing
+	// tasks, and the primary git checkouts directly inside the user's repo
+	// directories, each once, sorted by name. Repo directories that cannot be
+	// used or listed, such as ones that do not exist, are skipped.
+	ListRepos(ctx context.Context) ([]KnownRepo, error)
+	// SuggestRepoDir suggests the repo directory Setup offers a user without
+	// any: the parent directory of the repository containing cwd, which for
+	// a worktree is its main repository. It suggests nothing, an empty
+	// string, when cwd is not inside a git repository.
+	SuggestRepoDir(ctx context.Context, cwd string) (string, error)
 }
 
 // HookEventHandler consumes provider hook events inside the daemon process.
@@ -234,16 +273,25 @@ type HealthChecker interface {
 	HealthCheck(ctx context.Context) ([]HealthCheck, error)
 }
 
-// ProviderConfigStore reads and writes the user-level provider setup that
-// records which supported providers are configured and which one is the
-// default. Provider setup intentionally lives outside the task database.
-type ProviderConfigStore interface {
+// UserConfigStore reads and writes the User config: the user-level settings
+// Setup produces, which are the provider setup, recording which supported
+// providers are configured and which one is the default, and the repo
+// directories. The User config intentionally lives outside the task database.
+type UserConfigStore interface {
 	// GetProviderSetup returns the persisted provider setup, or nil when
 	// provider setup has never completed. Implementations apply any validated
 	// runtime default-provider override before returning.
 	GetProviderSetup(ctx context.Context) (*ProviderSetup, error)
-	// SaveProviderSetup validates and atomically persists the provider setup.
+	// SaveProviderSetup validates and atomically persists the provider setup,
+	// keeping the repo directories.
 	SaveProviderSetup(ctx context.Context, setup ProviderSetup) error
+	// GetRepoDirs returns the persisted repo directories, or none when none
+	// were saved.
+	GetRepoDirs(ctx context.Context) ([]string, error)
+	// SaveRepoDirs atomically persists the repo directories as given, keeping
+	// the provider setup. It fails with ErrProviderSetupRequired when provider
+	// setup has never completed, since the User config needs one.
+	SaveRepoDirs(ctx context.Context, dirs []string) error
 }
 
 // TaskRepository persists task records and returns their durable state.
@@ -253,9 +301,12 @@ type TaskRepository interface {
 	HealthCheck(ctx context.Context) error
 	// CreateTask stores a newly created task record.
 	CreateTask(ctx context.Context, task *Task) error
-	// DeleteTask removes a persisted task record.
+	// DeleteTask removes a persisted task record. Its child tasks stay, no
+	// longer linked to it.
 	DeleteTask(ctx context.Context, taskID string) error
-	// UpdateTask persists changes to an existing task record.
+	// UpdateTask persists changes to an existing task record. Its parent task
+	// is not among them: CreateTask records it, and only deleting the parent
+	// changes it.
 	UpdateTask(ctx context.Context, task *Task) error
 	// ListTasks returns all known tasks.
 	ListTasks(ctx context.Context) ([]*Task, error)
@@ -307,6 +358,15 @@ type ProviderClient interface {
 	// EnsureTaskSessionEnvironment applies any provider-specific runtime
 	// configuration required before launching or resuming an interactive session.
 	EnsureTaskSessionEnvironment(ctx context.Context) error
+	// InstallRigSkill writes the Rig skill, which teaches the provider's agents
+	// when and how to create tasks with the rig CLI, into the provider's
+	// user-level skills, replacing the one an earlier Rig wrote. It never
+	// writes into a repository or task workspace.
+	InstallRigSkill(ctx context.Context) error
+	// CheckRigSkill fails when the provider's user-level Rig skill is missing
+	// or differs from the one InstallRigSkill writes, with an error that says
+	// to run rig setup.
+	CheckRigSkill(ctx context.Context) error
 	// BuildWorkspaceBootstrapSpec describes the provider-specific files that
 	// should be written into the task workspace before launch.
 	BuildWorkspaceBootstrapSpec(task *Task) (WorkspaceBootstrapSpec, error)
@@ -375,6 +435,13 @@ type GitWorktreeClient interface {
 	CreateTaskWorkspaceFromPullRequest(ctx context.Context, task *Task, pullRequestNumber int) error
 	// RemoveTaskWorkspace deletes a task worktree while keeping its branch.
 	RemoveTaskWorkspace(ctx context.Context, task *Task) error
+	// ListRepoCheckouts returns the roots of the primary git checkouts
+	// directly inside dir, sorted: each child directory, or symlink to one,
+	// holding a .git directory. Worktrees, whose .git is a file, and hidden
+	// directories are left out. Like DetectRepo's, the roots are physical
+	// paths: symlinks resolved, and in the letter case on disk. It returns an
+	// error wrapping fs.ErrNotExist when dir does not exist.
+	ListRepoCheckouts(ctx context.Context, dir string) ([]string, error)
 }
 
 // PullRequestClient lists repository pull requests through an external

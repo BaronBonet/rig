@@ -118,7 +118,7 @@ func TestModel_ProviderSetupSavesSelectionAndDefault(t *testing.T) {
 
 	next, _ = got.Update(runCmd(t, saveCmd))
 	got = asModel(t, next)
-	require.Equal(t, modeBrowse, got.mode)
+	require.Equal(t, modeRepoDirsSetup, got.mode)
 	require.NotNil(t, frontend.savedProviderSetup)
 	require.Equal(t, core.ProviderClaude, frontend.savedProviderSetup.Default)
 	require.Equal(
@@ -262,32 +262,6 @@ func TestModel_ListKeybindsOfferNoNewAgent(t *testing.T) {
 	require.NotContains(t, keybinds, "new agent")
 	require.NotContains(t, keybinds, "p ")
 	require.Contains(t, keybinds, "n new")
-}
-
-func TestModel_SetupOnlyModeQuitsAfterSaving(t *testing.T) {
-	frontend := newFrontendHarness()
-	frontend.detections = []core.ProviderDetection{{Provider: core.ProviderCodex, Ready: true}}
-
-	m := newTestModel(frontend.mock)
-	m.setupOnly = true
-
-	msgs := runBatchCmd(t, m.Init())
-	setupMsg := requireMsgType[providerSetupLoadedMsg](t, msgs)
-	next, cmd := m.Update(setupMsg)
-	got := asModel(t, next)
-	require.Equal(t, modeProviderSetup, got.mode)
-
-	next, _ = got.Update(runCmd(t, cmd))
-	got = asModel(t, next)
-
-	next, saveCmd := got.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
-	got = asModel(t, next)
-	next, quitCmd := got.Update(runCmd(t, saveCmd))
-	_ = next
-
-	require.NotNil(t, frontend.savedProviderSetup)
-	require.NotNil(t, quitCmd)
-	require.Equal(t, tea.Quit(), quitCmd())
 }
 
 func TestProviderStyleDistinguishesClaudeFromCodex(t *testing.T) {

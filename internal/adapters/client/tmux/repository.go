@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"time"
@@ -16,7 +17,12 @@ import (
 const (
 	promptSubmitDelay      = 500 * time.Millisecond
 	promptInputSettleDelay = 500 * time.Millisecond
-	taskWindowName         = "task"
+	// prefillSubmitDelay separates pasting the prefill input from pressing
+	// Enter to submit it, so an agent that detects pastes by how fast keys
+	// arrive, as Codex does, reads the Enter as a submit rather than as part
+	// of the paste.
+	prefillSubmitDelay = 500 * time.Millisecond
+	taskWindowName     = "task"
 )
 
 type repository struct {
@@ -78,6 +84,19 @@ func (r *repository) StartTaskSession(
 	r.sleep(promptInputSettleDelay)
 
 	if err := r.typeInWindow(ctx, task.TmuxSession, taskWindowName, launch.PrefillInput); err != nil {
+		return core.TmuxPaneRef{}, r.cleanupStartedSession(ctx, task.TmuxSession, err)
+	}
+
+	if !launch.SubmitPrefill {
+		return pane, nil
+	}
+
+	r.sleep(prefillSubmitDelay)
+	target := exactWindowTarget(task.TmuxSession, taskWindowName)
+	if err := r.ensureAgentInForeground(ctx, target); err != nil {
+		return core.TmuxPaneRef{}, r.cleanupStartedSession(ctx, task.TmuxSession, err)
+	}
+	if err := r.pressEnter(ctx, target); err != nil {
 		return core.TmuxPaneRef{}, r.cleanupStartedSession(ctx, task.TmuxSession, err)
 	}
 
@@ -694,6 +713,63 @@ func (r *repository) sendKeys(ctx context.Context, target string, command []stri
 		"C-m",
 	)
 	return err
+}
+
+// shellCommands are the commands of the shells a task window's pane may show
+// in the foreground when its agent is not running there.
+var shellCommands = map[string]bool{
+	"sh":   true,
+	"bash": true,
+	"zsh":  true,
+	"fish": true,
+	"dash": true,
+	"ksh":  true,
+	"tcsh": true,
+	"csh":  true,
+	"nu":   true,
+}
+
+// ensureAgentInForeground refuses to submit input typed into a shell. The
+// ready marker found in the pane may be a shell prompt's, as when the agent
+// failed to start, and pressing Enter there would run the prompt as a
+// command. Anything but a shell counts as the agent, since an agent need not
+// show its own name: native Claude Code shows its version.
+func (r *repository) ensureAgentInForeground(ctx context.Context, target string) error {
+	result, err := r.runner.Run(ctx, "", "tmux", "display-message", "-p", "-t", target, "#{pane_current_command}")
+	if err != nil {
+		return fmt.Errorf("check the command in the task window before submitting the prompt: %w", err)
+	}
+	command := strings.TrimSpace(result.Stdout)
+	if command == "" || r.isShell(command) {
+		return fmt.Errorf(
+			"the agent is not running in the task window (%q is), so the prompt was not submitted",
+			command,
+		)
+	}
+	return nil
+}
+
+// isShell reports whether a pane's foreground command is a shell: a common
+// one or the user's own, either of them as a login shell.
+func (r *repository) isShell(command string) bool {
+	name := strings.TrimPrefix(filepath.Base(command), "-")
+	if shellCommands[name] {
+		return true
+	}
+	if r.getenv == nil {
+		return false
+	}
+	userShell := strings.TrimSpace(r.getenv("SHELL"))
+	return userShell != "" && name == strings.TrimPrefix(filepath.Base(userShell), "-")
+}
+
+// pressEnter presses Enter in the target pane, submitting the input typed
+// there.
+func (r *repository) pressEnter(ctx context.Context, target string) error {
+	if _, err := r.runner.Run(ctx, "", "tmux", "send-keys", "-t", target, "Enter"); err != nil {
+		return fmt.Errorf("submit task input: %w", err)
+	}
+	return nil
 }
 
 func (r *repository) capturePaneContent(ctx context.Context, session, window string) (string, error) {

@@ -18,7 +18,7 @@ var (
 func newAgentSessionHarness(t *testing.T) *testTaskServiceHarness {
 	t.Helper()
 	svc := newTestTaskService(t)
-	svc.providerConfig.setup = &ProviderSetup{
+	svc.userConfig.setup = &ProviderSetup{
 		Configured: []Provider{ProviderCodex, ProviderClaude},
 		Default:    ProviderClaude,
 	}

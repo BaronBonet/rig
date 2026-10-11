@@ -17,14 +17,17 @@ func NewProgram(
 	return tea.NewProgram(newModel(frontend, launchCwd, buildVersion), opts...)
 }
 
-// NewSetupProgram creates a TUI program that runs only the provider setup
-// flow and exits once setup is saved. It backs the `rig setup` command.
+// NewSetupProgram creates a TUI program that runs only the setup steps, the
+// provider setup and the repo directories, and exits once setup finishes. It
+// backs the `rig setup` command, run from launchCwd, which setup suggests a
+// repo directory for.
 func NewSetupProgram(
 	frontend core.TaskFrontend,
+	launchCwd string,
 	buildVersion string,
 	opts ...tea.ProgramOption,
 ) *tea.Program {
-	m := newModel(frontend, "", buildVersion)
+	m := newModel(frontend, launchCwd, buildVersion)
 	m.setupOnly = true
 	return tea.NewProgram(m, opts...)
 }

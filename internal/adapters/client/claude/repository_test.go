@@ -25,6 +25,8 @@ func newTestRepository(t *testing.T, runner subprocess.Runner) (*repository, str
 		HookSecret:   "secret-token",
 	}).(*repository)
 	repo.rigDataDir = func() (string, error) { return dataDir, nil }
+	configDir := t.TempDir()
+	repo.claudeConfigDir = func() (string, error) { return configDir, nil }
 	return repo, dataDir
 }
 
@@ -170,6 +172,76 @@ func TestRepositoryDoctorAcceptsInstalledForwarderScript(t *testing.T) {
 	require.NoError(t, repo.EnsureTaskSessionEnvironment(t.Context()))
 
 	require.NoError(t, repo.Doctor(t.Context()))
+}
+
+func TestRepositoryInstallRigSkill_WritesTheSkillToTheUsersClaudeSkills(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("CLAUDE_CONFIG_DIR", "")
+	repo := New(subprocess.NewMockRunner(t), Config{Binary: "claude"}, HookForwardingConfig{})
+
+	require.NoError(t, repo.InstallRigSkill(t.Context()))
+
+	installed, err := os.ReadFile(filepath.Join(home, ".claude", "skills", "rig", "SKILL.md"))
+	require.NoError(t, err)
+	require.Equal(t, providerkit.RigSkill(), installed)
+	require.NoError(t, repo.CheckRigSkill(t.Context()))
+}
+
+func TestRepositoryInstallRigSkill_FollowsClaudeConfigDir(t *testing.T) {
+	configDir := filepath.Join(t.TempDir(), "claude-config")
+	t.Setenv("CLAUDE_CONFIG_DIR", configDir)
+	repo := New(subprocess.NewMockRunner(t), Config{Binary: "claude"}, HookForwardingConfig{})
+
+	require.NoError(t, repo.InstallRigSkill(t.Context()))
+
+	installed, err := os.ReadFile(filepath.Join(configDir, "skills", "rig", "SKILL.md"))
+	require.NoError(t, err)
+	require.Equal(t, providerkit.RigSkill(), installed)
+}
+
+func TestRepositoryInstallRigSkill_RejectsAClaudeConfigDirThatIsNotAbsolute(t *testing.T) {
+	for _, configDir := range []string{"claude-config", "~/.claude-work"} {
+		t.Run(configDir, func(t *testing.T) {
+			workingDir := t.TempDir()
+			t.Chdir(workingDir)
+			t.Setenv("HOME", t.TempDir())
+			t.Setenv("CLAUDE_CONFIG_DIR", configDir)
+			repo := New(subprocess.NewMockRunner(t), Config{Binary: "claude"}, HookForwardingConfig{})
+
+			err := repo.InstallRigSkill(t.Context())
+
+			require.ErrorContains(t, err, "CLAUDE_CONFIG_DIR must be an absolute path")
+			require.ErrorContains(t, repo.CheckRigSkill(t.Context()), "CLAUDE_CONFIG_DIR must be an absolute path")
+			// Nothing is written relative to the working directory.
+			entries, err := os.ReadDir(workingDir)
+			require.NoError(t, err)
+			require.Empty(t, entries)
+		})
+	}
+}
+
+func TestRepositoryInstallRigSkill_ReplacesAnOutdatedSkill(t *testing.T) {
+	repo, _ := newTestRepository(t, subprocess.NewMockRunner(t))
+	configDir, err := repo.claudeConfigDir()
+	require.NoError(t, err)
+	skillPath := filepath.Join(configDir, "skills", "rig", "SKILL.md")
+	require.NoError(t, os.MkdirAll(filepath.Dir(skillPath), 0o755))
+	require.NoError(t, os.WriteFile(skillPath, []byte("An earlier rig skill.\n"), 0o644))
+	require.ErrorContains(t, repo.CheckRigSkill(t.Context()), "run rig setup to update it")
+
+	require.NoError(t, repo.InstallRigSkill(t.Context()))
+
+	require.NoError(t, repo.CheckRigSkill(t.Context()))
+}
+
+func TestRepositoryCheckRigSkill_ReportsAMissingSkill(t *testing.T) {
+	repo, _ := newTestRepository(t, subprocess.NewMockRunner(t))
+
+	err := repo.CheckRigSkill(t.Context())
+
+	require.ErrorContains(t, err, "not installed at")
+	require.ErrorContains(t, err, "run rig setup to install it")
 }
 
 func TestRepositorySuggestTaskName_LooksUpTicketsInAutoModeFromRepo(t *testing.T) {

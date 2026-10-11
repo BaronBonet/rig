@@ -48,8 +48,20 @@ type pullRequestStatusRequest struct {
 	BranchName string `json:"branch_name"`
 }
 
+type taskAtPathRequest struct {
+	Path string `json:"path"`
+}
+
 type saveProviderSetupRequest struct {
 	ProviderSetup *core.ProviderSetup `json:"provider_setup"`
+}
+
+type saveRepoDirsRequest struct {
+	RepoDirs []string `json:"repo_dirs"`
+}
+
+type suggestRepoDirRequest struct {
+	Cwd string `json:"cwd"`
 }
 
 func requiredTaskID(command string, taskID string) (string, error) {
@@ -146,6 +158,38 @@ var opDetectProviders = unaryOp[emptyResponse, []core.ProviderDetection]{
 	},
 }
 
+var opGetRepoDirs = unaryOp[emptyResponse, []string]{
+	command:  "get_repo_dirs",
+	envelope: "repo_dirs",
+	call: func(ctx context.Context, svc core.TaskService, _ emptyResponse) ([]string, error) {
+		return svc.GetRepoDirs(ctx)
+	},
+}
+
+var opSaveRepoDirs = unaryOp[saveRepoDirsRequest, emptyResponse]{
+	command:  "save_repo_dirs",
+	envelope: "repo_dirs_saved",
+	call: func(ctx context.Context, svc core.TaskService, req saveRepoDirsRequest) (emptyResponse, error) {
+		return emptyResponse{}, svc.SaveRepoDirs(ctx, req.RepoDirs)
+	},
+}
+
+var opListRepos = unaryOp[emptyResponse, []core.KnownRepo]{
+	command:  "list_repos",
+	envelope: "repos_list",
+	call: func(ctx context.Context, svc core.TaskService, _ emptyResponse) ([]core.KnownRepo, error) {
+		return svc.ListRepos(ctx)
+	},
+}
+
+var opSuggestRepoDir = unaryOp[suggestRepoDirRequest, string]{
+	command:  "suggest_repo_dir",
+	envelope: "repo_dir_suggestion",
+	call: func(ctx context.Context, svc core.TaskService, req suggestRepoDirRequest) (string, error) {
+		return svc.SuggestRepoDir(ctx, strings.TrimSpace(req.Cwd))
+	},
+}
+
 var opDeleteTask = unaryOp[taskIDRequest, emptyResponse]{
 	command:  "delete_task",
 	envelope: "task_deleted",
@@ -163,6 +207,14 @@ var opListTasks = unaryOp[emptyResponse, []*core.Task]{
 	envelope: "tasks_list",
 	call: func(ctx context.Context, svc core.TaskService, _ emptyResponse) ([]*core.Task, error) {
 		return svc.ListTasks(ctx)
+	},
+}
+
+var opTaskAtPath = unaryOp[taskAtPathRequest, *core.Task]{
+	command:  "task_at_path",
+	envelope: "task_at_path",
+	call: func(ctx context.Context, svc core.TaskService, req taskAtPathRequest) (*core.Task, error) {
+		return svc.TaskAtPath(ctx, strings.TrimSpace(req.Path))
 	},
 }
 
@@ -214,8 +266,13 @@ var socketUnaryHandlers = map[string]unaryHandler{
 	opGetProviderSetup.command:     serveUnary(opGetProviderSetup),
 	opSaveProviderSetup.command:    serveUnary(opSaveProviderSetup),
 	opDetectProviders.command:      serveUnary(opDetectProviders),
+	opGetRepoDirs.command:          serveUnary(opGetRepoDirs),
+	opSaveRepoDirs.command:         serveUnary(opSaveRepoDirs),
+	opListRepos.command:            serveUnary(opListRepos),
+	opSuggestRepoDir.command:       serveUnary(opSuggestRepoDir),
 	opDeleteTask.command:           serveUnary(opDeleteTask),
 	opListTasks.command:            serveUnary(opListTasks),
+	opTaskAtPath.command:           serveUnary(opTaskAtPath),
 	opLatestTaskStatus.command:     serveUnary(opLatestTaskStatus),
 }
 

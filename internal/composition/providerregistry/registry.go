@@ -1,7 +1,7 @@
 // Package providerregistry composes the provider adapter clients and hook
 // routes for every supported provider. It is the single place where
 // composition code learns which providers Rig supports; whether a provider is
-// configured is a user-config concern handled by the provider config store and
+// configured is a user-config concern handled by the user config store and
 // task service.
 package providerregistry
 
@@ -107,7 +107,7 @@ func LoadOrCreateHookSecret(path string) (string, error) {
 func RefreshProviderEnvironments(
 	ctx context.Context,
 	providers map[core.Provider]core.ProviderClient,
-	store core.ProviderConfigStore,
+	store core.UserConfigStore,
 ) []error {
 	if store == nil {
 		return nil

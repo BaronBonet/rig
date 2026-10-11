@@ -31,6 +31,10 @@ a background daemon handles longer running orchestration.
   start more agents in a task with any configured provider.
 - **Pull request-backed task creation**: pick an open GitHub pull request and
   create a local task workspace for reviewing or continuing that branch.
+- **Command line and agent handoff**: create, list, and inspect tasks with
+  `rig task` and `rig repo` commands, with JSON output. An agent can hand work
+  off to a new task in any repository, and the new task links back to the task
+  it came from.
 - **Isolated workspaces**: every task runs in its own git worktree so parallel
   tasks do not collide with the main checkout or each other.
 - **Tmux sessions**: attach to any task from the TUI, reconnect a lost session
@@ -90,7 +94,8 @@ provider config is missing or invalid) the TUI opens the setup screen before
 normal task use. Setup detects which supported providers work on your machine
 using the same checks task creation depends on, installs or repairs the hook
 forwarding each provider needs, and requires you to enable at least one
-provider and choose a default.
+provider and choose a default. It also installs the [Rig skill](#rig-skill) of
+each provider you enable.
 
 Rerun setup at any time to add or remove providers; your existing choices are
 preserved and edited incrementally:
@@ -99,10 +104,17 @@ preserved and edited incrementally:
 rig setup
 ```
 
-Provider setup is stored in user-level config at `~/.config/rig/config.json`
-(override with `RIG_USER_CONFIG_PATH`), never in the task database, and
-repo-level default provider configuration is not supported. See
-[ADR 0001](docs/adr/0001-provider-setup-in-user-config.md) for the reasoning.
+After the providers, setup offers an optional step for your repo directories:
+parent directories, such as `~/code`, whose git repositories Rig lists so that
+agents can find a repository by name (see [Command Line](#command-line)). When
+you have none yet, it suggests the parent directory of the repository you run
+setup from. Press `esc` to skip it.
+
+Provider setup and repo directories are stored in user-level config at
+`~/.config/rig/config.json` (override with `RIG_USER_CONFIG_PATH`), never in
+the task database, and repo-level default provider configuration is not
+supported. See [ADR 0001](docs/adr/0001-provider-setup-in-user-config.md) for
+the reasoning.
 
 `RIG_PROVIDER` overrides the default provider for a single run. It must name a
 configured provider; it cannot bypass setup:
@@ -155,9 +167,10 @@ alias codex='codex --no-daemon'
 
 ### Claude Code
 
-Claude hook registration is workspace-scoped. Provider setup installs only a
-shared forward-to-rig script under `~/.local/share/rig/claude/`; that script
-does nothing by itself. When Rig prepares a task workspace it writes an
+Claude hook registration is workspace-scoped. For hooks, provider setup
+installs only a shared forward-to-rig script under `~/.local/share/rig/claude/`;
+that script does nothing by itself. (Setup also installs the
+[Rig skill](#rig-skill).) When Rig prepares a task workspace it writes an
 untracked `.claude/settings.local.json` into the task worktree that registers
 Rig's hooks for that workspace only. The file is written into every Rig task
 workspace — not just tasks whose launch provider is Claude — so a Claude you
@@ -279,6 +292,81 @@ rig daemon stop
 rig daemon restart
 ```
 
+## Command Line
+
+Beside the TUI, `rig` has non-interactive commands for you, your scripts, and
+your agents:
+
+```bash
+rig task create [--repo <path|name>] [--provider codex|claude] [--submit] [--no-parent] [--json] [<prompt>]
+rig task list [--json]
+rig task show [<id|slug>] [--json]
+rig repo list [--json]
+```
+
+They start the daemon when it is not running, print results to stdout and
+progress to stderr, and exit non-zero on failure. With `--json` they print
+JSON, whose field names are only ever added to, never renamed.
+
+`rig task create` creates a task the way the TUI does, waits until it is
+ready, then prints its name, ID, repository, branch, worktree, and tmux
+session. It never attaches your terminal: the task opens in its own tmux
+session and shows up in the TUI.
+
+- The prompt is the argument, or stdin when the argument is `-` or absent and
+  stdin is not a terminal, so a long prompt can come from a heredoc.
+- `--repo` takes a repository path, or a name that `rig repo list` shows.
+  Without it, the task goes in the repository you are in; from inside a
+  task's worktree, that is the task's main repository.
+- `--provider` picks the task's launch provider; it defaults to your default
+  provider.
+- As in the TUI, the prompt is pasted into the new agent but not sent.
+  `--submit` sends it, so the agent starts working at once.
+- Run from inside a task's worktree, the new task records that task as its
+  parent, even across repositories; `--no-parent` leaves it unlinked. In the
+  TUI, a child task's row carries a `↳`, and the detail panel shows which task
+  a child came from and which tasks a parent spawned. Deleting a parent leaves
+  its children unlinked.
+- If you interrupt the command, the daemon goes on creating the task, so check
+  `rig task list` before creating it again. If creation fails, the error names
+  the task and the step it failed at; retry it from the TUI with `R`.
+
+`rig task list` lists every task with its repository, branch, creation status,
+runtime status, and parent. `rig task show` describes one task, by ID or slug,
+with its worktree, branch, parent, and children; with no argument it describes
+the task whose worktree you are in. Slugs are unique only within a repository,
+so a slug that tasks in several repositories share needs the ID instead.
+
+`rig repo list` lists the repositories `--repo` can name: those of your tasks,
+plus every git repository directly inside your repo directories, which you
+choose in `rig setup`. Worktrees are left out. A name that no repository has,
+or that several have, is an error: pass the path instead.
+
+### Rig skill
+
+`rig setup` installs a Rig skill for each configured provider. It teaches the
+agent to hand work off to a new task: find the repository with
+`rig repo list`, or ask you for its path; write a self-contained prompt;
+create the task with `--submit`; and report the new task back to you. It
+applies only when you ask for work in another repository or for a separate
+Rig task. The skill is installed for your user only, never into a repository:
+
+- Claude Code: `~/.claude/skills/rig/SKILL.md` (under `$CLAUDE_CONFIG_DIR`
+  when set)
+- Codex: `~/.agents/skills/rig/SKILL.md`
+
+Rig owns these files and rewrites them whenever you run `rig setup`; nothing
+else updates them, including upgrading Rig. `rig doctor` warns when a
+configured provider's skill is missing or differs from the one your Rig
+version installs, and `rig setup` then rewrites it. A skill that setup cannot
+write, for example into a read-only skills directory, does not fail setup:
+`rig doctor` keeps warning about it.
+
+Agents run `rig` outside their sandbox, since it talks to the daemon over a
+Unix socket: Codex requests escalated permissions for rig commands, and rig
+refuses to run inside the Codex sandbox when it can detect it; Claude Code
+runs them with its sandbox disabled, if it has one on.
+
 ## Running More Agents
 
 A task keeps the provider it was created with, its launch provider. To add an
@@ -389,8 +477,9 @@ daemon owns task creation, local state, provider hooks, and live update streams.
 | Component | Role |
 |-----------|------|
 | **TUI** | The foreground interface for creating tasks, browsing task state, and attaching to running work. |
+| **CLI** | The non-interactive `rig task` and `rig repo` commands for scripts and agents. Like the TUI, they talk to the daemon over the Unix socket. |
 | **Background task daemon** | A long-lived `rig` process that creates tasks, starts or resumes providers, records status, and serves updates back to the TUI. |
-| **Unix socket server** | The local control channel between the TUI and daemon. It carries commands such as creating tasks and streams live task updates back to the TUI. |
+| **Unix socket server** | The local control channel between the daemon and the TUI or CLI. It carries commands such as creating tasks and streams live task updates back to the TUI. |
 | **HTTP hook server** | A loopback-only endpoint used by provider hooks to report session, prompt, tool, and stop events back to Rig. Routes exist for every supported provider. |
 | **SQLite** | The local task database. It stores task records, agent sessions with their latest status and the conversation Reconnect resumes, activity snippets, and token usage. |
 | **Provider CLI** | The provider (Codex or Claude Code) Rig starts for each task. It runs in an isolated task workspace and sends hook events back to the daemon. |

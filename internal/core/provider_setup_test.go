@@ -29,7 +29,7 @@ func codexTaskFixture() *Task {
 
 func TestTaskServiceHandleHookEvent_SessionStartFromAnotherProviderLeavesTheTaskAlone(t *testing.T) {
 	svc := newTestTaskService(t)
-	svc.providerConfig.setup = multiProviderSetup()
+	svc.userConfig.setup = multiProviderSetup()
 	svc.taskRepo.listTasks = []*Task{codexTaskFixture()}
 	svc.claudeRepo.hookUpdate = &TaskStatusUpdate{
 		Phase:        TaskStatusPhaseStarting,
@@ -54,7 +54,7 @@ func TestTaskServiceHandleHookEvent_SessionStartFromAnotherProviderLeavesTheTask
 
 func TestTaskServiceHandleHookEvent_HookFromAnotherProviderRecordsHistory(t *testing.T) {
 	svc := newTestTaskService(t)
-	svc.providerConfig.setup = multiProviderSetup()
+	svc.userConfig.setup = multiProviderSetup()
 	task := codexTaskFixture()
 	task.Provider = ProviderClaude
 	svc.taskRepo.listTasks = []*Task{task}
@@ -96,7 +96,7 @@ func TestTaskServiceHandleHookEvent_IgnoresHooksFromUnconfiguredProviders(t *tes
 
 func TestTaskServiceGetProviderSetup_ReturnsNilBeforeSetupHasRun(t *testing.T) {
 	svc := newTestTaskService(t)
-	svc.providerConfig.setup = nil
+	svc.userConfig.setup = nil
 
 	setup, err := svc.service.GetProviderSetup(t.Context())
 
@@ -115,8 +115,65 @@ func TestTaskServiceSaveProviderSetup_InstallsHooksAndRunsProviderChecksBeforePe
 	require.NoError(t, err)
 	require.Equal(t, 1, svc.providerRepo.sessionEnvCalls)
 	require.Equal(t, 1, svc.claudeRepo.sessionEnvCalls)
-	require.NotNil(t, svc.providerConfig.savedSetup)
-	require.Equal(t, ProviderClaude, svc.providerConfig.savedSetup.Default)
+	require.NotNil(t, svc.userConfig.savedSetup)
+	require.Equal(t, ProviderClaude, svc.userConfig.savedSetup.Default)
+}
+
+func TestTaskServiceSaveProviderSetup_InstallsTheRigSkillOfEachConfiguredProvider(t *testing.T) {
+	svc := newTestTaskService(t)
+
+	err := svc.service.SaveProviderSetup(t.Context(), ProviderSetup{
+		Configured: []Provider{ProviderCodex, ProviderClaude},
+		Default:    ProviderCodex,
+	})
+
+	require.NoError(t, err)
+	require.Equal(t, 1, svc.providerRepo.skillInstallCalls)
+	require.Equal(t, 1, svc.claudeRepo.skillInstallCalls)
+	require.Empty(t, svc.warnings)
+}
+
+func TestTaskServiceSaveProviderSetup_LeavesTheRigSkillOfUnconfiguredProvidersAlone(t *testing.T) {
+	svc := newTestTaskService(t)
+
+	err := svc.service.SaveProviderSetup(t.Context(), ProviderSetup{
+		Configured: []Provider{ProviderClaude},
+		Default:    ProviderClaude,
+	})
+
+	require.NoError(t, err)
+	require.Equal(t, 1, svc.claudeRepo.skillInstallCalls)
+	require.Zero(t, svc.providerRepo.skillInstallCalls)
+}
+
+func TestTaskServiceSaveProviderSetup_SavesTheSetupWhenARigSkillCannotBeInstalled(t *testing.T) {
+	svc := newTestTaskService(t)
+	svc.claudeRepo.skillInstallErr = errors.New("read-only file system")
+
+	err := svc.service.SaveProviderSetup(t.Context(), ProviderSetup{
+		Configured: []Provider{ProviderClaude, ProviderCodex},
+		Default:    ProviderCodex,
+	})
+
+	require.NoError(t, err)
+	require.NotNil(t, svc.userConfig.savedSetup)
+	// The providers after the one that failed still get their skill.
+	require.Equal(t, 1, svc.providerRepo.skillInstallCalls)
+	require.Len(t, svc.warnings, 1)
+	require.ErrorContains(t, svc.warnings[0], "install the rig skill for claude: read-only file system")
+}
+
+func TestTaskServiceSaveProviderSetup_InstallsNoRigSkillWhenTheSetupIsNotSaved(t *testing.T) {
+	svc := newTestTaskService(t)
+	svc.userConfig.saveErr = errors.New("disk full")
+
+	err := svc.service.SaveProviderSetup(t.Context(), ProviderSetup{
+		Configured: []Provider{ProviderCodex},
+		Default:    ProviderCodex,
+	})
+
+	require.ErrorContains(t, err, "disk full")
+	require.Zero(t, svc.providerRepo.skillInstallCalls)
 }
 
 func TestTaskServiceSaveProviderSetup_RejectsInvalidSetups(t *testing.T) {
@@ -140,7 +197,7 @@ func TestTaskServiceSaveProviderSetup_RejectsInvalidSetups(t *testing.T) {
 		}),
 		`provider "gemini" is not a supported provider`,
 	)
-	require.Nil(t, svc.providerConfig.savedSetup)
+	require.Nil(t, svc.userConfig.savedSetup)
 }
 
 func TestTaskServiceSaveProviderSetup_FailsWhenProviderChecksFail(t *testing.T) {
@@ -153,7 +210,10 @@ func TestTaskServiceSaveProviderSetup_FailsWhenProviderChecksFail(t *testing.T) 
 	})
 
 	require.ErrorContains(t, err, "provider claude failed setup checks")
-	require.Nil(t, svc.providerConfig.savedSetup)
+	require.Nil(t, svc.userConfig.savedSetup)
+	// No skill is installed for a setup that is not saved.
+	require.Zero(t, svc.providerRepo.skillInstallCalls)
+	require.Zero(t, svc.claudeRepo.skillInstallCalls)
 }
 
 func TestTaskServiceDetectProviders_ReportsPerProviderReadiness(t *testing.T) {
@@ -169,6 +229,16 @@ func TestTaskServiceDetectProviders_ReportsPerProviderReadiness(t *testing.T) {
 	require.Equal(t, ProviderClaude, detections[1].Provider)
 	require.False(t, detections[1].Ready)
 	require.Contains(t, detections[1].Detail, "claude binary not found")
+}
+
+func TestTaskServiceDetectProviders_InstallsNoRigSkill(t *testing.T) {
+	svc := newTestTaskService(t)
+
+	_, err := svc.service.DetectProviders(t.Context())
+
+	require.NoError(t, err)
+	require.Zero(t, svc.providerRepo.skillInstallCalls)
+	require.Zero(t, svc.claudeRepo.skillInstallCalls)
 }
 
 func TestTaskServiceHealthCheck_ValidatesConfiguredProvidersOnly(t *testing.T) {
@@ -187,9 +257,34 @@ func TestTaskServiceHealthCheck_ValidatesConfiguredProvidersOnly(t *testing.T) {
 	require.NotContains(t, names, "claude")
 }
 
+func TestTaskServiceHealthCheck_WarnsAboutTheRigSkillOfEachConfiguredProvider(t *testing.T) {
+	svc := newTestTaskService(t)
+	svc.userConfig.setup = multiProviderSetup()
+	svc.claudeRepo.skillCheckErr = errors.New("not installed: run rig setup to install it")
+
+	checks, err := svc.service.HealthCheck(t.Context())
+
+	require.NoError(t, err)
+	requireHealthCheck(t, checks, "codex skill", false, "")
+	requireHealthCheck(t, checks, "claude skill", false, "run rig setup to install it")
+}
+
+func TestTaskServiceHealthCheck_ChecksNoRigSkillOfUnconfiguredProviders(t *testing.T) {
+	svc := newTestTaskService(t)
+	svc.claudeRepo.skillCheckErr = errors.New("not installed")
+
+	checks, err := svc.service.HealthCheck(t.Context())
+
+	require.NoError(t, err)
+	requireHealthCheck(t, checks, "codex skill", false, "")
+	for _, check := range checks {
+		require.NotEqual(t, "claude skill", check.Name)
+	}
+}
+
 func TestTaskServiceHealthCheck_FailsWhenProviderSetupIsMissing(t *testing.T) {
 	svc := newTestTaskService(t)
-	svc.providerConfig.setup = nil
+	svc.userConfig.setup = nil
 
 	checks, err := svc.service.HealthCheck(t.Context())
 

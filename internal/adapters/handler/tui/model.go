@@ -28,6 +28,8 @@ const (
 	modePRPicker
 	modeCleanupConfirm
 	modeProviderSetup
+	// modeRepoDirsSetup is the optional setup step after provider setup.
+	modeRepoDirsSetup
 )
 
 const defaultBuildVersion = "dev"
@@ -87,8 +89,12 @@ type model struct {
 	statusCancels map[string]context.CancelFunc
 
 	// Per-mode state, cleared by transition() when the mode family changes.
-	draft     taskDraft
-	setupForm setupFormState
+	draft        taskDraft
+	setupForm    setupFormState
+	repoDirsForm repoDirsFormState
+	// repoDirsLoad numbers the repo directories step's loads, so only the
+	// latest one fills the step. It outlives the step's state.
+	repoDirsLoad int
 
 	// In-flight creation progress; outlives the draft and renders in browse.
 	create createFlowState
@@ -126,6 +132,18 @@ type setupFormState struct {
 	detecting       bool
 	saving          bool
 	err             error
+}
+
+// repoDirsFormState is the repo directories setup step's working state: the
+// directories being edited, one per line.
+type repoDirsFormState struct {
+	input   textarea.Model
+	err     error
+	loading bool
+	// loadFailed records that the user's repo directories could not be
+	// loaded, so the step started empty rather than with them.
+	loadFailed bool
+	saving     bool
 }
 
 // providerSetupRow is one supported provider in the provider setup UI.
@@ -220,6 +238,17 @@ type providerDetectionsMsg struct {
 type providerSetupSavedMsg struct {
 	err   error
 	setup core.ProviderSetup
+}
+
+type repoDirsLoadedMsg struct {
+	err  error
+	dirs []string
+	// load is the number of the load this replies to.
+	load int
+}
+
+type repoDirsSavedMsg struct {
+	err error
 }
 
 type shimmerTickMsg struct{}
@@ -358,6 +387,9 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.height = msg.Height
 		return m, nil
 	case tea.PasteMsg:
+		if m.mode == modeRepoDirsSetup {
+			return m.updateRepoDirsSetup(msg)
+		}
 		return m.updatePromptPaste(msg)
 	case tea.KeyPressMsg:
 		if isForceQuitKey(msg) {
@@ -378,6 +410,9 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		if m.mode == modeProviderSetup {
 			return m.updateProviderSetup(msg)
+		}
+		if m.mode == modeRepoDirsSetup {
+			return m.updateRepoDirsSetup(msg)
 		}
 
 		if isQuitKey(msg) {
@@ -557,12 +592,11 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.providerSetup = &saved
 		m.setupForm.err = nil
 		m.draft.provider = ""
-		if m.setupOnly {
-			return m.quit()
-		}
-		m.transition(modeBrowse)
-		m.loading = true
-		return m, loadTasksCmd(m.statusContext, m.frontend)
+		return m.enterRepoDirsSetupMode()
+	case repoDirsLoadedMsg:
+		return m.applyLoadedRepoDirs(msg)
+	case repoDirsSavedMsg:
+		return m.applySavedRepoDirs(msg)
 	case repoPullRequestsLoadedMsg:
 		m.draft.err = msg.err
 		if msg.err != nil {
@@ -675,6 +709,9 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if m.mode == modePromptInput {
 			return m.updatePromptInput(msg)
 		}
+		if m.mode == modeRepoDirsSetup {
+			return m.updateRepoDirsSetup(msg)
+		}
 		return m, nil
 	}
 }
@@ -690,6 +727,8 @@ func (m model) View() tea.View {
 		body = m.confirmationView()
 	case modeProviderSetup:
 		body = m.providerSetupView()
+	case modeRepoDirsSetup:
+		body = m.repoDirsSetupView()
 	default:
 		body = m.listView()
 	}

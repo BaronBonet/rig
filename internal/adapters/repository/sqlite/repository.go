@@ -185,6 +185,8 @@ func (r *repository) DeleteTask(ctx context.Context, taskID string) error {
 	return r.queries.DeleteTask(ctx, strings.TrimSpace(taskID))
 }
 
+// UpdateTask leaves the task's parent link as it is: it is set at creation,
+// and deleting the parent clears it, which a stale task must not undo.
 func (r *repository) UpdateTask(ctx context.Context, task *core.Task) error {
 	return r.queries.UpdateTask(ctx, updateTaskParams(task))
 }
