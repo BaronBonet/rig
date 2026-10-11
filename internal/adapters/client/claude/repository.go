@@ -23,7 +23,6 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"os"
 	"path/filepath"
 	"strings"
 	"time"
@@ -131,7 +130,7 @@ func New(runner subprocess.Runner, cfg Config, hooks HookForwardingConfig) core.
 		binary:       cfg.Binary,
 		collectorURL: collectorURL,
 		hookSecret:   strings.TrimSpace(hooks.HookSecret),
-		rigDataDir:   defaultRigDataDir,
+		rigDataDir:   providerkit.DefaultRigDataDir,
 	}
 }
 
@@ -330,7 +329,7 @@ func (r *repository) WriteSessionHandoff(
 		Cwd:   cwd,
 		Name:  r.binary,
 		Args:  args,
-		Stdin: handoffPrompt(focus),
+		Stdin: providerkit.HandoffPrompt(focus),
 	})
 	if err != nil {
 		return "", fmt.Errorf("claude print mode failed: %w", err)
@@ -340,45 +339,11 @@ func (r *repository) WriteSessionHandoff(
 		return "", fmt.Errorf("claude returned an empty handoff note")
 	}
 
-	path, err := r.handoffPath(task, sessionID)
-	if err != nil {
-		return "", err
-	}
-	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
-		return "", fmt.Errorf("create handoff directory: %w", err)
-	}
-	if err := os.WriteFile(path, []byte(note+"\n"), 0o600); err != nil {
-		return "", fmt.Errorf("write handoff note: %w", err)
-	}
-	return path, nil
-}
-
-// handoffPrompt is the handoff request, told what the next session will be
-// asked to do so the note covers what it needs for that.
-func handoffPrompt(focus string) string {
-	focus = strings.TrimSpace(focus)
-	if focus == "" {
-		return prompts.HandoffPrompt
-	}
-	return prompts.HandoffPrompt +
-		"\n\nThe next session will start with this instruction from the user:\n" + focus +
-		"\n\nMake sure the note covers everything it needs for that: " +
-		"the context, files, decisions and open questions that bear on it."
-}
-
-// handoffPath names a task's handoff notes under rig's data dir, one file per
-// session they were written from, so earlier notes stay readable.
-func (r *repository) handoffPath(task *core.Task, sessionID string) (string, error) {
 	dataDir, err := r.resolveRigDataDir()
 	if err != nil {
 		return "", err
 	}
-	stamp := time.Now().UTC().Format("20060102-150405")
-	short := sessionID
-	if len(short) > 8 {
-		short = short[:8]
-	}
-	return filepath.Join(dataDir, "handoffs", strings.TrimSpace(task.ID), stamp+"-"+short+".md"), nil
+	return providerkit.SaveHandoffNote(dataDir, task, sessionID, note)
 }
 
 func (r *repository) BuildReconnectTaskSessionLaunchSpec(
@@ -453,18 +418,9 @@ func (r *repository) forwarderScriptPath() (string, error) {
 
 func (r *repository) resolveRigDataDir() (string, error) {
 	if r.rigDataDir == nil {
-		return defaultRigDataDir()
+		return providerkit.DefaultRigDataDir()
 	}
 	return r.rigDataDir()
-}
-
-func defaultRigDataDir() (string, error) {
-	home, err := os.UserHomeDir()
-	if err != nil {
-		return "", fmt.Errorf("resolve rig data dir: %w", err)
-	}
-
-	return filepath.Join(home, ".local", "share", "rig"), nil
 }
 
 // renderWorkspaceHookSettings renders the workspace-level Claude settings

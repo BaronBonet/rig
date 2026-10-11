@@ -479,6 +479,32 @@ func TestTaskServiceNewTaskSession_CanStartAnotherConfiguredProvider(t *testing.
 	require.Equal(t, LaunchOptions{Model: "opus"}, svc.providerConfig.savedLaunchDefaults[ProviderClaude])
 }
 
+func TestTaskServiceNewTaskSession_HandsOffFromTheTasksProviderToAnother(t *testing.T) {
+	svc := newTestTaskService(t)
+	svc.providerConfig.setup = multiProviderSetup()
+	svc.taskRepo.listTasks = []*Task{readyTaskFixture()}
+	svc.sessionClient.inspectState = idlePane()
+	svc.taskRepo.providerSessionsByTask["task-1"] = []TaskProviderSession{
+		{TaskID: "task-1", Provider: ProviderCodex, ProviderSessionID: "sess-codex", LastObservedAt: time.Unix(100, 0)},
+	}
+	svc.providerRepo.handoffPath = "/data/rig/handoffs/task-1/note.md"
+
+	_, err := svc.service.NewTaskSessionWithProgress(t.Context(), NewTaskSessionInput{
+		TaskID:   "task-1",
+		Prompt:   "continue",
+		Provider: ProviderClaude,
+		Handoff:  true,
+	}, nil)
+
+	require.NoError(t, err)
+	require.NotNil(t, svc.providerRepo.handoffSession, "the codex session writes the note")
+	require.Equal(t, "sess-codex", svc.providerRepo.handoffSession.ProviderSessionID)
+	require.Nil(t, svc.claudeRepo.handoffSession)
+	require.Equal(t, []string{"claude"}, svc.sessionClient.startedLaunch.Command)
+	require.Contains(t, svc.sessionClient.prefilledLaunch.PrefillInput[0], "/data/rig/handoffs/task-1/note.md",
+		"the claude session starts from it")
+}
+
 func TestTaskServiceNewTaskSession_RequiresAReadyTask(t *testing.T) {
 	svc := newTestTaskService(t)
 	svc.taskRepo.listTasks = []*Task{failedTaskFixture(TaskCreateProgressStartingSession)}

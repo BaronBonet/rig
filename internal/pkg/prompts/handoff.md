@@ -7,4 +7,6 @@ You are ending this session. Write a handoff note for a fresh session of the sam
 5. Gotchas: dead ends, flaky steps, and anything the next session must not redo.
 6. Next step: the exact first action to take.
 
+The fresh session may run a different coding agent, so describe the work in files, commands and decisions, not in this agent's own tools or slash commands.
+
 Be concrete: paths, names, numbers. Do not include pleasantries, do not restate this instruction, and do not use tools.

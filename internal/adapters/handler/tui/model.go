@@ -458,9 +458,6 @@ func (m *model) cycleCreateProvider() {
 		}
 	}
 	m.applyLaunchDefaults(m.draft.provider)
-	if m.draft.forTask != nil {
-		m.draft.handoff = m.providerSupportsHandoff(m.draft.provider)
-	}
 }
 
 // launchChoices lists the models and efforts provider accepts, each led by
@@ -475,6 +472,14 @@ func (m model) launchChoices(provider core.Provider) ([]string, []string) {
 		return models, efforts
 	}
 	return append(models, options.Models...), append(efforts, options.Efforts...)
+}
+
+// handoffAvailable reports whether the draft's task can start its new session
+// from a handoff note. The note is written by the task's latest session, of
+// the task's current provider, whichever provider the new session starts
+// with, so a Claude Code session can hand off to Codex and back.
+func (m model) handoffAvailable() bool {
+	return m.draft.forTask != nil && m.providerSupportsHandoff(m.draft.forTask.Provider)
 }
 
 // providerSupportsHandoff reports whether provider can write a handoff note
@@ -1324,7 +1329,7 @@ func (m model) updatePromptInput(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 		if typed.String() == "ctrl+g" {
-			if m.draft.forTask != nil && m.providerSupportsHandoff(m.effectiveCreateProvider()) {
+			if m.handoffAvailable() {
 				m.draft.handoff = !m.draft.handoff
 			}
 			return m, nil
@@ -1510,7 +1515,7 @@ func (m model) enterNewSessionMode() (tea.Model, tea.Cmd) {
 	if m.draft.model == "" && m.draft.effort == "" {
 		m.applyLaunchDefaults(m.effectiveCreateProvider())
 	}
-	m.draft.handoff = m.providerSupportsHandoff(m.effectiveCreateProvider())
+	m.draft.handoff = m.handoffAvailable()
 	// The running session is left as it is; the new one opens next to it.
 	m.draft.newWindow = true
 	m.create = createFlowState{}
@@ -1525,7 +1530,7 @@ func (m model) continuationPreview() string {
 		return ""
 	}
 	handoffPath := ""
-	if m.draft.handoff && m.providerSupportsHandoff(m.effectiveCreateProvider()) {
+	if m.draft.handoff && m.handoffAvailable() {
 		handoffPath = "(the note written when the session starts)"
 	}
 	return core.ContinuationPrompt(m.draft.forTask, "", handoffPath)

@@ -150,11 +150,11 @@ func TestModel_KeyNOpensANewSessionComposerForTheSelectedTask(t *testing.T) {
 	require.Empty(t, m.draft.prompt, "the box takes the user's own instruction")
 	require.Equal(t, "gpt-5", m.draft.model, "the task's own options come first")
 	require.Equal(t, "low", m.draft.effort)
-	require.False(t, m.draft.handoff, "codex cannot write a handoff note")
+	require.False(t, m.draft.handoff, "the fixture's codex cannot write a handoff note")
 	require.True(t, m.draft.newWindow, "the running session is left alone")
 	view := stripANSI(m.View().Content)
 	require.Contains(t, view, "new session · billing retry")
-	require.Contains(t, view, "handoff   not available for this provider")
+	require.Contains(t, view, "handoff   not available: the previous session's provider cannot write one")
 	require.Contains(t, view, "where     new window, alongside the running session")
 	require.Contains(
 		t,
@@ -175,6 +175,43 @@ func TestModel_KeyNOpensANewSessionComposerForTheSelectedTask(t *testing.T) {
 	m = pressKeys(t, m, ctrl('w'))
 	require.False(t, m.draft.newWindow)
 	require.Contains(t, stripANSI(m.View().Content), "where     this window, replacing the running session")
+}
+
+func TestModel_NewSessionHandsOffFromTheTasksProviderToAnother(t *testing.T) {
+	for name, tc := range map[string]struct {
+		taskProvider core.Provider
+		wantHandoff  bool
+	}{
+		"claude code writes the note for codex": {core.ProviderClaude, true},
+		"a provider that cannot write one":      {core.ProviderCodex, false},
+	} {
+		t.Run(name, func(t *testing.T) {
+			frontend := newFrontendHarness()
+			frontend.listTasks = []*core.Task{{
+				ID:             "task-1",
+				DisplayName:    "billing retry",
+				Prompt:         "add billing retry flow",
+				Provider:       tc.taskProvider,
+				CreationStatus: core.TaskCreationStatusReady,
+			}}
+			m := newLoadedModel(frontend)
+			m.providerSetup = &core.ProviderSetup{
+				Configured: []core.Provider{core.ProviderClaude, core.ProviderCodex},
+				Default:    core.ProviderClaude,
+			}
+			m.launchSettings = launchSettingsFixture()
+			m = pressKeys(t, m, tea.KeyPressMsg{Text: "N"})
+			require.Equal(t, tc.wantHandoff, m.draft.handoff)
+
+			m = pressKeys(t, m, tea.KeyPressMsg{Code: tea.KeyTab})
+
+			require.NotEqual(t, tc.taskProvider, m.effectiveCreateProvider(), "the new session uses another provider")
+			require.Equal(t, tc.wantHandoff, m.draft.handoff, "the task's provider still writes the note")
+			require.Equal(t, tc.wantHandoff, m.handoffAvailable())
+			m = pressKeys(t, m, ctrl('g'))
+			require.False(t, m.draft.handoff, "ctrl+g skips the note, or there is none to skip")
+		})
+	}
 }
 
 func TestModel_NewSessionReplacingTheRunningOneShowsItLive(t *testing.T) {

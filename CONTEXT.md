@@ -44,9 +44,10 @@ Use `rig` for the CLI command and Rig for the product or system.
   another purpose. It happens in Rig, or by renaming the Task's provider
   session, whose new title the Task takes. A rename drops the Task's original
   ask, so new sessions are not briefed on what it was first for.
-- Handoff note: A note the previous provider session writes, in print mode on
-  a fork that is not saved, for a new session to start from: goal, state,
-  decisions, where things are, gotchas, next step. Kept under Rig's data dir.
+- Handoff note: A note the previous provider session writes, without a
+  terminal on a fork that is not saved, for a new session to start from: goal,
+  state, decisions, where things are, gotchas, next step. Kept under Rig's
+  data dir. The new session may run another Provider.
 - Creation status: The durable state of task setup: `creating`, `ready`, or
   `failed`.
 - Creation step: The retryable task setup milestone, such as suggesting a name,
@@ -189,7 +190,8 @@ Use `rig` for the CLI command and Rig for the product or system.
   made in Rig stands until the session is renamed again. Only the Active
   provider's sessions rename the Task.
 - A Handoff note is written by the Task's latest Provider session of its
-  Active provider, and only by a Provider that supports it.
+  Active provider, and only by a Provider that supports it, whichever Provider
+  the new session starts with.
 - A Provider session belongs to exactly one Task and one Provider.
 - A Task's Runtime status is driven by the root agent of its Active provider,
   plus any subagent permission request that needs user action. Subagent work

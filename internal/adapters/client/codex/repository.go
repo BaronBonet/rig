@@ -58,6 +58,7 @@ var titleSkipPrefixes = []string{"tokens used", "openai codex"}
 type repository struct {
 	runner              subprocess.Runner
 	codexHomeDir        func() (string, error)
+	rigDataDir          func() (string, error)
 	binary              string
 	collectorURL        string
 	hookSecret          string
@@ -80,6 +81,7 @@ func New(runner subprocess.Runner, cfg Config, hooks HookForwardingConfig) core.
 		collectorURL: collectorURL,
 		hookSecret:   strings.TrimSpace(hooks.HookSecret),
 		codexHomeDir: defaultCodexHomeDir,
+		rigDataDir:   providerkit.DefaultRigDataDir,
 		transcripts:  newCodexTranscriptIndex(defaultCodexTranscriptIndexBudget),
 	}
 }
@@ -181,15 +183,78 @@ func (r *repository) BuildWorkspaceBootstrapSpec(_ *core.Task) (core.WorkspaceBo
 	return core.WorkspaceBootstrapSpec{}, nil
 }
 
-// WriteSessionHandoff is not supported: Codex has no print-mode resume that
-// leaves the session untouched.
+// WriteSessionHandoff forks the previous session without a terminal and
+// without saving the fork (`codex exec fork --ephemeral`), so the session is
+// left as it was, even while it is still open interactively: `exec resume`
+// would add the request to it, ephemeral or not. Hooks are off and the
+// sandbox read-only so nothing but the note comes out; the note is saved
+// under rig's data dir. The session's own model is used: a smaller one might
+// not fit its context. The request goes in on stdin.
 func (r *repository) WriteSessionHandoff(
-	context.Context,
-	*core.Task,
-	core.TaskProviderSession,
-	string,
+	ctx context.Context,
+	task *core.Task,
+	session core.TaskProviderSession,
+	focus string,
 ) (string, error) {
-	return "", core.ErrHandoffUnsupported
+	sessionID := strings.TrimSpace(session.ProviderSessionID)
+	if sessionID == "" {
+		return "", fmt.Errorf("session ID is required")
+	}
+
+	outputFile, err := os.CreateTemp("", "rig-codex-handoff-*.md")
+	if err != nil {
+		return "", err
+	}
+	outputPath := outputFile.Name()
+	_ = outputFile.Close()
+	defer func() { _ = os.Remove(outputPath) }()
+
+	args := []string{
+		"exec", "fork", sessionID, "--ephemeral", "--disable", "hooks", "--skip-git-repo-check",
+		"-c", `sandbox_mode="read-only"`, "-o", outputPath,
+	}
+	model := strings.TrimSpace(session.Model)
+	if model == "" {
+		model = task.Launch().Model
+	}
+	if model != "" {
+		args = append(args, "-m", model)
+	}
+	if effort := task.Launch().Effort; effort != "" {
+		args = append(args, "-c", "model_reasoning_effort="+effort)
+	}
+	args = append(args, "-")
+
+	cwd := strings.TrimSpace(session.Cwd)
+	if cwd == "" {
+		cwd = strings.TrimSpace(task.WorktreePath)
+	}
+	if _, err := r.runner.RunWithStdin(ctx, subprocess.RunWithStdinOptions{
+		Env:   providerkit.EnvOverrides(task.ProviderEnv, ConfigEnvVars),
+		Cwd:   cwd,
+		Name:  r.binary,
+		Args:  args,
+		Stdin: providerkit.HandoffPrompt(focus),
+	}); err != nil {
+		return "", fmt.Errorf("codex exec fork failed: %w", err)
+	}
+	note := strings.TrimSpace(readOutputFile(outputPath))
+	if note == "" {
+		return "", fmt.Errorf("codex returned an empty handoff note")
+	}
+
+	dataDir, err := r.resolveRigDataDir()
+	if err != nil {
+		return "", err
+	}
+	return providerkit.SaveHandoffNote(dataDir, task, sessionID, note)
+}
+
+func (r *repository) resolveRigDataDir() (string, error) {
+	if r.rigDataDir == nil {
+		return providerkit.DefaultRigDataDir()
+	}
+	return r.rigDataDir()
 }
 
 // launchArgs are the global flags a task's launch options add before any

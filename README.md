@@ -419,17 +419,22 @@ its state — and a box for your own instruction for this session, which is
 optional and goes last under `Now:`. The task's model and effort are
 preselected; `tab`, `ctrl+t` and `ctrl+r` change them.
 
-With `handoff` on (the default for Claude Code), Rig first runs the previous
-session once more in print mode and asks it for a handoff note — goal, state,
+With `handoff` on (the default), Rig first runs the previous session once
+more without a terminal and asks it for a handoff note — goal, state,
 decisions, where things are, gotchas, next step — told what your instruction
 for the next session is, so the note covers what that session needs. The note
 is saved under `~/.local/share/rig/handoffs/<task id>/`. The session is forked
-and not saved, with workspace hooks and tools off, so the previous
+and the fork is not saved (`claude -p --fork-session
+--no-session-persistence`, `codex exec fork --ephemeral`), with hooks off and
+no tools for Claude Code or a read-only sandbox for Codex, so the previous
 conversation is left exactly as it was and nothing but the note comes out. The
 continuation prompt then points at the note; without a handoff it asks the
 session to recover the state from the workspace first. `ctrl+g` skips the
-handoff; a task without a previous session skips it on its own. Codex cannot
-write handoff notes yet.
+handoff; a task without a previous session skips it on its own.
+
+The note is written by the task's current provider and read by whichever
+provider the new session starts with, so `tab` to another provider hands a
+Claude Code session off to Codex, or a Codex session to Claude Code.
 
 `where` decides what happens to the running session:
 

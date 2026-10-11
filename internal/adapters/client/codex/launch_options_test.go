@@ -1,7 +1,6 @@
 package codex
 
 import (
-	"context"
 	"os"
 	"path/filepath"
 	"testing"
@@ -77,7 +76,7 @@ func TestRepositoryLaunchOptions_ListsTheModelsOfTheWindowsCodexAccount(t *testi
 		"the listed models, in Codex's priority order")
 	require.Equal(t, []string{"medium", "high", "ultra", "low", "max"}, options.Efforts,
 		"every effort a listed model supports, once")
-	require.False(t, options.Handoff)
+	require.True(t, options.Handoff, "Codex writes handoff notes")
 
 	daemonOptions := repo.LaunchOptions(nil)
 	require.Equal(t, []string{"gpt-6.1-sol"}, daemonOptions.Models, "an undecided window gets the daemon's home")
@@ -101,18 +100,17 @@ func TestRepositoryLaunchOptions_FallsBackWithoutAUsableModelsCache(t *testing.T
 
 			options := repo.LaunchOptions(core.ProviderEnv{"CODEX_HOME": codexHome})
 
-			require.Equal(t, fallbackLaunchOptions, options)
+			require.Equal(t, fallbackLaunchOptions.Models, options.Models)
+			require.Equal(t, fallbackLaunchOptions.Efforts, options.Efforts)
+			require.True(t, options.Handoff, "Codex writes handoff notes")
 			options.Models[0] = "changed"
 			require.NotEqual(t, "changed", fallbackLaunchOptions.Models[0], "callers get a copy")
 		})
 	}
 }
 
-func TestRepository_QuitsWithSlashQuitAndWritesNoHandoffs(t *testing.T) {
+func TestRepository_QuitsWithSlashQuit(t *testing.T) {
 	repo := newRepositoryWithHome(t, t.TempDir())
 
 	require.Equal(t, "/quit", repo.ExitCommand())
-
-	_, err := repo.WriteSessionHandoff(context.Background(), &core.Task{}, core.TaskProviderSession{}, "")
-	require.ErrorIs(t, err, core.ErrHandoffUnsupported)
 }

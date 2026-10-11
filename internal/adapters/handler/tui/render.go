@@ -696,8 +696,8 @@ func (m model) draftWhereLine() string {
 // written by the previous session.
 func (m model) draftHandoffLine() string {
 	label := mutedStyle.Render("handoff   ")
-	if !m.providerSupportsHandoff(m.effectiveCreateProvider()) {
-		return label + dimStyle.Render("not available for this provider")
+	if !m.handoffAvailable() {
+		return label + dimStyle.Render("not available: the previous session's provider cannot write one")
 	}
 	if m.draft.handoff {
 		return label + primaryStyle.Render("note from the previous session") +

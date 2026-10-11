@@ -48,17 +48,26 @@ type codexReasoningLevel struct {
 
 // LaunchOptions lists the models the account of env's Codex home may use, and
 // their reasoning efforts, falling back to fallbackLaunchOptions while that
-// home has no readable models cache.
+// home has no readable models cache. Codex writes handoff notes.
 func (r *repository) LaunchOptions(env core.ProviderEnv) core.ProviderLaunchOptions {
-	if codexHome, err := r.resolveCodexHomeDir(env); err == nil {
-		if options, ok := readModelsCache(filepath.Join(codexHome, modelsCacheFile)); ok {
-			return options
+	options, ok := r.accountLaunchOptions(env)
+	if !ok {
+		options = core.ProviderLaunchOptions{
+			Models:  append([]string(nil), fallbackLaunchOptions.Models...),
+			Efforts: append([]string(nil), fallbackLaunchOptions.Efforts...),
 		}
 	}
-	return core.ProviderLaunchOptions{
-		Models:  append([]string(nil), fallbackLaunchOptions.Models...),
-		Efforts: append([]string(nil), fallbackLaunchOptions.Efforts...),
+	options.Handoff = true
+	return options
+}
+
+// accountLaunchOptions reads the models cache of env's Codex home.
+func (r *repository) accountLaunchOptions(env core.ProviderEnv) (core.ProviderLaunchOptions, bool) {
+	codexHome, err := r.resolveCodexHomeDir(env)
+	if err != nil {
+		return core.ProviderLaunchOptions{}, false
 	}
+	return readModelsCache(filepath.Join(codexHome, modelsCacheFile))
 }
 
 // readModelsCache returns the listed models of a Codex models cache in
