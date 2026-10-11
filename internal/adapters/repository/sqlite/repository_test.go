@@ -531,6 +531,13 @@ var dropAgentSessionLaunchedAtStatements = []string{
 	"alter table agent_sessions drop column launched_at",
 }
 
+// dropAgentSessionNameStatements undo 00012, which records each agent
+// session's name.
+var dropAgentSessionNameStatements = []string{
+	"alter table agent_sessions drop column named_provider_session_id",
+	"alter table agent_sessions drop column name",
+}
+
 func TestRepositoryNew_ReturnsErrorAndPreservesDBWhenSchemaIsStale(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "state.db")
 
@@ -856,6 +863,36 @@ func TestRepositoryUpdateAgentSession_SetsAndClearsTheLaunchTime(t *testing.T) {
 	require.Empty(t, launchedAt)
 }
 
+func TestRepositoryUpdateAgentSession_StoresTheName(t *testing.T) {
+	repo := newTestRepository(t)
+	ctx := context.Background()
+	createAgentSessionTestTask(t, repo, "task-1")
+	session := core.AgentSession{
+		ID:                "agent-1",
+		TaskID:            "task-1",
+		Provider:          core.ProviderClaude,
+		TmuxServer:        agentSessionTestServer,
+		TmuxPane:          "%1",
+		ProviderSessionID: "claude-sess-1",
+		StartedAt:         time.Date(2026, time.October, 9, 10, 0, 0, 0, time.UTC),
+	}
+	require.NoError(t, repo.CreateAgentSession(ctx, session))
+
+	session.Name = "GH #124 Task CLI"
+	session.NamedProviderSessionID = "claude-sess-1"
+	require.NoError(t, repo.UpdateAgentSession(ctx, session))
+
+	open, err := repo.ListOpenAgentSessions(ctx, "task-1")
+	require.NoError(t, err)
+	require.Equal(t, []core.AgentSession{session}, open)
+	onPane, err := repo.OpenAgentSessionOnPane(ctx, agentSessionTestServer, "%1")
+	require.NoError(t, err)
+	require.Equal(t, &session, onPane)
+	latest, err := repo.LatestAgentSession(ctx, "task-1")
+	require.NoError(t, err)
+	require.Equal(t, &session, latest)
+}
+
 func TestRepositoryListOpenAgentSessions_OrdersByStartTimeWithinOneSecond(t *testing.T) {
 	repo := newTestRepository(t)
 	ctx := context.Background()
@@ -985,6 +1022,8 @@ func TestRepositoryNew_AddsAgentSessionsToAnExistingDatabase(t *testing.T) {
 		"background_workflows",
 		"background_other",
 		"launched_at",
+		"name",
+		"named_provider_session_id",
 	}, tableColumnNames(t, reopened.db, "agent_sessions"))
 	require.NoError(t, reopened.CreateAgentSession(context.Background(), core.AgentSession{
 		ID:         "agent-1",
@@ -1002,13 +1041,14 @@ func TestRepositoryNew_DropsTaskStatusFromAnExistingDatabase(t *testing.T) {
 
 	// Rewind to a database migrated before task status moved to agent
 	// sessions, with a status row for the task.
-	for _, statement := range slices.Concat(dropAgentSessionLaunchedAtStatements, dropActivityAgentSessionStatements, []string{
-		originalTaskStatusTable,
-		originalTaskResumeMetadataTable,
-		"insert into task_status (task_id, provider, phase, raw_event_name, observed_at) " +
-			"values ('task-1', 'claude', 'working', 'PostToolUse', '2026-10-09T10:00:00Z')",
-		"delete from goose_db_version where version_id >= 8",
-	}) {
+	for _, statement := range slices.Concat(dropAgentSessionNameStatements, dropAgentSessionLaunchedAtStatements,
+		dropActivityAgentSessionStatements, []string{
+			originalTaskStatusTable,
+			originalTaskResumeMetadataTable,
+			"insert into task_status (task_id, provider, phase, raw_event_name, observed_at) " +
+				"values ('task-1', 'claude', 'working', 'PostToolUse', '2026-10-09T10:00:00Z')",
+			"delete from goose_db_version where version_id >= 8",
+		}) {
 		_, err := repo.db.ExecContext(context.Background(), statement)
 		require.NoError(t, err, statement)
 	}
@@ -1030,7 +1070,7 @@ func TestRepositoryNew_KeepsAgentSessionsOfAnExistingDatabaseAsHookOpened(t *tes
 
 	// Rewind to a database migrated before Rig recorded agent launches, with
 	// an open agent session a hook event opened.
-	for _, statement := range slices.Concat(dropAgentSessionLaunchedAtStatements, []string{
+	for _, statement := range slices.Concat(dropAgentSessionNameStatements, dropAgentSessionLaunchedAtStatements, []string{
 		originalTaskResumeMetadataTable,
 		"insert into agent_sessions (id, task_id, provider, tmux_socket_path, tmux_server_pid, tmux_pane, " +
 			"pane_trusted, provider_session_id, started_at) values ('agent-1', 'task-1', 'claude', " +
@@ -1174,6 +1214,53 @@ func TestRepositoryListLatestAgentSessionPrompts_ReturnsEachOpenAgentSessionsNew
 	require.Equal(t, map[string]string{"agent-a": "newest", "agent-b": "b's prompt"}, byAgentSession)
 }
 
+func TestRepositoryListAgentSessionPrompts_ReturnsOneAgentSessionsPromptsOldestFirst(t *testing.T) {
+	repo := newTestRepository(t)
+	ctx := context.Background()
+	createAgentSessionTestTask(t, repo, "task-1")
+	for _, session := range []core.AgentSession{
+		{ID: "agent-a", TaskID: "task-1", TmuxPane: "%1"},
+		{ID: "agent-b", TaskID: "task-1", TmuxPane: "%2"},
+	} {
+		session.Provider = core.ProviderClaude
+		session.TmuxServer = agentSessionTestServer
+		require.NoError(t, repo.CreateAgentSession(ctx, session))
+	}
+
+	second := time.Date(2026, time.October, 9, 10, 0, 0, 0, time.UTC)
+	record := func(agentSessionID string, role core.TaskActivityRole, text string, at time.Time) {
+		require.NoError(t, repo.RecordTaskActivity(ctx, core.TaskActivityEvent{
+			TaskID:         "task-1",
+			AgentSessionID: agentSessionID,
+			EventName:      core.HookEventUserPromptSubmit,
+			Role:           role,
+			Text:           text,
+			ObservedAt:     at,
+		}))
+	}
+	// Stored as RFC 3339 text, .15s sorts before .1s, so only time order
+	// lists the prompts oldest first.
+	record("agent-a", core.TaskActivityRoleUser, "third", second.Add(150*time.Millisecond))
+	record("agent-a", core.TaskActivityRoleUser, "second", second.Add(100*time.Millisecond))
+	record("agent-a", core.TaskActivityRoleUser, "first", second.Add(-time.Minute))
+	record("agent-a", core.TaskActivityRoleAssistant, "not a prompt", second.Add(-time.Hour))
+	record("agent-b", core.TaskActivityRoleUser, "another agent's", second.Add(-time.Hour))
+	record("", core.TaskActivityRoleUser, "unattributed", second.Add(-time.Hour))
+
+	prompts, err := repo.ListAgentSessionPrompts(ctx, "agent-a")
+	require.NoError(t, err)
+	texts := make([]string, 0, len(prompts))
+	for _, prompt := range prompts {
+		require.Equal(t, "agent-a", prompt.AgentSessionID)
+		texts = append(texts, prompt.Text)
+	}
+	require.Equal(t, []string{"first", "second", "third"}, texts)
+
+	prompts, err = repo.ListAgentSessionPrompts(ctx, "")
+	require.NoError(t, err)
+	require.Empty(t, prompts)
+}
+
 func TestRepositoryNew_AddsAgentSessionsToActivityAndRollsBack(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "state.db")
 	repo := newTestRepositoryAtPath(t, path)
@@ -1229,13 +1316,13 @@ func TestRepositoryNew_MakesEachTasksLastConversationAnAgentSession(t *testing.T
 	// Rewind to a database migrated before Reconnect restored agent sessions,
 	// where task-1 and task-2 have resume metadata for their last
 	// conversation.
-	for _, statement := range []string{
+	for _, statement := range slices.Concat(dropAgentSessionNameStatements, []string{
 		originalTaskResumeMetadataTable,
 		"insert into task_resume_metadata (task_id, provider, session_id, observed_at) values " +
 			"('task-1', 'codex', 'codex-sess-1', '2026-10-09T10:05:00.123456789Z'), " +
 			"('task-2', 'claude', 'claude-old', '2026-10-09T09:00:00Z')",
 		"delete from goose_db_version where version_id >= 11",
-	} {
+	}) {
 		_, err := repo.db.ExecContext(ctx, statement)
 		require.NoError(t, err, statement)
 	}
@@ -1277,12 +1364,12 @@ func TestRepositoryNew_LeavesOutATaskWhoseIDAnAgentSessionHolds(t *testing.T) {
 		Provider:  core.ProviderClaude,
 		StartedAt: time.Date(2026, time.October, 9, 10, 0, 0, 0, time.UTC),
 	}))
-	for _, statement := range []string{
+	for _, statement := range slices.Concat(dropAgentSessionNameStatements, []string{
 		originalTaskResumeMetadataTable,
 		"insert into task_resume_metadata (task_id, provider, session_id, observed_at) values " +
 			"('task-2', 'codex', 'codex-sess-2', '2026-10-09T10:05:00Z')",
 		"delete from goose_db_version where version_id >= 11",
-	} {
+	}) {
 		_, err := repo.db.ExecContext(ctx, statement)
 		require.NoError(t, err, statement)
 	}
@@ -1352,7 +1439,7 @@ func TestRepositoryNew_MigratesOnlyResumeMetadataItCanResume(t *testing.T) {
 	// Rewind to before 00011. task-1's resume metadata has no time, task-2's
 	// no provider and task-3's no conversation; the last row's task is gone,
 	// as foreign keys were off when it was deleted.
-	for _, statement := range []string{
+	for _, statement := range slices.Concat(dropAgentSessionNameStatements, []string{
 		originalTaskResumeMetadataTable,
 		"pragma foreign_keys = off",
 		"insert into task_resume_metadata (task_id, provider, session_id, observed_at) values " +
@@ -1362,7 +1449,7 @@ func TestRepositoryNew_MigratesOnlyResumeMetadataItCanResume(t *testing.T) {
 			"('task-gone', 'claude', 'claude-sess-gone', '2026-10-09T10:00:00Z')",
 		"pragma foreign_keys = on",
 		"delete from goose_db_version where version_id >= 11",
-	} {
+	}) {
 		_, err := repo.db.ExecContext(ctx, statement)
 		require.NoError(t, err, statement)
 	}

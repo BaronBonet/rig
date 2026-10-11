@@ -147,8 +147,10 @@ type providerClientState struct {
 	suggestedName       string
 	suggestedSuggestion TaskSuggestion
 	suggestRepoRoot     string
-	sessionEnvErr       error
-	sessionEnvCalls     int
+	// suggestPrompts lists the prompts the provider was asked to name.
+	suggestPrompts  []string
+	sessionEnvErr   error
+	sessionEnvCalls int
 	// sessionEnvRan runs as each session environment is ensured, as a hook
 	// event arriving meanwhile would.
 	sessionEnvRan        func()
@@ -556,8 +558,9 @@ func configureProviderClientMock(client *MockProviderClient, state *providerClie
 		},
 	).Maybe()
 	client.EXPECT().SuggestTaskName(mock.Anything, mock.Anything, mock.Anything).RunAndReturn(
-		func(_ context.Context, repoRoot string, _ string) (TaskSuggestion, error) {
+		func(_ context.Context, repoRoot string, prompt string) (TaskSuggestion, error) {
 			state.suggestRepoRoot = repoRoot
+			state.suggestPrompts = append(state.suggestPrompts, prompt)
 			if state.suggestErr != nil {
 				return TaskSuggestion{}, state.suggestErr
 			}
@@ -879,6 +882,25 @@ func configureTaskRepositoryMock(repo *MockTaskRepository, state *taskRepository
 			return prompts, nil
 		},
 	).Maybe()
+	repo.EXPECT().ListAgentSessionPrompts(mock.Anything, mock.Anything).RunAndReturn(
+		func(_ context.Context, agentSessionID string) ([]TaskActivityEvent, error) {
+			state.mu.Lock()
+			defer state.mu.Unlock()
+			var prompts []TaskActivityEvent
+			for _, events := range state.activityByTask {
+				for _, event := range events {
+					if agentSessionID != "" && event.AgentSessionID == agentSessionID &&
+						event.Role == TaskActivityRoleUser {
+						prompts = append(prompts, event)
+					}
+				}
+			}
+			slices.SortStableFunc(prompts, func(left, right TaskActivityEvent) int {
+				return left.ObservedAt.Compare(right.ObservedAt)
+			})
+			return prompts, nil
+		},
+	).Maybe()
 	repo.EXPECT().UpsertTaskProviderSession(mock.Anything, mock.Anything).RunAndReturn(
 		func(_ context.Context, session TaskProviderSession) error {
 			state.mu.Lock()
@@ -985,6 +1007,8 @@ func configureAgentSessionRepositoryMock(repo *MockTaskRepository, state *taskRe
 				existing.PaneTrusted = session.PaneTrusted
 				existing.ProviderSessionID = session.ProviderSessionID
 				existing.Status = session.Status
+				existing.Name = session.Name
+				existing.NamedProviderSessionID = session.NamedProviderSessionID
 				state.agentSessions[i] = existing
 			}
 			return nil

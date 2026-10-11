@@ -36,8 +36,13 @@ type taskObservation struct {
 	// Provider session ID.
 	paneTraces           *boundedCache[paneTraceKey, paneTrace]
 	codexFallbackRetries *boundedCache[string, time.Time]
-	newAgentSessionID    func() string
-	now                  func() time.Time
+	// agentNamings records the conversations whose naming has started.
+	agentNamings      *boundedCache[agentNamingKey, struct{}]
+	newAgentSessionID func() string
+	now               func() time.Time
+	// startBackground runs work that must not hold up its caller, such as
+	// naming an agent.
+	startBackground func(func())
 	// agentSessionMu serializes reading and writing agent sessions, because
 	// concurrent hook events can come from the same pane.
 	agentSessionMu sync.Mutex
@@ -90,8 +95,10 @@ func newTaskObservationWithOptions(
 		statusCacheMaxAge:    options.statusCacheMaxAge,
 		paneTraces:           newBoundedCache[paneTraceKey, paneTrace](maxPaneTraceEntries),
 		codexFallbackRetries: newBoundedCache[string, time.Time](maxPaneTraceEntries),
+		agentNamings:         newBoundedCache[agentNamingKey, struct{}](maxAgentNamingEntries),
 		newAgentSessionID:    newAgentSessionID,
 		now:                  time.Now,
+		startBackground:      func(work func()) { go work() },
 	}
 	observation.statusObserver = newTaskStatusObserver(observation)
 	return observation
@@ -441,7 +448,8 @@ func liveAgentSessionsEqual(left LiveAgentSession, right LiveAgentSession) bool 
 		left.Pane == right.Pane &&
 		sameLocation &&
 		agentSessionStatusesEqual(left.Status, right.Status) &&
-		left.LatestPrompt == right.LatestPrompt
+		left.LatestPrompt == right.LatestPrompt &&
+		left.Name == right.Name
 }
 
 func taskSessionCommandsMatch(activeCommand, expectedCommand string) bool {

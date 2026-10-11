@@ -817,3 +817,49 @@ func TestCompactionsDetailText(t *testing.T) {
 		require.Equal(t, tc.want, compactionsDetailText(tc.compactions), "%+v", tc.compactions)
 	}
 }
+
+func TestModel_AgentSubRowShowsItsNameOnceNamed(t *testing.T) {
+	m := agentsTaskModel(newFrontendHarness())
+	named := codexAgent()
+	named.Name = "GH #124 Task CLI"
+	m = withAgentSessions(t, m, "task-1", claudeAgent(), named)
+
+	require.Contains(t, viewLineContaining(t, m, "GH #124 Task CLI"), "└ "+spinnerFrames[0]+" codex")
+	require.NotContains(t, stripANSI(m.View().Content), "review the retry change")
+	// Until it is named, an agent shows its latest prompt.
+	require.Contains(t, viewLineContaining(t, m, "fix the flaky retry test"), "├ "+iconStatusNeedsInput+" claude")
+}
+
+func TestModel_DetailViewShowsTheSelectedAgentsOwnActivity(t *testing.T) {
+	m := agentsTaskModel(newFrontendHarness())
+	m.width = 120
+	claude := claudeAgent()
+	claude.Name = "Retry test fix"
+	codex := codexAgent()
+	codex.Name = "Retry change review"
+	m = withAgentSessions(t, m, "task-1", claude, codex)
+	next, _ := m.Update(taskActivityLoadedMsg{
+		taskID: "task-1",
+		activity: []core.TaskActivityEvent{
+			{AgentSessionID: "agent-claude", Role: core.TaskActivityRoleAssistant, Text: "claude reply"},
+			{AgentSessionID: "agent-codex", Role: core.TaskActivityRoleUser, Text: "review the retry change"},
+			{AgentSessionID: "agent-codex", Role: core.TaskActivityRoleAssistant, Text: "codex reply"},
+		},
+	})
+	m = asModel(t, next)
+
+	// On the task row, the activity is the task's.
+	view := stripANSI(m.View().Content)
+	require.Contains(t, view, "review the retry change")
+	require.Contains(t, view, "codex reply")
+
+	// On an agent's sub-row, it is that agent's own. Its latest prompt shows
+	// even when the activity loaded has scrolled past it.
+	m = pressKey(t, m, tea.KeyPressMsg{Code: 'j', Text: "j"})
+	require.Equal(t, "agent-claude", m.selectedAgent)
+	view = stripANSI(m.View().Content)
+	require.Contains(t, view, "fix the flaky retry test")
+	require.Contains(t, view, "claude reply")
+	require.NotContains(t, view, "review the retry change")
+	require.NotContains(t, view, "codex reply")
+}

@@ -269,6 +269,9 @@ type TaskRepository interface {
 	// of a task's open agent sessions. Agent sessions without a prompt have
 	// none.
 	ListLatestAgentSessionPrompts(ctx context.Context, taskID string) ([]TaskActivityEvent, error)
+	// ListAgentSessionPrompts returns every prompt activity of one agent
+	// session, oldest first.
+	ListAgentSessionPrompts(ctx context.Context, agentSessionID string) ([]TaskActivityEvent, error)
 	// UpsertTaskProviderSession stores a provider session observed for a task.
 	UpsertTaskProviderSession(ctx context.Context, session TaskProviderSession) error
 	// ListTaskProviderSessions returns provider sessions observed for a task.
@@ -285,7 +288,7 @@ type TaskRepository interface {
 	// open or ended, or nil when the task has never had one.
 	LatestAgentSession(ctx context.Context, taskID string) (*AgentSession, error)
 	// UpdateAgentSession stores an open agent session's pane, pane trust,
-	// launch time, current Provider session, and status.
+	// launch time, current Provider session, status, and name.
 	UpdateAgentSession(ctx context.Context, session AgentSession) error
 	// EndAgentSession marks an open agent session as ended.
 	EndAgentSession(ctx context.Context, agentSessionID string, endedAt time.Time) error

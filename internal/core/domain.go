@@ -193,6 +193,9 @@ type LiveAgentSession struct {
 	// LatestPrompt is the newest prompt submitted to the agent, or empty when
 	// there is none.
 	LatestPrompt string `json:"latest_prompt,omitempty"`
+	// Name is the short name of the agent's current conversation, or empty
+	// while that has none.
+	Name string `json:"name,omitempty"`
 }
 
 // TmuxPaneRef identifies one tmux pane: its server and its pane ID, such as
@@ -318,6 +321,15 @@ type AgentSession struct {
 	// /resume replace it.
 	ProviderSessionID string
 	Status            AgentSessionStatus
+	// Name is the agent's short name, such as "GH #124 Task CLI", derived
+	// like a task's name from the first prompt of a conversation. It is empty
+	// until the agent is named.
+	Name string
+	// NamedProviderSessionID is the Provider session Name names: the one
+	// whose first prompt gave it, or one that went on from that, as a resume
+	// or a fork does. A conversation the agent starts afresh, as after
+	// /clear, is not it, so its first prompt renames the agent.
+	NamedProviderSessionID string
 	// PaneTrusted reports whether a hook process was traced to the pane
 	// through the process tree. An untrusted pane was bound by the Codex
 	// fallback, because a Codex agent using the shared daemon runs its hooks
