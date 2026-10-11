@@ -23,22 +23,25 @@ func (r *repository) ReadSessionTokenUsage(
 	return snapshot.usage, err
 }
 
-// ReadConversationCompactions counts the compactions in the root agent's
-// rollout, as subagents compact their own contexts. Codex does not record
-// what triggered a compaction.
-func (r *repository) ReadConversationCompactions(
+// ReadConversationUsage reads the compactions and context usage in the root
+// agent's rollout, as subagents have contexts of their own. Codex does not
+// record what triggered a compaction.
+func (r *repository) ReadConversationUsage(
 	ctx context.Context,
 	conversation []core.TaskProviderSession,
-) (core.Compactions, error) {
+) (core.ConversationUsage, error) {
 	root, err := r.rootCodexTranscriptSession(ctx, conversation)
 	if err != nil || root == nil {
-		return core.Compactions{}, err
+		return core.ConversationUsage{}, err
 	}
 	snapshot, err := r.getTranscriptIndex().read(ctx, root.TranscriptPath)
 	if err != nil {
-		return core.Compactions{}, err
+		return core.ConversationUsage{}, err
 	}
-	return core.Compactions{Total: snapshot.compactions}, nil
+	return core.ConversationUsage{
+		Compactions: core.Compactions{Total: snapshot.compactions},
+		Context:     snapshot.context,
+	}, nil
 }
 
 type codexTranscriptEnvelope struct {
@@ -49,7 +52,8 @@ type codexTranscriptEnvelope struct {
 
 type codexEventPayload struct {
 	Type string `json:"type"`
-	Info struct {
+	// Info is nil in a token_count event that reports only rate limits.
+	Info *struct {
 		TotalTokenUsage struct {
 			InputTokens              int `json:"input_tokens"`
 			CachedInputTokens        int `json:"cached_input_tokens"`
@@ -58,6 +62,12 @@ type codexEventPayload struct {
 			ReasoningOutputTokens    int `json:"reasoning_output_tokens"`
 			TotalTokens              int `json:"total_tokens"`
 		} `json:"total_token_usage"`
+		// LastTokenUsage is the latest request's usage. Its total is what
+		// that request put in the context window.
+		LastTokenUsage *struct {
+			TotalTokens int `json:"total_tokens"`
+		} `json:"last_token_usage"`
+		ModelContextWindow int `json:"model_context_window"`
 	} `json:"info"`
 }
 

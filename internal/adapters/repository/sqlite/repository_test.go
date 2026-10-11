@@ -375,6 +375,132 @@ func TestRepositoryUpsertTaskProviderSession_PreservesRichMetadataFromSparseEven
 	require.Equal(t, []core.TaskProviderSession{rich, filledLater}, got)
 }
 
+// providerSessionModels is a task whose Provider sessions record their model
+// from observed events, as hook observation records them.
+type providerSessionModels struct {
+	t    *testing.T
+	repo *repository
+	now  time.Time
+}
+
+func newProviderSessionModels(t *testing.T) providerSessionModels {
+	t.Helper()
+	repo := newTestRepository(t)
+	now := time.Date(2026, time.October, 11, 10, 0, 0, 0, time.UTC)
+	require.NoError(t, repo.CreateTask(context.Background(), &core.Task{
+		ID:           "task-1",
+		Slug:         "task-one",
+		Prompt:       "prompt",
+		DisplayName:  "task one",
+		RepoRoot:     "/tmp/repo",
+		RepoName:     "repo",
+		BranchName:   "feat/task-one",
+		WorktreePath: "/tmp/repo-task-one",
+		TmuxSession:  "repo_task_one",
+		Provider:     core.ProviderClaude,
+		CreatedAt:    now,
+		UpdatedAt:    now,
+	}))
+	return providerSessionModels{t: t, repo: repo, now: now}
+}
+
+// observe records an event of Provider session sess-a at minute, with model.
+func (m providerSessionModels) observe(eventName string, minute int, model string) {
+	m.t.Helper()
+	at := m.now.Add(time.Duration(minute) * time.Minute)
+	require.NoError(m.t, m.repo.UpsertTaskProviderSession(context.Background(), core.TaskProviderSession{
+		TaskID:            "task-1",
+		Provider:          core.ProviderClaude,
+		ProviderSessionID: "sess-a",
+		TranscriptPath:    "/tmp/sess-a.jsonl",
+		Model:             model,
+		ModelSwitch:       eventName == core.HookEventPostModelSwitch,
+		Cwd:               "/tmp/repo-task-one",
+		FirstObservedAt:   at,
+		LastObservedAt:    at,
+		LastEventName:     eventName,
+	}))
+}
+
+// model is the model stored for sess-a.
+func (m providerSessionModels) model() string {
+	m.t.Helper()
+	sessions, err := m.repo.ListTaskProviderSessions(context.Background(), "task-1")
+	require.NoError(m.t, err)
+	require.Len(m.t, sessions, 1)
+	require.False(m.t, sessions[0].ModelSwitch, "a stored Provider session is no model switch")
+	return sessions[0].Model
+}
+
+// A Provider session keeps the first model observed, as a SessionStart can
+// report the model a resumed conversation started on. Only a model switch
+// replaces it, unless a newer event was stored already.
+func TestRepositoryUpsertTaskProviderSession_OnlyAModelSwitchReplacesTheModel(t *testing.T) {
+	const (
+		start    = core.HookEventSessionStart
+		switched = core.HookEventPostModelSwitch
+		prompt   = core.HookEventUserPromptSubmit
+		tool     = core.HookEventPreToolUse
+	)
+
+	t.Run("a switch replaces a stored model", func(t *testing.T) {
+		m := newProviderSessionModels(t)
+		m.observe(start, 0, "claude-opus-5-5[1m]")
+		m.observe(switched, 1, "claude-sonnet-4-6")
+		require.Equal(t, "claude-sonnet-4-6", m.model())
+	})
+
+	t.Run("a later SessionStart keeps a switched model", func(t *testing.T) {
+		m := newProviderSessionModels(t)
+		m.observe(start, 0, "claude-opus-5-5[1m]")
+		m.observe(switched, 1, "claude-sonnet-4-6")
+		m.observe(start, 2, "claude-opus-5-5[1m]")
+		require.Equal(t, "claude-sonnet-4-6", m.model())
+	})
+
+	t.Run("a switch before SessionStart sets the model, which SessionStart keeps", func(t *testing.T) {
+		m := newProviderSessionModels(t)
+		m.observe(switched, 1, "claude-sonnet-4-6")
+		require.Equal(t, "claude-sonnet-4-6", m.model())
+		m.observe(start, 0, "claude-opus-5-5[1m]")
+		require.Equal(t, "claude-sonnet-4-6", m.model())
+	})
+
+	t.Run("an older switch arriving after a newer one does not win", func(t *testing.T) {
+		m := newProviderSessionModels(t)
+		m.observe(start, 0, "claude-opus-5-5[1m]")
+		m.observe(switched, 2, "claude-sonnet-4-6")
+		m.observe(switched, 1, "claude-haiku-4-5-20251001")
+		require.Equal(t, "claude-sonnet-4-6", m.model())
+	})
+
+	t.Run("a switch at the same time as the newest event wins", func(t *testing.T) {
+		m := newProviderSessionModels(t)
+		m.observe(start, 0, "claude-opus-5-5[1m]")
+		m.observe(tool, 1, "")
+		m.observe(switched, 1, "claude-sonnet-4-6")
+		require.Equal(t, "claude-sonnet-4-6", m.model())
+	})
+
+	t.Run("an event without a model never clears it", func(t *testing.T) {
+		m := newProviderSessionModels(t)
+		m.observe(start, 0, "claude-opus-5-5[1m]")
+		m.observe(tool, 1, "")
+		require.Equal(t, "claude-opus-5-5[1m]", m.model())
+		m.observe(switched, 2, "")
+		require.Equal(t, "claude-opus-5-5[1m]", m.model())
+	})
+
+	t.Run("other events keep the first model", func(t *testing.T) {
+		m := newProviderSessionModels(t)
+		m.observe(prompt, 0, "")
+		m.observe(start, 1, "claude-opus-5-5")
+		require.Equal(t, "claude-opus-5-5", m.model(), "any event's model fills a missing one")
+		m.observe(prompt, 2, "claude-sonnet-4-6")
+		require.Equal(t, "claude-opus-5-5", m.model())
+	})
+}
+
 func TestRepositoryRecordTaskActivityAndGetTaskActivity_ReturnsNewestWindowOldestFirst(t *testing.T) {
 	repo := newTestRepository(t)
 	task := &core.Task{

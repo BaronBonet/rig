@@ -527,10 +527,11 @@ type ProviderClient interface {
 	// ReadSessionTokenUsage reads provider-specific token usage from one
 	// provider transcript.
 	ReadSessionTokenUsage(ctx context.Context, transcriptPath string) (*SessionTokenUsage, error)
-	// ReadConversationCompactions counts how many times the root agent's
-	// context was compacted in one conversation: the Provider session history
-	// of one Provider session ID, as RecoverAgentSessionStatus takes it.
-	ReadConversationCompactions(ctx context.Context, conversation []TaskProviderSession) (Compactions, error)
+	// ReadConversationUsage reads how many times the root agent's context was
+	// compacted in one conversation, and how full it is now. A conversation
+	// is the Provider session history of one Provider session ID, as
+	// RecoverAgentSessionStatus takes it.
+	ReadConversationUsage(ctx context.Context, conversation []TaskProviderSession) (ConversationUsage, error)
 }
 
 // GitWorktreeClient manages the Git worktree operations needed by the new task

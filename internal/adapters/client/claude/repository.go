@@ -26,6 +26,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"github.com/BaronBonet/rig/internal/adapters/client/providerkit"
 	"github.com/BaronBonet/rig/internal/core"
@@ -65,6 +66,13 @@ const (
 // StopFailure replaces Stop when the turn ends on an API error, such as a rate
 // limit, an overloaded or failed request, or an authentication problem. It is
 // unmatched so that every error type ends the working status.
+//
+// PostModelSwitch drives no phase: it only records the model the conversation
+// moved to, so that its context usage is measured against that model's
+// window. Claude Code fires it for /model, the model picker, the stream-json
+// set_model request, a resume onto another model and a model change of its
+// own, such as opusplan leaving plan mode. It is unmatched, so that every
+// model is recorded.
 var hookCatalog = providerkit.Catalog{
 	{Event: core.HookEventSessionStart, Matcher: "startup|resume|clear|fork", Phase: core.TaskStatusPhaseStarting},
 	{Event: core.HookEventSessionEnd, Timeout: providerkit.SessionEndTimeout},
@@ -78,6 +86,7 @@ var hookCatalog = providerkit.Catalog{
 	},
 	{Event: core.HookEventStop, Phase: core.TaskStatusPhaseWaitingForInput},
 	{Event: core.HookEventStopFailure, Phase: core.TaskStatusPhaseWaitingForInput},
+	{Event: core.HookEventPostModelSwitch},
 }
 
 // needsInputNotificationTypes are the Claude notification types that ask the
@@ -105,6 +114,8 @@ type repository struct {
 	binary          string
 	collectorURL    string
 	hookSecret      string
+	// contextWindows caches the context window Claude reports for each model.
+	contextWindows *contextWindowCache
 }
 
 func New(runner subprocess.Runner, cfg Config, hooks HookForwardingConfig) core.ProviderClient {
@@ -113,7 +124,7 @@ func New(runner subprocess.Runner, cfg Config, hooks HookForwardingConfig) core.
 		collectorURL = defaultClaudeHooksURL
 	}
 
-	return &repository{
+	repo := &repository{
 		runner:          runner,
 		binary:          cfg.Binary,
 		collectorURL:    collectorURL,
@@ -121,6 +132,8 @@ func New(runner subprocess.Runner, cfg Config, hooks HookForwardingConfig) core.
 		rigDataDir:      defaultRigDataDir,
 		claudeConfigDir: defaultClaudeConfigDir,
 	}
+	repo.contextWindows = newContextWindowCache(repo.probeContextWindow, time.Now)
+	return repo
 }
 
 func NewHookForwardingConfig(hookListenAddr string, hookSecret string) HookForwardingConfig {

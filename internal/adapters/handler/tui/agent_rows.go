@@ -123,12 +123,20 @@ func agentSessionStatusUpdate(session core.LiveAgentSession) *core.TaskStatusUpd
 	}
 }
 
+// agentRowUsage is what an agent sub-row shows of its agent's usage: how full
+// its context window is, or nil when that is not known, and its compactions.
+type agentRowUsage struct {
+	context     *core.ContextUsage
+	compactions core.Compactions
+}
+
 // renderAgentSubRow renders one agent session as an indented sub-row under
 // its task: its status symbol, its provider, and what agentSubRowText says
-// about it, then its compaction marker, if it has compacted.
+// about it, then how full its context window is and its compaction marker,
+// where it has them.
 func (m model) renderAgentSubRow(
 	session core.LiveAgentSession,
-	compactions core.Compactions,
+	usage agentRowUsage,
 	last bool,
 	selected bool,
 	totalWidth int,
@@ -151,7 +159,7 @@ func (m model) renderAgentSubRow(
 	text, placeholder := agentSubRowText(session)
 	text = truncateStr(text, textWidth-len(nameGap))
 
-	textStyle, compactionStyle := dimStyle, mutedStyle
+	textStyle, markerStyle := dimStyle, mutedStyle
 	if placeholder {
 		textStyle = mutedStyle
 	}
@@ -160,19 +168,27 @@ func (m model) renderAgentSubRow(
 	}
 	if selected {
 		textStyle = lipgloss.NewStyle().Foreground(colorAccent).Bold(true)
-		compactionStyle = primaryStyle
+		markerStyle = primaryStyle
 	}
 
 	line := dimStyle.Render(subRowIndent+branch+" ") +
 		symbolStyle.Render(symbol) + " " +
 		providerStyle(provider).Render(providerCell) +
 		textStyle.Render(text)
-	// The compaction marker lines up with the task rows' compactions column,
-	// after their provider column, which a sub-row leaves blank.
-	if layout.compactions && compactions.Total > 0 {
-		line = padRightVisible(line, subRowLead+textWidth) +
-			strings.Repeat(" ", colWidthAgent) +
-			renderCompactionsCell(compactions, compactionStyle)
+	// The context and compaction markers line up with the task rows' context
+	// and compactions columns, after their provider column, which a sub-row
+	// leaves blank.
+	_, hasPercent := contextPercent(usage.context)
+	showContext := layout.context && hasPercent
+	showCompactions := layout.compactions && usage.compactions.Total > 0
+	if showContext || showCompactions {
+		line = padRightVisible(line, subRowLead+textWidth) + strings.Repeat(" ", colWidthAgent)
+		if layout.context {
+			line += renderContextCell(usage.context, markerStyle)
+		}
+		if showCompactions {
+			line += renderCompactionsCell(usage.compactions, markerStyle)
+		}
 	}
 	if selected {
 		return selectedRowStyle.Render(line)
@@ -262,6 +278,60 @@ func taskRowCompactions(row taskRow) core.Compactions {
 		return core.Compactions{}
 	}
 	return agentCompactions(row, row.status.AgentSessions[0].ID)
+}
+
+// agentContext is how full an agent session's context window is, as its
+// task's usage reports it, or nil when the usage does not record it.
+func agentContext(row taskRow, agentSessionID string) *core.ContextUsage {
+	if row.usage == nil {
+		return nil
+	}
+	contextUsage, ok := row.usage.AgentContext[agentSessionID]
+	if !ok {
+		return nil
+	}
+	return &contextUsage
+}
+
+// taskRowContext is the context usage a task row shows: its agent's, while it
+// has exactly one live agent session, as with its compactions.
+func taskRowContext(row taskRow) *core.ContextUsage {
+	if row.status == nil || len(row.status.AgentSessions) != 1 {
+		return nil
+	}
+	return agentContext(row, row.status.AgentSessions[0].ID)
+}
+
+// contextPercent is how full a context window is, in whole percent rounded
+// down. It is capped at 100, as Codex can count more tokens than its window
+// holds. ok is false when the context or its window is unknown.
+func contextPercent(contextUsage *core.ContextUsage) (int, bool) {
+	if contextUsage == nil || contextUsage.Window <= 0 {
+		return 0, false
+	}
+	return min(max(contextUsage.Tokens*100/contextUsage.Window, 0), 100), true
+}
+
+// renderContextCell renders how full an agent's context window is, such as
+// "41%", padded to the context column, or a blank cell when that is not known.
+func renderContextCell(contextUsage *core.ContextUsage, style lipgloss.Style) string {
+	percent, ok := contextPercent(contextUsage)
+	if !ok {
+		return strings.Repeat(" ", colWidthContext)
+	}
+	return " " + padLeftVisible(style.Render(strconv.Itoa(percent)+"%"), colWidthContext-2) + " "
+}
+
+// contextDetailText describes an agent's context for the detail panel: how
+// full its context window is and the tokens in it of the window's size, or
+// only the tokens while the window is unknown.
+func contextDetailText(contextUsage core.ContextUsage) string {
+	tokens := formatTokenCount(contextUsage.Tokens)
+	percent, ok := contextPercent(&contextUsage)
+	if !ok {
+		return tokens
+	}
+	return strconv.Itoa(percent) + "% · " + tokens + " of " + formatTokenCount(contextUsage.Window)
 }
 
 // renderCompactionsCell renders an agent's compaction marker, such as "↻2",

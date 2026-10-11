@@ -52,8 +52,8 @@ Use `rig` for the CLI command and Rig for the product or system.
   creation and session reconnect.
 - Task observation: The core component that consumes provider hook events and
   provider session history to maintain a task's agent sessions, their runtime
-  status, activity, token usage, and compactions — including liveness checks
-  against the Session and recovery of stale status.
+  status, activity, token usage, compactions and context usage — including
+  liveness checks against the Session and recovery of stale status.
 - Provider: An AI coding runtime that can back a task, such as Codex.
 - Supported provider: A provider Rig knows how to integrate with.
 - Configured provider: A supported provider the user has enabled for task
@@ -101,11 +101,12 @@ Use `rig` for the CLI command and Rig for the product or system.
   one untracked Codex pane instead.
 - Provider session: One conversation of a provider, observed for a task,
   including its provider session ID, transcript path, model, working
-  directory, and latest event name. `/clear` and `/resume` start a new one in
-  the same agent process.
+  directory, and latest event name. Its model is the latest one the
+  conversation switched to, or else the one it started with. `/clear` and
+  `/resume` start a new one in the same agent process.
 - Provider transcript: An append-oriented record emitted by a Provider session
-  from which Rig can recover Runtime status, Activity events, Token usage, and
-  Compactions.
+  from which Rig can recover Runtime status, Activity events, Token usage,
+  Compactions and Context usage.
 - Daemon: The long-lived background Rig process that coordinates task creation,
   task state, provider hook handling, and frontend updates.
 - TUI: The foreground terminal interface for creating tasks, browsing task
@@ -149,6 +150,12 @@ Use `rig` for the CLI command and Rig for the product or system.
   in its current Provider session's root transcript, so `/clear` starts the
   count over, and splits them into auto and manual (`/compact`) where the
   provider records the trigger, as Claude does and Codex does not.
+- Context usage: How full an Agent session's context window is: the tokens its
+  latest request put in its context, out of the model's context window where
+  Rig knows it. After a compaction it is Codex's own count of what the
+  compaction left, while a Claude agent's context is unknown until its next
+  request. Rig reads it from the same root transcript as Compactions, so
+  `/clear` starts it over.
 - Task branch: A branch a Task's worktree has had checked out, as the
   worktree's reflog records, or the branch the Task was created on. Rig
   records each one it finds, so a branch deleted after its pull request merged,

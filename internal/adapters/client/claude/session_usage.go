@@ -71,54 +71,88 @@ func (r *repository) ReadSessionTokenUsage(
 }
 
 // compactBoundaryMarker is the subtype of the system entry Claude Code
-// records where it compacted the conversation. Lines without it are skipped
-// undecoded.
-var compactBoundaryMarker = []byte(`"compact_boundary"`)
+// records where it compacted the conversation, and assistantEntryMarker the
+// type of the entry that records an API request's usage. Lines with neither
+// are skipped undecoded.
+var (
+	compactBoundaryMarker = []byte(`"compact_boundary"`)
+	assistantEntryMarker  = []byte(`"type":"assistant"`)
+)
 
-// ReadConversationCompactions counts the compaction boundaries Claude Code
-// recorded in a conversation's transcript, split by what triggered each:
-// running out of context, or /compact.
-func (r *repository) ReadConversationCompactions(
+// ReadConversationUsage reads, in one pass over a conversation's transcript,
+// the compactions Claude Code recorded and how full the root agent's context
+// is. Compactions are split by what triggered each: running out of context,
+// or /compact. The context is what the root agent's latest request put in it,
+// as Claude Code's status line counts it. A compaction since then leaves it
+// unknown until the next request: the size Claude Code records for the
+// compacted conversation leaves out the system prompt and tools.
+//
+// The transcript does not record the context window, so the window is the
+// one Claude reports for the model the conversation records, which the
+// context window cache holds, and 0 until Claude has reported it. The window
+// is looked up even while the context is unknown, so the first read after the
+// conversation starts sets Claude probing before the agent's first request.
+func (r *repository) ReadConversationUsage(
 	ctx context.Context,
 	conversation []core.TaskProviderSession,
-) (core.Compactions, error) {
+) (core.ConversationUsage, error) {
 	session := claudeConversationTranscript(conversation)
 	if session == nil {
-		return core.Compactions{}, nil
+		return core.ConversationUsage{}, nil
 	}
+	window := r.contextWindows.lookup(ctx, session.Model)
 
-	var compactions core.Compactions
+	var usage core.ConversationUsage
 	err := scanTranscriptLines(ctx, session.TranscriptPath, func(line []byte) {
-		if !bytes.Contains(line, compactBoundaryMarker) {
+		if !bytes.Contains(line, compactBoundaryMarker) && !bytes.Contains(line, assistantEntryMarker) {
 			return
 		}
-		var entry claudeCompactBoundaryLine
-		if err := json.Unmarshal(line, &entry); err != nil ||
-			entry.IsSidechain ||
-			entry.Type != "system" ||
-			entry.Subtype != "compact_boundary" {
+		var entry claudeConversationUsageLine
+		if err := json.Unmarshal(line, &entry); err != nil || entry.IsSidechain {
 			return
 		}
 
-		compactions.Total++
-		switch entry.CompactMetadata.Trigger {
-		case "auto":
-			compactions.Auto++
-		case "manual":
-			compactions.Manual++
+		switch {
+		case entry.Type == "system" && entry.Subtype == "compact_boundary":
+			usage.Compactions.Total++
+			switch entry.CompactMetadata.Trigger {
+			case "auto":
+				usage.Compactions.Auto++
+			case "manual":
+				usage.Compactions.Manual++
+			}
+			usage.Context = nil
+		case entry.Type == "assistant" && entry.Message.Usage != nil:
+			// Output tokens are left out, as the status line leaves them. A
+			// synthetic message, such as an API error, reports no usage and
+			// says nothing about the context.
+			requestUsage := entry.Message.Usage
+			if tokens := requestUsage.InputTokens +
+				requestUsage.CacheCreationInputTokens +
+				requestUsage.CacheReadInputTokens; tokens > 0 {
+				usage.Context = &core.ContextUsage{Tokens: tokens}
+			}
 		}
 	})
 	if err != nil {
-		return core.Compactions{}, err
+		return core.ConversationUsage{}, err
+	}
+	if usage.Context != nil {
+		usage.Context.Window = window
 	}
 
-	return compactions, nil
+	return usage, nil
 }
 
-type claudeCompactBoundaryLine struct {
-	Type            string `json:"type"`
-	Subtype         string `json:"subtype"`
-	IsSidechain     bool   `json:"isSidechain"`
+// claudeConversationUsageLine decodes only what ReadConversationUsage needs,
+// as assistant entries carry the whole response.
+type claudeConversationUsageLine struct {
+	Type        string `json:"type"`
+	Subtype     string `json:"subtype"`
+	IsSidechain bool   `json:"isSidechain"`
+	Message     struct {
+		Usage *claudeUsage `json:"usage"`
+	} `json:"message"`
 	CompactMetadata struct {
 		Trigger string `json:"trigger"`
 	} `json:"compactMetadata"`

@@ -16,6 +16,10 @@ import (
 
 const (
 	colWidthAgent = 7
+	// colWidthContext fits how full an agent's context window is, from "0%"
+	// to "100%", right-aligned between a gap after the provider column and a
+	// gap before the compactions column.
+	colWidthContext = 6
 	// colWidthCompactions fits an agent's compaction marker, from "↻1" to
 	// "↻99+".
 	colWidthCompactions = 4
@@ -36,7 +40,8 @@ const (
 	// request from the columns after it.
 	nameGap = "  "
 	// minTaskNameArea is the narrowest name area a task row keeps: below it,
-	// the row drops its compactions column, then its provider column.
+	// the row drops its context column, then its compactions column, then its
+	// provider column.
 	minTaskNameArea = 40
 	// maxEarlierPullRequestSymbols is how many of a task's earlier pull
 	// requests its row's marker shows before the current one. Older ones
@@ -262,8 +267,11 @@ func (m model) taskListBlocks(totalWidth int) []taskListBlock {
 			if selected {
 				selectedLine = len(lines)
 			}
-			compactions := agentCompactions(row, session.ID)
-			lines = append(lines, m.renderAgentSubRow(session, compactions, i == len(subRows)-1, selected, totalWidth))
+			usage := agentRowUsage{
+				context:     agentContext(row, session.ID),
+				compactions: agentCompactions(row, session.ID),
+			}
+			lines = append(lines, m.renderAgentSubRow(session, usage, i == len(subRows)-1, selected, totalWidth))
 		}
 		// A blank line sets a task with agent sub-rows apart from the tasks
 		// next to it.
@@ -369,8 +377,8 @@ func (m model) renderRepoHeader(task *core.Task, totalWidth int) string {
 }
 
 // renderRow renders a task row on one line: its status symbol, a child
-// task's link marker, its name and pull requests, then its agent's provider
-// and compactions and its elapsed time on the right.
+// task's link marker, its name and pull requests, then its agent's provider,
+// context and compactions and its elapsed time on the right.
 func (m model) renderRow(index int, row taskRow, totalWidth int) string {
 	if row.task == nil {
 		return ""
@@ -386,8 +394,8 @@ func (m model) renderRow(index int, row taskRow, totalWidth int) string {
 	// A task that needs input stands out from the dimmed rest. The selected
 	// task stands out further, also while the cursor is on one of its agent
 	// sub-rows; the selection border and bold name mark the cursor's line.
-	// Its terse markers, a child task's link marker and its compactions, stay
-	// muted until it is selected.
+	// Its terse markers, a child task's link marker and its agent's context
+	// and compactions, stay muted until it is selected.
 	nameStyle, markerStyle, timeStyle, rowStyle := dimStyle, mutedStyle, dimStyle, normalRowStyle
 	if needsInput(row.status) {
 		nameStyle = primaryStyle
@@ -417,9 +425,12 @@ func (m model) renderRow(index int, row taskRow, totalWidth int) string {
 		}
 		line += providerCell
 	}
+	// As with the provider, a task with agent sub-rows leaves its agents'
+	// context and compactions to them.
+	if layout.context {
+		line += renderContextCell(taskRowContext(row), markerStyle)
+	}
 	if layout.compactions {
-		// As with the provider, a task with agent sub-rows leaves its agents'
-		// compactions to them.
 		line += renderCompactionsCell(taskRowCompactions(row), markerStyle)
 	}
 	line += padLeftVisible(timeStyle.Render(taskElapsed(row.task)), colWidthElapsed)
@@ -431,18 +442,26 @@ func (m model) renderRow(index int, row taskRow, totalWidth int) string {
 type taskRowLayout struct {
 	nameArea    int
 	provider    bool
+	context     bool
 	compactions bool
 }
 
 // taskRowLayoutFor fits a task row's columns to the terminal: as it narrows,
-// the compactions column goes first and the provider column next, so the name
-// area keeps minTaskNameArea columns for as long as it can.
+// the context column goes first, the compactions column next and the provider
+// column last, so the name area keeps minTaskNameArea columns for as long as
+// it can.
 func taskRowLayoutFor(totalWidth int) taskRowLayout {
-	fixedWidth := rowGutterWidth + statusSymbolWidth + colWidthAgent + colWidthCompactions + colWidthElapsed
+	fixedWidth := rowGutterWidth + statusSymbolWidth +
+		colWidthAgent + colWidthContext + colWidthCompactions + colWidthElapsed
 	layout := taskRowLayout{
 		nameArea:    totalWidth - fixedWidth,
 		provider:    true,
+		context:     true,
 		compactions: true,
+	}
+	if layout.nameArea < minTaskNameArea {
+		layout.nameArea += colWidthContext
+		layout.context = false
 	}
 	if layout.nameArea < minTaskNameArea {
 		layout.nameArea += colWidthCompactions
@@ -656,14 +675,20 @@ func (m model) selectedTaskDetailView() string {
 			fitDetailLine(mutedStyle.Render("provider")+"  "+renderProviderNames(providers), sessionWidth),
 		)
 	}
-	compactions := taskRowCompactions(*row)
+	contextUsage, compactions := taskRowContext(*row), taskRowCompactions(*row)
 	if agentSession != nil {
 		if pane := agentPaneText(*agentSession); pane != "" {
 			sessionLines = append(sessionLines, detailFieldLines("pane", "   ", pane, dimStyle, sessionWidth)...)
 		}
-		compactions = agentCompactions(*row, agentSession.ID)
+		contextUsage, compactions = agentContext(*row, agentSession.ID), agentCompactions(*row, agentSession.ID)
 	} else {
 		sessionLines = append(sessionLines, m.launchChoiceDetailLines(task, sessionWidth)...)
+	}
+	if contextUsage != nil {
+		sessionLines = append(
+			sessionLines,
+			detailFieldLines("context", "  ", contextDetailText(*contextUsage), primaryStyle, sessionWidth)...,
+		)
 	}
 	if compactions.Total > 0 {
 		sessionLines = append(

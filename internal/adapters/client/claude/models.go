@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"path/filepath"
 	"strings"
 	"time"
 
@@ -29,37 +30,14 @@ const (
 // ListModels asks Claude for the models it offers with the initialize control
 // request of its stream-json protocol, the request behind the Claude Agent
 // SDK's supportedModels. A model's reasoning levels are the effort levels
-// Claude lists for it.
-//
-// Claude runs in a private, empty directory and reads only the user's own
-// settings, so no task workspace or shared directory can plant project
-// settings for it. Every hook is disabled, so neither Rig's nor the user's
-// SessionStart hooks fire for it, and no session is saved.
+// Claude lists for it. Claude runs isolated, as startControlSession starts it.
 func (r *repository) ListModels(ctx context.Context) ([]core.ProviderModel, error) {
 	ctx, cancel := context.WithTimeout(ctx, listModelsTimeout)
 	defer cancel()
 
-	workDir, err := os.MkdirTemp("", "rig-list-models-*")
+	session, err := r.startControlSession(ctx)
 	if err != nil {
-		return nil, fmt.Errorf("list claude models: create working directory: %w", err)
-	}
-	defer func() { _ = os.RemoveAll(workDir) }()
-
-	session, err := r.runner.StartLineSession(ctx, subprocess.StartLineSessionOptions{
-		Cwd:  workDir,
-		Name: r.binary,
-		Args: []string{
-			"-p",
-			"--input-format", "stream-json",
-			"--output-format", "stream-json",
-			"--verbose",
-			"--no-session-persistence",
-			"--setting-sources", "user",
-			"--settings", `{"disableAllHooks":true}`,
-		},
-	})
-	if err != nil {
-		return nil, fmt.Errorf("start claude: %w", err)
+		return nil, fmt.Errorf("list claude models: %w", err)
 	}
 	defer func() { _ = session.Close() }()
 
@@ -71,6 +49,64 @@ func (r *repository) ListModels(ctx context.Context) ([]core.ProviderModel, erro
 	return models, nil
 }
 
+// startControlSession starts Claude to answer control requests of its
+// stream-json protocol, with extraArgs after the flags that isolate it. The
+// caller must Close the session.
+//
+// Claude runs in Rig's control directory and reads only the user's own
+// settings, so no task workspace or shared directory can plant project
+// settings for it. Every hook is disabled, so neither Rig's nor the user's
+// SessionStart hooks fire for it, and no session is saved. Claude keeps a
+// project directory under ~/.claude/projects for every directory it starts
+// in, so every control session shares the one directory, which stays.
+func (r *repository) startControlSession(
+	ctx context.Context,
+	extraArgs ...string,
+) (subprocess.LineSession, error) {
+	workDir, err := r.controlDir()
+	if err != nil {
+		return nil, err
+	}
+	if err := os.MkdirAll(workDir, 0o700); err != nil {
+		return nil, fmt.Errorf("create claude control directory: %w", err)
+	}
+
+	args := []string{
+		"-p",
+		"--input-format", "stream-json",
+		"--output-format", "stream-json",
+		"--verbose",
+		"--no-session-persistence",
+		"--setting-sources", "user",
+		"--settings", `{"disableAllHooks":true}`,
+	}
+	session, err := r.runner.StartLineSession(ctx, subprocess.StartLineSessionOptions{
+		Cwd:  workDir,
+		Name: r.binary,
+		Args: append(args, extraArgs...),
+	})
+	if err != nil {
+		return nil, fmt.Errorf("start claude: %w", err)
+	}
+
+	return session, nil
+}
+
+// controlDir is the directory Claude runs in to answer Rig's control
+// requests: an empty one of Rig's own, kept between sessions.
+func (r *repository) controlDir() (string, error) {
+	dataDir, err := r.resolveRigDataDir()
+	if err != nil {
+		return "", err
+	}
+	dataDir = strings.TrimSpace(dataDir)
+	if dataDir == "" {
+		return "", fmt.Errorf("rig data dir is required")
+	}
+
+	return filepath.Join(dataDir, "claude", "control"), nil
+}
+
 type controlRequest struct {
 	Type      string                `json:"type"`
 	RequestID string                `json:"request_id"`
@@ -79,6 +115,8 @@ type controlRequest struct {
 
 type controlRequestPayload struct {
 	Subtype string `json:"subtype"`
+	// Detail is the level of detail a get_context_usage request asks for.
+	Detail string `json:"detail,omitempty"`
 }
 
 // controlResponse is a control_response line. Other stream-json lines, such
@@ -86,13 +124,16 @@ type controlRequestPayload struct {
 type controlResponse struct {
 	Type     string `json:"type"`
 	Response struct {
-		Subtype   string `json:"subtype"`
-		RequestID string `json:"request_id"`
-		Error     string `json:"error"`
-		Response  struct {
-			Models []initializeModel `json:"models"`
-		} `json:"response"`
+		Subtype   string          `json:"subtype"`
+		RequestID string          `json:"request_id"`
+		Error     string          `json:"error"`
+		Response  json.RawMessage `json:"response"`
 	} `json:"response"`
+}
+
+// initializeResponse is the payload of a successful initialize response.
+type initializeResponse struct {
+	Models []initializeModel `json:"models"`
 }
 
 type initializeModel struct {
@@ -103,47 +144,76 @@ type initializeModel struct {
 	SupportedEffortLevels []string `json:"supportedEffortLevels"`
 }
 
-// initializeModels sends the initialize control request and reads lines until
-// its response arrives.
+// initializeModels sends the initialize control request and returns the
+// models its response lists.
 func initializeModels(session subprocess.LineSession) ([]core.ProviderModel, error) {
+	var response initializeResponse
+	if err := exchangeControlRequest(
+		session,
+		listModelsRequestID,
+		controlRequestPayload{Subtype: "initialize"},
+		&response,
+	); err != nil {
+		return nil, err
+	}
+
+	var models []core.ProviderModel
+	for _, model := range response.Models {
+		if providerModel, ok := model.providerModel(); ok {
+			models = append(models, providerModel)
+		}
+	}
+	return models, nil
+}
+
+// exchangeControlRequest sends a control request and reads lines until its
+// response arrives, decoding a successful response's payload into response,
+// unless response is nil. Lines that are not that response, such as hook
+// progress or the responses to other requests, are skipped. An error response
+// is an error.
+func exchangeControlRequest(
+	session subprocess.LineSession,
+	requestID string,
+	payload controlRequestPayload,
+	response any,
+) error {
 	request, err := json.Marshal(controlRequest{
 		Type:      "control_request",
-		RequestID: listModelsRequestID,
-		Request:   controlRequestPayload{Subtype: "initialize"},
+		RequestID: requestID,
+		Request:   payload,
 	})
 	if err != nil {
-		return nil, fmt.Errorf("encode initialize request: %w", err)
+		return fmt.Errorf("encode %s request: %w", payload.Subtype, err)
 	}
 	if err := session.Send(string(request)); err != nil {
-		return nil, fmt.Errorf("send initialize request: %w", err)
+		return fmt.Errorf("send %s request: %w", payload.Subtype, err)
 	}
 
 	for {
 		line, err := session.Receive()
 		if errors.Is(err, io.EOF) {
-			return nil, fmt.Errorf("claude ended before answering initialize: %w", err)
+			return fmt.Errorf("claude ended before answering %s: %w", payload.Subtype, err)
 		}
 		if err != nil {
-			return nil, fmt.Errorf("await initialize response: %w", err)
+			return fmt.Errorf("await %s response: %w", payload.Subtype, err)
 		}
 
 		var message controlResponse
 		if json.Unmarshal([]byte(line), &message) != nil ||
 			message.Type != "control_response" ||
-			message.Response.RequestID != listModelsRequestID {
+			message.Response.RequestID != requestID {
 			continue
 		}
 		if message.Response.Subtype != "success" {
-			return nil, fmt.Errorf("initialize failed: %s", message.Response.Error)
+			return fmt.Errorf("%s failed: %s", payload.Subtype, message.Response.Error)
 		}
-
-		var models []core.ProviderModel
-		for _, model := range message.Response.Response.Models {
-			if providerModel, ok := model.providerModel(); ok {
-				models = append(models, providerModel)
-			}
+		if response == nil || len(message.Response.Response) == 0 {
+			return nil
 		}
-		return models, nil
+		if err := json.Unmarshal(message.Response.Response, response); err != nil {
+			return fmt.Errorf("decode %s response: %w", payload.Subtype, err)
+		}
+		return nil
 	}
 }
 

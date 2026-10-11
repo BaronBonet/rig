@@ -63,6 +63,8 @@ type codexTranscriptEntry struct {
 	turn       codexTranscriptTurn
 	// compactions counts the transcript's compacted records.
 	compactions int
+	// context is the latest token_count's context usage.
+	context *core.ContextUsage
 }
 
 type codexTranscriptSnapshot struct {
@@ -71,6 +73,7 @@ type codexTranscriptSnapshot struct {
 	activities  []core.TaskActivityEvent
 	turn        codexTranscriptTurn
 	compactions int
+	context     *core.ContextUsage
 }
 
 // codexTranscriptTurn is a transcript's latest turn-lifecycle record, in file
@@ -224,6 +227,7 @@ func (i *codexTranscriptIndex) refreshLocked(ctx context.Context, entry *codexTr
 	activities := append([]core.TaskActivityEvent(nil), entry.activities...)
 	turn := entry.turn
 	compactions := entry.compactions
+	contextUsage := cloneContextUsage(entry.context)
 	if rebuild {
 		offset = 0
 		trailing = nil
@@ -232,6 +236,7 @@ func (i *codexTranscriptIndex) refreshLocked(ctx context.Context, entry *codexTr
 		activities = nil
 		turn = codexTranscriptTurn{}
 		compactions = 0
+		contextUsage = nil
 	}
 
 	readOffset := offset + int64(len(trailing))
@@ -254,7 +259,15 @@ func (i *codexTranscriptIndex) refreshLocked(ctx context.Context, entry *codexTr
 			return err
 		}
 		lineEnd += consumed
-		parseCodexTranscriptRecord(pending[consumed:lineEnd], &status, &usage, &activities, &turn, &compactions)
+		parseCodexTranscriptRecord(
+			pending[consumed:lineEnd],
+			&status,
+			&usage,
+			&activities,
+			&turn,
+			&compactions,
+			&contextUsage,
+		)
 		consumed = lineEnd + 1
 	}
 
@@ -268,6 +281,7 @@ func (i *codexTranscriptIndex) refreshLocked(ctx context.Context, entry *codexTr
 	entry.activities = activities
 	entry.turn = turn
 	entry.compactions = compactions
+	entry.context = contextUsage
 	if rebuild {
 		i.metrics.rebuilds.Add(1)
 	}
@@ -308,6 +322,7 @@ func parseCodexTranscriptRecord(
 	activities *[]core.TaskActivityEvent,
 	turn *codexTranscriptTurn,
 	compactions *int,
+	contextUsage **core.ContextUsage,
 ) {
 	var envelope codexTranscriptEnvelope
 	if err := jsonUnmarshalTranscriptLine(line, &envelope); err != nil {
@@ -323,8 +338,11 @@ func parseCodexTranscriptRecord(
 		(*status == nil || candidate.observedAt.After((*status).observedAt)) {
 		*status = candidate
 	}
-	if candidate := codexTranscriptEnvelopeTokenUsage(envelope); candidate != nil {
-		*usage = candidate
+	if payload := codexTranscriptEnvelopeTokenCount(envelope); payload != nil {
+		if candidate := codexTokenCountUsage(payload); candidate != nil {
+			*usage = candidate
+		}
+		*contextUsage = codexTokenCountContext(payload, *contextUsage)
 	}
 	if activity := codexTranscriptActivityEvent("", envelope); activity != nil {
 		*activities = append(*activities, *activity)
@@ -370,15 +388,22 @@ func codexTranscriptEnvelopeTurn(envelope codexTranscriptEnvelope) (codexTranscr
 	}
 }
 
-func codexTranscriptEnvelopeTokenUsage(envelope codexTranscriptEnvelope) *core.SessionTokenUsage {
+// codexTranscriptEnvelopeTokenCount returns a token_count event's payload
+// when it reports token usage.
+func codexTranscriptEnvelopeTokenCount(envelope codexTranscriptEnvelope) *codexEventPayload {
 	if envelope.Type != "event_msg" || len(envelope.Payload) == 0 {
 		return nil
 	}
 	var payload codexEventPayload
-	if err := json.Unmarshal(envelope.Payload, &payload); err != nil || payload.Type != "token_count" {
+	if err := json.Unmarshal(envelope.Payload, &payload); err != nil ||
+		payload.Type != "token_count" ||
+		payload.Info == nil {
 		return nil
 	}
+	return &payload
+}
 
+func codexTokenCountUsage(payload *codexEventPayload) *core.SessionTokenUsage {
 	total := payload.Info.TotalTokenUsage
 	if total.TotalTokens == 0 && total.InputTokens == 0 && total.OutputTokens == 0 {
 		return nil
@@ -393,6 +418,24 @@ func codexTranscriptEnvelopeTokenUsage(envelope codexTranscriptEnvelope) *core.S
 	}
 }
 
+// codexTokenCountContext returns the context usage a token_count event
+// reports, keeping the previous window when the event does not say. Codex
+// writes a token_count next to each compacted record whose latest usage is
+// the size of the compacted history, and the compacted record itself does
+// not record that size, so the latest token_count holds after a compaction
+// too.
+func codexTokenCountContext(payload *codexEventPayload, previous *core.ContextUsage) *core.ContextUsage {
+	last := payload.Info.LastTokenUsage
+	if last == nil || last.TotalTokens <= 0 {
+		return previous
+	}
+	window := max(payload.Info.ModelContextWindow, 0)
+	if window == 0 && previous != nil {
+		window = previous.Window
+	}
+	return &core.ContextUsage{Tokens: last.TotalTokens, Window: window}
+}
+
 func snapshotTranscriptEntry(entry *codexTranscriptEntry) codexTranscriptSnapshot {
 	return codexTranscriptSnapshot{
 		status:      cloneCodexTranscriptStatus(entry.status),
@@ -400,6 +443,7 @@ func snapshotTranscriptEntry(entry *codexTranscriptEntry) codexTranscriptSnapsho
 		activities:  append([]core.TaskActivityEvent(nil), entry.activities...),
 		turn:        entry.turn,
 		compactions: entry.compactions,
+		context:     cloneContextUsage(entry.context),
 	}
 }
 
@@ -425,6 +469,14 @@ func cloneCodexTranscriptStatus(status *codexTranscriptStatus) *codexTranscriptS
 }
 
 func cloneSessionTokenUsage(usage *core.SessionTokenUsage) *core.SessionTokenUsage {
+	if usage == nil {
+		return nil
+	}
+	copyUsage := *usage
+	return &copyUsage
+}
+
+func cloneContextUsage(usage *core.ContextUsage) *core.ContextUsage {
 	if usage == nil {
 		return nil
 	}

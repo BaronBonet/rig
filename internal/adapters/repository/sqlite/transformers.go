@@ -88,6 +88,19 @@ func upsertTaskProviderSessionParams(session core.TaskProviderSession) generated
 	}
 }
 
+func switchTaskProviderSessionModelParams(
+	session core.TaskProviderSession,
+) generated.SwitchTaskProviderSessionModelParams {
+	return generated.SwitchTaskProviderSessionModelParams{
+		Model:             session.Model,
+		TaskID:            session.TaskID,
+		Provider:          string(session.Provider),
+		ProviderSessionID: session.ProviderSessionID,
+		TranscriptPath:    session.TranscriptPath,
+		ObservedAt:        formatTime(session.LastObservedAt),
+	}
+}
+
 func formatTime(ts time.Time) string {
 	if ts.IsZero() {
 		return ""

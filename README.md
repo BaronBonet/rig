@@ -13,8 +13,9 @@ a background daemon handles longer running orchestration.
 ## Features
 
 - **Task dashboard**: browse all known tasks in a terminal UI grouped by
-  repository, with live status, PR state, elapsed time, and how many times each
-  agent's context was compacted. The detail panel adds token usage.
+  repository, with live status, PR state, elapsed time, how full each agent's
+  context window is, and how many times it was compacted. The detail panel adds
+  token usage.
 - **Prompt-backed task creation**: start a new task from a prompt; the selected
   provider suggests a task name, then Rig creates the branch and worktree,
   prepares the workspace, and starts the tmux session.
