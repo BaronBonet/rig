@@ -14,11 +14,15 @@ import (
 )
 
 type taskRow struct {
-	task        *core.Task
-	activity    []core.TaskActivityEvent
-	status      *core.TaskStatusUpdate
-	usage       *core.TaskUsage
-	pullRequest *core.PRStatus
+	task     *core.Task
+	activity []core.TaskActivityEvent
+	status   *core.TaskStatusUpdate
+	usage    *core.TaskUsage
+	// pullRequests are the task's pull requests, oldest first, and
+	// unshippedWork the work in its worktree none of them contains, as last
+	// loaded.
+	pullRequests  []core.PullRequest
+	unshippedWork core.UnshippedWork
 }
 
 type modelMode int
@@ -196,10 +200,10 @@ type tasksLoadedMsg struct {
 	tasks []*core.Task
 }
 
-type pullRequestStatusLoadedMsg struct {
-	status *core.PRStatus
-	err    error
-	taskID string
+type taskPullRequestsLoadedMsg struct {
+	err          error
+	taskID       string
+	pullRequests core.TaskPullRequests
 }
 
 type taskActivityLoadedMsg struct {
@@ -313,6 +317,8 @@ type spinnerTickMsg struct{}
 
 type activityRefreshTickMsg struct{}
 
+type pullRequestRefreshTickMsg struct{}
+
 func newModel(frontend core.TaskFrontend, launchCwd string, buildVersion string) model {
 	statusContext, cancelStatus := context.WithCancel(context.Background())
 
@@ -342,6 +348,7 @@ func (m model) Init() tea.Cmd {
 		getProviderSetupCmd(m.statusContext, m.frontend),
 		loadTasksCmd(m.statusContext, m.frontend),
 		activityRefreshTickCmd(),
+		pullRequestRefreshTickCmd(),
 	)
 }
 
@@ -562,7 +569,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		selectedAgent := m.selectedAgent
 		nextRows := rowsFromTasks(msg.tasks)
-		preserveTaskStatuses(nextRows, m.rows)
+		preserveLoadedRowState(nextRows, m.rows)
 		m.reconcileTaskStatusTracking(nextRows)
 		m.rows = nextRows
 		m.clampSelection()
@@ -573,11 +580,13 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.clampAgentSelection()
 		}
 		return m, tea.Batch(m.afterTasksLoadedCmds()...)
-	case pullRequestStatusLoadedMsg:
+	case taskPullRequestsLoadedMsg:
+		// A refresh that fails keeps the pull requests and unshipped work
+		// loaded before.
 		if msg.err != nil {
 			return m, nil
 		}
-		m.setTaskPullRequestStatus(msg.taskID, msg.status)
+		m.setTaskPullRequests(msg.taskID, msg.pullRequests)
 		return m, nil
 	case taskActivityLoadedMsg:
 		if msg.err != nil {
@@ -766,6 +775,14 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			)
 		}
 		return m, tea.Batch(cmds...)
+	case pullRequestRefreshTickMsg:
+		cmds := []tea.Cmd{pullRequestRefreshTickCmd()}
+		for _, row := range m.rows {
+			if id := taskID(row.task); id != "" {
+				cmds = append(cmds, taskPullRequestsCmd(m.statusContext, m.frontend, id))
+			}
+		}
+		return m, tea.Batch(cmds...)
 	case shimmerTickMsg:
 		if m.pending == opNone && !m.opening {
 			return m, nil
@@ -823,16 +840,22 @@ func rowsFromTasks(tasks []*core.Task) []taskRow {
 	return groupRowsByRepo(rows)
 }
 
-func preserveTaskStatuses(nextRows []taskRow, currentRows []taskRow) {
-	statuses := make(map[string]*core.TaskStatusUpdate, len(currentRows))
+// preserveLoadedRowState carries each task's status, pull requests and
+// unshipped work over to its reloaded row, so they show until their next
+// update arrives.
+func preserveLoadedRowState(nextRows []taskRow, currentRows []taskRow) {
+	current := make(map[string]taskRow, len(currentRows))
 	for _, row := range currentRows {
-		if id := taskID(row.task); id != "" && row.status != nil {
-			statuses[id] = row.status
+		if id := taskID(row.task); id != "" {
+			current[id] = row
 		}
 	}
 
 	for index := range nextRows {
-		nextRows[index].status = statuses[taskID(nextRows[index].task)]
+		previous := current[taskID(nextRows[index].task)]
+		nextRows[index].status = previous.status
+		nextRows[index].pullRequests = previous.pullRequests
+		nextRows[index].unshippedWork = previous.unshippedWork
 	}
 }
 
@@ -844,9 +867,7 @@ func (m *model) afterTasksLoadedCmds() []tea.Cmd {
 		if taskID != "" {
 			cmds = append(cmds, taskActivityCmd(m.statusContext, m.frontend, taskID, taskActivityFetchLimit))
 			cmds = append(cmds, taskUsageCmd(m.statusContext, m.frontend, taskID))
-		}
-		if cmd := m.taskPullRequestStatusCmd(row.task); cmd != nil {
-			cmds = append(cmds, cmd)
+			cmds = append(cmds, taskPullRequestsCmd(m.statusContext, m.frontend, taskID))
 		}
 	}
 	return cmds
@@ -1138,19 +1159,6 @@ func (m *model) cancelTaskStatusTracking(taskID string) {
 	delete(m.statusSubscribed, taskID)
 }
 
-func (m model) taskPullRequestStatusCmd(task *core.Task) tea.Cmd {
-	if task == nil {
-		return nil
-	}
-	taskID := strings.TrimSpace(task.ID)
-	repoRoot := strings.TrimSpace(task.RepoRoot)
-	branchName := strings.TrimSpace(task.BranchName)
-	if taskID == "" || repoRoot == "" || branchName == "" {
-		return nil
-	}
-	return pullRequestStatusCmd(m.statusContext, m.frontend, taskID, repoRoot, branchName)
-}
-
 // clampIndex clamps index into [0, length-1], or 0 for an empty list.
 func clampIndex(index int, length int) int {
 	if length <= 0 || index < 0 {
@@ -1238,9 +1246,10 @@ func (m *model) setTaskStatus(taskID string, status *core.TaskStatusUpdate) {
 	}
 }
 
-func (m *model) setTaskPullRequestStatus(taskID string, status *core.PRStatus) {
+func (m *model) setTaskPullRequests(taskID string, pullRequests core.TaskPullRequests) {
 	if row := m.taskRowByID(taskID); row != nil {
-		row.pullRequest = status
+		row.pullRequests = pullRequests.PullRequests
+		row.unshippedWork = pullRequests.UnshippedWork
 	}
 }
 

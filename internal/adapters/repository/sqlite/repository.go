@@ -158,6 +158,14 @@ func (r *healthCheckRepository) EndAgentSession(context.Context, string, time.Ti
 	return errHealthCheckRepositoryOnly
 }
 
+func (r *healthCheckRepository) ListTaskBranches(context.Context, string) ([]string, error) {
+	return nil, errHealthCheckRepositoryOnly
+}
+
+func (r *healthCheckRepository) RecordTaskBranches(context.Context, string, []string) error {
+	return errHealthCheckRepositoryOnly
+}
+
 func (r *repository) HealthCheck(ctx context.Context) error {
 	if r == nil || r.db == nil {
 		return fmt.Errorf("sqlite repository not configured")
@@ -426,6 +434,49 @@ func (r *repository) EndAgentSession(ctx context.Context, agentSessionID string,
 		EndedAt: formatTime(endedAt),
 		ID:      agentSessionID,
 	})
+}
+
+func (r *repository) ListTaskBranches(ctx context.Context, taskID string) ([]string, error) {
+	taskID = strings.TrimSpace(taskID)
+	if taskID == "" {
+		return nil, nil
+	}
+
+	return r.queries.ListTaskBranches(ctx, taskID)
+}
+
+// RecordTaskBranches records the branches in one transaction, so a failure
+// records none of them.
+func (r *repository) RecordTaskBranches(ctx context.Context, taskID string, branchNames []string) (err error) {
+	taskID = strings.TrimSpace(taskID)
+	if taskID == "" {
+		return fmt.Errorf("task branch task ID is required")
+	}
+
+	tx, err := r.db.BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("begin recording task branches: %w", err)
+	}
+	defer func() {
+		if err != nil {
+			_ = tx.Rollback()
+		}
+	}()
+
+	queries := r.queries.WithTx(tx)
+	for _, branchName := range branchNames {
+		branchName = strings.TrimSpace(branchName)
+		if branchName == "" {
+			continue
+		}
+		if err := queries.RecordTaskBranch(ctx, generated.RecordTaskBranchParams{
+			TaskID:     taskID,
+			BranchName: branchName,
+		}); err != nil {
+			return err
+		}
+	}
+	return tx.Commit()
 }
 
 func openSQLiteDB(path string) (*sql.DB, error) {

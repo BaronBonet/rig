@@ -66,6 +66,10 @@ var (
 	prMergedStyle = lipgloss.NewStyle().
 			Foreground(colorPRMerged)
 
+	// unshippedWorkStyle marks unshipped work in plain text color: it neither
+	// needs the user nor shows something busy, which the other colors mean.
+	unshippedWorkStyle = primaryStyle
+
 	selectedRowStyle = lipgloss.NewStyle().
 				BorderLeft(true).
 				BorderStyle(lipgloss.Border{Left: "│"}).

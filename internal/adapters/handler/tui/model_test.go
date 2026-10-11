@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"regexp"
+	"slices"
 	"strconv"
 	"strings"
 	"testing"
@@ -383,7 +384,7 @@ func TestModel_PageKeysMoveSelectionByVisibleTaskPage(t *testing.T) {
 	require.Equal(t, 0, pagedUp.selected)
 }
 
-func TestModel_PRStatusShownInOverviewRowsAndDetailPanel(t *testing.T) {
+func TestModel_PullRequestsShownInOverviewRowsAndDetailPanel(t *testing.T) {
 	frontend := newFrontendHarness()
 	frontend.listTasks = []*core.Task{
 		{
@@ -395,8 +396,11 @@ func TestModel_PRStatusShownInOverviewRowsAndDetailPanel(t *testing.T) {
 			Provider:    core.ProviderCodex,
 		},
 	}
-	frontend.pullRequestStatus = map[string]*core.PRStatus{
-		"/tmp/repo:feat/auth": {State: core.PRStateOpen, Number: 42},
+	frontend.taskPullRequests = map[string]core.TaskPullRequests{
+		"task-1": {PullRequests: []core.PullRequest{
+			{Number: 40, State: core.PRStateMerged, HeadBranch: "feat/auth"},
+			{Number: 42, State: core.PRStateOpen, HeadBranch: "feat/auth-2"},
+		}},
 	}
 
 	m := newTestModel(frontend.mock)
@@ -408,21 +412,22 @@ func TestModel_PRStatusShownInOverviewRowsAndDetailPanel(t *testing.T) {
 	require.True(t, ok)
 
 	msgs := runBatchCmd(t, cmd)
-	prStatusMsg := requireMsgType[pullRequestStatusLoadedMsg](t, msgs)
-	next, _ = got.Update(prStatusMsg)
+	next, _ = got.Update(requireMsgType[taskPullRequestsLoadedMsg](t, msgs))
 	got, ok = next.(model)
 	require.True(t, ok)
 
-	require.NotNil(t, got.rows[0].pullRequest)
-	require.Equal(t, core.PRStateOpen, got.rows[0].pullRequest.State)
+	require.Equal(t, frontend.taskPullRequests["task-1"].PullRequests, got.rows[0].pullRequests)
+	require.Equal(t, []string{"task-1"}, frontend.taskPullRequestsCalls)
 
-	// The row shows the pull request's state symbol and number; the detail
-	// panel names the state.
+	// The row shows the pull requests' state symbols and the current one's
+	// number; the detail panel names their states.
 	view := stripANSI(got.View().Content)
-	require.Contains(t, view, "auth rewrite  "+iconStatusActive+"#42")
+	require.Contains(t, view, "auth rewrite  "+iconDone+iconStatusActive+"#42")
 	require.NotContains(t, view, "open")
 	got.detailsHidden = false
-	require.Contains(t, stripANSI(got.View().Content), "#42 open")
+	view = stripANSI(got.View().Content)
+	require.Contains(t, view, "#40 merged  feat/auth")
+	require.Contains(t, view, "#42 open    feat/auth-2")
 }
 
 func TestModel_AfterLoadUsesSubscriptionsAsInitialStatusSource(t *testing.T) {
@@ -445,7 +450,7 @@ func TestModel_AfterLoadUsesSubscriptionsAsInitialStatusSource(t *testing.T) {
 	require.True(t, ok)
 
 	msgs := runBatchCmd(t, cmd)
-	require.Len(t, msgs, 6)
+	require.Len(t, msgs, 8)
 	require.Empty(t, frontend.latestTaskStatusCalls)
 	require.Equal(t, []string{"task-1:60", "task-2:60"}, frontend.getTaskActivityCalls)
 	require.Equal(t, []string{"task-1", "task-2"}, frontend.getTaskUsageCalls)
@@ -852,8 +857,8 @@ func TestRenderRow_PullRequestFollowsTheNameAsSymbolAndNumber(t *testing.T) {
 	}
 	for state, marker := range cases {
 		line := rowContent(model{}.renderRow(0, taskRow{
-			task:        rowTask(),
-			pullRequest: &core.PRStatus{State: state, Number: 42},
+			task:         rowTask(),
+			pullRequests: []core.PullRequest{{State: state, Number: 42}},
 		}, 100))
 
 		require.Contains(t, line, "first task  "+marker, line)
@@ -882,7 +887,7 @@ func compactedRow() taskRow {
 func TestRenderRow_ColumnsFollowTheNameInOrder(t *testing.T) {
 	for _, selected := range []int{0, 1} {
 		row := compactedRow()
-		row.pullRequest = &core.PRStatus{State: core.PRStateOpen, Number: 42}
+		row.pullRequests = []core.PullRequest{{State: core.PRStateOpen, Number: 42}}
 		line := model{selected: selected}.renderRow(0, row, 120)
 
 		require.Less(t, lipgloss.Width(line), 120)
@@ -901,7 +906,7 @@ func TestRenderRow_RightColumnsStayAligned(t *testing.T) {
 	m := model{selected: 2}
 	bare := stripANSI(m.renderRow(0, taskRow{task: rowTask()}, 120))
 	fullRow := compactedRow()
-	fullRow.pullRequest = &core.PRStatus{State: core.PRStateMerged, Number: 12345}
+	fullRow.pullRequests = []core.PullRequest{{State: core.PRStateMerged, Number: 12345}}
 	fullRow.usage.AgentCompactions["agent-1"] = core.Compactions{Total: 999}
 	full := stripANSI(m.renderRow(1, fullRow, 120))
 
@@ -921,8 +926,8 @@ func TestRenderRow_LongNameKeepsItsPullRequest(t *testing.T) {
 	task.Provider = core.ProviderClaude
 
 	line := model{}.renderRow(0, taskRow{
-		task:        task,
-		pullRequest: &core.PRStatus{State: core.PRStateOpen, Number: 42},
+		task:         task,
+		pullRequests: []core.PullRequest{{State: core.PRStateOpen, Number: 42}},
 	}, 100)
 
 	require.Less(t, lipgloss.Width(line), 100)
@@ -951,7 +956,7 @@ func TestRenderRow_ShowsCompactionsOnlyForAnAgentThatCompacted(t *testing.T) {
 
 func TestRenderRow_NarrowTerminalsDropCompactionsThenProvider(t *testing.T) {
 	row := compactedRow()
-	row.pullRequest = &core.PRStatus{State: core.PRStateOpen, Number: 42}
+	row.pullRequests = []core.PullRequest{{State: core.PRStateOpen, Number: 42}}
 
 	wide := rowContent(model{}.renderRow(0, row, 100))
 	require.Contains(t, wide, "codex")
@@ -2666,9 +2671,9 @@ type frontendHarness struct {
 	listRepoPullRequests        []core.RepoPullRequest
 	listRepoPullRequestsErr     error
 	listRepoPullRequestsCwd     string
-	pullRequestStatus           map[string]*core.PRStatus
-	pullRequestStatusErr        map[string]error
-	pullRequestStatusCalls      []string
+	taskPullRequests            map[string]core.TaskPullRequests
+	taskPullRequestsErr         map[string]error
+	taskPullRequestsCalls       []string
 	attachedTask                *core.Task
 	attachedPanes               []*core.TmuxPaneRef
 	attachTaskSessionErr        error
@@ -2902,17 +2907,15 @@ func newFrontendHarness() *frontendHarness {
 			return append([]core.RepoPullRequest(nil), frontend.listRepoPullRequests...), nil
 		},
 	).Maybe()
-	frontend.mock.EXPECT().PullRequestStatus(mock.Anything, mock.Anything, mock.Anything).RunAndReturn(
-		func(_ context.Context, repoRoot string, branchName string) (*core.PRStatus, error) {
-			key := repoRoot + ":" + branchName
-			frontend.pullRequestStatusCalls = append(frontend.pullRequestStatusCalls, key)
-			if frontend.pullRequestStatusErr != nil && frontend.pullRequestStatusErr[key] != nil {
-				return nil, frontend.pullRequestStatusErr[key]
+	frontend.mock.EXPECT().TaskPullRequests(mock.Anything, mock.Anything).RunAndReturn(
+		func(_ context.Context, taskID string) (core.TaskPullRequests, error) {
+			frontend.taskPullRequestsCalls = append(frontend.taskPullRequestsCalls, taskID)
+			if err := frontend.taskPullRequestsErr[taskID]; err != nil {
+				return core.TaskPullRequests{}, err
 			}
-			if frontend.pullRequestStatus == nil {
-				return &core.PRStatus{State: core.PRStateNone}, nil
-			}
-			return frontend.pullRequestStatus[key], nil
+			pullRequests := frontend.taskPullRequests[taskID]
+			pullRequests.PullRequests = slices.Clone(pullRequests.PullRequests)
+			return pullRequests, nil
 		},
 	).Maybe()
 	frontend.mock.EXPECT().LatestTaskStatus(mock.Anything, mock.Anything).RunAndReturn(

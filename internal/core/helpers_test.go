@@ -93,6 +93,13 @@ type taskRepositoryState struct {
 	createAgentSessionErr error
 	// agentSessionReads counts reads of each task's open agent sessions.
 	agentSessionReads map[string]int
+	// taskBranches are the branches recorded for each task.
+	taskBranches map[string][]string
+	// recordedTaskBranches are the branches each RecordTaskBranches call
+	// recorded, in call order.
+	recordedTaskBranches [][]string
+	listTaskBranchesErr  error
+	recordTaskBranchErr  error
 }
 
 type repoClientState struct {
@@ -113,6 +120,25 @@ type repoClientState struct {
 	// checkoutErrs fails its listing.
 	checkouts    map[string][]string
 	checkoutErrs map[string]error
+	// worktreeBranches are the branches ListWorktreeBranches finds in each
+	// worktree. A worktree missing from it does not exist, unless
+	// worktreeBranchErr fails every listing.
+	worktreeBranches  map[string][]string
+	worktreeBranchErr error
+	// unshippedWork is the unshipped work UnshippedWork finds in each
+	// worktree. A worktree missing from it does not exist, unless
+	// unshippedWorkErr fails every lookup.
+	unshippedWork    map[string]UnshippedWork
+	unshippedWorkErr error
+	// unshippedWorkLookups are the worktree and shipped work of each
+	// UnshippedWork call, in call order.
+	unshippedWorkLookups []unshippedWorkLookup
+}
+
+type unshippedWorkLookup struct {
+	worktreePath string
+	shipped      ShippedWork
+	rigFiles     []string
 }
 
 type sessionClientState struct {
@@ -239,13 +265,22 @@ func (s *providerClientState) mockCommandName() string {
 type pullRequestClientState struct {
 	healthErr            error
 	listErr              error
-	checkStatusErr       error
 	listRepoPullRequests []RepoPullRequest
-	statusByBranch       map[string]*PRStatus
-	statusSequence       []*PRStatus
 	lastListRepoRoot     string
-	lastStatusRepoRoot   string
-	checkStatusCalls     int
+	// branchPullRequests are each branch's pull requests, and
+	// branchPullRequestErrs fail the listing of a branch.
+	branchPullRequests    map[string][]PullRequest
+	branchPullRequestErrs map[string]error
+	// branchListings are the repository root and branch of each
+	// ListBranchPullRequests call, joined by a colon, in call order.
+	branchListings []string
+	// defaultBranch is each repository's default branch, unless
+	// defaultBranchErr fails its lookup.
+	defaultBranch    string
+	defaultBranchErr error
+	// defaultBranchRepoRoots are the repository roots of each DefaultBranch
+	// call, in call order.
+	defaultBranchRepoRoots []string
 }
 
 type providerTokenUsageCall struct {
@@ -446,6 +481,34 @@ func configureGitWorktreeMock(client *MockGitWorktreeClient, state *repoClientSt
 			return state.removeErr
 		},
 	).Maybe()
+	client.EXPECT().ListWorktreeBranches(mock.Anything, mock.Anything).RunAndReturn(
+		func(_ context.Context, worktreePath string) ([]string, error) {
+			if state.worktreeBranchErr != nil {
+				return nil, state.worktreeBranchErr
+			}
+			branches, ok := state.worktreeBranches[worktreePath]
+			if !ok {
+				return nil, &fs.PathError{Op: "stat", Path: worktreePath, Err: fs.ErrNotExist}
+			}
+			return slices.Clone(branches), nil
+		},
+	).Maybe()
+	client.EXPECT().UnshippedWork(mock.Anything, mock.Anything, mock.Anything, mock.Anything).RunAndReturn(
+		func(_ context.Context, worktreePath string, shipped ShippedWork, rigFiles []string) (UnshippedWork, error) {
+			state.unshippedWorkLookups = append(
+				state.unshippedWorkLookups,
+				unshippedWorkLookup{worktreePath, shipped, rigFiles},
+			)
+			if state.unshippedWorkErr != nil {
+				return UnshippedWork{}, state.unshippedWorkErr
+			}
+			work, ok := state.unshippedWork[worktreePath]
+			if !ok {
+				return UnshippedWork{}, &fs.PathError{Op: "stat", Path: worktreePath, Err: fs.ErrNotExist}
+			}
+			return work, nil
+		},
+	).Maybe()
 	client.EXPECT().ListRepoCheckouts(mock.Anything, mock.Anything).RunAndReturn(
 		func(_ context.Context, dir string) ([]string, error) {
 			if err := state.checkoutErrs[dir]; err != nil {
@@ -475,22 +538,22 @@ func configurePullRequestClientMock(client *MockPullRequestClient, state *pullRe
 			return append([]RepoPullRequest(nil), state.listRepoPullRequests...), nil
 		},
 	).Maybe()
-	client.EXPECT().CheckPullRequestStatus(mock.Anything, mock.Anything, mock.Anything).RunAndReturn(
-		func(_ context.Context, repoRoot string, branchName string) (*PRStatus, error) {
-			state.lastStatusRepoRoot = repoRoot
-			state.checkStatusCalls++
-			if state.checkStatusErr != nil {
-				return nil, state.checkStatusErr
+	client.EXPECT().ListBranchPullRequests(mock.Anything, mock.Anything, mock.Anything).RunAndReturn(
+		func(_ context.Context, repoRoot string, branchName string) ([]PullRequest, error) {
+			state.branchListings = append(state.branchListings, repoRoot+":"+branchName)
+			if err := state.branchPullRequestErrs[branchName]; err != nil {
+				return nil, err
 			}
-			if len(state.statusSequence) > 0 {
-				status := state.statusSequence[0]
-				state.statusSequence = state.statusSequence[1:]
-				return clonePRStatus(status), nil
+			return slices.Clone(state.branchPullRequests[branchName]), nil
+		},
+	).Maybe()
+	client.EXPECT().DefaultBranch(mock.Anything, mock.Anything).RunAndReturn(
+		func(_ context.Context, repoRoot string) (string, error) {
+			state.defaultBranchRepoRoots = append(state.defaultBranchRepoRoots, repoRoot)
+			if state.defaultBranchErr != nil {
+				return "", state.defaultBranchErr
 			}
-			if state.statusByBranch == nil {
-				return &PRStatus{State: PRStateNone}, nil
-			}
-			return clonePRStatus(state.statusByBranch[branchName]), nil
+			return state.defaultBranch, nil
 		},
 	).Maybe()
 }
@@ -1119,6 +1182,37 @@ func configureAgentSessionRepositoryMock(repo *MockTaskRepository, state *taskRe
 			for i, existing := range state.agentSessions {
 				if existing.ID == agentSessionID && existing.IsOpen() {
 					state.agentSessions[i].EndedAt = endedAt
+				}
+			}
+			return nil
+		},
+	).Maybe()
+	repo.EXPECT().ListTaskBranches(mock.Anything, mock.Anything).RunAndReturn(
+		func(_ context.Context, taskID string) ([]string, error) {
+			state.mu.Lock()
+			defer state.mu.Unlock()
+			if state.listTaskBranchesErr != nil {
+				return nil, state.listTaskBranchesErr
+			}
+			branches := slices.Clone(state.taskBranches[taskID])
+			slices.Sort(branches)
+			return branches, nil
+		},
+	).Maybe()
+	repo.EXPECT().RecordTaskBranches(mock.Anything, mock.Anything, mock.Anything).RunAndReturn(
+		func(_ context.Context, taskID string, branchNames []string) error {
+			state.mu.Lock()
+			defer state.mu.Unlock()
+			if state.recordTaskBranchErr != nil {
+				return state.recordTaskBranchErr
+			}
+			state.recordedTaskBranches = append(state.recordedTaskBranches, slices.Clone(branchNames))
+			if state.taskBranches == nil {
+				state.taskBranches = map[string][]string{}
+			}
+			for _, branch := range branchNames {
+				if !slices.Contains(state.taskBranches[taskID], branch) {
+					state.taskBranches[taskID] = append(state.taskBranches[taskID], branch)
 				}
 			}
 			return nil

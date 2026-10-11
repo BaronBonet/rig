@@ -43,6 +43,9 @@ type service struct {
 	observation  *taskObservation
 	operations   *taskOperationCoordinator
 	models       *providerModelCatalog
+	// unshippedWorkFailures are the tasks git last failed to find unshipped
+	// work for, so a lasting failure warns once.
+	unshippedWorkFailures taskFailures
 }
 
 // The concrete service must satisfy every port it is wired into. These
@@ -332,26 +335,6 @@ func (s *service) ListRepoPullRequests(ctx context.Context, cwd string) ([]RepoP
 	return annotated, nil
 }
 
-func (s *service) PullRequestStatus(
-	ctx context.Context,
-	repoRoot string,
-	branchName string,
-) (*PRStatus, error) {
-	repoRoot = strings.TrimSpace(repoRoot)
-	branchName = strings.TrimSpace(branchName)
-	if repoRoot == "" || branchName == "" || s.pullRequests == nil {
-		return &PRStatus{State: PRStateNone}, nil
-	}
-
-	status := &PRStatus{State: PRStateNone}
-	checkedStatus, checkErr := s.pullRequests.CheckPullRequestStatus(ctx, repoRoot, branchName)
-	if checkErr == nil && checkedStatus != nil {
-		status = checkedStatus
-	}
-
-	return clonePRStatus(status), nil
-}
-
 func (s *service) DeleteTask(ctx context.Context, taskID string) error {
 	return s.operations.Run(ctx, taskID, taskOperationDelete, false, func(ctx context.Context) error {
 		return s.deleteTask(ctx, taskID)
@@ -447,13 +430,4 @@ func taskByID(ctx context.Context, tasks TaskRepository, taskID string) (*Task, 
 	}
 
 	return nil, ErrTaskNotFound
-}
-
-func clonePRStatus(status *PRStatus) *PRStatus {
-	if status == nil {
-		return nil
-	}
-
-	cloned := *status
-	return &cloned
 }

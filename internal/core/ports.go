@@ -16,9 +16,71 @@ const (
 	PRStateClosed PRState = "closed"
 )
 
-type PRStatus struct {
-	State  PRState `json:"state"`
-	Number int     `json:"number"`
+// PullRequest is a pull request of one of a task's branches, its Task
+// branches, in the task's repository.
+type PullRequest struct {
+	State PRState `json:"state"`
+	// HeadBranch is the branch the pull request merges from.
+	HeadBranch string `json:"head_branch"`
+	// HeadCommit is the ID of the commit at the pull request's head: the
+	// newest commit it contains, also once a squash merge has left its
+	// commits out of the branch it merged into.
+	HeadCommit string `json:"head_commit"`
+	// BaseBranch is the branch the pull request merges into.
+	BaseBranch string `json:"base_branch"`
+	// Commits are the IDs of the commits the pull request contains, up to its
+	// first hundred. They tell what it shipped once its head and branch are
+	// gone from the worktree's repository, which only the daemon needs.
+	Commits []string `json:"-"`
+	Number  int      `json:"number"`
+}
+
+// TaskPullRequests is a task's pull requests, oldest first, and the
+// unshipped work in its worktree.
+type TaskPullRequests struct {
+	PullRequests []PullRequest `json:"pull_requests"`
+	// UnshippedWork is only found for a task with pull requests: without
+	// one, none of its work is in a pull request.
+	UnshippedWork UnshippedWork `json:"unshipped_work"`
+}
+
+// UnshippedWork is the work in a task's worktree that none of its pull
+// requests contains yet: uncommitted changes, other than to files Rig writes
+// itself, and commits, other than merges, that are neither in one of its pull
+// requests nor on the repository's default branch or a branch one of them
+// merges into. Commits pushed to a branch without a pull request are still
+// unshipped.
+type UnshippedWork struct {
+	// Commits counts the commits on the worktree's HEAD that are unshipped.
+	Commits int `json:"commits"`
+	// UncommittedChanges reports changes in the worktree that are not
+	// committed, untracked files included and ignored ones not. Changes in a
+	// submodule's own working tree are not this repository's, but a
+	// submodule moved to another commit is.
+	UncommittedChanges bool `json:"uncommitted_changes"`
+}
+
+// Any reports whether there is any unshipped work.
+func (w UnshippedWork) Any() bool {
+	return w.Commits > 0 || w.UncommittedChanges
+}
+
+// ShippedWork is what a task's work ships in, against which a worktree's
+// unshipped work is found.
+type ShippedWork struct {
+	// BaseBranches are the branches work ships into: the repository's default
+	// branch, such as main, and the branches the task's pull requests merge
+	// into, each both local and as each remote has it.
+	BaseBranches []string
+	// PullRequestCommits are the IDs of the commits of the task's pull
+	// requests, in every state, their heads among them. They ship the task's
+	// work even once its pull request was squash merged and its branch
+	// deleted.
+	PullRequestCommits []string
+	// OpenHeadBranches are the head branches of the task's open and draft
+	// pull requests. What was pushed to them is in the pull request, even
+	// while its head is a commit made on GitHub that was never fetched.
+	OpenHeadBranches []string
 }
 
 type RepoPullRequest struct {
@@ -202,9 +264,16 @@ type TaskService interface {
 	// cwd and annotates whether each PR branch already has a local Rig
 	// workspace.
 	ListRepoPullRequests(ctx context.Context, cwd string) ([]RepoPullRequest, error)
-	// PullRequestStatus returns the pull request state for a repository branch,
-	// or PRStateNone when no pull request is open or known for that branch.
-	PullRequestStatus(ctx context.Context, repoRoot string, branchName string) (*PRStatus, error)
+	// TaskPullRequests returns the pull requests of a task's branches, oldest
+	// first: those of the branches recorded for the task, of its own branch,
+	// and of every branch its worktree has had checked out, which it records.
+	// The repository's default branch is never one of them, and without it
+	// the worktree's branches are left out. Pull requests from forks are never
+	// among them. It fails when a branch's pull requests cannot be looked up,
+	// rather than returning some of them. With pull requests and the default
+	// branch known, it also returns the worktree's unshipped work, or none
+	// when the worktree is gone or git cannot read it.
+	TaskPullRequests(ctx context.Context, taskID string) (TaskPullRequests, error)
 	// GetTaskActivity returns recent persisted activity events for the selected
 	// task detail view, ordered oldest-to-newest within the requested window.
 	GetTaskActivity(ctx context.Context, taskID string, limit int) ([]TaskActivityEvent, error)
@@ -381,6 +450,12 @@ type TaskRepository interface {
 	UpdateAgentSession(ctx context.Context, session AgentSession) error
 	// EndAgentSession marks an open agent session as ended.
 	EndAgentSession(ctx context.Context, agentSessionID string, endedAt time.Time) error
+	// ListTaskBranches returns the branches recorded as a task's, sorted.
+	ListTaskBranches(ctx context.Context, taskID string) ([]string, error)
+	// RecordTaskBranches records branches as a task's, keeping the ones
+	// recorded before. Recording a branch again changes nothing, and deleting
+	// the task deletes its branches' records.
+	RecordTaskBranches(ctx context.Context, taskID string, branchNames []string) error
 }
 
 // ProviderClient wraps provider-specific behavior behind one application
@@ -482,6 +557,28 @@ type GitWorktreeClient interface {
 	CreateTaskWorkspaceFromPullRequest(ctx context.Context, task *Task, pullRequestNumber int) error
 	// RemoveTaskWorkspace deletes a task worktree while keeping its branch.
 	RemoveTaskWorkspace(ctx context.Context, task *Task) error
+	// ListWorktreeBranches returns, sorted, the local branches a worktree has
+	// had checked out, as its own HEAD reflog records them: each branch a
+	// checkout moved away from, both names of each rename of its branch, and
+	// the branch it has checked out now. A branch deleted since is kept. Git
+	// expires old reflog entries, so a branch may drop out of it. It returns
+	// an error wrapping fs.ErrNotExist when the worktree does not exist.
+	ListWorktreeBranches(ctx context.Context, worktreePath string) ([]string, error)
+	// UnshippedWork returns a worktree's work that shipped does not contain:
+	// whether it has uncommitted changes, other than to rigFiles, the files
+	// Rig writes into it, relative to it, and how many commits on its HEAD,
+	// merges left out, are on none of the base branches, local or any
+	// remote's, the pull request commits, and each remote's copy of the open
+	// pull requests' head branches. Commits and branches git does not have
+	// are passed over, and git never fetches objects it lacks to find them.
+	// It returns an error wrapping fs.ErrNotExist when the worktree does not
+	// exist.
+	UnshippedWork(
+		ctx context.Context,
+		worktreePath string,
+		shipped ShippedWork,
+		rigFiles []string,
+	) (UnshippedWork, error)
 	// ListRepoCheckouts returns the roots of the primary git checkouts
 	// directly inside dir, sorted: each child directory, or symlink to one,
 	// holding a .git directory. Worktrees, whose .git is a file, and hidden
@@ -499,9 +596,15 @@ type PullRequestClient interface {
 	// ListRepoPullRequests lists open and draft pull requests for the canonical
 	// repository root.
 	ListRepoPullRequests(ctx context.Context, repoRoot string) ([]RepoPullRequest, error)
-	// CheckPullRequestStatus returns pull request state for a branch in the
-	// canonical repository root.
-	CheckPullRequestStatus(ctx context.Context, repoRoot string, branchName string) (*PRStatus, error)
+	// ListBranchPullRequests lists the pull requests, in every state, whose
+	// head is branchName in the repository of the canonical repository root.
+	// Pull requests from forks are left out, even when their head branch has
+	// the same name.
+	ListBranchPullRequests(ctx context.Context, repoRoot string, branchName string) ([]PullRequest, error)
+	// DefaultBranch returns the default branch, such as main, of the
+	// repository of the canonical repository root, where its pull requests
+	// are listed, or an empty string when it has none.
+	DefaultBranch(ctx context.Context, repoRoot string) (string, error)
 }
 
 // TmuxSessionClient manages tmux session lifecycle for a task.

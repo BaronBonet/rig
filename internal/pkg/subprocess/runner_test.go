@@ -38,3 +38,21 @@ func TestExecRunner_CancelledRunDoesNotWaitForGrandchildHoldingOutput(t *testing
 	require.Error(t, err)
 	require.Less(t, time.Since(start), 5*time.Second)
 }
+
+func TestExecRunner_RunWithStdinAddsToTheInheritedEnvironment(t *testing.T) {
+	t.Setenv("RIG_RUNNER_TEST_INHERITED", "kept")
+	t.Setenv("RIG_RUNNER_TEST_REPLACED", "before")
+
+	result, err := ExecRunner{}.RunWithStdin(t.Context(), RunWithStdinOptions{
+		Name: "sh",
+		Args: []string{
+			"-c",
+			`cat; echo "$RIG_RUNNER_TEST_INHERITED $RIG_RUNNER_TEST_REPLACED $RIG_RUNNER_TEST_ADDED"`,
+		},
+		Stdin: "in ",
+		Env:   []string{"RIG_RUNNER_TEST_REPLACED=after", "RIG_RUNNER_TEST_ADDED=added"},
+	})
+
+	require.NoError(t, err)
+	require.Equal(t, "in kept after added\n", result.Stdout)
+}
