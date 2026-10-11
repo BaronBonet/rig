@@ -253,26 +253,35 @@ func (r *repository) BuildWorkspaceBootstrapSpec(_ *core.Task) (core.WorkspaceBo
 	return core.WorkspaceBootstrapSpec{}, nil
 }
 
+// BuildTaskSessionLaunchSpec starts Codex on the task's launch model and
+// reasoning level, when the task was launched on Codex and they are set.
 func (r *repository) BuildTaskSessionLaunchSpec(task *core.Task) (core.TaskSessionLaunchSpec, error) {
 	var prefillInput []string
 	if strings.TrimSpace(task.Prompt) != "" {
 		prefillInput = []string{task.Prompt}
 	}
 
-	command, err := r.codexTaskCommand(noDaemonFlag)
+	codexHome, err := r.taskCodexHome()
 	if err != nil {
 		return core.TaskSessionLaunchSpec{}, err
 	}
+	args := append([]string{noDaemonFlag}, launchChoiceArgs(task.LaunchChoiceFor(core.ProviderCodex))...)
 
 	return core.TaskSessionLaunchSpec{
-		Command:      command,
+		Command:      r.codexTaskCommand(codexHome, args...),
 		ReadyMarker:  readyMarker,
 		PrefillInput: prefillInput,
 	}, nil
 }
 
+// BuildReconnectTaskSessionLaunchSpec resumes sessionID on the model and
+// reasoning level it last ran a turn with. Codex resumes a session on the
+// model of the user's config rather than its own, so they are read from the
+// session's rollout, which follows a /model change too. Without one to read,
+// a task launched on Codex resumes on its launch choice, and the agent
+// session of any other task on the user's config.
 func (r *repository) BuildReconnectTaskSessionLaunchSpec(
-	_ *core.Task,
+	task *core.Task,
 	sessionID string,
 ) (core.TaskSessionLaunchSpec, error) {
 	sessionID = strings.TrimSpace(sessionID)
@@ -280,15 +289,35 @@ func (r *repository) BuildReconnectTaskSessionLaunchSpec(
 		return core.TaskSessionLaunchSpec{}, fmt.Errorf("session ID is required")
 	}
 
-	command, err := r.codexTaskCommand("resume", noDaemonFlag, sessionID)
+	codexHome, err := r.taskCodexHome()
 	if err != nil {
 		return core.TaskSessionLaunchSpec{}, err
 	}
+	model, reasoningLevel := task.LaunchChoiceFor(core.ProviderCodex)
+	if turn, ok := lastTurnContext(findRollout(codexHome, sessionID)); ok {
+		model, reasoningLevel = turn.Model, turn.Effort
+	}
+	args := append([]string{"resume", noDaemonFlag}, launchChoiceArgs(model, reasoningLevel)...)
 
 	return core.TaskSessionLaunchSpec{
-		Command:     command,
+		Command:     r.codexTaskCommand(codexHome, append(args, sessionID)...),
 		ReadyMarker: readyMarker,
 	}, nil
+}
+
+// launchChoiceArgs returns the Codex flags for a model and reasoning level,
+// leaving out each that is empty, so the user's config applies to it. Codex
+// parses the reasoning level as TOML, and takes a bare word that is not TOML
+// as a literal string.
+func launchChoiceArgs(model string, reasoningLevel string) []string {
+	var args []string
+	if model != "" {
+		args = append(args, "-m", model)
+	}
+	if reasoningLevel != "" {
+		args = append(args, "-c", "model_reasoning_effort="+reasoningLevel)
+	}
+	return args
 }
 
 func (r *repository) TaskSessionCommandName() string {
@@ -299,18 +328,22 @@ func (r *repository) TaskSessionCommandName() string {
 	return commandName
 }
 
-func (r *repository) codexTaskCommand(args ...string) ([]string, error) {
+// taskCodexHome resolves the Codex home a task's Codex runs with.
+func (r *repository) taskCodexHome() (string, error) {
 	codexHome, err := r.resolveCodexHomeDir()
 	if err != nil {
-		return nil, err
+		return "", err
 	}
 	codexHome = strings.TrimSpace(codexHome)
 	if codexHome == "" {
-		return nil, fmt.Errorf("codex home is required")
+		return "", fmt.Errorf("codex home is required")
 	}
+	return codexHome, nil
+}
 
+func (r *repository) codexTaskCommand(codexHome string, args ...string) []string {
 	command := []string{"env", "CODEX_HOME=" + codexHome, r.binary}
-	return append(command, args...), nil
+	return append(command, args...)
 }
 
 func readOutputFile(path string) string {

@@ -6,6 +6,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 
@@ -58,6 +59,181 @@ func TestRepositoryBuildReconnectTaskSessionLaunchSpec_ResumesCodexWithoutShared
 		Command:     []string{"env", "CODEX_HOME=" + codexHome, "codex", "resume", "--no-daemon", "sess-1"},
 		ReadyMarker: "›",
 	}, launch)
+}
+
+// A launch flag is passed only for what the task chose, and only to the
+// provider the task was launched on.
+func TestRepositoryBuildTaskSessionLaunchSpec_StartsCodexOnTheTasksLaunchChoice(t *testing.T) {
+	codexHome := t.TempDir()
+	repo := New(subprocess.NewMockRunner(t), Config{Binary: "codex"}, HookForwardingConfig{}).(*repository)
+	repo.codexHomeDir = func() (string, error) { return codexHome, nil }
+	codex := []string{"env", "CODEX_HOME=" + codexHome, "codex", "--no-daemon"}
+
+	for name, test := range map[string]struct {
+		task core.Task
+		want []string
+	}{
+		"model and reasoning level": {
+			task: core.Task{Provider: core.ProviderCodex, Model: "gpt-6-luna", ReasoningLevel: "low"},
+			want: append(slices.Clone(codex), "-m", "gpt-6-luna", "-c", "model_reasoning_effort=low"),
+		},
+		"model only": {
+			task: core.Task{Provider: core.ProviderCodex, Model: "gpt-6-luna"},
+			want: append(slices.Clone(codex), "-m", "gpt-6-luna"),
+		},
+		"reasoning level only": {
+			task: core.Task{Provider: core.ProviderCodex, ReasoningLevel: "xhigh"},
+			want: append(slices.Clone(codex), "-c", "model_reasoning_effort=xhigh"),
+		},
+		"no choice": {
+			task: core.Task{Provider: core.ProviderCodex},
+			want: codex,
+		},
+		"another launch provider": {
+			task: core.Task{Provider: core.ProviderClaude, Model: "opus", ReasoningLevel: "high"},
+			want: codex,
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			launch, err := repo.BuildTaskSessionLaunchSpec(&test.task)
+			require.NoError(t, err)
+			require.Equal(t, test.want, launch.Command)
+		})
+	}
+}
+
+// rolloutSessionID is the Codex session codex_rollout_model_switch.jsonl
+// records: its first turn ran on gpt-6-luna at low, after a /model change its
+// second on gpt-6-astra at medium, and its third in plan mode, at plan mode's
+// own high.
+const rolloutSessionID = "0199c0de-5e55-7000-8000-00000000c0de"
+
+// writeRollout writes content as the rollout of rolloutSessionID into dir of
+// the Codex home.
+func writeRollout(t *testing.T, codexHome string, dir string, content []byte) {
+	t.Helper()
+	dir = filepath.Join(codexHome, dir)
+	require.NoError(t, os.MkdirAll(dir, 0o755))
+	path := filepath.Join(dir, "rollout-2026-10-11T11-55-19-"+rolloutSessionID+".jsonl")
+	require.NoError(t, os.WriteFile(path, content, 0o600))
+}
+
+func readRolloutFixture(t *testing.T) []byte {
+	t.Helper()
+	content, err := os.ReadFile(filepath.Join("testdata", "codex_rollout_model_switch.jsonl"))
+	require.NoError(t, err)
+	return content
+}
+
+// rolloutFixtureWithout returns the rollout fixture without the lines drop
+// reports.
+func rolloutFixtureWithout(t *testing.T, drop func(line string) bool) []byte {
+	t.Helper()
+	var kept []byte
+	for line := range strings.Lines(string(readRolloutFixture(t))) {
+		if !drop(line) {
+			kept = append(kept, line...)
+		}
+	}
+	return kept
+}
+
+func isTurnContextLine(line string) bool {
+	return strings.Contains(line, `"type":"turn_context"`)
+}
+
+// Codex resumes a session on the model of the user's config, so Reconnect
+// passes the model and reasoning level of the session's last turn, whatever
+// the task was launched with, and even for a Codex agent session in a task
+// launched on another provider. A plan-mode turn runs on plan mode's own
+// reasoning level, so the last turn outside plan mode decides.
+func TestRepositoryBuildReconnectTaskSessionLaunchSpec_ResumesOnTheLastDefaultModeTurnsModel(t *testing.T) {
+	for name, test := range map[string]struct {
+		dir  string
+		task core.Task
+	}{
+		"rollout of a codex task": {
+			dir:  filepath.Join("sessions", "2026", "10", "11"),
+			task: core.Task{Provider: core.ProviderCodex, Model: "gpt-6-luna", ReasoningLevel: "low"},
+		},
+		"rollout of a claude task": {
+			dir:  filepath.Join("sessions", "2026", "10", "11"),
+			task: core.Task{Provider: core.ProviderClaude, Model: "opus", ReasoningLevel: "high"},
+		},
+		"archived rollout": {
+			dir:  "archived_sessions",
+			task: core.Task{Provider: core.ProviderCodex},
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			codexHome := t.TempDir()
+			repo := New(subprocess.NewMockRunner(t), Config{Binary: "codex"}, HookForwardingConfig{}).(*repository)
+			repo.codexHomeDir = func() (string, error) { return codexHome, nil }
+			writeRollout(t, codexHome, test.dir, readRolloutFixture(t))
+
+			launch, err := repo.BuildReconnectTaskSessionLaunchSpec(&test.task, rolloutSessionID)
+
+			require.NoError(t, err)
+			require.Equal(t, core.TaskSessionLaunchSpec{
+				Command: []string{
+					"env", "CODEX_HOME=" + codexHome, "codex", "resume", "--no-daemon",
+					"-m", "gpt-6-astra", "-c", "model_reasoning_effort=medium", rolloutSessionID,
+				},
+				ReadyMarker: "›",
+			}, launch)
+		})
+	}
+}
+
+// Without a rollout turn to read, a task launched on Codex resumes on its
+// launch choice, and a Codex agent session of any other task on the user's
+// config.
+func TestRepositoryBuildReconnectTaskSessionLaunchSpec_FallsBackToTheTasksLaunchChoice(t *testing.T) {
+	for name, writeRolloutOf := range map[string]func(t *testing.T, codexHome string){
+		"no rollout": func(*testing.T, string) {},
+		"no turn_context": func(t *testing.T, codexHome string) {
+			writeRollout(t, codexHome, "sessions", rolloutFixtureWithout(t, isTurnContextLine))
+		},
+		"only plan-mode turns": func(t *testing.T, codexHome string) {
+			writeRollout(t, codexHome, "sessions", rolloutFixtureWithout(t, func(line string) bool {
+				return isTurnContextLine(line) && !strings.Contains(line, `"mode":"plan"`)
+			}))
+		},
+		"unreadable rollout": func(t *testing.T, codexHome string) {
+			dir := filepath.Join(codexHome, "sessions")
+			require.NoError(t, os.MkdirAll(dir, 0o755))
+			require.NoError(t, os.Symlink(
+				filepath.Join(codexHome, "gone.jsonl"),
+				filepath.Join(dir, "rollout-2026-10-11T11-55-19-"+rolloutSessionID+".jsonl"),
+			))
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			codexHome := t.TempDir()
+			repo := New(subprocess.NewMockRunner(t), Config{Binary: "codex"}, HookForwardingConfig{}).(*repository)
+			repo.codexHomeDir = func() (string, error) { return codexHome, nil }
+			writeRolloutOf(t, codexHome)
+			resume := []string{"env", "CODEX_HOME=" + codexHome, "codex", "resume", "--no-daemon"}
+
+			launch, err := repo.BuildReconnectTaskSessionLaunchSpec(&core.Task{
+				Provider:       core.ProviderCodex,
+				Model:          "gpt-6-luna",
+				ReasoningLevel: "low",
+			}, rolloutSessionID)
+			require.NoError(t, err)
+			require.Equal(t, append(slices.Clone(resume),
+				"-m", "gpt-6-luna", "-c", "model_reasoning_effort=low", rolloutSessionID,
+			), launch.Command)
+
+			launch, err = repo.BuildReconnectTaskSessionLaunchSpec(&core.Task{
+				Provider:       core.ProviderClaude,
+				Model:          "opus",
+				ReasoningLevel: "high",
+			}, rolloutSessionID)
+			require.NoError(t, err)
+			require.Equal(t, append(slices.Clone(resume), rolloutSessionID), launch.Command)
+		})
+	}
 }
 
 func TestRepositoryTaskSessionCommandNameUsesConfiguredBinaryBase(t *testing.T) {

@@ -114,7 +114,9 @@ Provider setup and repo directories are stored in user-level config at
 `~/.config/rig/config.json` (override with `RIG_USER_CONFIG_PATH`), never in
 the task database, and repo-level default provider configuration is not
 supported. See [ADR 0001](docs/adr/0001-provider-setup-in-user-config.md) for
-the reasoning.
+the reasoning. The same file keeps each provider's launch default: the model
+and reasoning level you last chose when creating a task with that provider,
+which the next task starts from.
 
 `RIG_PROVIDER` overrides the default provider for a single run. It must name a
 configured provider; it cannot bypass setup:

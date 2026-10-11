@@ -62,6 +62,75 @@ func TestRepositoryBuildReconnectTaskSessionLaunchSpec_ResumesByRecordedSessionI
 	}, launch)
 }
 
+// A launch flag is passed only for what the task chose, and only to the
+// provider the task was launched on.
+func TestRepositoryBuildTaskSessionLaunchSpec_StartsClaudeOnTheTasksLaunchChoice(t *testing.T) {
+	repo, _ := newTestRepository(t, subprocess.NewMockRunner(t))
+
+	for name, test := range map[string]struct {
+		task core.Task
+		want []string
+	}{
+		"model and reasoning level": {
+			task: core.Task{Provider: core.ProviderClaude, Model: "opus[1m]", ReasoningLevel: "high"},
+			want: []string{"claude", "--model", "opus[1m]", "--effort", "high"},
+		},
+		"model only": {
+			task: core.Task{Provider: core.ProviderClaude, Model: "sonnet"},
+			want: []string{"claude", "--model", "sonnet"},
+		},
+		"reasoning level only": {
+			task: core.Task{Provider: core.ProviderClaude, ReasoningLevel: "low"},
+			want: []string{"claude", "--effort", "low"},
+		},
+		"no choice": {
+			task: core.Task{Provider: core.ProviderClaude},
+			want: []string{"claude"},
+		},
+		"another launch provider": {
+			task: core.Task{Provider: core.ProviderCodex, Model: "gpt-6-luna", ReasoningLevel: "high"},
+			want: []string{"claude"},
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			launch, err := repo.BuildTaskSessionLaunchSpec(&test.task)
+			require.NoError(t, err)
+			require.Equal(t, test.want, launch.Command)
+		})
+	}
+}
+
+// Claude resumes a session on its own model, so Reconnect never passes one;
+// it passes only the reasoning level Claude would otherwise lose.
+func TestRepositoryBuildReconnectTaskSessionLaunchSpec_PassesOnlyTheLaunchReasoningLevel(t *testing.T) {
+	repo, _ := newTestRepository(t, subprocess.NewMockRunner(t))
+
+	for name, test := range map[string]struct {
+		task core.Task
+		want []string
+	}{
+		"model and reasoning level": {
+			task: core.Task{Provider: core.ProviderClaude, Model: "opus", ReasoningLevel: "xhigh"},
+			want: []string{"claude", "--resume", "sess-1", "--effort", "xhigh"},
+		},
+		"model only": {
+			task: core.Task{Provider: core.ProviderClaude, Model: "opus"},
+			want: []string{"claude", "--resume", "sess-1"},
+		},
+		"another launch provider": {
+			task: core.Task{Provider: core.ProviderCodex, Model: "gpt-6-luna", ReasoningLevel: "high"},
+			want: []string{"claude", "--resume", "sess-1"},
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			launch, err := repo.BuildReconnectTaskSessionLaunchSpec(&test.task, "sess-1")
+			require.NoError(t, err)
+			require.Equal(t, test.want, launch.Command)
+			require.NotContains(t, launch.Command, "--model")
+		})
+	}
+}
+
 func TestRepositoryBuildReconnectTaskSessionLaunchSpec_RequiresSessionID(t *testing.T) {
 	repo, _ := newTestRepository(t, subprocess.NewMockRunner(t))
 

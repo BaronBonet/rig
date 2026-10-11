@@ -216,6 +216,96 @@ func TestTaskServiceSaveProviderSetup_FailsWhenProviderChecksFail(t *testing.T) 
 	require.Zero(t, svc.claudeRepo.skillInstallCalls)
 }
 
+func TestTaskServiceGetLaunchDefaults_ReturnsTheSavedDefaults(t *testing.T) {
+	svc := newTestTaskService(t)
+	svc.userConfig.launchDefaults = map[Provider]LaunchChoice{
+		ProviderClaude: {Model: "opus[1m]", ReasoningLevel: "high"},
+	}
+
+	defaults, err := svc.service.GetLaunchDefaults(t.Context())
+
+	require.NoError(t, err)
+	require.Equal(t, svc.userConfig.launchDefaults, defaults)
+
+	svc.userConfig.getLaunchDefaultsErr = errors.New("decode user config")
+	_, err = svc.service.GetLaunchDefaults(t.Context())
+	require.ErrorContains(t, err, "decode user config")
+}
+
+// A Launch default is checked as a task's Launch choice is, but its provider
+// need not be a Configured provider: the setup screen edits the defaults of
+// providers being configured.
+func TestTaskServiceSaveLaunchDefault_TrimsTheChoiceAndSavesIt(t *testing.T) {
+	svc := newTestTaskService(t)
+
+	require.NoError(t, svc.service.SaveLaunchDefault(t.Context(), ProviderClaude, LaunchChoice{
+		Model:          "  opus[1m] ",
+		ReasoningLevel: "\thigh\n",
+	}))
+	require.NoError(t, svc.service.SaveLaunchDefault(t.Context(), ProviderCodex, LaunchChoice{Model: " "}))
+
+	require.Equal(t, []savedLaunchDefault{
+		{provider: ProviderClaude, choice: LaunchChoice{Model: "opus[1m]", ReasoningLevel: "high"}},
+		{provider: ProviderCodex, choice: LaunchChoice{}},
+	}, svc.userConfig.savedLaunchDefaults)
+}
+
+func TestTaskServiceSaveLaunchDefault_ReturnsTheStoresError(t *testing.T) {
+	svc := newTestTaskService(t)
+	svc.userConfig.saveLaunchDefaultErr = errors.New("config directory is read-only")
+
+	err := svc.service.SaveLaunchDefault(t.Context(), ProviderCodex, LaunchChoice{Model: "gpt-6-luna"})
+
+	require.ErrorContains(t, err, "config directory is read-only")
+}
+
+func TestTaskServiceSaveLaunchDefault_RejectsInvalidChoices(t *testing.T) {
+	for name, test := range map[string]struct {
+		provider Provider
+		choice   LaunchChoice
+		wantErr  string
+	}{
+		"unsupported provider": {
+			provider: Provider("gemini"),
+			choice:   LaunchChoice{Model: "gemini-3"},
+			wantErr:  `provider "gemini" is not a supported provider`,
+		},
+		"no provider": {
+			choice:  LaunchChoice{Model: "gpt-6-luna"},
+			wantErr: `provider "" is not a supported provider`,
+		},
+		"whitespace inside the model": {
+			provider: ProviderCodex,
+			choice:   LaunchChoice{Model: " gpt 6 luna "},
+			wantErr:  `model "gpt 6 luna" must not contain whitespace or control characters`,
+		},
+		"control character inside the reasoning level": {
+			provider: ProviderCodex,
+			choice:   LaunchChoice{ReasoningLevel: "hi\x1bgh"},
+			wantErr:  `reasoning level "hi\x1bgh" must not contain whitespace or control characters`,
+		},
+		"model that reads as a flag": {
+			provider: ProviderClaude,
+			choice:   LaunchChoice{Model: " --bogus"},
+			wantErr:  `model "--bogus" must not start with a dash, which the provider CLI reads as a flag`,
+		},
+		"reasoning level that reads as a flag": {
+			provider: ProviderCodex,
+			choice:   LaunchChoice{ReasoningLevel: "-high"},
+			wantErr:  `reasoning level "-high" must not start with a dash, which the provider CLI reads as a flag`,
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			svc := newTestTaskService(t)
+
+			err := svc.service.SaveLaunchDefault(t.Context(), test.provider, test.choice)
+
+			require.EqualError(t, err, test.wantErr)
+			require.Empty(t, svc.userConfig.savedLaunchDefaults)
+		})
+	}
+}
+
 func TestTaskServiceDetectProviders_ReportsPerProviderReadiness(t *testing.T) {
 	svc := newTestTaskService(t)
 	svc.claudeRepo.healthErr = errors.New("claude binary not found")

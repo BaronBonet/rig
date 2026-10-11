@@ -349,6 +349,24 @@ func TestReconnect_LaunchesTheLaunchProviderFreshWhenNothingIsLeftToRestore(t *t
 	}}, svc.agentSessionsWithoutIDs())
 }
 
+// A fresh launch on Reconnect is the task's launch, so it keeps the task's
+// launch choice and leaves out only the prompt.
+func TestReconnect_LaunchesTheLaunchProviderFreshOnTheTasksLaunchChoice(t *testing.T) {
+	svc := newAgentSessionHarness(t)
+	svc.taskRepo.listTasks[0].Prompt = "fix billing retry flow"
+	svc.taskRepo.listTasks[0].Model = "opus"
+	svc.taskRepo.listTasks[0].ReasoningLevel = "high"
+	svc.loseSession()
+	svc.observation.now = func() time.Time { return reconnectedAt }
+
+	require.NoError(t, svc.service.ReconnectTaskSession(t.Context(), "task-1"))
+
+	require.NotNil(t, svc.claudeRepo.launchTask)
+	require.Empty(t, svc.claudeRepo.launchTask.Prompt)
+	require.Equal(t, "opus", svc.claudeRepo.launchTask.Model)
+	require.Equal(t, "high", svc.claudeRepo.launchTask.ReasoningLevel)
+}
+
 func TestReconnect_LaunchesTheLaunchProviderFreshWhenItsOnlyAgentIsSkipped(t *testing.T) {
 	svc := newAgentSessionHarness(t)
 	svc.agentPanes("codex")

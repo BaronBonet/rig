@@ -562,7 +562,8 @@ func (m model) selectedTaskDetailView() string {
 		)
 	}
 	// With an agent sub-row selected, the session column describes that agent;
-	// on the task row, it names the providers of the task's agents.
+	// on the task row, it names the providers of the task's agents and the
+	// task's Launch choice.
 	sessionWidth := totalWidth - detailColWidth - 6
 	status := row.status
 	providers := taskProviderNames(*row)
@@ -586,6 +587,8 @@ func (m model) selectedTaskDetailView() string {
 			sessionLines = append(sessionLines, detailFieldLines("pane", "   ", pane, dimStyle, sessionWidth)...)
 		}
 		compactions = agentCompactions(*row, agentSession.ID)
+	} else {
+		sessionLines = append(sessionLines, m.launchChoiceDetailLines(task, sessionWidth)...)
 	}
 	if compactions.Total > 0 {
 		sessionLines = append(
@@ -716,12 +719,7 @@ func (m model) promptInputView() string {
 	builder.WriteString(m.screenHeader(mutedStyle.Render("new task")))
 	builder.WriteString(errorBlock(m.draft.err))
 	builder.WriteString(dimStyle.Render("Enter task prompt.") + "\n\n")
-	createProvider := string(m.effectiveCreateProvider())
-	providerLine := mutedStyle.Render("provider  ") + providerStyle(createProvider).Render(createProvider)
-	if len(m.configuredProviders()) > 1 {
-		providerLine += mutedStyle.Render("  ·  ") + keybindStyle.Render("tab") + mutedStyle.Render(" cycle")
-	}
-	builder.WriteString(providerLine + "\n\n")
+	builder.WriteString(m.launchChoiceView(m.totalWidth()) + "\n\n")
 
 	m.ensurePromptInputInitialized()
 	input := m.draft.input
@@ -812,9 +810,13 @@ func (m model) providerSetupView() string {
 			line += mutedStyle.Render("  (default)")
 		}
 		builder.WriteString(line + "\n")
+		if row.showsLaunchDefault() {
+			selected := index == m.setupForm.selected
+			builder.WriteString(m.setupLaunchDefaultLine(row.provider, selected, totalWidth) + "\n")
+		}
 		if !row.ready && strings.TrimSpace(row.detail) != "" {
-			for _, detailLine := range wrapAndTruncate(row.detail, totalWidth-8, 2) {
-				builder.WriteString("       " + dimStyle.Render(detailLine) + "\n")
+			for _, detailLine := range wrapAndTruncate(row.detail, totalWidth-len(setupDetailIndent), 2) {
+				builder.WriteString(setupDetailIndent + dimStyle.Render(detailLine) + "\n")
 			}
 		}
 	}
@@ -823,15 +825,60 @@ func (m model) providerSetupView() string {
 		builder.WriteString("\n" + renderShimmer("Installing provider hooks...", m.shimmerTick) + "\n")
 	}
 
-	builder.WriteString("\n")
-	builder.WriteString(footerKeybinds(
-		[2]string{"space", "toggle"},
-		[2]string{"d", "default"},
-		[2]string{"enter", "save"},
-		[2]string{"q", "quit"},
-	))
+	binds := [][2]string{{"space", "toggle"}, {"d", "default"}}
+	if _, _, cycles := m.stepSetupLaunchChoice(model.nextLaunchModel); cycles {
+		binds = append(binds, [2]string{"ctrl+o", "model"})
+	}
+	if _, _, cycles := m.stepSetupLaunchChoice(model.nextLaunchReasoningLevel); cycles {
+		binds = append(binds, [2]string{"ctrl+r", "reasoning"})
+	}
+	binds = append(binds, [2]string{"enter", "save"}, [2]string{"q", "quit"})
+	builder.WriteString("\n" + footerKeybindsWithin(totalWidth, binds...))
 
 	return builder.String()
+}
+
+// setupDetailIndent indents the lines under a provider setup row past its
+// cursor and checkbox.
+const setupDetailIndent = "       "
+
+// minSetupModelWidth is the fewest columns a model keeps on a provider setup
+// line before the line drops its model list's state to make room.
+const minSetupModelWidth = 5
+
+// setupLaunchDefaultLine renders a provider's Launch default under its row
+// on the provider setup screen, labeled as the detail panel's model line, or
+// the Launch defaults' state while they are missing and the user has not
+// edited it. The selected row's line ends with its model list's state while
+// the list is loading or unavailable. Within width only the model is cut, as
+// the reasoning level is what gets saved, and the state goes first when the
+// model would have no room.
+func (m model) setupLaunchDefaultLine(provider core.Provider, selected bool, width int) string {
+	choice := m.setupLaunchChoice(provider)
+	value := m.launchModelText(provider, choice.Model)
+	level := ""
+	if text := terminalSafeText(choice.ReasoningLevel); text != "" {
+		level = mutedStyle.Render(" · ") + primaryStyle.Render(text)
+	}
+	if _, edited := m.setupForm.edits[provider]; !edited {
+		if state := m.launchDefaultsStateText(); state != "" {
+			value, level = mutedStyle.Render(state), ""
+		}
+	}
+	suffix := ""
+	if state := m.modelListStateText(provider); selected && state != "" {
+		suffix = mutedStyle.Render("  (" + state + ")")
+	}
+
+	prefix := setupDetailIndent + mutedStyle.Render(launchModelLabel) + launchModelLabelGap
+	room := func() int { return width - lipgloss.Width(prefix+level+suffix) }
+	if room() < min(lipgloss.Width(value), minSetupModelWidth) {
+		suffix = ""
+	}
+	if room() < 1 {
+		return truncateStr(prefix+value+level, width)
+	}
+	return prefix + truncateStr(value, room()) + level + suffix
 }
 
 func (m model) repoDirsSetupView() string {
@@ -884,6 +931,7 @@ func (m model) prPickerView() string {
 
 	if len(m.draft.prs) == 0 {
 		builder.WriteString(dimStyle.Render("No pull requests found.") + "\n\n")
+		builder.WriteString(m.launchChoiceView(m.totalWidth()) + "\n\n")
 		builder.WriteString(footerKeybinds([2]string{"esc", "back"}))
 		return builder.String()
 	}
@@ -922,6 +970,7 @@ func (m model) prPickerView() string {
 	}
 
 	builder.WriteString("\n\n")
+	builder.WriteString(m.launchChoiceView(m.totalWidth()) + "\n\n")
 	builder.WriteString(footerKeybinds(
 		[2]string{"enter", "create"},
 		[2]string{"esc", "back"},
@@ -1254,6 +1303,21 @@ func keybindBar(sep string, binds ...[2]string) string {
 // footerKeybinds is the keybind bar at the bottom of the modal screens.
 func footerKeybinds(binds ...[2]string) string {
 	return keybindBar(" · ", binds...)
+}
+
+// footerKeybindsWithin is footerKeybinds broken between keys onto more lines
+// where one line would run wider than width.
+func footerKeybindsWithin(width int, binds ...[2]string) string {
+	var lines []string
+	var line [][2]string
+	for _, bind := range binds {
+		if len(line) > 0 && lipgloss.Width(footerKeybinds(append(line, bind)...)) > width {
+			lines = append(lines, footerKeybinds(line...))
+			line = nil
+		}
+		line = append(line, bind)
+	}
+	return strings.Join(append(lines, footerKeybinds(line...)), "\n")
 }
 
 // zipColumns lays two line columns side by side: a three-space indent, the

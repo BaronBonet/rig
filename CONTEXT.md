@@ -21,8 +21,11 @@ Use `rig` for the CLI command and Rig for the product or system.
 - Child task: A Task with a Parent task. The TUI marks its row with `↳`, and
   its parent's detail panel lists it as spawned.
 - Task draft: The in-progress task the TUI user is assembling before
-  submission: the prompt text, the chosen provider, and the optional pull
-  request source. Discarded on cancel; cleared once creation is submitted.
+  submission: the prompt text, the chosen provider and a Launch choice for
+  it, and the optional pull request source. The Launch choice starts from
+  the chosen provider's Launch default, and a reasoning level can be chosen
+  only together with a model. Discarded on cancel; cleared once creation is
+  submitted.
 - Creation status: The durable state of task setup: `creating`, `ready`, or
   `failed`.
 - Creation step: The retryable task setup milestone, such as suggesting a name,
@@ -69,8 +72,27 @@ Use `rig` for the CLI command and Rig for the product or system.
 - Launch provider: The provider Rig launches for a task at creation, and on
   Reconnect when there is no Agent session it can restore. Nothing changes it
   afterwards: other agents started in the task are Agent sessions.
+- Launch model: The model of the Launch provider chosen at task creation.
+  Empty means no choice: Rig passes the provider CLI no model, so its own
+  default applies. Nothing changes it afterwards.
+- Launch reasoning level: The Reasoning level chosen at task creation for the
+  Launch model. Empty means no choice: Rig passes the provider CLI no
+  reasoning level, so its own default applies. Nothing changes it afterwards.
+- Launch choice: A Task's Launch model and Launch reasoning level, made for
+  its Launch provider.
+- Launch default: A provider's saved Launch choice, which a Task draft
+  starts from when that provider is chosen. It lives in user config, beside
+  Provider setup. Creating a Task from a Task draft for a chosen provider
+  saves the Task's Launch choice as that provider's Launch default, and an
+  empty Launch choice clears it; a Task created from the command line leaves
+  it alone. The provider setup screen shows each enabled provider's Launch
+  default and can edit it, by the Task draft's rules; it saves an edited one
+  only once the Provider setup itself has saved.
 - Default provider: The user-level provider Rig preselects when creating a
   task.
+- Reasoning level: How much a provider's model reasons before it answers,
+  such as `low` or `high`. Each model accepts its own levels, in the order its
+  provider CLI reports them, and some accept none.
 - Agent session: One agent process, such as a Claude or Codex CLI, running in
   one tmux pane for a task. Rig records it when it launches the agent, or
   else from the first hook event it can trace to the pane, and it holds the
@@ -133,8 +155,19 @@ Use `rig` for the CLI command and Rig for the product or system.
 ## Relationships
 
 - A Task has exactly one Launch provider.
+- A Task's Launch choice belongs to its Launch provider, so making one
+  requires choosing the provider too, and no agent of another Provider is
+  launched with it. On Reconnect, a Codex agent resumes on the model and
+  reasoning level its Provider session last used outside plan mode, or on the
+  Task's Launch choice when Rig cannot read them; a Claude agent restores its
+  own model and gets the Launch reasoning level again.
 - A Default provider becomes the Launch provider for a new Task unless the user
   selects a different provider during Task creation.
+- A Provider has at most one Launch default. Creating a Task from a Task draft
+  for a chosen provider replaces that provider's. A Task that falls to the
+  Default provider without choosing it, a Task created from the command line,
+  and a retried Task creation, leave it alone. A Provider
+  need not be a Configured provider to have one.
 - An environment-selected Default provider must be one of the user's Configured
   providers.
 - A Configured provider must also be a Supported provider.
@@ -205,6 +238,8 @@ Use `rig` for the CLI command and Rig for the product or system.
 - Prefer "workspace" for the filesystem environment and "worktree" only for
   the git isolation mechanism.
 - Prefer "provider" for Codex or other future AI runtimes.
+- Prefer "reasoning level" over the providers' own terms: Codex calls it
+  reasoning effort and Claude calls it effort.
 - Keep durable task fields separate from live runtime observations in design
   discussions.
 - Use "daemon" for the background process and "TUI" for the foreground

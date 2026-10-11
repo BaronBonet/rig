@@ -36,6 +36,20 @@ func TestCreateTaskInput_SupportsPromptAndPullRequestSources(t *testing.T) {
 	}
 }
 
+// The launch choice was made for the launch provider's CLI, so no other
+// provider gets it.
+func TestTaskLaunchChoiceFor_GivesTheChoiceToTheLaunchProviderOnly(t *testing.T) {
+	task := &Task{Provider: ProviderCodex, Model: "gpt-6-luna", ReasoningLevel: "low"}
+
+	model, reasoningLevel := task.LaunchChoiceFor(ProviderCodex)
+	require.Equal(t, "gpt-6-luna", model)
+	require.Equal(t, "low", reasoningLevel)
+
+	model, reasoningLevel = task.LaunchChoiceFor(ProviderClaude)
+	require.Empty(t, model)
+	require.Empty(t, reasoningLevel)
+}
+
 func TestTaskServiceCreateTask_CreatesWorkspaceSessionAndPersistsTask(t *testing.T) {
 	svc := newTestTaskService(t)
 	svc.providerRepo.suggestedName = "billing retry flow"
@@ -603,6 +617,335 @@ func TestTaskServiceCreateTaskWithProgress_AllowsNilReporter(t *testing.T) {
 
 	require.NoError(t, err)
 	require.NotNil(t, task)
+}
+
+// A task records the model and reasoning level chosen for its launch
+// provider, trimmed, and that provider's client builds its launch from them.
+func TestTaskServiceCreateTask_StoresTheLaunchChoiceAndLaunchesWithIt(t *testing.T) {
+	svc := newTestTaskService(t)
+	svc.userConfig.setup = &ProviderSetup{
+		Configured: []Provider{ProviderCodex, ProviderClaude},
+		Default:    ProviderCodex,
+	}
+	svc.claudeRepo.suggestedName = "billing retry flow"
+
+	task, err := svc.service.CreateTaskWithProgress(t.Context(), CreateTaskInput{
+		Cwd:            "/tmp/repo",
+		Prompt:         "add billing retry flow",
+		Provider:       ProviderClaude,
+		Model:          "  opus[1m] ",
+		ReasoningLevel: "\thigh\n",
+	}, nil)
+
+	require.NoError(t, err)
+	require.Equal(t, ProviderClaude, task.Provider)
+	require.Equal(t, "opus[1m]", task.Model)
+	require.Equal(t, "high", task.ReasoningLevel)
+	require.Equal(t, "opus[1m]", svc.taskRepo.createdTask.Model)
+	require.Equal(t, "high", svc.taskRepo.createdTask.ReasoningLevel)
+	require.Equal(t, "opus[1m]", svc.taskRepo.updatedTask.Model)
+	require.Equal(t, "high", svc.taskRepo.updatedTask.ReasoningLevel)
+	require.NotNil(t, svc.claudeRepo.launchTask)
+	require.Equal(t, "opus[1m]", svc.claudeRepo.launchTask.Model)
+	require.Equal(t, "high", svc.claudeRepo.launchTask.ReasoningLevel)
+	require.Equal(t, "add billing retry flow", svc.claudeRepo.launchTask.Prompt)
+	require.Nil(t, svc.providerRepo.launchTask)
+}
+
+func TestTaskServiceCreateTask_FromPullRequestStoresTheLaunchChoice(t *testing.T) {
+	svc := newTestTaskService(t)
+
+	task, err := svc.service.CreateTaskWithProgress(t.Context(), CreateTaskInput{
+		Cwd:      "/tmp/repo",
+		Provider: ProviderCodex,
+		Source: CreateTaskSource{
+			PullRequest: &RepoPullRequest{Number: 42, Title: "Auth rewrite", BranchName: "feat/auth"},
+		},
+		ReasoningLevel: "xhigh",
+	}, nil)
+
+	require.NoError(t, err)
+	require.Empty(t, task.Model)
+	require.Equal(t, "xhigh", task.ReasoningLevel)
+	require.Equal(t, "xhigh", svc.taskRepo.createdTask.ReasoningLevel)
+	require.NotNil(t, svc.providerRepo.launchTask)
+	require.Empty(t, svc.providerRepo.launchTask.Model)
+	require.Equal(t, "xhigh", svc.providerRepo.launchTask.ReasoningLevel)
+}
+
+// A blank choice is no choice, so it needs no provider.
+func TestTaskServiceCreateTask_TreatsABlankLaunchChoiceAsNone(t *testing.T) {
+	svc := newTestTaskService(t)
+	svc.providerRepo.suggestedName = "billing retry flow"
+
+	task, err := svc.service.CreateTaskWithProgress(t.Context(), CreateTaskInput{
+		Cwd:            "/tmp/repo",
+		Prompt:         "add billing retry flow",
+		Model:          "  ",
+		ReasoningLevel: "\t",
+	}, nil)
+
+	require.NoError(t, err)
+	require.Equal(t, ProviderCodex, task.Provider)
+	require.Empty(t, task.Model)
+	require.Empty(t, task.ReasoningLevel)
+	require.Empty(t, svc.providerRepo.launchTask.Model)
+	require.Empty(t, svc.providerRepo.launchTask.ReasoningLevel)
+}
+
+// A choice is made for one provider's CLI, so it must name that provider
+// rather than fall to the default one, and must reach the CLI as the one
+// argument it names, not as a flag.
+func TestTaskServiceCreateTask_RejectsAnInvalidLaunchChoiceBeforePersisting(t *testing.T) {
+	for name, test := range map[string]struct {
+		input   CreateTaskInput
+		wantErr string
+	}{
+		"model without a provider": {
+			input:   CreateTaskInput{Model: "gpt-6-luna"},
+			wantErr: "a model or reasoning level needs an explicit provider",
+		},
+		"reasoning level without a provider": {
+			input:   CreateTaskInput{ReasoningLevel: "high"},
+			wantErr: "a model or reasoning level needs an explicit provider",
+		},
+		"whitespace inside the model": {
+			input:   CreateTaskInput{Provider: ProviderCodex, Model: " gpt 6 luna "},
+			wantErr: `model "gpt 6 luna" must not contain whitespace or control characters`,
+		},
+		"newline inside the model": {
+			input:   CreateTaskInput{Provider: ProviderCodex, Model: "gpt-6\nluna"},
+			wantErr: `model "gpt-6\nluna" must not contain whitespace or control characters`,
+		},
+		"control character inside the reasoning level": {
+			input:   CreateTaskInput{Provider: ProviderCodex, ReasoningLevel: "hi\x1bgh"},
+			wantErr: `reasoning level "hi\x1bgh" must not contain whitespace or control characters`,
+		},
+		"model that reads as a flag": {
+			input:   CreateTaskInput{Provider: ProviderClaude, Model: " --bogus"},
+			wantErr: `model "--bogus" must not start with a dash, which the provider CLI reads as a flag`,
+		},
+		"reasoning level that reads as a flag": {
+			input:   CreateTaskInput{Provider: ProviderCodex, ReasoningLevel: "-high"},
+			wantErr: `reasoning level "-high" must not start with a dash, which the provider CLI reads as a flag`,
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			svc := newTestTaskService(t)
+			svc.providerRepo.suggestedName = "billing retry flow"
+			input := test.input
+			input.Cwd = "/tmp/repo"
+			input.Prompt = "add billing retry flow"
+
+			task, err := svc.service.CreateTaskWithProgress(t.Context(), input, nil)
+
+			require.Nil(t, task)
+			require.EqualError(t, err, test.wantErr)
+			require.Nil(t, svc.taskRepo.createdTask)
+			require.Nil(t, svc.sessionClient.startedTask)
+			require.Empty(t, svc.userConfig.savedLaunchDefaults)
+		})
+	}
+}
+
+// Retrying a failed creation launches the task with the choice it was
+// created with, and keeps it on the task.
+func TestTaskServiceRetryTaskCreationWithProgress_KeepsTheLaunchChoice(t *testing.T) {
+	svc := newTestTaskService(t)
+	failed := failedAtStartingSessionTask()
+	failed.Model = "gpt-6-luna"
+	failed.ReasoningLevel = "low"
+	svc.taskRepo.listTasks = []*Task{failed}
+
+	task, err := svc.service.RetryTaskCreationWithProgress(t.Context(), "task-1", nil)
+
+	require.NoError(t, err)
+	require.Equal(t, "gpt-6-luna", task.Model)
+	require.Equal(t, "low", task.ReasoningLevel)
+	require.Equal(t, "gpt-6-luna", svc.providerRepo.launchTask.Model)
+	require.Equal(t, "low", svc.providerRepo.launchTask.ReasoningLevel)
+	require.Equal(t, TaskCreationStatusReady, svc.taskRepo.updatedTask.CreationStatus)
+	require.Equal(t, "gpt-6-luna", svc.taskRepo.updatedTask.Model)
+	require.Equal(t, "low", svc.taskRepo.updatedTask.ReasoningLevel)
+}
+
+// The last choice becomes the Launch default, as each provider CLI keeps the
+// last model picked. It is saved before the long creation steps, so it holds
+// even when they fail.
+func TestTaskServiceCreateTask_SavesTheLaunchChoiceAsTheLaunchProvidersDefault(t *testing.T) {
+	svc := newTestTaskService(t)
+	svc.userConfig.setup = multiProviderSetup()
+	svc.claudeRepo.suggestErr = errors.New("claude is offline")
+
+	_, err := svc.service.CreateTaskWithProgress(t.Context(), CreateTaskInput{
+		RememberLaunchChoice: true,
+		Cwd:                  "/tmp/repo",
+		Prompt:               "add billing retry flow",
+		Provider:             ProviderClaude,
+		Model:                "  opus[1m] ",
+		ReasoningLevel:       "\thigh\n",
+	}, nil)
+
+	require.ErrorContains(t, err, "claude is offline")
+	require.Equal(t, []savedLaunchDefault{
+		{provider: ProviderClaude, choice: LaunchChoice{Model: "opus[1m]", ReasoningLevel: "high"}},
+	}, svc.userConfig.savedLaunchDefaults)
+}
+
+func TestTaskServiceCreateTask_FromPullRequestSavesTheLaunchChoiceAsTheDefault(t *testing.T) {
+	svc := newTestTaskService(t)
+
+	_, err := svc.service.CreateTaskWithProgress(t.Context(), CreateTaskInput{
+		RememberLaunchChoice: true,
+		Cwd:                  "/tmp/repo",
+		Provider:             ProviderCodex,
+		Source: CreateTaskSource{
+			PullRequest: &RepoPullRequest{Number: 42, Title: "Auth rewrite", BranchName: "feat/auth"},
+		},
+		Model: "gpt-6-luna",
+	}, nil)
+
+	require.NoError(t, err)
+	require.Equal(t, []savedLaunchDefault{
+		{provider: ProviderCodex, choice: LaunchChoice{Model: "gpt-6-luna"}},
+	}, svc.userConfig.savedLaunchDefaults)
+}
+
+// Going back to no choice is a choice too: it clears the Launch provider's
+// Launch default.
+func TestTaskServiceCreateTask_WithNoLaunchChoiceClearsTheLaunchProvidersDefault(t *testing.T) {
+	svc := newTestTaskService(t)
+	svc.providerRepo.suggestedName = "billing retry flow"
+
+	_, err := svc.service.CreateTaskWithProgress(t.Context(), CreateTaskInput{
+		RememberLaunchChoice: true,
+		Cwd:                  "/tmp/repo",
+		Prompt:               "add billing retry flow",
+		Provider:             ProviderCodex,
+		Model:                "  ",
+	}, nil)
+
+	require.NoError(t, err)
+	require.Equal(t, []savedLaunchDefault{
+		{provider: ProviderCodex, choice: LaunchChoice{}},
+	}, svc.userConfig.savedLaunchDefaults)
+}
+
+// A task that falls to the Default provider made no choice for it, so it
+// leaves that provider's Launch default alone, as when RIG_PROVIDER picks it.
+func TestTaskServiceCreateTask_FallingToTheDefaultProviderSavesNoLaunchDefault(t *testing.T) {
+	svc := newTestTaskService(t)
+	svc.providerRepo.suggestedName = "billing retry flow"
+
+	task, err := svc.service.CreateTaskWithProgress(t.Context(), CreateTaskInput{
+		RememberLaunchChoice: true,
+		Cwd:                  "/tmp/repo",
+		Prompt:               "add billing retry flow",
+		Model:                "  ",
+	}, nil)
+
+	require.NoError(t, err)
+	require.Equal(t, ProviderCodex, task.Provider)
+	require.Empty(t, svc.userConfig.savedLaunchDefaults)
+}
+
+// The Launch default is saved only once the Launch provider is resolved.
+func TestTaskServiceCreateTask_FailingBeforeTheProviderIsResolvedSavesNoLaunchDefault(t *testing.T) {
+	for name, test := range map[string]struct {
+		arrange  func(*testTaskServiceHarness)
+		provider Provider
+		wantErr  string
+	}{
+		"repository not detected": {
+			arrange: func(svc *testTaskServiceHarness) {
+				svc.repoClient.detectRepoErr = errors.New("not a git repository")
+			},
+			provider: ProviderCodex,
+			wantErr:  "not a git repository",
+		},
+		"provider not configured": {
+			arrange:  func(*testTaskServiceHarness) {},
+			provider: ProviderClaude,
+			wantErr:  `provider "claude" is not configured`,
+		},
+		"provider setup missing": {
+			arrange: func(svc *testTaskServiceHarness) {
+				svc.userConfig.setup = nil
+			},
+			provider: ProviderCodex,
+			wantErr:  ErrProviderSetupRequired.Error(),
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			svc := newTestTaskService(t)
+			test.arrange(svc)
+
+			_, err := svc.service.CreateTaskWithProgress(t.Context(), CreateTaskInput{
+				RememberLaunchChoice: true,
+				Cwd:                  "/tmp/repo",
+				Prompt:               "add billing retry flow",
+				Provider:             test.provider,
+				Model:                "opus[1m]",
+			}, nil)
+
+			require.ErrorContains(t, err, test.wantErr)
+			require.Empty(t, svc.userConfig.savedLaunchDefaults)
+		})
+	}
+}
+
+// The Launch default is a convenience: failing to save it never fails the
+// task.
+func TestTaskServiceCreateTask_SucceedsWhenSavingTheLaunchDefaultFails(t *testing.T) {
+	svc := newTestTaskService(t)
+	svc.providerRepo.suggestedName = "billing retry flow"
+	svc.userConfig.saveLaunchDefaultErr = errors.New("config directory is read-only")
+
+	task, err := svc.service.CreateTaskWithProgress(t.Context(), CreateTaskInput{
+		RememberLaunchChoice: true,
+		Cwd:                  "/tmp/repo",
+		Prompt:               "add billing retry flow",
+		Provider:             ProviderCodex,
+		ReasoningLevel:       "low",
+	}, nil)
+
+	require.NoError(t, err)
+	require.Equal(t, TaskCreationStatusReady, task.CreationStatus)
+	require.Len(t, svc.userConfig.savedLaunchDefaults, 1)
+	require.NotNil(t, svc.sessionClient.startedTask)
+}
+
+// A task created without asking to remember its choice, as the CLI creates
+// one, makes no choice of model, so it leaves the Launch default alone even
+// when it names its provider.
+func TestTaskServiceCreateTask_NotRememberingTheLaunchChoiceSavesNoLaunchDefault(t *testing.T) {
+	svc := newTestTaskService(t)
+	svc.userConfig.setup = multiProviderSetup()
+	svc.claudeRepo.suggestedName = "billing retry flow"
+
+	task, err := svc.service.CreateTaskWithProgress(t.Context(), CreateTaskInput{
+		Cwd:      "/tmp/repo",
+		Prompt:   "add billing retry flow",
+		Provider: ProviderClaude,
+	}, nil)
+
+	require.NoError(t, err)
+	require.Equal(t, ProviderClaude, task.Provider)
+	require.Empty(t, svc.userConfig.savedLaunchDefaults)
+}
+
+// A retry replays the choice its task was created with rather than making a
+// new one, so it leaves the Launch default alone.
+func TestTaskServiceRetryTaskCreationWithProgress_DoesNotSaveTheLaunchDefault(t *testing.T) {
+	svc := newTestTaskService(t)
+	failed := failedAtStartingSessionTask()
+	failed.Model = "gpt-6-luna"
+	svc.taskRepo.listTasks = []*Task{failed}
+
+	_, err := svc.service.RetryTaskCreationWithProgress(t.Context(), "task-1", nil)
+
+	require.NoError(t, err)
+	require.Empty(t, svc.userConfig.savedLaunchDefaults)
 }
 
 func TestTaskServiceCreateTask_CreatesTheTaskInTheTargetRepository(t *testing.T) {

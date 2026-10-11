@@ -39,6 +39,15 @@ type CreateTaskInput struct {
 	Cwd      string   `json:"cwd"`
 	Prompt   string   `json:"prompt"`
 	Provider Provider `json:"provider"`
+	// Model and ReasoningLevel are the launch choice for Provider, which must
+	// then be set. Empty leaves each to the provider CLI's own default.
+	Model          string `json:"model"`
+	ReasoningLevel string `json:"reasoning_level"`
+	// RememberLaunchChoice saves the launch choice, even an empty one, as
+	// Provider's Launch default, as creating a task from the TUI's Task draft
+	// does. The CLI never sets it: a task it creates makes no choice of model,
+	// so it leaves the user's Launch default alone.
+	RememberLaunchChoice bool `json:"remember_launch_choice"`
 	// TargetRepo names the repository to create the task in, by path or by
 	// name. A path contains a path separator or starts with ~ or a dot; a
 	// relative one is relative to Cwd. Empty means the repository containing
@@ -235,6 +244,25 @@ type TaskService interface {
 	// DetectProviders reports which supported providers pass provider setup
 	// checks on this machine.
 	DetectProviders(ctx context.Context) ([]ProviderDetection, error)
+	// ListProviderModels returns the models a supported provider offers and
+	// the reasoning levels each accepts. The list comes from the provider's
+	// CLI, and the daemon caches it per provider: a cached list is returned
+	// at once, and one older than an hour is refreshed in the background.
+	// Only a call with no cached list waits for the CLI. The provider need
+	// not be configured, but an unsupported provider is an error.
+	ListProviderModels(ctx context.Context, provider Provider) ([]ProviderModel, error)
+	// GetLaunchDefaults returns each provider's Launch default: the Launch
+	// choice a Task draft starts from when that provider is chosen. A
+	// provider with none saved is absent, and with none saved at all the map
+	// is empty.
+	GetLaunchDefaults(ctx context.Context) (map[Provider]LaunchChoice, error)
+	// SaveLaunchDefault sets a Supported provider's Launch default, which
+	// creating a task with an explicit provider also does with the task's
+	// Launch choice. An empty choice clears it. The choice is trimmed and
+	// checked as at task creation, but the provider need not be a Configured
+	// provider. Before Provider setup has completed there is nowhere to keep
+	// it, and nothing is saved.
+	SaveLaunchDefault(ctx context.Context, provider Provider, choice LaunchChoice) error
 	// GetRepoDirs returns the user's repo directories, or none when none were
 	// saved.
 	GetRepoDirs(ctx context.Context) ([]string, error)
@@ -275,8 +303,10 @@ type HealthChecker interface {
 
 // UserConfigStore reads and writes the User config: the user-level settings
 // Setup produces, which are the provider setup, recording which supported
-// providers are configured and which one is the default, and the repo
-// directories. The User config intentionally lives outside the task database.
+// providers are configured and which one is the default, the repo
+// directories, and each provider's Launch default. The User config
+// intentionally lives outside the task database. Saving any of them keeps the
+// others.
 type UserConfigStore interface {
 	// GetProviderSetup returns the persisted provider setup, or nil when
 	// provider setup has never completed. Implementations apply any validated
@@ -285,6 +315,14 @@ type UserConfigStore interface {
 	// SaveProviderSetup validates and atomically persists the provider setup,
 	// keeping the repo directories.
 	SaveProviderSetup(ctx context.Context, setup ProviderSetup) error
+	// GetLaunchDefaults returns each Supported provider's Launch default.
+	// With none saved, or before Provider setup has completed, it returns an
+	// empty map.
+	GetLaunchDefaults(ctx context.Context) (map[Provider]LaunchChoice, error)
+	// SaveLaunchDefault atomically persists a provider's Launch default, or
+	// deletes it when choice is empty. Before Provider setup has completed it
+	// saves nothing and returns nil, since there is no config to keep it in.
+	SaveLaunchDefault(ctx context.Context, provider Provider, choice LaunchChoice) error
 	// GetRepoDirs returns the persisted repo directories, or none when none
 	// were saved.
 	GetRepoDirs(ctx context.Context) ([]string, error)
@@ -355,6 +393,10 @@ type ProviderClient interface {
 	// or ticket from a prompt. It runs in the task's repository so the provider
 	// can look up a ticket the prompt refers to, on a best effort basis.
 	SuggestTaskName(ctx context.Context, repoRoot string, prompt string) (TaskSuggestion, error)
+	// ListModels returns the models the provider offers and the reasoning
+	// levels each accepts. The list comes from the provider CLI at runtime, so
+	// it follows the installed CLI and the user's account.
+	ListModels(ctx context.Context) ([]ProviderModel, error)
 	// EnsureTaskSessionEnvironment applies any provider-specific runtime
 	// configuration required before launching or resuming an interactive session.
 	EnsureTaskSessionEnvironment(ctx context.Context) error
@@ -371,10 +413,15 @@ type ProviderClient interface {
 	// should be written into the task workspace before launch.
 	BuildWorkspaceBootstrapSpec(task *Task) (WorkspaceBootstrapSpec, error)
 	// BuildTaskSessionLaunchSpec describes how the provider's CLI should be
-	// started inside the task's tmux session.
+	// started inside the task's tmux session. It is called on the task's
+	// launch provider, and passes the CLI the task's launch model and
+	// reasoning level when they are set.
 	BuildTaskSessionLaunchSpec(task *Task) (TaskSessionLaunchSpec, error)
 	// BuildReconnectTaskSessionLaunchSpec describes how the provider's CLI
 	// should resume an existing logical session inside a recreated tmux session.
+	// The session may be an agent session whose provider is not the task's
+	// launch provider; such an agent session never gets the task's launch
+	// model and reasoning level.
 	BuildReconnectTaskSessionLaunchSpec(task *Task, sessionID string) (TaskSessionLaunchSpec, error)
 	// TaskSessionCommandName returns the foreground process name expected while
 	// the provider is running in the task tmux pane.

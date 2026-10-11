@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"io/fs"
+	"maps"
 	"slices"
 	"strings"
 	"sync"
@@ -20,6 +21,7 @@ type testTaskServiceHarness struct {
 	creation    *taskCreation
 	launcher    *sessionLauncher
 	observation *taskObservation
+	models      *providerModelCatalog
 	events      []string
 
 	taskRepoMock *MockTaskRepository
@@ -55,6 +57,18 @@ type userConfigState struct {
 	getRepoDirsErr  error
 	saveRepoDirsErr error
 	repoDirsSaves   int
+	// launchDefaults are what GetLaunchDefaults returns.
+	launchDefaults       map[Provider]LaunchChoice
+	getLaunchDefaultsErr error
+	saveLaunchDefaultErr error
+	// savedLaunchDefaults are the SaveLaunchDefault calls, in order, failed
+	// ones included.
+	savedLaunchDefaults []savedLaunchDefault
+}
+
+type savedLaunchDefault struct {
+	provider Provider
+	choice   LaunchChoice
 }
 
 type taskRepositoryState struct {
@@ -174,13 +188,15 @@ type providerClientState struct {
 	skillInstallErr   error
 	skillInstallCalls int
 	// skillCheckErr is what CheckRigSkill returns.
-	skillCheckErr        error
-	events               *[]string
-	bootstrapErr         error
-	bootstrapSpec        WorkspaceBootstrapSpec
-	bootstrapRequest     *Task
-	launchErr            error
-	launchRequest        TaskSessionLaunchSpec
+	skillCheckErr    error
+	events           *[]string
+	bootstrapErr     error
+	bootstrapSpec    WorkspaceBootstrapSpec
+	bootstrapRequest *Task
+	launchErr        error
+	launchRequest    TaskSessionLaunchSpec
+	// launchTask is the task the last fresh launch spec was built for.
+	launchTask           *Task
 	reconnectLaunchErr   error
 	reconnectLaunch      TaskSessionLaunchSpec
 	hookErr              error
@@ -319,6 +335,7 @@ func newTestTaskService(t *testing.T) *testTaskServiceHarness {
 	h.creation = h.service.creation
 	h.launcher = h.service.launcher
 	h.observation = h.service.observation
+	h.models = h.service.models
 
 	return h
 }
@@ -345,6 +362,20 @@ func configureUserConfigMock(store *MockUserConfigStore, state *userConfigState)
 			saved := setup
 			state.savedSetup = &saved
 			return nil
+		},
+	).Maybe()
+	store.EXPECT().GetLaunchDefaults(mock.Anything).RunAndReturn(
+		func(context.Context) (map[Provider]LaunchChoice, error) {
+			if state.getLaunchDefaultsErr != nil {
+				return nil, state.getLaunchDefaultsErr
+			}
+			return maps.Clone(state.launchDefaults), nil
+		},
+	).Maybe()
+	store.EXPECT().SaveLaunchDefault(mock.Anything, mock.Anything, mock.Anything).RunAndReturn(
+		func(_ context.Context, provider Provider, choice LaunchChoice) error {
+			state.savedLaunchDefaults = append(state.savedLaunchDefaults, savedLaunchDefault{provider, choice})
+			return state.saveLaunchDefaultErr
 		},
 	).Maybe()
 	store.EXPECT().GetRepoDirs(mock.Anything).RunAndReturn(
@@ -659,6 +690,7 @@ func configureProviderClientMock(client *MockProviderClient, state *providerClie
 	).Maybe()
 	client.EXPECT().BuildTaskSessionLaunchSpec(mock.Anything).RunAndReturn(
 		func(task *Task) (TaskSessionLaunchSpec, error) {
+			state.launchTask = cloneTask(task)
 			if state.launchErr != nil {
 				return TaskSessionLaunchSpec{}, state.launchErr
 			}

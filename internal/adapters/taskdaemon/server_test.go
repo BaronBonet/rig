@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"maps"
 	"net"
 	"net/http"
 	"os"
@@ -31,17 +32,22 @@ type fakeTaskService struct {
 	prStatuses map[string]*core.PRStatus
 	setup      *core.ProviderSetup
 	detections []core.ProviderDetection
-	latest     map[string]*core.TaskStatusUpdate
-	taskAtPath map[string]*core.Task
-	repoDirs   []string
-	repos      []core.KnownRepo
+	models     map[core.Provider][]core.ProviderModel
+	// launchDefaults are the saved Launch defaults, which SaveLaunchDefault
+	// sets and an empty choice deletes.
+	launchDefaults map[core.Provider]core.LaunchChoice
+	latest         map[string]*core.TaskStatusUpdate
+	taskAtPath     map[string]*core.Task
+	repoDirs       []string
+	repos          []core.KnownRepo
 	// repoDirSuggestions is the repo directory suggested for each working
 	// directory.
 	repoDirSuggestions map[string]string
 
-	createSteps  []core.TaskCreateProgressStep
-	createTask   *core.Task
-	createErr    error
+	createSteps []core.TaskCreateProgressStep
+	createTask  *core.Task
+	createErr   error
+	// createInputs are the inputs CreateTaskStream received.
 	createInputs []core.CreateTaskInput
 
 	updates      chan core.TaskStatusUpdate
@@ -56,15 +62,17 @@ type fakeTaskService struct {
 
 func newFakeTaskService() *fakeTaskService {
 	return &fakeTaskService{
-		activity:     map[string][]core.TaskActivityEvent{},
-		usage:        map[string]*core.TaskUsage{},
-		prs:          map[string][]core.RepoPullRequest{},
-		prStatuses:   map[string]*core.PRStatus{},
-		latest:       map[string]*core.TaskStatusUpdate{},
-		taskAtPath:   map[string]*core.Task{},
-		updates:      make(chan core.TaskStatusUpdate, 8),
-		subscribeCtx: make(chan context.Context, 1),
-		errByOp:      map[string]error{},
+		activity:       map[string][]core.TaskActivityEvent{},
+		usage:          map[string]*core.TaskUsage{},
+		prs:            map[string][]core.RepoPullRequest{},
+		prStatuses:     map[string]*core.PRStatus{},
+		models:         map[core.Provider][]core.ProviderModel{},
+		launchDefaults: map[core.Provider]core.LaunchChoice{},
+		latest:         map[string]*core.TaskStatusUpdate{},
+		taskAtPath:     map[string]*core.Task{},
+		updates:        make(chan core.TaskStatusUpdate, 8),
+		subscribeCtx:   make(chan context.Context, 1),
+		errByOp:        map[string]error{},
 	}
 }
 
@@ -215,6 +223,39 @@ func (f *fakeTaskService) DetectProviders(context.Context) ([]core.ProviderDetec
 	return f.detections, f.errByOp["detect_providers"]
 }
 
+func (f *fakeTaskService) ListProviderModels(
+	_ context.Context,
+	provider core.Provider,
+) ([]core.ProviderModel, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.models[provider], f.errByOp["list_provider_models"]
+}
+
+func (f *fakeTaskService) GetLaunchDefaults(context.Context) (map[core.Provider]core.LaunchChoice, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return maps.Clone(f.launchDefaults), f.errByOp["get_launch_defaults"]
+}
+
+func (f *fakeTaskService) SaveLaunchDefault(
+	_ context.Context,
+	provider core.Provider,
+	choice core.LaunchChoice,
+) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if err := f.errByOp["save_launch_default"]; err != nil {
+		return err
+	}
+	if choice.IsZero() {
+		delete(f.launchDefaults, provider)
+	} else {
+		f.launchDefaults[provider] = choice
+	}
+	return nil
+}
+
 func (f *fakeTaskService) GetRepoDirs(context.Context) ([]string, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
@@ -293,6 +334,10 @@ func TestUnaryOperationsRoundTrip(t *testing.T) {
 		Default:    core.ProviderCodex,
 	}
 	svc.detections = []core.ProviderDetection{{Provider: core.ProviderCodex, Ready: true}}
+	svc.models[core.ProviderCodex] = []core.ProviderModel{
+		{ID: "gpt-5.5", DisplayName: "GPT-5.5", ReasoningLevels: []string{"low", "medium", "high"}},
+		{ID: "gpt-5.5-mini", DisplayName: "GPT-5.5 Mini"},
+	}
 	svc.repoDirs = []string{"/work"}
 	svc.repos = []core.KnownRepo{
 		{Name: "backend", Root: "/work/backend", TaskCount: 2},
@@ -411,6 +456,67 @@ func TestUnaryOperationsRoundTrip(t *testing.T) {
 		require.NoError(t, err)
 		require.Len(t, detections, 1)
 		require.True(t, detections[0].Ready)
+	})
+
+	t.Run("list provider models", func(t *testing.T) {
+		models, err := client.ListProviderModels(ctx, core.ProviderCodex)
+		require.NoError(t, err)
+		require.Equal(t, svc.models[core.ProviderCodex], models)
+	})
+
+	t.Run("list provider models trims the provider", func(t *testing.T) {
+		models, err := client.ListProviderModels(ctx, "  codex  ")
+		require.NoError(t, err)
+		require.Equal(t, svc.models[core.ProviderCodex], models)
+	})
+
+	t.Run("list provider models requires provider", func(t *testing.T) {
+		_, err := client.ListProviderModels(ctx, " ")
+		require.ErrorContains(t, err, "list_provider_models provider required")
+	})
+
+	t.Run("launch defaults", func(t *testing.T) {
+		defaults, err := client.GetLaunchDefaults(ctx)
+		require.NoError(t, err)
+		require.Empty(t, defaults)
+
+		choice := core.LaunchChoice{Model: "opus[1m]", ReasoningLevel: "high"}
+		require.NoError(t, client.SaveLaunchDefault(ctx, core.ProviderClaude, choice))
+		require.NoError(t, client.SaveLaunchDefault(ctx, "  codex  ", core.LaunchChoice{ReasoningLevel: "low"}))
+		defaults, err = client.GetLaunchDefaults(ctx)
+		require.NoError(t, err)
+		require.Equal(t, map[core.Provider]core.LaunchChoice{
+			core.ProviderClaude: choice,
+			core.ProviderCodex:  {ReasoningLevel: "low"},
+		}, defaults)
+
+		require.NoError(t, client.SaveLaunchDefault(ctx, core.ProviderClaude, core.LaunchChoice{}))
+		defaults, err = client.GetLaunchDefaults(ctx)
+		require.NoError(t, err)
+		require.Equal(t, map[core.Provider]core.LaunchChoice{core.ProviderCodex: {ReasoningLevel: "low"}}, defaults)
+	})
+
+	t.Run("save launch default requires provider", func(t *testing.T) {
+		err := client.SaveLaunchDefault(ctx, " ", core.LaunchChoice{Model: "gpt-5.5"})
+		require.ErrorContains(t, err, "save_launch_default provider required")
+	})
+
+	t.Run("launch default service errors surface as client errors", func(t *testing.T) {
+		svc.mu.Lock()
+		svc.errByOp["get_launch_defaults"] = errors.New("config unreadable")
+		svc.errByOp["save_launch_default"] = errors.New(`model "-x" must not start with a dash`)
+		svc.mu.Unlock()
+		t.Cleanup(func() {
+			svc.mu.Lock()
+			delete(svc.errByOp, "get_launch_defaults")
+			delete(svc.errByOp, "save_launch_default")
+			svc.mu.Unlock()
+		})
+
+		_, err := client.GetLaunchDefaults(ctx)
+		require.ErrorContains(t, err, "config unreadable")
+		err = client.SaveLaunchDefault(ctx, core.ProviderCodex, core.LaunchChoice{Model: "-x"})
+		require.ErrorContains(t, err, `model "-x" must not start with a dash`)
 	})
 
 	t.Run("get repo dirs", func(t *testing.T) {
@@ -542,6 +648,38 @@ func TestCreateTaskStreamRoundTrip(t *testing.T) {
 		require.Equal(t, core.TaskCreateProgressCreatingWorktree, got[1].Progress.Step)
 		require.NotNil(t, got[2].Task)
 		require.Equal(t, "task-1", got[2].Task.ID)
+	})
+
+	t.Run("carries the launch choice to the daemon and back", func(t *testing.T) {
+		svc := newFakeTaskService()
+		svc.createTask = &core.Task{
+			ID:             "task-1",
+			Provider:       core.ProviderClaude,
+			Model:          "opus[1m]",
+			ReasoningLevel: "high",
+		}
+		client := startTestFrontend(t, svc)
+
+		input := core.CreateTaskInput{
+			Cwd:                  "/tmp/repo",
+			Prompt:               "add retries",
+			Provider:             core.ProviderClaude,
+			Model:                "opus[1m]",
+			ReasoningLevel:       "high",
+			RememberLaunchChoice: true,
+		}
+		events, err := client.CreateTaskStream(context.Background(), input)
+		require.NoError(t, err)
+
+		var got []core.TaskCreateEvent
+		for event := range events {
+			got = append(got, event)
+		}
+		require.Len(t, got, 1)
+		require.Equal(t, svc.createTask, got[0].Task)
+		svc.mu.Lock()
+		defer svc.mu.Unlock()
+		require.Equal(t, []core.CreateTaskInput{input}, svc.createInputs)
 	})
 
 	t.Run("sends the whole input", func(t *testing.T) {
