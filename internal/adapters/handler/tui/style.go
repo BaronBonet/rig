@@ -23,13 +23,19 @@ var (
 )
 
 const (
-	iconStatusActive   = "●"
-	iconStatusIdle     = "○"
-	iconStatusProgress = "◐"
-	iconDone           = "✓"
-	iconFailed         = "×"
-	iconPRNone         = "—"
+	iconStatusActive     = "●"
+	iconStatusIdle       = "○"
+	iconStatusProgress   = "◐"
+	iconStatusNeedsInput = "◆"
+	iconStatusStarting   = "◌"
+	iconStatusNone       = "·"
+	iconDone             = "✓"
+	iconFailed           = "×"
+	iconPRNone           = "—"
 )
+
+// spinnerFrames animate the status symbol of a task or agent that is working.
+var spinnerFrames = []string{"⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"}
 
 var (
 	dimStyle = lipgloss.NewStyle().

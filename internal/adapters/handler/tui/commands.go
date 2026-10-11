@@ -141,6 +141,15 @@ func shimmerTickCmd() tea.Cmd {
 	})
 }
 
+// spinnerTickInterval paces the spinner of working tasks and agents.
+var spinnerTickInterval = 100 * time.Millisecond
+
+func spinnerTickCmd() tea.Cmd {
+	return tea.Tick(spinnerTickInterval, func(time.Time) tea.Msg {
+		return spinnerTickMsg{}
+	})
+}
+
 func taskActivityCmd(ctx context.Context, frontend core.TaskFrontend, taskID string, limit int) tea.Cmd {
 	return func() tea.Msg {
 		activity, err := frontend.GetTaskActivity(ctx, taskID, limit)

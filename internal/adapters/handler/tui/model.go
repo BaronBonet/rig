@@ -69,6 +69,11 @@ type model struct {
 	detailsHidden bool
 	setupOnly     bool
 
+	// spinnerFrame turns the spinner of working tasks and agents, while
+	// spinnerRunning keeps a single tick driving it.
+	spinnerFrame   int
+	spinnerRunning bool
+
 	// statusSubscribed tracks tasks with a live status subscription so task
 	// reloads do not open a duplicate subscription per reload.
 	statusSubscribed map[string]bool
@@ -214,6 +219,8 @@ type providerSetupSavedMsg struct {
 
 type shimmerTickMsg struct{}
 
+type spinnerTickMsg struct{}
+
 type activityRefreshTickMsg struct{}
 
 func newModel(frontend core.TaskFrontend, launchCwd string, buildVersion string) model {
@@ -311,6 +318,32 @@ func (m *model) beginOp(op pendingOp) {
 func (m *model) endOp() {
 	m.pending = opNone
 	m.shimmerTick = 0
+}
+
+// startSpinner starts the spinner's tick once a task or agent works, unless
+// it already turns. The tick stops itself when nothing works.
+func (m *model) startSpinner() tea.Cmd {
+	if m.spinnerRunning || !m.anyWorking() {
+		return nil
+	}
+	m.spinnerRunning = true
+	return spinnerTickCmd()
+}
+
+// anyWorking reports whether a task, or an agent shown as one of its
+// sub-rows, is working.
+func (m model) anyWorking() bool {
+	for _, row := range m.rows {
+		if row.status != nil && row.status.Phase == core.TaskStatusPhaseWorking {
+			return true
+		}
+		for _, session := range agentSubRows(row) {
+			if session.Status.Phase == core.TaskStatusPhaseWorking {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
@@ -474,10 +507,12 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// A sub-row whose agent ended, or a task down to one agent, leaves the
 		// cursor on the task row.
 		m.clampAgentSelection()
+		spinnerCmd := m.startSpinner()
 		return m, tea.Batch(
 			taskActivityCmd(m.statusContext, m.frontend, msg.taskID, taskActivityPreviewLimit),
 			taskTokenUsageCmd(m.statusContext, m.frontend, msg.taskID),
 			waitForTaskStatusCmd(msg.taskID, msg.updates),
+			spinnerCmd,
 		)
 	case taskStatusSubscriptionClosedMsg:
 		m.cancelTaskStatusTracking(msg.taskID)
@@ -624,6 +659,13 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		m.shimmerTick++
 		return m, shimmerTickCmd()
+	case spinnerTickMsg:
+		if !m.anyWorking() {
+			m.spinnerRunning = false
+			return m, nil
+		}
+		m.spinnerFrame++
+		return m, spinnerTickCmd()
 	default:
 		if m.mode == modePromptInput {
 			return m.updatePromptInput(msg)
