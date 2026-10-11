@@ -13,7 +13,7 @@ import (
 const shimmerTickInterval = 90 * time.Millisecond
 
 // activityRefreshInterval paces the background refresh of the selected
-// task's activity and token usage. Status updates stream live, but activity
+// task's activity and usage. Status updates stream live, but activity
 // accumulates without status changes (and transcript-recovered activity has
 // no hook events at all), so the detail view polls to stay fresh.
 var activityRefreshInterval = 5 * time.Second
@@ -161,10 +161,10 @@ func taskActivityCmd(ctx context.Context, frontend core.TaskFrontend, taskID str
 	}
 }
 
-func taskTokenUsageCmd(ctx context.Context, frontend core.TaskFrontend, taskID string) tea.Cmd {
+func taskUsageCmd(ctx context.Context, frontend core.TaskFrontend, taskID string) tea.Cmd {
 	return func() tea.Msg {
-		usage, err := frontend.GetTaskTokenUsage(ctx, taskID)
-		return taskTokenUsageLoadedMsg{
+		usage, err := frontend.GetTaskUsage(ctx, taskID)
+		return taskUsageLoadedMsg{
 			taskID: taskID,
 			usage:  usage,
 			err:    err,

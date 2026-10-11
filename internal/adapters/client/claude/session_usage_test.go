@@ -88,3 +88,38 @@ func TestReadSessionTokenUsage_ReturnsNilForMissingOrUsageFreeTranscripts(t *tes
 	require.NoError(t, err)
 	require.Nil(t, usage)
 }
+
+func TestReadConversationCompactions_CountsCompactBoundariesByTrigger(t *testing.T) {
+	repo, _ := newTestRepository(t, subprocess.NewMockRunner(t))
+	transcript := writeTranscript(t,
+		`{"type":"user","message":{"role":"user","content":"why is \"compact_boundary\" in the logs?"}}`,
+		`{"type":"system","subtype":"compact_boundary","content":"Conversation compacted",`+
+			`"compactMetadata":{"trigger":"auto","preTokens":180000}}`,
+		`{"type":"system","subtype":"microcompact_boundary","content":"Context microcompacted"}`,
+		`{"type":"system","subtype":"compact_boundary","compactMetadata":{"trigger":"manual"}}`,
+		`{"type":"system","subtype":"compact_boundary","compactMetadata":{"trigger":"auto"}}`,
+		`{"type":"system","subtype":"compact_boundary"}`,
+		`{"type":"system","subtype":"compact_boundary","isSidechain":true,"compactMetadata":{"trigger":"auto"}}`,
+		`not json "compact_boundary"`,
+	)
+
+	compactions, err := repo.ReadConversationCompactions(t.Context(), []core.TaskProviderSession{{
+		Provider:       core.ProviderClaude,
+		TranscriptPath: transcript,
+	}})
+
+	require.NoError(t, err)
+	require.Equal(t, core.Compactions{Total: 4, Auto: 2, Manual: 1}, compactions)
+}
+
+func TestReadConversationCompactions_ReturnsNoneWithoutATranscript(t *testing.T) {
+	repo, _ := newTestRepository(t, subprocess.NewMockRunner(t))
+
+	compactions, err := repo.ReadConversationCompactions(t.Context(), []core.TaskProviderSession{
+		{Provider: core.ProviderClaude},
+		{Provider: core.ProviderClaude, TranscriptPath: filepath.Join(t.TempDir(), "missing.jsonl")},
+	})
+
+	require.NoError(t, err)
+	require.Equal(t, core.Compactions{}, compactions)
+}

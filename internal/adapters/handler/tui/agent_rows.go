@@ -125,8 +125,14 @@ func agentSessionStatusUpdate(session core.LiveAgentSession) *core.TaskStatusUpd
 
 // renderAgentSubRow renders one agent session as an indented sub-row under
 // its task: its status symbol, its provider, and its latest prompt or else
-// where the agent runs.
-func (m model) renderAgentSubRow(session core.LiveAgentSession, last bool, selected bool, totalWidth int) string {
+// where the agent runs, then its compaction marker, if it has compacted.
+func (m model) renderAgentSubRow(
+	session core.LiveAgentSession,
+	compactions core.Compactions,
+	last bool,
+	selected bool,
+	totalWidth int,
+) string {
 	branch := "├"
 	if last {
 		branch = "└"
@@ -140,11 +146,12 @@ func (m model) renderAgentSubRow(session core.LiveAgentSession, last bool, selec
 	// The text ends where the task row's name area does, clear of its columns
 	// on the right. Too narrow a terminal leaves no room for text rather than
 	// overflowing.
-	textWidth := max(0, statusSymbolWidth+taskRowLayoutFor(totalWidth).nameArea-subRowLead)
+	layout := taskRowLayoutFor(totalWidth)
+	textWidth := max(0, statusSymbolWidth+layout.nameArea-subRowLead)
 	text, isPrompt := agentSubRowText(session)
 	text = truncateStr(text, textWidth-len(nameGap))
 
-	textStyle := dimStyle
+	textStyle, compactionStyle := dimStyle, mutedStyle
 	if !isPrompt {
 		textStyle = mutedStyle
 	}
@@ -153,12 +160,20 @@ func (m model) renderAgentSubRow(session core.LiveAgentSession, last bool, selec
 	}
 	if selected {
 		textStyle = lipgloss.NewStyle().Foreground(colorAccent).Bold(true)
+		compactionStyle = primaryStyle
 	}
 
 	line := dimStyle.Render(subRowIndent+branch+" ") +
 		symbolStyle.Render(symbol) + " " +
 		providerStyle(provider).Render(providerCell) +
 		textStyle.Render(text)
+	// The compaction marker lines up with the task rows' compactions column,
+	// after their provider column, which a sub-row leaves blank.
+	if layout.compactions && compactions.Total > 0 {
+		line = padRightVisible(line, subRowLead+textWidth) +
+			strings.Repeat(" ", colWidthAgent) +
+			renderCompactionsCell(compactions, compactionStyle)
+	}
 	if selected {
 		return selectedRowStyle.Render(line)
 	}
@@ -213,6 +228,63 @@ func taskProviderNames(row taskRow) []string {
 		return []string{"-"}
 	}
 	return []string{emptyFallback(string(row.task.Provider), "-")}
+}
+
+// agentCompactions is how many times an agent session's current conversation
+// was compacted, as its task's usage reports it.
+func agentCompactions(row taskRow, agentSessionID string) core.Compactions {
+	if row.usage == nil {
+		return core.Compactions{}
+	}
+	return row.usage.AgentCompactions[agentSessionID]
+}
+
+// taskRowCompactions is the compactions a task row shows: its agent's, while
+// it has exactly one live agent session.
+func taskRowCompactions(row taskRow) core.Compactions {
+	if row.status == nil || len(row.status.AgentSessions) != 1 {
+		return core.Compactions{}
+	}
+	return agentCompactions(row, row.status.AgentSessions[0].ID)
+}
+
+// renderCompactionsCell renders an agent's compaction marker, such as "↻2",
+// padded to the compactions column, or a blank cell for an agent that has not
+// compacted. Counts past maxCompactionsMarker fit the column as "↻99+".
+func renderCompactionsCell(compactions core.Compactions, style lipgloss.Style) string {
+	if compactions.Total <= 0 {
+		return strings.Repeat(" ", colWidthCompactions)
+	}
+	count := strconv.Itoa(min(compactions.Total, maxCompactionsMarker))
+	if compactions.Total > maxCompactionsMarker {
+		count += "+"
+	}
+	return padRightVisible(style.Render(iconCompacted+count), colWidthCompactions)
+}
+
+// compactionsDetailText describes an agent's compactions for the detail
+// panel: how many there were and, where the provider records it, what
+// triggered them.
+func compactionsDetailText(compactions core.Compactions) string {
+	text := strconv.Itoa(compactions.Total) + "×"
+	switch {
+	case compactions.Auto == compactions.Total:
+		return text + " (auto)"
+	case compactions.Manual == compactions.Total:
+		return text + " (manual)"
+	}
+
+	var triggers []string
+	if compactions.Auto > 0 {
+		triggers = append(triggers, strconv.Itoa(compactions.Auto)+" auto")
+	}
+	if compactions.Manual > 0 {
+		triggers = append(triggers, strconv.Itoa(compactions.Manual)+" manual")
+	}
+	if len(triggers) == 0 {
+		return text
+	}
+	return text + " (" + strings.Join(triggers, ", ") + ")"
 }
 
 // renderProviderCell renders a task row's provider cell, padded to the agent

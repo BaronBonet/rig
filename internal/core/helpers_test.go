@@ -182,7 +182,12 @@ type providerClientState struct {
 	errByTranscript              map[string]error
 	usageByTranscript            map[string]*SessionTokenUsage
 	tokenUsageCalls              []providerTokenUsageCall
-	builtLaunchSpecs             []TaskSessionLaunchSpec
+	// compactionsBySession is what ReadConversationCompactions returns for a
+	// conversation, by its Provider session ID.
+	compactionsBySession map[string]Compactions
+	compactionsErr       error
+	compactionCalls      [][]TaskProviderSession
+	builtLaunchSpecs     []TaskSessionLaunchSpec
 }
 
 func (s *providerClientState) mockCommandName() string {
@@ -713,6 +718,15 @@ func configureProviderClientMock(client *MockProviderClient, state *providerClie
 			}
 			copy := *usage
 			return &copy, nil
+		},
+	).Maybe()
+	client.EXPECT().ReadConversationCompactions(mock.Anything, mock.Anything).RunAndReturn(
+		func(_ context.Context, conversation []TaskProviderSession) (Compactions, error) {
+			state.compactionCalls = append(state.compactionCalls, conversation)
+			if state.compactionsErr != nil {
+				return Compactions{}, state.compactionsErr
+			}
+			return state.compactionsBySession[conversation[0].ProviderSessionID], nil
 		},
 	).Maybe()
 }

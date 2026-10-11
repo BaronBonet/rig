@@ -265,8 +265,8 @@ func (s *service) GetTaskActivity(ctx context.Context, taskID string, limit int)
 	return s.observation.GetTaskActivity(ctx, taskID, limit)
 }
 
-func (s *service) GetTaskTokenUsage(ctx context.Context, taskID string) (*TaskTokenUsage, error) {
-	return s.observation.GetTaskTokenUsage(ctx, taskID)
+func (s *service) GetTaskUsage(ctx context.Context, taskID string) (*TaskUsage, error) {
+	return s.observation.GetTaskUsage(ctx, taskID)
 }
 
 func (s *service) ListRepoPullRequests(ctx context.Context, cwd string) ([]RepoPullRequest, error) {

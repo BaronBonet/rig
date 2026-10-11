@@ -16,7 +16,7 @@ type taskRow struct {
 	task        *core.Task
 	activity    []core.TaskActivityEvent
 	status      *core.TaskStatusUpdate
-	tokenUsage  *core.TaskTokenUsage
+	usage       *core.TaskUsage
 	pullRequest *core.PRStatus
 }
 
@@ -148,8 +148,8 @@ type taskActivityLoadedMsg struct {
 	taskID   string
 }
 
-type taskTokenUsageLoadedMsg struct {
-	usage  *core.TaskTokenUsage
+type taskUsageLoadedMsg struct {
+	usage  *core.TaskUsage
 	err    error
 	taskID string
 }
@@ -488,12 +488,12 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		m.setTaskActivity(msg.taskID, msg.activity)
 		return m, nil
-	case taskTokenUsageLoadedMsg:
+	case taskUsageLoadedMsg:
 		if msg.err != nil {
 			m.err = msg.err
 			return m, nil
 		}
-		m.setTaskTokenUsage(msg.taskID, msg.usage)
+		m.setTaskUsage(msg.taskID, msg.usage)
 		return m, nil
 	case taskStatusSubscriptionReadyMsg:
 		if msg.err != nil {
@@ -510,7 +510,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		spinnerCmd := m.startSpinner()
 		return m, tea.Batch(
 			taskActivityCmd(m.statusContext, m.frontend, msg.taskID, taskActivityPreviewLimit),
-			taskTokenUsageCmd(m.statusContext, m.frontend, msg.taskID),
+			taskUsageCmd(m.statusContext, m.frontend, msg.taskID),
 			waitForTaskStatusCmd(msg.taskID, msg.updates),
 			spinnerCmd,
 		)
@@ -649,7 +649,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			id := taskID(row.task)
 			cmds = append(cmds,
 				taskActivityCmd(m.statusContext, m.frontend, id, taskActivityPreviewLimit),
-				taskTokenUsageCmd(m.statusContext, m.frontend, id),
+				taskUsageCmd(m.statusContext, m.frontend, id),
 			)
 		}
 		return m, tea.Batch(cmds...)
@@ -725,7 +725,7 @@ func (m *model) afterTasksLoadedCmds() []tea.Cmd {
 		cmds = append(cmds, m.taskStatusTrackingCmds(taskID)...)
 		if taskID != "" {
 			cmds = append(cmds, taskActivityCmd(m.statusContext, m.frontend, taskID, taskActivityPreviewLimit))
-			cmds = append(cmds, taskTokenUsageCmd(m.statusContext, m.frontend, taskID))
+			cmds = append(cmds, taskUsageCmd(m.statusContext, m.frontend, taskID))
 		}
 		if cmd := m.taskPullRequestStatusCmd(row.task); cmd != nil {
 			cmds = append(cmds, cmd)
@@ -1102,17 +1102,10 @@ func (m *model) setTaskActivity(taskID string, activity []core.TaskActivityEvent
 	}
 }
 
-func (m *model) setTaskTokenUsage(taskID string, usage *core.TaskTokenUsage) {
-	row := m.taskRowByID(taskID)
-	if row == nil {
-		return
+func (m *model) setTaskUsage(taskID string, usage *core.TaskUsage) {
+	if row := m.taskRowByID(taskID); row != nil {
+		row.usage = usage
 	}
-	if usage == nil {
-		row.tokenUsage = nil
-		return
-	}
-	copied := *usage
-	row.tokenUsage = &copied
 }
 
 func (m *model) upsertTaskRow(task *core.Task) int {

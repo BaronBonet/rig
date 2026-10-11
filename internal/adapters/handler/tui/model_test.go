@@ -448,7 +448,7 @@ func TestModel_AfterLoadUsesSubscriptionsAsInitialStatusSource(t *testing.T) {
 	require.Len(t, msgs, 6)
 	require.Empty(t, frontend.latestTaskStatusCalls)
 	require.Equal(t, []string{"task-1:6", "task-2:6"}, frontend.getTaskActivityCalls)
-	require.Equal(t, []string{"task-1", "task-2"}, frontend.getTaskTokenUsageCalls)
+	require.Equal(t, []string{"task-1", "task-2"}, frontend.getTaskUsageCalls)
 	require.Equal(t, []string{"task-1", "task-2"}, frontend.subscribeTaskStatusCalls)
 }
 
@@ -865,18 +865,29 @@ func TestRenderRow_PullRequestFollowsTheNameAsSymbolAndNumber(t *testing.T) {
 	require.NotContains(t, withoutPR, iconPRNone)
 }
 
+// compactedRow is a task row needing input whose one live agent compacted its
+// context twice.
+func compactedRow() taskRow {
+	return taskRow{
+		task: rowTask(),
+		status: &core.TaskStatusUpdate{
+			Phase:              core.TaskStatusPhaseWaitingForInput,
+			LeadAgentSessionID: "agent-1",
+			AgentSessions:      []core.LiveAgentSession{{ID: "agent-1", Provider: core.ProviderCodex}},
+		},
+		usage: &core.TaskUsage{AgentCompactions: map[string]core.Compactions{"agent-1": {Total: 2}}},
+	}
+}
+
 func TestRenderRow_ColumnsFollowTheNameInOrder(t *testing.T) {
 	for _, selected := range []int{0, 1} {
-		line := model{selected: selected}.renderRow(0, taskRow{
-			task:        rowTask(),
-			status:      &core.TaskStatusUpdate{Phase: core.TaskStatusPhaseWaitingForInput},
-			pullRequest: &core.PRStatus{State: core.PRStateOpen, Number: 42},
-			tokenUsage:  &core.TaskTokenUsage{TotalTokens: 45200},
-		}, 120)
+		row := compactedRow()
+		row.pullRequest = &core.PRStatus{State: core.PRStateOpen, Number: 42}
+		line := model{selected: selected}.renderRow(0, row, 120)
 
 		require.Less(t, lipgloss.Width(line), 120)
 		view := rowContent(line)
-		columns := []string{iconStatusNeedsInput, "first task", "#42", "codex", "45.2k tok", "15m"}
+		columns := []string{iconStatusNeedsInput, "first task", "#42", "codex", iconCompacted + "2", "15m"}
 		previous := -1
 		for _, column := range columns {
 			index := strings.Index(view, column)
@@ -889,12 +900,10 @@ func TestRenderRow_ColumnsFollowTheNameInOrder(t *testing.T) {
 func TestRenderRow_RightColumnsStayAligned(t *testing.T) {
 	m := model{selected: 2}
 	bare := stripANSI(m.renderRow(0, taskRow{task: rowTask()}, 120))
-	full := stripANSI(m.renderRow(1, taskRow{
-		task:        rowTask(),
-		status:      &core.TaskStatusUpdate{Phase: core.TaskStatusPhaseWaitingForInput},
-		pullRequest: &core.PRStatus{State: core.PRStateMerged, Number: 12345},
-		tokenUsage:  &core.TaskTokenUsage{TotalTokens: 999900},
-	}, 120))
+	fullRow := compactedRow()
+	fullRow.pullRequest = &core.PRStatus{State: core.PRStateMerged, Number: 12345}
+	fullRow.usage.AgentCompactions["agent-1"] = core.Compactions{Total: 999}
+	full := stripANSI(m.renderRow(1, fullRow, 120))
 
 	for _, column := range []string{"codex", "15m"} {
 		require.Equal(
@@ -923,24 +932,38 @@ func TestRenderRow_LongNameKeepsItsPullRequest(t *testing.T) {
 	require.Contains(t, view, "15m")
 }
 
-func TestRenderRow_NarrowTerminalsDropTokensThenProvider(t *testing.T) {
-	row := taskRow{
-		task:        rowTask(),
-		pullRequest: &core.PRStatus{State: core.PRStateOpen, Number: 42},
-		tokenUsage:  &core.TaskTokenUsage{TotalTokens: 45200},
-	}
+func TestRenderRow_ShowsCompactionsOnlyForAnAgentThatCompacted(t *testing.T) {
+	compacted := rowContent(model{}.renderRow(0, compactedRow(), 100))
+	require.Contains(t, compacted, "codex  "+iconCompacted+"2")
+
+	neverCompacted := compactedRow()
+	neverCompacted.usage = &core.TaskUsage{AgentCompactions: map[string]core.Compactions{"other-agent": {Total: 4}}}
+	require.NotContains(t, rowContent(model{}.renderRow(0, neverCompacted, 100)), iconCompacted)
+
+	beforeUsageLoads := compactedRow()
+	beforeUsageLoads.usage = nil
+	require.NotContains(t, rowContent(model{}.renderRow(0, beforeUsageLoads, 100)), iconCompacted)
+
+	noLiveAgent := compactedRow()
+	noLiveAgent.status = nil
+	require.NotContains(t, rowContent(model{}.renderRow(0, noLiveAgent, 100)), iconCompacted)
+}
+
+func TestRenderRow_NarrowTerminalsDropCompactionsThenProvider(t *testing.T) {
+	row := compactedRow()
+	row.pullRequest = &core.PRStatus{State: core.PRStateOpen, Number: 42}
 
 	wide := rowContent(model{}.renderRow(0, row, 100))
 	require.Contains(t, wide, "codex")
-	require.Contains(t, wide, "45.2k tok")
+	require.Contains(t, wide, iconCompacted+"2")
 
-	medium := rowContent(model{}.renderRow(0, row, 66))
+	medium := rowContent(model{}.renderRow(0, row, 62))
 	require.Contains(t, medium, "codex")
-	require.NotContains(t, medium, "tok")
+	require.NotContains(t, medium, iconCompacted)
 
 	narrow := rowContent(model{}.renderRow(0, row, 54))
 	require.NotContains(t, narrow, "codex")
-	require.NotContains(t, narrow, "tok")
+	require.NotContains(t, narrow, iconCompacted)
 
 	for width := 40; width <= 140; width++ {
 		line := model{}.renderRow(0, row, width)
@@ -1147,16 +1170,16 @@ func TestModel_TaskStatusUpdateReloadsTaskActivity(t *testing.T) {
 	require.True(t, ok)
 	require.Len(t, got.rows[0].activity, 1)
 
-	tokenMsg, ok := batchMsg[1]().(taskTokenUsageLoadedMsg)
+	usageMsg, ok := batchMsg[1]().(taskUsageLoadedMsg)
 	require.True(t, ok)
-	require.Equal(t, []string{"task-1", "task-1"}, frontend.getTaskTokenUsageCalls)
-	next, _ = got.Update(tokenMsg)
+	require.Equal(t, []string{"task-1", "task-1"}, frontend.getTaskUsageCalls)
+	next, _ = got.Update(usageMsg)
 	got, ok = next.(model)
 	require.True(t, ok)
 	require.Equal(t, "fresh activity", got.rows[0].activity[0].Text)
 }
 
-func TestModel_TokenUsageLoadedRendersInSelectedTaskDetail(t *testing.T) {
+func TestModel_UsageLoadedRendersTokensInSelectedTaskDetail(t *testing.T) {
 	frontend := newFrontendHarness()
 	m := newLoadedModel(frontend)
 	m.rows = []taskRow{{
@@ -1168,9 +1191,9 @@ func TestModel_TokenUsageLoadedRendersInSelectedTaskDetail(t *testing.T) {
 		},
 	}}
 
-	next, _ := m.Update(taskTokenUsageLoadedMsg{
+	next, _ := m.Update(taskUsageLoadedMsg{
 		taskID: "task-1",
-		usage: &core.TaskTokenUsage{
+		usage: &core.TaskUsage{Tokens: &core.TaskTokenUsage{
 			SessionCount:             2,
 			InputTokens:              130,
 			OutputTokens:             60,
@@ -1178,7 +1201,7 @@ func TestModel_TokenUsageLoadedRendersInSelectedTaskDetail(t *testing.T) {
 			CacheCreationInputTokens: 15,
 			ReasoningOutputTokens:    10,
 			TotalTokens:              190,
-		},
+		}},
 	})
 
 	got, ok := next.(model)
@@ -1202,11 +1225,11 @@ func TestModel_TokenUsageLoadedRendersInSelectedTaskDetail(t *testing.T) {
 	require.Less(t, strings.Index(view, "TOKENS"), strings.Index(view, "INITIAL PROMPT"))
 }
 
-func TestModel_TokenUsageLoadedErrorRendersError(t *testing.T) {
+func TestModel_UsageLoadedErrorRendersError(t *testing.T) {
 	frontend := newFrontendHarness()
 	m := newLoadedModel(frontend)
 
-	next, _ := m.Update(taskTokenUsageLoadedMsg{
+	next, _ := m.Update(taskUsageLoadedMsg{
 		taskID: "task-1",
 		err:    errors.New("token usage unavailable"),
 	})
@@ -1222,9 +1245,9 @@ func TestModel_ErrorSurvivesBackgroundLoadsAndClearsOnNextKeyPress(t *testing.T)
 	m := newLoadedModel(frontend)
 	m.err = errors.New("agent session start failed")
 
-	next, _ := m.Update(taskTokenUsageLoadedMsg{
+	next, _ := m.Update(taskUsageLoadedMsg{
 		taskID: "task-1",
-		usage:  &core.TaskTokenUsage{TotalTokens: 190},
+		usage:  &core.TaskUsage{Tokens: &core.TaskTokenUsage{TotalTokens: 190}},
 	})
 	got, ok := next.(model)
 	require.True(t, ok)
@@ -2658,9 +2681,9 @@ type frontendHarness struct {
 	latestTaskStatus            map[string]*core.TaskStatusUpdate
 	latestTaskStatusErr         map[string]error
 	latestTaskStatusCalls       []string
-	getTaskTokenUsage           map[string]*core.TaskTokenUsage
-	getTaskTokenUsageErr        map[string]error
-	getTaskTokenUsageCalls      []string
+	getTaskUsage                map[string]*core.TaskUsage
+	getTaskUsageErr             map[string]error
+	getTaskUsageCalls           []string
 	getTaskActivity             map[string][]core.TaskActivityEvent
 	getTaskActivityErr          map[string]error
 	getTaskActivityCalls        []string
@@ -2824,16 +2847,16 @@ func newFrontendHarness() *frontendHarness {
 			return append([]core.TaskActivityEvent(nil), frontend.getTaskActivity[taskID]...), nil
 		},
 	).Maybe()
-	frontend.mock.EXPECT().GetTaskTokenUsage(mock.Anything, mock.Anything).RunAndReturn(
-		func(_ context.Context, taskID string) (*core.TaskTokenUsage, error) {
-			frontend.getTaskTokenUsageCalls = append(frontend.getTaskTokenUsageCalls, taskID)
-			if frontend.getTaskTokenUsageErr != nil && frontend.getTaskTokenUsageErr[taskID] != nil {
-				return nil, frontend.getTaskTokenUsageErr[taskID]
+	frontend.mock.EXPECT().GetTaskUsage(mock.Anything, mock.Anything).RunAndReturn(
+		func(_ context.Context, taskID string) (*core.TaskUsage, error) {
+			frontend.getTaskUsageCalls = append(frontend.getTaskUsageCalls, taskID)
+			if frontend.getTaskUsageErr != nil && frontend.getTaskUsageErr[taskID] != nil {
+				return nil, frontend.getTaskUsageErr[taskID]
 			}
-			if frontend.getTaskTokenUsage == nil {
+			if frontend.getTaskUsage == nil {
 				return nil, nil
 			}
-			return frontend.getTaskTokenUsage[taskID], nil
+			return frontend.getTaskUsage[taskID], nil
 		},
 	).Maybe()
 	frontend.mock.EXPECT().SubscribeTaskStatus(mock.Anything, mock.Anything).RunAndReturn(

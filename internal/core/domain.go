@@ -424,6 +424,27 @@ func (u TaskTokenUsage) IsZero() bool {
 		u.TotalTokens == 0
 }
 
+// TaskUsage is what a task's agents have used: the token usage summed across
+// the task's Provider sessions, and how many times each live Agent session's
+// context was compacted.
+type TaskUsage struct {
+	// Tokens is nil when no transcript reports token usage.
+	Tokens *TaskTokenUsage `json:"tokens,omitempty"`
+	// AgentCompactions holds, by Agent session ID, the compactions of each
+	// open Agent session whose current Provider session was compacted.
+	AgentCompactions map[string]Compactions `json:"agent_compactions,omitempty"`
+}
+
+// Compactions counts how many times a conversation's context was compacted:
+// summarized to free room in the context window, losing detail. Auto and
+// Manual split the total by what triggered each compaction where the provider
+// records it, which Codex does not.
+type Compactions struct {
+	Total  int `json:"total"`
+	Auto   int `json:"auto,omitempty"`
+	Manual int `json:"manual,omitempty"`
+}
+
 // Provider identifies the supported interactive runtime backing a task.
 type Provider string
 

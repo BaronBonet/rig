@@ -18,7 +18,7 @@ const defaultTaskStatusRecoveryWorkerLimit = 2
 // agent sessions hook events are attributed to, each agent session's runtime
 // status (including read-time liveness against the live tmux session and
 // provider-side recovery of stale status), the task's runtime status rolled
-// up from them, persisted activity, and token usage.
+// up from them, persisted activity, and usage: token usage and compactions.
 type taskObservation struct {
 	tasks          TaskRepository
 	tmuxSession    TmuxSessionClient
@@ -132,12 +132,33 @@ func (o *taskObservation) GetTaskActivity(
 	return activityWindowWithLastUserPrompt(events, limit), nil
 }
 
-func (o *taskObservation) GetTaskTokenUsage(ctx context.Context, taskID string) (*TaskTokenUsage, error) {
-	sessions, err := o.tasks.ListTaskProviderSessions(ctx, strings.TrimSpace(taskID))
+// GetTaskUsage reads a task's token usage and its open agent sessions'
+// compactions from their transcripts.
+func (o *taskObservation) GetTaskUsage(ctx context.Context, taskID string) (*TaskUsage, error) {
+	taskID = strings.TrimSpace(taskID)
+	sessions, err := o.tasks.ListTaskProviderSessions(ctx, taskID)
 	if err != nil {
 		return nil, err
 	}
 
+	tokens, err := o.taskTokenUsage(ctx, sessions)
+	if err != nil {
+		return nil, err
+	}
+	compactions, err := o.agentCompactions(ctx, taskID, sessions)
+	if err != nil {
+		return nil, err
+	}
+	if tokens == nil && len(compactions) == 0 {
+		return nil, nil
+	}
+
+	return &TaskUsage{Tokens: tokens, AgentCompactions: compactions}, nil
+}
+
+// taskTokenUsage sums the token usage of the latest transcript of each of a
+// task's Provider sessions.
+func (o *taskObservation) taskTokenUsage(ctx context.Context, sessions []TaskProviderSession) (*TaskTokenUsage, error) {
 	latestBySession := latestProviderSessionsByID(sessions)
 	if len(latestBySession) == 0 {
 		return nil, nil
@@ -175,6 +196,43 @@ func (o *taskObservation) GetTaskTokenUsage(ctx context.Context, taskID string) 
 	}
 
 	return &total, nil
+}
+
+// agentCompactions counts the compactions of each open agent session's
+// current Provider session, leaving out agent sessions with none. /clear
+// starts a new Provider session, so it starts the count over. An agent whose
+// transcript cannot be read is left out too, as its marker is not worth
+// failing the task's token usage over.
+func (o *taskObservation) agentCompactions(
+	ctx context.Context,
+	taskID string,
+	history []TaskProviderSession,
+) (map[string]Compactions, error) {
+	open, err := o.tasks.ListOpenAgentSessions(ctx, taskID)
+	if err != nil {
+		return nil, fmt.Errorf("list open agent sessions: %w", err)
+	}
+
+	var compactions map[string]Compactions
+	for _, session := range open {
+		conversation := conversationHistory(history, session)
+		if len(conversation) == 0 {
+			continue
+		}
+		providerClient, err := supportedProviderClient(o.providers, session.Provider)
+		if err != nil {
+			continue
+		}
+		count, err := providerClient.ReadConversationCompactions(ctx, conversation)
+		if err != nil || count.Total == 0 {
+			continue
+		}
+		if compactions == nil {
+			compactions = make(map[string]Compactions)
+		}
+		compactions[session.ID] = count
+	}
+	return compactions, nil
 }
 
 func (o *taskObservation) LatestTaskStatus(ctx context.Context, taskID string) (*TaskStatusUpdate, error) {

@@ -38,8 +38,8 @@ Use `rig` for the CLI command and Rig for the product or system.
   creation and session reconnect.
 - Task observation: The core component that consumes provider hook events and
   provider session history to maintain a task's agent sessions, their runtime
-  status, activity, and token usage — including liveness checks against the
-  Session and recovery of stale status.
+  status, activity, token usage, and compactions — including liveness checks
+  against the Session and recovery of stale status.
 - Provider: An AI coding runtime that can back a task, such as Codex.
 - Supported provider: A provider Rig knows how to integrate with.
 - Configured provider: A supported provider the user has enabled for task
@@ -62,7 +62,8 @@ Use `rig` for the CLI command and Rig for the product or system.
   directory, and latest event name. `/clear` and `/resume` start a new one in
   the same agent process.
 - Provider transcript: An append-oriented record emitted by a Provider session
-  from which Rig can recover Runtime status, Activity events, and Token usage.
+  from which Rig can recover Runtime status, Activity events, Token usage, and
+  Compactions.
 - Daemon: The long-lived background Rig process that coordinates task creation,
   task state, provider hook handling, and frontend updates.
 - TUI: The foreground terminal interface for creating tasks, browsing task
@@ -96,7 +97,12 @@ Use `rig` for the CLI command and Rig for the product or system.
   hook events Rig places in the Agent session change it, and reports of a
   Provider session ending never do.
 - Token usage: The summed provider token counts observed across a task's
-  provider sessions.
+  provider sessions. The detail view shows it; the task list does not.
+- Compaction: A provider summarizing an agent's conversation to free room in
+  its context window, losing detail. Rig counts an Agent session's compactions
+  in its current Provider session's root transcript, so `/clear` starts the
+  count over, and splits them into auto and manual (`/compact`) where the
+  provider records the trigger, as Claude does and Codex does not.
 - Pull request status: The GitHub pull request state associated with a task
   branch, if any.
 

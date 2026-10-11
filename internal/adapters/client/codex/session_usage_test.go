@@ -474,6 +474,44 @@ func TestRepositoryRecoverAgentSessionStatus_IgnoresSubagentTurnsFromBeforeRootR
 	require.Equal(t, current.ObservedAt, update.ObservedAt)
 }
 
+// A subagent compacts its own context, so only the root agent's rollout
+// counts, and a compaction appended later is picked up on the next read.
+func TestRepositoryReadConversationCompactions_CountsTheRootRolloutsCompactions(t *testing.T) {
+	repo := &repository{}
+	compacted := `{"timestamp":"2026-09-22T10:50:00Z","type":"compacted",` +
+		`"payload":{"message":"","replacement_history":[]}}`
+	contextCompacted := `{"timestamp":"2026-09-22T10:50:00Z","type":"event_msg",` +
+		`"payload":{"type":"context_compacted"}}`
+	rootPath := writeCodexRootTranscript(t)
+	appendTranscript(t, rootPath, compacted+"\n"+contextCompacted+"\n")
+	subagentPath := writeCodexSubagentTranscript(t, "session-root", compacted, contextCompacted, compacted)
+	conversation := codexBackgroundSessions(rootPath, subagentPath)
+
+	compactions, err := repo.ReadConversationCompactions(t.Context(), conversation)
+	require.NoError(t, err)
+	require.Equal(t, core.Compactions{Total: 1}, compactions)
+
+	appendTranscript(t, rootPath, compacted+"\n")
+	compactions, err = repo.ReadConversationCompactions(t.Context(), conversation)
+	require.NoError(t, err)
+	require.Equal(t, core.Compactions{Total: 2}, compactions)
+
+	// A rewritten rollout is counted afresh.
+	require.NoError(t, os.WriteFile(rootPath, []byte(compacted+"\n"), 0o644))
+	compactions, err = repo.ReadConversationCompactions(t.Context(), conversation)
+	require.NoError(t, err)
+	require.Equal(t, core.Compactions{Total: 1}, compactions)
+}
+
+func TestRepositoryReadConversationCompactions_ReturnsNoneWithoutARootRollout(t *testing.T) {
+	repo := &repository{}
+
+	compactions, err := repo.ReadConversationCompactions(t.Context(), nil)
+
+	require.NoError(t, err)
+	require.Equal(t, core.Compactions{}, compactions)
+}
+
 func codexRootStopStatus() core.AgentSessionStatus {
 	return core.AgentSessionStatus{
 		Phase:        core.TaskStatusPhaseWaitingForInput,

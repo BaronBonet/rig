@@ -380,11 +380,11 @@ func TestModel_ActivityRefreshTickReloadsSelectedTaskActivity(t *testing.T) {
 
 	msgs := runBatchCmd(t, cmd)
 	requireMsgType[taskActivityLoadedMsg](t, msgs)
-	requireMsgType[taskTokenUsageLoadedMsg](t, msgs)
+	requireMsgType[taskUsageLoadedMsg](t, msgs)
 	// The tick re-arms itself so activity keeps refreshing.
 	requireMsgType[activityRefreshTickMsg](t, msgs)
 	require.Contains(t, frontend.getTaskActivityCalls, "task-1:6")
-	require.Contains(t, frontend.getTaskTokenUsageCalls, "task-1")
+	require.Contains(t, frontend.getTaskUsageCalls, "task-1")
 	_ = got
 }
 

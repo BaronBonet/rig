@@ -72,15 +72,15 @@ var opGetTaskActivity = unaryOp[taskActivityRequest, []core.TaskActivityEvent]{
 	},
 }
 
-var opGetTaskTokenUsage = unaryOp[taskIDRequest, *core.TaskTokenUsage]{
-	command:  "get_task_token_usage",
-	envelope: "task_token_usage",
-	call: func(ctx context.Context, svc core.TaskService, req taskIDRequest) (*core.TaskTokenUsage, error) {
-		taskID, err := requiredTaskID("get_task_token_usage", req.TaskID)
+var opGetTaskUsage = unaryOp[taskIDRequest, *core.TaskUsage]{
+	command:  "get_task_usage",
+	envelope: "task_usage",
+	call: func(ctx context.Context, svc core.TaskService, req taskIDRequest) (*core.TaskUsage, error) {
+		taskID, err := requiredTaskID("get_task_usage", req.TaskID)
 		if err != nil {
 			return nil, err
 		}
-		return svc.GetTaskTokenUsage(ctx, taskID)
+		return svc.GetTaskUsage(ctx, taskID)
 	},
 }
 
@@ -207,7 +207,7 @@ func serveUnary[Req, Resp any](op unaryOp[Req, Resp]) unaryHandler {
 // method, which keeps this table honest.
 var socketUnaryHandlers = map[string]unaryHandler{
 	opGetTaskActivity.command:      serveUnary(opGetTaskActivity),
-	opGetTaskTokenUsage.command:    serveUnary(opGetTaskTokenUsage),
+	opGetTaskUsage.command:         serveUnary(opGetTaskUsage),
 	opListRepoPullRequests.command: serveUnary(opListRepoPullRequests),
 	opPullRequestStatus.command:    serveUnary(opPullRequestStatus),
 	opReconnectTaskSession.command: serveUnary(opReconnectTaskSession),

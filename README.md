@@ -13,7 +13,8 @@ a background daemon handles longer running orchestration.
 ## Features
 
 - **Task dashboard**: browse all known tasks in a terminal UI grouped by
-  repository, with live status, PR state, elapsed time, and token usage.
+  repository, with live status, PR state, elapsed time, and how many times each
+  agent's context was compacted. The detail panel adds token usage.
 - **Prompt-backed task creation**: start a new task from a prompt; the selected
   provider suggests a task name, then Rig creates the branch and worktree,
   prepares the workspace, and starts the tmux session.
@@ -169,10 +170,10 @@ reach existing tasks. Rig never modifies your user-level
 observed by or reported to Rig. The workspace settings file is untracked, so it
 never shows up in diffs or pull requests.
 
-Token usage and recent activity for Claude tasks are read from Claude Code
-transcripts, the same overview Codex tasks get: the last user prompt and
-recent assistant messages are recovered from the transcript even when hook
-events were lost, for example while the daemon was restarting.
+Token usage, compactions and recent activity for Claude tasks are read from
+Claude Code transcripts, the same overview Codex tasks get: the last user
+prompt and recent assistant messages are recovered from the transcript even
+when hook events were lost, for example while the daemon was restarting.
 
 ### Status semantics
 

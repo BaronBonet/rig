@@ -61,13 +61,16 @@ type codexTranscriptEntry struct {
 	usage      *core.SessionTokenUsage
 	activities []core.TaskActivityEvent
 	turn       codexTranscriptTurn
+	// compactions counts the transcript's compacted records.
+	compactions int
 }
 
 type codexTranscriptSnapshot struct {
-	status     *codexTranscriptStatus
-	usage      *core.SessionTokenUsage
-	activities []core.TaskActivityEvent
-	turn       codexTranscriptTurn
+	status      *codexTranscriptStatus
+	usage       *core.SessionTokenUsage
+	activities  []core.TaskActivityEvent
+	turn        codexTranscriptTurn
+	compactions int
 }
 
 // codexTranscriptTurn is a transcript's latest turn-lifecycle record, in file
@@ -220,6 +223,7 @@ func (i *codexTranscriptIndex) refreshLocked(ctx context.Context, entry *codexTr
 	usage := cloneSessionTokenUsage(entry.usage)
 	activities := append([]core.TaskActivityEvent(nil), entry.activities...)
 	turn := entry.turn
+	compactions := entry.compactions
 	if rebuild {
 		offset = 0
 		trailing = nil
@@ -227,6 +231,7 @@ func (i *codexTranscriptIndex) refreshLocked(ctx context.Context, entry *codexTr
 		usage = nil
 		activities = nil
 		turn = codexTranscriptTurn{}
+		compactions = 0
 	}
 
 	readOffset := offset + int64(len(trailing))
@@ -249,7 +254,7 @@ func (i *codexTranscriptIndex) refreshLocked(ctx context.Context, entry *codexTr
 			return err
 		}
 		lineEnd += consumed
-		parseCodexTranscriptRecord(pending[consumed:lineEnd], &status, &usage, &activities, &turn)
+		parseCodexTranscriptRecord(pending[consumed:lineEnd], &status, &usage, &activities, &turn, &compactions)
 		consumed = lineEnd + 1
 	}
 
@@ -262,6 +267,7 @@ func (i *codexTranscriptIndex) refreshLocked(ctx context.Context, entry *codexTr
 	entry.usage = usage
 	entry.activities = activities
 	entry.turn = turn
+	entry.compactions = compactions
 	if rebuild {
 		i.metrics.rebuilds.Add(1)
 	}
@@ -301,12 +307,18 @@ func parseCodexTranscriptRecord(
 	usage **core.SessionTokenUsage,
 	activities *[]core.TaskActivityEvent,
 	turn *codexTranscriptTurn,
+	compactions *int,
 ) {
 	var envelope codexTranscriptEnvelope
 	if err := jsonUnmarshalTranscriptLine(line, &envelope); err != nil {
 		return
 	}
 
+	// Codex records each compaction as a compacted record holding the
+	// history that replaced the conversation's.
+	if envelope.Type == "compacted" {
+		*compactions++
+	}
 	if candidate := codexTranscriptEnvelopeStatus(envelope); candidate != nil &&
 		(*status == nil || candidate.observedAt.After((*status).observedAt)) {
 		*status = candidate
@@ -383,10 +395,11 @@ func codexTranscriptEnvelopeTokenUsage(envelope codexTranscriptEnvelope) *core.S
 
 func snapshotTranscriptEntry(entry *codexTranscriptEntry) codexTranscriptSnapshot {
 	return codexTranscriptSnapshot{
-		status:     cloneCodexTranscriptStatus(entry.status),
-		usage:      cloneSessionTokenUsage(entry.usage),
-		activities: append([]core.TaskActivityEvent(nil), entry.activities...),
-		turn:       entry.turn,
+		status:      cloneCodexTranscriptStatus(entry.status),
+		usage:       cloneSessionTokenUsage(entry.usage),
+		activities:  append([]core.TaskActivityEvent(nil), entry.activities...),
+		turn:        entry.turn,
+		compactions: entry.compactions,
 	}
 }
 
