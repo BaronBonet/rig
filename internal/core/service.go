@@ -42,6 +42,7 @@ type service struct {
 	creation     *taskCreation
 	observation  *taskObservation
 	operations   *taskOperationCoordinator
+	models       *providerModelCatalog
 }
 
 // The concrete service must satisfy every port it is wired into. These
@@ -104,9 +105,10 @@ func NewTaskService(deps TaskServiceDependencies) *service {
 		warn:         deps.ReportWarning,
 		launcher:     launcher,
 		repos:        repos,
-		creation:     newTaskCreation(deps.Tasks, deps.GitWorktree, repos, launcher, operations),
+		creation:     newTaskCreation(deps.Tasks, deps.GitWorktree, deps.UserConfig, repos, launcher, operations),
 		operations:   operations,
 		observation:  observation,
+		models:       newProviderModelCatalog(deps.Providers),
 	}
 }
 

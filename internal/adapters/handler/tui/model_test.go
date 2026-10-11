@@ -1787,7 +1787,10 @@ func TestModel_CreateTaskFromPromptAppendsTaskAndStartsStatusTracking(t *testing
 
 	frontend.listTasks = append(frontend.listTasks, createdTask)
 	msgs := runBatchCmd(t, follow)
-	require.Len(t, msgs, 2)
+	// The tasks reload, the Launch defaults the daemon saved are fetched again,
+	// and the new task's status is tracked.
+	require.Len(t, msgs, 3)
+	requireMsgType[launchDefaultsLoadedMsg](t, msgs)
 	tasksLoaded := requireMsgType[tasksLoadedMsg](t, msgs)
 	next, _ = got.Update(tasksLoaded)
 	got, ok = next.(model)
@@ -1990,7 +1993,8 @@ func TestModel_CreateTaskFailureDiscardsDraftAndPreservesListView(t *testing.T) 
 
 	createFailed := runCmd(t, follow)
 	next, follow = withProgress.Update(createFailed)
-	require.Nil(t, follow)
+	// Its end only fetches the Launch defaults the daemon holds.
+	requireMsgType[launchDefaultsLoadedMsg](t, []tea.Msg{runCmd(t, follow)})
 
 	got, ok := next.(model)
 	require.True(t, ok)
@@ -2052,7 +2056,8 @@ func TestModel_CreateTaskFailureWithTaskSnapshotEnablesRetry(t *testing.T) {
 	require.True(t, ok)
 	createFailed := runCmd(t, follow)
 	next, follow = withProgress.Update(createFailed)
-	require.Nil(t, follow)
+	// Its end only fetches the Launch defaults the daemon holds.
+	requireMsgType[launchDefaultsLoadedMsg](t, []tea.Msg{runCmd(t, follow)})
 
 	got, ok := next.(model)
 	require.True(t, ok)
@@ -2453,7 +2458,8 @@ func TestModel_PRPickerCreateFailureReturnsToBrowseWithProgressAndError(t *testi
 
 	createFailed := runCmd(t, follow)
 	next, follow = withProgress.Update(createFailed)
-	require.Nil(t, follow)
+	// Its end only fetches the Launch defaults the daemon holds.
+	requireMsgType[launchDefaultsLoadedMsg](t, []tea.Msg{runCmd(t, follow)})
 
 	got, ok := next.(model)
 	require.True(t, ok)
@@ -2699,17 +2705,32 @@ type frontendHarness struct {
 	getProviderSetupCalls       int
 	savedProviderSetup          *core.ProviderSetup
 	saveProviderSetupErr        error
+	saveProviderSetupContext    context.Context
 	detections                  []core.ProviderDetection
 	detectProvidersErr          error
 	detectProvidersCalls        int
-	repoDirs                    []string
-	getRepoDirsErr              error
-	getRepoDirsCalls            int
-	savedRepoDirs               [][]string
-	saveRepoDirsErr             error
-	repoDirSuggestion           string
-	suggestRepoDirErr           error
-	suggestRepoDirCwds          []string
+	providerModels              map[core.Provider][]core.ProviderModel
+	providerModelsErr           map[core.Provider]error
+	providerModelsCalls         []core.Provider
+	providerModelsContexts      []context.Context
+	launchDefaults              map[core.Provider]core.LaunchChoice
+	launchDefaultsErr           error
+	launchDefaultsCalls         int
+	launchDefaultsContext       context.Context
+	savedLaunchDefaults         map[core.Provider]core.LaunchChoice
+	saveLaunchDefaultErr        map[core.Provider]error
+	saveLaunchDefaultContexts   []context.Context
+	// saveCalls names each provider setup and Launch default save in the
+	// order they ran, failed ones too.
+	saveCalls          []string
+	repoDirs           []string
+	getRepoDirsErr     error
+	getRepoDirsCalls   int
+	savedRepoDirs      [][]string
+	saveRepoDirsErr    error
+	repoDirSuggestion  string
+	suggestRepoDirErr  error
+	suggestRepoDirCwds []string
 }
 
 func newFrontendHarness() *frontendHarness {
@@ -2731,7 +2752,9 @@ func newFrontendHarness() *frontendHarness {
 		},
 	).Maybe()
 	frontend.mock.EXPECT().SaveProviderSetup(mock.Anything, mock.Anything).RunAndReturn(
-		func(_ context.Context, setup core.ProviderSetup) error {
+		func(ctx context.Context, setup core.ProviderSetup) error {
+			frontend.saveCalls = append(frontend.saveCalls, "setup")
+			frontend.saveProviderSetupContext = ctx
 			if frontend.saveProviderSetupErr != nil {
 				return frontend.saveProviderSetupErr
 			}
@@ -2747,6 +2770,40 @@ func newFrontendHarness() *frontendHarness {
 				return nil, frontend.detectProvidersErr
 			}
 			return append([]core.ProviderDetection(nil), frontend.detections...), nil
+		},
+	).Maybe()
+	frontend.mock.EXPECT().ListProviderModels(mock.Anything, mock.Anything).RunAndReturn(
+		func(ctx context.Context, provider core.Provider) ([]core.ProviderModel, error) {
+			frontend.providerModelsCalls = append(frontend.providerModelsCalls, provider)
+			frontend.providerModelsContexts = append(frontend.providerModelsContexts, ctx)
+			if err := frontend.providerModelsErr[provider]; err != nil {
+				return nil, err
+			}
+			return frontend.providerModels[provider], nil
+		},
+	).Maybe()
+	frontend.mock.EXPECT().GetLaunchDefaults(mock.Anything).RunAndReturn(
+		func(ctx context.Context) (map[core.Provider]core.LaunchChoice, error) {
+			frontend.launchDefaultsCalls++
+			frontend.launchDefaultsContext = ctx
+			if frontend.launchDefaultsErr != nil {
+				return nil, frontend.launchDefaultsErr
+			}
+			return frontend.launchDefaults, nil
+		},
+	).Maybe()
+	frontend.mock.EXPECT().SaveLaunchDefault(mock.Anything, mock.Anything, mock.Anything).RunAndReturn(
+		func(ctx context.Context, provider core.Provider, choice core.LaunchChoice) error {
+			frontend.saveCalls = append(frontend.saveCalls, string(provider))
+			frontend.saveLaunchDefaultContexts = append(frontend.saveLaunchDefaultContexts, ctx)
+			if err := frontend.saveLaunchDefaultErr[provider]; err != nil {
+				return err
+			}
+			if frontend.savedLaunchDefaults == nil {
+				frontend.savedLaunchDefaults = make(map[core.Provider]core.LaunchChoice)
+			}
+			frontend.savedLaunchDefaults[provider] = choice
+			return nil
 		},
 	).Maybe()
 	frontend.mock.EXPECT().GetRepoDirs(mock.Anything).RunAndReturn(

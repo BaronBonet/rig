@@ -56,6 +56,15 @@ type saveProviderSetupRequest struct {
 	ProviderSetup *core.ProviderSetup `json:"provider_setup"`
 }
 
+type providerModelsRequest struct {
+	Provider core.Provider `json:"provider"`
+}
+
+type saveLaunchDefaultRequest struct {
+	Provider core.Provider     `json:"provider"`
+	Choice   core.LaunchChoice `json:"choice"`
+}
+
 type saveRepoDirsRequest struct {
 	RepoDirs []string `json:"repo_dirs"`
 }
@@ -70,6 +79,14 @@ func requiredTaskID(command string, taskID string) (string, error) {
 		return "", errors.New(command + " task_id required")
 	}
 	return taskID, nil
+}
+
+func requiredProvider(command string, provider core.Provider) (core.Provider, error) {
+	provider = core.Provider(strings.TrimSpace(string(provider)))
+	if provider == "" {
+		return "", errors.New(command + " provider required")
+	}
+	return provider, nil
 }
 
 var opGetTaskActivity = unaryOp[taskActivityRequest, []core.TaskActivityEvent]{
@@ -155,6 +172,42 @@ var opDetectProviders = unaryOp[emptyResponse, []core.ProviderDetection]{
 	envelope: "provider_detections",
 	call: func(ctx context.Context, svc core.TaskService, _ emptyResponse) ([]core.ProviderDetection, error) {
 		return svc.DetectProviders(ctx)
+	},
+}
+
+var opListProviderModels = unaryOp[providerModelsRequest, []core.ProviderModel]{
+	command:  "list_provider_models",
+	envelope: "provider_models",
+	call: func(ctx context.Context, svc core.TaskService, req providerModelsRequest) ([]core.ProviderModel, error) {
+		provider, err := requiredProvider("list_provider_models", req.Provider)
+		if err != nil {
+			return nil, err
+		}
+		return svc.ListProviderModels(ctx, provider)
+	},
+}
+
+var opGetLaunchDefaults = unaryOp[emptyResponse, map[core.Provider]core.LaunchChoice]{
+	command:  "get_launch_defaults",
+	envelope: "launch_defaults",
+	call: func(
+		ctx context.Context,
+		svc core.TaskService,
+		_ emptyResponse,
+	) (map[core.Provider]core.LaunchChoice, error) {
+		return svc.GetLaunchDefaults(ctx)
+	},
+}
+
+var opSaveLaunchDefault = unaryOp[saveLaunchDefaultRequest, emptyResponse]{
+	command:  "save_launch_default",
+	envelope: "launch_default_saved",
+	call: func(ctx context.Context, svc core.TaskService, req saveLaunchDefaultRequest) (emptyResponse, error) {
+		provider, err := requiredProvider("save_launch_default", req.Provider)
+		if err != nil {
+			return emptyResponse{}, err
+		}
+		return emptyResponse{}, svc.SaveLaunchDefault(ctx, provider, req.Choice)
 	},
 }
 
@@ -266,6 +319,9 @@ var socketUnaryHandlers = map[string]unaryHandler{
 	opGetProviderSetup.command:     serveUnary(opGetProviderSetup),
 	opSaveProviderSetup.command:    serveUnary(opSaveProviderSetup),
 	opDetectProviders.command:      serveUnary(opDetectProviders),
+	opListProviderModels.command:   serveUnary(opListProviderModels),
+	opGetLaunchDefaults.command:    serveUnary(opGetLaunchDefaults),
+	opSaveLaunchDefault.command:    serveUnary(opSaveLaunchDefault),
 	opGetRepoDirs.command:          serveUnary(opGetRepoDirs),
 	opSaveRepoDirs.command:         serveUnary(opSaveRepoDirs),
 	opListRepos.command:            serveUnary(opListRepos),

@@ -1234,6 +1234,64 @@ func TestRepositorySplitAgentPane_SplitsTheTaskWindowWithoutAPaneToSplitBeside(t
 	require.Equal(t, "%12", pane.ID)
 }
 
+// The launch command is typed into the pane's shell, which must pass each
+// word on as the provider CLI's argument: a model such as opus[1m] must not
+// hit zsh's nomatch error, nor a value run a command substitution.
+func TestRepositorySplitAgentPane_TypesEachLaunchWordShellSafe(t *testing.T) {
+	runner := subprocess.NewMockRunner(t)
+	repo := New(runner).(*repository)
+
+	mock.InOrder(
+		expectAgentPane(runner, subprocess.Result{Stdout: "%12\t/private/tmp/tmux-501/default\t4722\n"}, nil),
+		expectTmuxRun(runner, subprocess.Result{}, nil, "select-layout", "-t", "%12", "even-horizontal"),
+		expectTmuxRun(runner, subprocess.Result{}, nil,
+			"send-keys", "-t", "%12", `claude --model 'opus[1m]' --effort '$(touch pwned)' ''`, "C-m",
+		),
+	)
+
+	_, err := repo.SplitAgentPane(context.Background(), agentPaneTask, "%50", core.TaskSessionLaunchSpec{
+		Command: []string{"claude", "--model", "opus[1m]", "--effort", "$(touch pwned)", ""},
+	})
+
+	require.NoError(t, err)
+}
+
+func TestShellWord_QuotesEveryWordTheShellWouldChange(t *testing.T) {
+	for word, want := range map[string]string{
+		// Rig's launch commands come out as they always have.
+		"env":                                  "env",
+		"CODEX_HOME=/Users/me/.codex":          "CODEX_HOME=/Users/me/.codex",
+		"codex":                                "codex",
+		"--no-daemon":                          "--no-daemon",
+		"resume":                               "resume",
+		"0199a213-81c0-7800-8aa1-bbab2a035a53": "0199a213-81c0-7800-8aa1-bbab2a035a53",
+		"model_reasoning_effort=high":          "model_reasoning_effort=high",
+		"gpt-6-luna":                           "gpt-6-luna",
+		"~/bin/claude":                         "~/bin/claude",
+		"CODEX_HOME=/Users/me/my codex":        "'CODEX_HOME=/Users/me/my codex'",
+		`{"a": 1}`:                             `'{"a": 1}'`,
+		// Values the shell would glob, substitute or split.
+		"opus[1m]":         "'opus[1m]'",
+		"$(touch pwned)":   "'$(touch pwned)'",
+		"`touch pwned`":    "'`touch pwned`'",
+		"high;touch pwned": "'high;touch pwned'",
+		"it's":             `'it'\''s'`,
+		"=codex":           "'=codex'",
+		"":                 "''",
+		"!":                "'!'",
+		"opus-été":         "'opus-été'",
+		// A ~ stays unquoted only as a leading ~/, where it expands to the
+		// user's home as it always has.
+		"~nosuchuser":  "'~nosuchuser'",
+		"a=~/x":        "'a=~/x'",
+		"~/bin/codex":  "~/bin/codex",
+		"~/bin/~codex": "'~/bin/~codex'",
+		"~/":           "~/",
+	} {
+		require.Equal(t, want, shellWord(word), word)
+	}
+}
+
 // The panes stay unevenly wide, but the agent still starts.
 func TestRepositorySplitAgentPane_LaunchesTheAgentWhenThePanesCannotBeEvenedOut(t *testing.T) {
 	runner := subprocess.NewMockRunner(t)

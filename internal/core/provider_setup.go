@@ -54,6 +54,29 @@ func (s *service) SaveProviderSetup(ctx context.Context, setup ProviderSetup) er
 	return nil
 }
 
+func (s *service) GetLaunchDefaults(ctx context.Context) (map[Provider]LaunchChoice, error) {
+	if s.userConfig == nil {
+		return nil, fmt.Errorf("user config store not configured")
+	}
+
+	return s.userConfig.GetLaunchDefaults(ctx)
+}
+
+func (s *service) SaveLaunchDefault(ctx context.Context, provider Provider, choice LaunchChoice) error {
+	if s.userConfig == nil {
+		return fmt.Errorf("user config store not configured")
+	}
+	if !IsSupportedProvider(provider) {
+		return fmt.Errorf("provider %q is not a supported provider", provider)
+	}
+	choice, err := normalizeLaunchChoice(choice)
+	if err != nil {
+		return err
+	}
+
+	return s.userConfig.SaveLaunchDefault(ctx, provider, choice)
+}
+
 func (s *service) DetectProviders(ctx context.Context) ([]ProviderDetection, error) {
 	detections := make([]ProviderDetection, 0, len(SupportedProviders()))
 	for _, provider := range SupportedProviders() {

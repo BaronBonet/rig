@@ -86,8 +86,7 @@ func TestModel_SavedProviderSetupOpensTheRepoDirsStep(t *testing.T) {
 			next, cmd := m.Update(providerSetupLoadedMsg{setup: tt.setup})
 			got := asModel(t, next)
 			require.Equal(t, modeProviderSetup, got.mode)
-			next, _ = got.Update(runCmd(t, cmd))
-			got = asModel(t, next)
+			got = feed(t, got, dataMsgs(t, cmd)...)
 			next, saveCmd := got.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
 			got = asModel(t, next)
 			next, cmd = got.Update(runCmd(t, saveCmd))
@@ -95,7 +94,7 @@ func TestModel_SavedProviderSetupOpensTheRepoDirsStep(t *testing.T) {
 
 			require.NotNil(t, frontend.savedProviderSetup)
 			require.Equal(t, modeRepoDirsSetup, got.mode)
-			require.IsType(t, repoDirsLoadedMsg{}, runCmd(t, cmd))
+			require.Len(t, msgsOf[repoDirsLoadedMsg](dataMsgs(t, cmd)), 1)
 			require.Equal(t, 1, frontend.getRepoDirsCalls)
 			require.Equal(t, []string{"/work/backend"}, frontend.suggestRepoDirCwds)
 		})
@@ -111,7 +110,7 @@ func TestModel_StartWithProviderSetupDoesNotOpenTheRepoDirsStep(t *testing.T) {
 	next, cmd := m.Update(providerSetupLoadedMsg{setup: frontend.providerSetup})
 	got := asModel(t, next)
 
-	require.Nil(t, cmd)
+	require.Empty(t, msgsOf[repoDirsLoadedMsg](dataMsgs(t, cmd)))
 	require.Equal(t, modeBrowse, got.mode)
 	require.Zero(t, frontend.getRepoDirsCalls)
 }
@@ -316,8 +315,7 @@ func TestModel_RepoDirsStepIgnoresTheReplyToAnEarlierLoad(t *testing.T) {
 	next, cmd := got.Update(tea.KeyPressMsg{Code: 'S', Text: "S"})
 	got = asModel(t, next)
 	require.Equal(t, modeProviderSetup, got.mode)
-	next, _ = got.Update(runCmd(t, cmd))
-	got = asModel(t, next)
+	got = feed(t, got, dataMsgs(t, cmd)...)
 	next, cmd = got.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
 	got = asModel(t, next)
 	next, secondLoad := got.Update(runCmd(t, cmd))
@@ -327,7 +325,7 @@ func TestModel_RepoDirsStepIgnoresTheReplyToAnEarlierLoad(t *testing.T) {
 	frontend.repoDirs = []string{"/old"}
 	stale := runCmd(t, firstLoad)
 	frontend.repoDirs = []string{"/work"}
-	fresh := runCmd(t, secondLoad)
+	fresh := requireMsgType[repoDirsLoadedMsg](t, dataMsgs(t, secondLoad))
 
 	next, cmd = got.Update(stale)
 	got = asModel(t, next)
@@ -461,8 +459,7 @@ func TestModel_FirstRunSetupGoesThroughBothStepsToTheTaskList(t *testing.T) {
 	got = asModel(t, next)
 	require.Equal(t, modeProviderSetup, got.mode)
 
-	next, _ = got.Update(runCmd(t, cmd))
-	got = asModel(t, next)
+	got = feed(t, got, dataMsgs(t, cmd)...)
 	next, cmd = got.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
 	got = asModel(t, next)
 	next, cmd = got.Update(runCmd(t, cmd))
@@ -473,8 +470,7 @@ func TestModel_FirstRunSetupGoesThroughBothStepsToTheTaskList(t *testing.T) {
 		Default:    core.ProviderCodex,
 	}, frontend.savedProviderSetup)
 
-	next, _ = got.Update(runCmd(t, cmd))
-	got = asModel(t, next)
+	got = feed(t, got, dataMsgs(t, cmd)...)
 	require.Equal(t, "/work", got.repoDirsForm.input.Value())
 	next, cmd = got.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
 	got = asModel(t, next)

@@ -28,6 +28,11 @@ type Task struct {
 	WorktreePath string   `json:"worktree_path"`
 	TmuxSession  string   `json:"tmux_session"`
 	Provider     Provider `json:"provider"`
+	// Model and ReasoningLevel are the launch choice made at task creation for
+	// the launch provider. Empty means no choice: Rig then passes the provider
+	// CLI no flag, so the user's own CLI config applies.
+	Model          string `json:"model"`
+	ReasoningLevel string `json:"reasoning_level"`
 	// CreationStatus tracks whether the durable task has completed its initial
 	// workspace/session setup, or whether it can be retried from CreationStep.
 	CreationStatus TaskCreationStatus     `json:"creation_status"`
@@ -39,6 +44,30 @@ type Task struct {
 	// deleting the parent clears it. A task's children are the tasks whose
 	// ParentTaskID is its ID.
 	ParentTaskID string `json:"parent_task_id"`
+}
+
+// LaunchChoiceFor returns the task's launch model and reasoning level when
+// provider is its launch provider, and nothing for any other provider: the
+// choice was made for the launch provider's CLI, so an agent session of
+// another provider never gets it.
+func (t *Task) LaunchChoiceFor(provider Provider) (model string, reasoningLevel string) {
+	if t == nil || t.Provider != provider {
+		return "", ""
+	}
+	return t.Model, t.ReasoningLevel
+}
+
+// LaunchChoice is a Launch choice: a Launch model and Launch reasoning level
+// made for one provider. Empty fields mean no choice, which leaves each to the
+// provider CLI's own default.
+type LaunchChoice struct {
+	Model          string `json:"model"`
+	ReasoningLevel string `json:"reasoning_level"`
+}
+
+// IsZero reports whether the choice makes no choice at all.
+func (c LaunchChoice) IsZero() bool {
+	return c.Model == "" && c.ReasoningLevel == ""
 }
 
 type TaskCreationStatus string
@@ -561,6 +590,17 @@ type ProviderDetection struct {
 	Provider Provider `json:"provider"`
 	Ready    bool     `json:"ready"`
 	Detail   string   `json:"detail,omitempty"`
+}
+
+// ProviderModel is one model a provider offers, as its CLI reports it at
+// runtime. Rig keeps no list of models or reasoning levels of its own.
+type ProviderModel struct {
+	// ID is the value the provider CLI's model flag takes.
+	ID          string `json:"id"`
+	DisplayName string `json:"display_name"`
+	// ReasoningLevels are the reasoning levels the model accepts, in provider
+	// order. Empty means the model takes no reasoning level.
+	ReasoningLevels []string `json:"reasoning_levels,omitempty"`
 }
 
 // TaskSessionLaunchSpec is the handoff from a provider client to the tmux

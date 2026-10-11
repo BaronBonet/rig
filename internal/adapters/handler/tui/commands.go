@@ -3,6 +3,8 @@ package tui
 import (
 	"context"
 	"errors"
+	"fmt"
+	"strings"
 	"time"
 
 	"github.com/BaronBonet/rig/internal/core"
@@ -115,22 +117,89 @@ func getProviderSetupCmd(ctx context.Context, frontend core.TaskFrontend) tea.Cm
 	}
 }
 
-func detectProvidersCmd(ctx context.Context, frontend core.TaskFrontend) tea.Cmd {
+// detectProvidersCmd detects the providers, its reply carrying the
+// detection's number so a stale one can be told apart.
+func detectProvidersCmd(ctx context.Context, frontend core.TaskFrontend, detection int) tea.Cmd {
 	return func() tea.Msg {
 		detections, err := frontend.DetectProviders(ctx)
 		return providerDetectionsMsg{
 			detections: detections,
 			err:        err,
+			detection:  detection,
 		}
 	}
 }
 
-func saveProviderSetupCmd(ctx context.Context, frontend core.TaskFrontend, setup core.ProviderSetup) tea.Cmd {
+// saveProviderSetupCmd saves the provider setup and then, only once it saved,
+// each Launch default edit in turn: before the first provider setup there is
+// no user config to keep them in, and saving one would do nothing. A Launch
+// default that fails to save does not stop the rest.
+func saveProviderSetupCmd(
+	ctx context.Context,
+	frontend core.TaskFrontend,
+	setup core.ProviderSetup,
+	edits []launchDefaultEdit,
+) tea.Cmd {
 	return func() tea.Msg {
-		err := frontend.SaveProviderSetup(ctx, setup)
-		return providerSetupSavedMsg{
-			setup: setup,
-			err:   err,
+		msg := providerSetupSavedMsg{setup: setup}
+		if msg.err = frontend.SaveProviderSetup(ctx, setup); msg.err != nil {
+			return msg
+		}
+		var failures []string
+		for _, edit := range edits {
+			if err := saveLaunchDefault(ctx, frontend, edit); err != nil {
+				failures = append(failures, fmt.Sprintf("save %s launch default: %v", edit.provider, err))
+				continue
+			}
+			msg.savedDefaults = append(msg.savedDefaults, edit)
+		}
+		if len(failures) > 0 {
+			msg.defaultsErr = errors.New(strings.Join(failures, "; "))
+		}
+		return msg
+	}
+}
+
+func saveLaunchDefault(ctx context.Context, frontend core.TaskFrontend, edit launchDefaultEdit) error {
+	ctx, cancel := context.WithTimeout(ctx, launchDefaultsTimeout)
+	defer cancel()
+	return frontend.SaveLaunchDefault(ctx, edit.provider, edit.choice)
+}
+
+// providerModelsTimeout bounds one model list fetch. The daemon answers from
+// its cache at once when warm and bounds a cold fetch from the provider CLI
+// itself; the deadline keeps a stuck daemon from holding the fetch forever,
+// as the daemon does not see a client that gave up.
+const providerModelsTimeout = 60 * time.Second
+
+// launchDefaultsTimeout bounds the Launch defaults fetch, a user config read,
+// and each Launch default save, a user config write.
+const launchDefaultsTimeout = 10 * time.Second
+
+func listProviderModelsCmd(ctx context.Context, frontend core.TaskFrontend, provider core.Provider) tea.Cmd {
+	return func() tea.Msg {
+		ctx, cancel := context.WithTimeout(ctx, providerModelsTimeout)
+		defer cancel()
+		models, err := frontend.ListProviderModels(ctx, provider)
+		return providerModelsLoadedMsg{
+			provider: provider,
+			models:   models,
+			err:      err,
+		}
+	}
+}
+
+// getLaunchDefaultsCmd fetches the Launch defaults, its reply carrying the
+// fetch's number so a stale one can be told apart.
+func getLaunchDefaultsCmd(ctx context.Context, frontend core.TaskFrontend, fetch int) tea.Cmd {
+	return func() tea.Msg {
+		ctx, cancel := context.WithTimeout(ctx, launchDefaultsTimeout)
+		defer cancel()
+		defaults, err := frontend.GetLaunchDefaults(ctx)
+		return launchDefaultsLoadedMsg{
+			defaults: defaults,
+			err:      err,
+			fetch:    fetch,
 		}
 	}
 }

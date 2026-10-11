@@ -280,21 +280,35 @@ func (r *repository) BuildWorkspaceBootstrapSpec(_ *core.Task) (core.WorkspaceBo
 	}, nil
 }
 
+// BuildTaskSessionLaunchSpec starts Claude on the task's launch model and
+// reasoning level, when the task was launched on Claude and they are set.
 func (r *repository) BuildTaskSessionLaunchSpec(task *core.Task) (core.TaskSessionLaunchSpec, error) {
 	var prefillInput []string
 	if strings.TrimSpace(task.Prompt) != "" {
 		prefillInput = []string{task.Prompt}
 	}
 
+	model, reasoningLevel := task.LaunchChoiceFor(core.ProviderClaude)
+	command := []string{r.binary}
+	if model != "" {
+		command = append(command, "--model", model)
+	}
+	command = appendEffortFlag(command, reasoningLevel)
+
 	return core.TaskSessionLaunchSpec{
-		Command:      []string{r.binary},
+		Command:      command,
 		ReadyMarker:  readyMarker,
 		PrefillInput: prefillInput,
 	}, nil
 }
 
+// BuildReconnectTaskSessionLaunchSpec resumes sessionID without a model flag:
+// Claude resumes a session on the model it last used, including one picked
+// with /model, which a flag would undo. Claude keeps no reasoning level with
+// the session that Rig can read back, and would resume on the user's own, so
+// a task launched on Claude passes its launch reasoning level again.
 func (r *repository) BuildReconnectTaskSessionLaunchSpec(
-	_ *core.Task,
+	task *core.Task,
 	sessionID string,
 ) (core.TaskSessionLaunchSpec, error) {
 	sessionID = strings.TrimSpace(sessionID)
@@ -302,10 +316,20 @@ func (r *repository) BuildReconnectTaskSessionLaunchSpec(
 		return core.TaskSessionLaunchSpec{}, fmt.Errorf("session ID is required")
 	}
 
+	_, reasoningLevel := task.LaunchChoiceFor(core.ProviderClaude)
 	return core.TaskSessionLaunchSpec{
-		Command:     []string{r.binary, "--resume", sessionID},
+		Command:     appendEffortFlag([]string{r.binary, "--resume", sessionID}, reasoningLevel),
 		ReadyMarker: readyMarker,
 	}, nil
+}
+
+// appendEffortFlag adds Claude's reasoning level flag to command, unless no
+// level is set.
+func appendEffortFlag(command []string, reasoningLevel string) []string {
+	if reasoningLevel == "" {
+		return command
+	}
+	return append(command, "--effort", reasoningLevel)
 }
 
 func (r *repository) TaskSessionCommandName() string {

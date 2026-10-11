@@ -76,6 +76,19 @@ func (f *frontend) DetectProviders(ctx context.Context) ([]core.ProviderDetectio
 	return callUnary(ctx, f, opDetectProviders, emptyResponse{})
 }
 
+func (f *frontend) ListProviderModels(ctx context.Context, provider core.Provider) ([]core.ProviderModel, error) {
+	return callUnary(ctx, f, opListProviderModels, providerModelsRequest{Provider: provider})
+}
+
+func (f *frontend) GetLaunchDefaults(ctx context.Context) (map[core.Provider]core.LaunchChoice, error) {
+	return callUnary(ctx, f, opGetLaunchDefaults, emptyResponse{})
+}
+
+func (f *frontend) SaveLaunchDefault(ctx context.Context, provider core.Provider, choice core.LaunchChoice) error {
+	_, err := callUnary(ctx, f, opSaveLaunchDefault, saveLaunchDefaultRequest{Provider: provider, Choice: choice})
+	return err
+}
+
 func (f *frontend) GetRepoDirs(ctx context.Context) ([]string, error) {
 	return callUnary(ctx, f, opGetRepoDirs, emptyResponse{})
 }

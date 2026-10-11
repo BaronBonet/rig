@@ -128,6 +128,63 @@ func TestRepositoryUpdateTask_PersistsMutations(t *testing.T) {
 	}
 }
 
+// A task keeps the model and reasoning level it was created with, and one
+// created without a choice reads back with neither.
+func TestRepositoryTask_RoundTripsTheLaunchChoice(t *testing.T) {
+	repo := newTestRepository(t)
+	ctx := context.Background()
+	now := time.Date(2026, time.October, 11, 10, 0, 0, 0, time.UTC)
+
+	chosen := &core.Task{
+		ID:             "task-1",
+		Slug:           "task-one",
+		Prompt:         "prompt",
+		DisplayName:    "task one",
+		RepoRoot:       "/tmp/repo",
+		RepoName:       "repo",
+		BranchName:     "feat/task-one",
+		WorktreePath:   "/tmp/repo-task-one",
+		TmuxSession:    "repo_task-one",
+		Provider:       core.ProviderClaude,
+		Model:          "opus[1m]",
+		ReasoningLevel: "high",
+		CreationStatus: core.TaskCreationStatusCreating,
+		CreatedAt:      now,
+		UpdatedAt:      now,
+	}
+	unchosen := &core.Task{
+		ID:             "task-2",
+		Slug:           "task-two",
+		Prompt:         "prompt",
+		DisplayName:    "task two",
+		RepoRoot:       "/tmp/repo",
+		RepoName:       "repo",
+		BranchName:     "feat/task-two",
+		WorktreePath:   "/tmp/repo-task-two",
+		TmuxSession:    "repo_task-two",
+		Provider:       core.ProviderCodex,
+		CreationStatus: core.TaskCreationStatusReady,
+		CreatedAt:      now.Add(time.Second),
+		UpdatedAt:      now.Add(time.Second),
+	}
+	require.NoError(t, repo.CreateTask(ctx, chosen))
+	require.NoError(t, repo.CreateTask(ctx, unchosen))
+
+	tasks, err := repo.ListTasks(ctx)
+	require.NoError(t, err)
+	require.Equal(t, []*core.Task{chosen, unchosen}, tasks)
+
+	chosen.CreationStatus = core.TaskCreationStatusReady
+	chosen.Model = "sonnet"
+	chosen.ReasoningLevel = ""
+	chosen.UpdatedAt = now.Add(time.Minute)
+	require.NoError(t, repo.UpdateTask(ctx, chosen))
+
+	tasks, err = repo.ListTasks(ctx)
+	require.NoError(t, err)
+	require.Equal(t, []*core.Task{chosen, unchosen}, tasks)
+}
+
 func TestRepositoryUpdateTask_PersistsCreationFailureMetadata(t *testing.T) {
 	repo := newTestRepository(t)
 	now := time.Now().UTC()
@@ -476,7 +533,7 @@ func TestRepositoryNew_MigratesDatabaseWithSquashedMigrationHistory(t *testing.T
 	// 00001_init.sql: it records goose versions 2-5 as applied, still has the
 	// original task_status table, and has no agent sessions.
 	for _, statement := range slices.Concat(
-		dropTaskParentStatements, dropAgentSessionsStatements, dropActivityAgentSessionStatements, []string{
+		dropTaskLaunchChoiceStatements, dropTaskParentStatements, dropAgentSessionsStatements, dropActivityAgentSessionStatements, []string{
 			originalTaskStatusTable,
 			originalTaskResumeMetadataTable,
 			"delete from goose_db_version where version_id > 1",
@@ -526,6 +583,13 @@ var dropAgentSessionsStatements = []string{
 var dropActivityAgentSessionStatements = []string{
 	"drop index idx_task_activity_agent_session",
 	"alter table task_activity drop column agent_session_id",
+}
+
+// dropTaskLaunchChoiceStatements undo 00014, which records the model and
+// reasoning level chosen at task creation.
+var dropTaskLaunchChoiceStatements = []string{
+	"alter table tasks drop column reasoning_level",
+	"alter table tasks drop column model",
 }
 
 // dropTaskParentStatements undo 00013, which records each task's parent
@@ -651,6 +715,8 @@ func TestRepositoryNew_CreatesSchemaForTasksAndTaskState(t *testing.T) {
 		"creation_step",
 		"creation_error",
 		"parent_task_id",
+		"model",
+		"reasoning_level",
 	}
 	if !reflect.DeepEqual(names, wantTasks) {
 		t.Fatalf("unexpected tasks columns:\n got: %#v\nwant: %#v", names, wantTasks)
@@ -1141,7 +1207,7 @@ func TestRepositoryNew_AddsAgentSessionsToAnExistingDatabase(t *testing.T) {
 	// Rewind to a database migrated before agent sessions existed, when tasks
 	// still had a status row.
 	for _, statement := range slices.Concat(
-		dropTaskParentStatements, dropAgentSessionsStatements, dropActivityAgentSessionStatements, []string{
+		dropTaskLaunchChoiceStatements, dropTaskParentStatements, dropAgentSessionsStatements, dropActivityAgentSessionStatements, []string{
 			originalTaskStatusTable,
 			originalTaskResumeMetadataTable,
 			"delete from goose_db_version where version_id >= 6",
@@ -1197,7 +1263,7 @@ func TestRepositoryNew_DropsTaskStatusFromAnExistingDatabase(t *testing.T) {
 	// Rewind to a database migrated before task status moved to agent
 	// sessions, with a status row for the task.
 	for _, statement := range slices.Concat(
-		dropTaskParentStatements, dropAgentSessionNameStatements, dropAgentSessionLaunchedAtStatements,
+		dropTaskLaunchChoiceStatements, dropTaskParentStatements, dropAgentSessionNameStatements, dropAgentSessionLaunchedAtStatements,
 		dropActivityAgentSessionStatements, []string{
 			originalTaskStatusTable,
 			originalTaskResumeMetadataTable,
@@ -1227,7 +1293,7 @@ func TestRepositoryNew_KeepsAgentSessionsOfAnExistingDatabaseAsHookOpened(t *tes
 
 	// Rewind to a database migrated before Rig recorded agent launches, with
 	// an open agent session a hook event opened.
-	for _, statement := range slices.Concat(dropTaskParentStatements, dropAgentSessionNameStatements, dropAgentSessionLaunchedAtStatements, []string{
+	for _, statement := range slices.Concat(dropTaskLaunchChoiceStatements, dropTaskParentStatements, dropAgentSessionNameStatements, dropAgentSessionLaunchedAtStatements, []string{
 		originalTaskResumeMetadataTable,
 		"insert into agent_sessions (id, task_id, provider, tmux_socket_path, tmux_server_pid, tmux_pane, " +
 			"pane_trusted, provider_session_id, started_at) values ('agent-1', 'task-1', 'claude', " +
@@ -1473,7 +1539,7 @@ func TestRepositoryNew_MakesEachTasksLastConversationAnAgentSession(t *testing.T
 	// Rewind to a database migrated before Reconnect restored agent sessions,
 	// where task-1 and task-2 have resume metadata for their last
 	// conversation.
-	for _, statement := range slices.Concat(dropTaskParentStatements, dropAgentSessionNameStatements, []string{
+	for _, statement := range slices.Concat(dropTaskLaunchChoiceStatements, dropTaskParentStatements, dropAgentSessionNameStatements, []string{
 		originalTaskResumeMetadataTable,
 		"insert into task_resume_metadata (task_id, provider, session_id, observed_at) values " +
 			"('task-1', 'codex', 'codex-sess-1', '2026-10-09T10:05:00.123456789Z'), " +
@@ -1521,7 +1587,7 @@ func TestRepositoryNew_LeavesOutATaskWhoseIDAnAgentSessionHolds(t *testing.T) {
 		Provider:  core.ProviderClaude,
 		StartedAt: time.Date(2026, time.October, 9, 10, 0, 0, 0, time.UTC),
 	}))
-	for _, statement := range slices.Concat(dropTaskParentStatements, dropAgentSessionNameStatements, []string{
+	for _, statement := range slices.Concat(dropTaskLaunchChoiceStatements, dropTaskParentStatements, dropAgentSessionNameStatements, []string{
 		originalTaskResumeMetadataTable,
 		"insert into task_resume_metadata (task_id, provider, session_id, observed_at) values " +
 			"('task-2', 'codex', 'codex-sess-2', '2026-10-09T10:05:00Z')",
@@ -1596,7 +1662,7 @@ func TestRepositoryNew_MigratesOnlyResumeMetadataItCanResume(t *testing.T) {
 	// Rewind to before 00011. task-1's resume metadata has no time, task-2's
 	// no provider and task-3's no conversation; the last row's task is gone,
 	// as foreign keys were off when it was deleted.
-	for _, statement := range slices.Concat(dropTaskParentStatements, dropAgentSessionNameStatements, []string{
+	for _, statement := range slices.Concat(dropTaskLaunchChoiceStatements, dropTaskParentStatements, dropAgentSessionNameStatements, []string{
 		originalTaskResumeMetadataTable,
 		"pragma foreign_keys = off",
 		"insert into task_resume_metadata (task_id, provider, session_id, observed_at) values " +

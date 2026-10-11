@@ -3,6 +3,7 @@ package tui
 import (
 	"context"
 	"errors"
+	"fmt"
 	"path/filepath"
 	"strings"
 
@@ -88,6 +89,17 @@ type model struct {
 	// task-list reconciliation can release daemon observation interest.
 	statusCancels map[string]context.CancelFunc
 
+	// providerModels is each configured provider's model list, fetched once
+	// provider setup loads, and launchDefaults each provider's Launch
+	// default. Both outlive drafts: a draft starts from them.
+	providerModels map[core.Provider]providerModelsState
+	launchDefaults launchDefaultsState
+
+	// setupDetections numbers each provider detection as the setup screen
+	// starts it. It outlives the setup form, so a reply from a screen since
+	// closed is told apart from the latest.
+	setupDetections int
+
 	// Per-mode state, cleared by transition() when the mode family changes.
 	draft        taskDraft
 	setupForm    setupFormState
@@ -101,9 +113,9 @@ type model struct {
 }
 
 // taskDraft is the in-progress task the user is assembling before
-// submission: the prompt text, the Tab-cycled provider choice, and the
-// optional pull request source. It spans the prompt-input and PR-picker
-// modes and is discarded when the TUI leaves that mode family.
+// submission: the prompt text, the Tab-cycled provider choice and its Launch
+// choice, and the optional pull request source. It spans the prompt-input and
+// PR-picker modes and is discarded when the TUI leaves that mode family.
 type taskDraft struct {
 	prompt     string
 	input      textarea.Model
@@ -113,6 +125,12 @@ type taskDraft struct {
 	repoRoot   string
 	repoName   string
 	err        error // validation error shown inside the draft views
+
+	// choice is the draft's Launch choice. It starts from the provider's
+	// Launch default; choiceTouched records that the user cycled it, so a
+	// late Launch default no longer replaces it.
+	choice        core.LaunchChoice
+	choiceTouched bool
 }
 
 // createFlowState is the progress of an in-flight or just-failed task
@@ -132,6 +150,12 @@ type setupFormState struct {
 	detecting       bool
 	saving          bool
 	err             error
+
+	// edits is each Launch default the user edited on the screen. Enter
+	// saves those of enabled providers once the provider setup has saved.
+	// A provider without one shows its Launch default as fetched, so a late
+	// fetch fills only the rows the user has not edited.
+	edits map[core.Provider]core.LaunchChoice
 }
 
 // repoDirsFormState is the repo directories setup step's working state: the
@@ -152,6 +176,19 @@ type providerSetupRow struct {
 	detail   string
 	ready    bool
 	enabled  bool
+}
+
+// showsLaunchDefault reports whether the row shows its provider's Launch
+// default and lets the user edit it, which it does while ready and enabled.
+func (r providerSetupRow) showsLaunchDefault() bool {
+	return r.ready && r.enabled
+}
+
+// launchDefaultEdit is a Launch default the user set on the provider setup
+// screen.
+type launchDefaultEdit struct {
+	provider core.Provider
+	choice   core.LaunchChoice
 }
 
 type tasksLoadedMsg struct {
@@ -233,11 +270,30 @@ type providerSetupLoadedMsg struct {
 type providerDetectionsMsg struct {
 	err        error
 	detections []core.ProviderDetection
+	detection  int
 }
 
+// providerSetupSavedMsg is the result of saving the provider setup, then the
+// Launch defaults edited with it. err is the setup's failure, which leaves
+// the Launch defaults unsaved; defaultsErr is theirs, and savedDefaults the
+// ones that saved.
 type providerSetupSavedMsg struct {
-	err   error
-	setup core.ProviderSetup
+	err           error
+	setup         core.ProviderSetup
+	defaultsErr   error
+	savedDefaults []launchDefaultEdit
+}
+
+type providerModelsLoadedMsg struct {
+	err      error
+	provider core.Provider
+	models   []core.ProviderModel
+}
+
+type launchDefaultsLoadedMsg struct {
+	err      error
+	defaults map[core.Provider]core.LaunchChoice
+	fetch    int
 }
 
 type repoDirsLoadedMsg struct {
@@ -277,6 +333,7 @@ func newModel(frontend core.TaskFrontend, launchCwd string, buildVersion string)
 		detailsHidden:    true,
 		statusSubscribed: make(map[string]bool),
 		statusCancels:    make(map[string]context.CancelFunc),
+		providerModels:   make(map[core.Provider]providerModelsState),
 	}
 }
 
@@ -573,15 +630,9 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			next, cmd := m.enterProviderSetupMode()
 			return next, cmd
 		}
-		return m, nil
+		return m, tea.Batch(m.launchChoiceLoadCmds()...)
 	case providerDetectionsMsg:
-		m.setupForm.detecting = false
-		if msg.err != nil {
-			m.setupForm.err = msg.err
-			return m, nil
-		}
-		m.applyProviderDetections(msg.detections)
-		return m, nil
+		return m, m.setProviderDetections(msg)
 	case providerSetupSavedMsg:
 		m.setupForm.saving = false
 		if msg.err != nil {
@@ -592,11 +643,33 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.providerSetup = &saved
 		m.setupForm.err = nil
 		m.draft.provider = ""
-		return m.enterRepoDirsSetupMode()
+		// What saved is no longer an edit, so a retry saves only the rest.
+		for _, edit := range msg.savedDefaults {
+			m.setLocalLaunchDefault(edit.provider, edit.choice)
+			delete(m.setupForm.edits, edit.provider)
+		}
+		if msg.defaultsErr != nil {
+			// Setup stays to show it, and enter saves again. The saves
+			// dropped the replies of fetches under way, so the defaults are
+			// fetched again.
+			m.setupForm.err = fmt.Errorf("provider setup saved; %w", msg.defaultsErr)
+			return m, m.fetchLaunchDefaults()
+		}
+		// The Launch defaults and the configured providers' model lists load
+		// while the repo directories step shows.
+		loads := m.launchChoiceLoadCmds()
+		next, cmd := m.enterRepoDirsSetupMode()
+		return next, tea.Batch(append(loads, cmd)...)
 	case repoDirsLoadedMsg:
 		return m.applyLoadedRepoDirs(msg)
 	case repoDirsSavedMsg:
 		return m.applySavedRepoDirs(msg)
+	case providerModelsLoadedMsg:
+		m.setProviderModels(msg.provider, msg.models, msg.err)
+		return m, nil
+	case launchDefaultsLoadedMsg:
+		m.setLaunchDefaults(msg)
+		return m, nil
 	case repoPullRequestsLoadedMsg:
 		m.draft.err = msg.err
 		if msg.err != nil {
@@ -610,9 +683,10 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 	case taskCreatedMsg:
 		m.endOp()
+		defaultsCmd := m.launchDefaultsAfterCreateCmd()
 		if msg.err != nil {
 			m.create.err = msg.err
-			return m, nil
+			return m, defaultsCmd
 		}
 
 		m.transition(modeBrowse)
@@ -622,13 +696,13 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.selected = index
 		}
 		m.clampSelection()
-		cmds := []tea.Cmd{loadTasksCmd(m.statusContext, m.frontend)}
+		cmds := []tea.Cmd{loadTasksCmd(m.statusContext, m.frontend), defaultsCmd}
 		cmds = append(cmds, m.taskStatusTrackingCmds(taskID(msg.task))...)
 		return m, tea.Batch(cmds...)
 	case taskCreateStreamStartFailedMsg:
 		m.endOp()
 		m.create.err = msg.err
-		return m, nil
+		return m, m.launchDefaultsAfterCreateCmd()
 	case taskCreateEventMsg:
 		switch {
 		case msg.event.Progress != nil:
@@ -643,7 +717,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				}
 				m.clampSelection()
 			}
-			return m, nil
+			return m, m.launchDefaultsAfterCreateCmd()
 		case msg.event.Task != nil:
 			return m.Update(taskCreatedMsg{task: msg.event.Task})
 		default:
@@ -657,7 +731,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if m.create.err == nil {
 			m.create.err = errors.New("create task stream closed unexpectedly")
 		}
-		return m, nil
+		return m, m.launchDefaultsAfterCreateCmd()
 	case taskOpenedMsg:
 		m.opening = false
 		if m.pending == opNone {
@@ -788,15 +862,21 @@ func (m model) submitPrompt() (model, tea.Cmd) {
 	// Capture the draft's inputs before the transition discards it.
 	cwd := m.currentCreateCwd()
 	provider := m.effectiveCreateProvider()
+	choice := m.draftLaunchChoice()
 	m.transition(modeBrowse)
 	m.beginOp(opCreating)
 	m.create = createFlowState{}
+	m.rememberLaunchDefault(provider, choice)
 
 	return m, tea.Batch(
 		createTaskStreamCmd(m.statusContext, m.frontend, core.CreateTaskInput{
-			Cwd:      cwd,
-			Prompt:   prompt,
-			Provider: provider,
+			Cwd:            cwd,
+			Prompt:         prompt,
+			Provider:       provider,
+			Model:          choice.Model,
+			ReasoningLevel: choice.ReasoningLevel,
+			// The draft's choice becomes the provider's Launch default.
+			RememberLaunchChoice: true,
 		}),
 		shimmerTickCmd(),
 	)
@@ -837,12 +917,19 @@ func (m model) updatePromptInput(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	switch typed := msg.(type) {
 	case tea.KeyPressMsg:
-		if typed.String() == "tab" {
-			// Tab cycles through configured providers for the new task.
-			m.cycleCreateProvider()
+		// Tab cycles the new task's provider, and ctrl+o and ctrl+r its Launch
+		// choice; the textarea binds none of them.
+		switch typed.String() {
+		case "tab":
+			m.cycleDraftProvider()
 			return m, nil
-		}
-		if typed.String() == "ctrl+p" {
+		case "ctrl+o":
+			m.cycleDraftLaunchChoice(model.nextLaunchModel)
+			return m, nil
+		case "ctrl+r":
+			m.cycleDraftLaunchChoice(model.nextLaunchReasoningLevel)
+			return m, nil
+		case "ctrl+p":
 			repoRoot, repoName, ok := m.currentRepoScope()
 			if !ok {
 				m.draft.err = errors.New("repo scope unavailable")
@@ -858,7 +945,11 @@ func (m model) updatePromptInput(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.draft.prSelected = 0
 			m.draft.err = nil
 			m.draft.input.Blur()
-			return m, listRepoPullRequestsCmd(m.statusContext, m.frontend, repoRoot, repoName)
+			cmds := append(
+				[]tea.Cmd{listRepoPullRequestsCmd(m.statusContext, m.frontend, repoRoot, repoName)},
+				m.retryLaunchChoiceCmds()...,
+			)
+			return m, tea.Batch(cmds...)
 		}
 
 		switch typed.Key().Code {
@@ -924,14 +1015,19 @@ func (m model) updatePRPicker(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		selected := *pr
 		repoRoot := m.draft.repoRoot
 		provider := m.effectiveCreateProvider()
+		choice := m.draftLaunchChoice()
 		m.transition(modeBrowse)
 		m.beginOp(opCreating)
 		m.create = createFlowState{fromPR: true}
+		m.rememberLaunchDefault(provider, choice)
 
 		return m, tea.Batch(
 			createTaskStreamCmd(m.statusContext, m.frontend, core.CreateTaskInput{
-				Cwd:      repoRoot,
-				Provider: provider,
+				Cwd:                  repoRoot,
+				Provider:             provider,
+				Model:                choice.Model,
+				ReasoningLevel:       choice.ReasoningLevel,
+				RememberLaunchChoice: true,
 				Source: core.CreateTaskSource{
 					PullRequest: &selected,
 				},
@@ -939,7 +1035,13 @@ func (m model) updatePRPicker(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 			shimmerTickCmd(),
 		)
 	case "tab":
-		m.cycleCreateProvider()
+		m.cycleDraftProvider()
+		return m, nil
+	case "ctrl+o":
+		m.cycleDraftLaunchChoice(model.nextLaunchModel)
+		return m, nil
+	case "ctrl+r":
+		m.cycleDraftLaunchChoice(model.nextLaunchReasoningLevel)
 		return m, nil
 	default:
 		return m, nil
@@ -953,9 +1055,11 @@ func (m model) enterPromptInputMode(initialValue string) (tea.Model, tea.Cmd) {
 	input := newPromptInput()
 	input.SetValue(initialValue)
 	m.draft = taskDraft{prompt: initialValue, input: input}
+	m.startDraftLaunchChoice()
 	m.create.err = nil
 	m.create.fromPR = false
-	return m, m.draft.input.Focus()
+	cmds := append([]tea.Cmd{m.draft.input.Focus()}, m.retryLaunchChoiceCmds()...)
+	return m, tea.Batch(cmds...)
 }
 
 func (m model) promptValue() string {

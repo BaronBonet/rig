@@ -695,11 +695,7 @@ func (r *repository) cleanupStartedSession(ctx context.Context, sessionName stri
 func (r *repository) sendKeys(ctx context.Context, target string, command []string) error {
 	quoted := make([]string, 0, len(command))
 	for _, part := range command {
-		if strings.ContainsRune(part, ' ') {
-			quoted = append(quoted, "'"+strings.ReplaceAll(part, "'", "'\\''")+"'")
-			continue
-		}
-		quoted = append(quoted, part)
+		quoted = append(quoted, shellWord(part))
 	}
 
 	_, err := r.runner.Run(
@@ -713,6 +709,35 @@ func (r *repository) sendKeys(ctx context.Context, target string, command []stri
 		"C-m",
 	)
 	return err
+}
+
+// shellWord quotes one word of a command for the pane's shell, so the shell
+// passes it on as typed. A word of only safe characters stays unquoted, and
+// so does one that starts with ~/ followed by only safe characters, which
+// keeps a home-relative binary path expanding. Any other word is wrapped in
+// single quotes, so a model such as opus[1m] is never globbed, nor $(...)
+// substituted. An empty word stays an empty argument. A word that starts
+// with = is quoted too, as zsh would replace it with a command's path.
+func shellWord(word string) string {
+	if word != "" && !strings.HasPrefix(word, "=") &&
+		!strings.ContainsFunc(strings.TrimPrefix(word, "~/"), isUnsafeShellRune) {
+		return word
+	}
+	return "'" + strings.ReplaceAll(word, "'", `'\''`) + "'"
+}
+
+// isUnsafeShellRune reports whether r is outside the characters a word may
+// hold unquoted: letters, digits and _@%+=:,./-, the characters Python's shlex
+// leaves unquoted. A ~ is not among them: shellWord lets only a leading ~/
+// through, as a ~ elsewhere may expand to a user's home, or abort the line
+// when there is no such user.
+func isUnsafeShellRune(r rune) bool {
+	switch {
+	case 'a' <= r && r <= 'z', 'A' <= r && r <= 'Z', '0' <= r && r <= '9':
+		return false
+	default:
+		return !strings.ContainsRune("_@%+=:,./-", r)
+	}
 }
 
 // shellCommands are the commands of the shells a task window's pane may show

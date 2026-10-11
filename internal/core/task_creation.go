@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"strings"
 	"time"
+	"unicode"
 
 	slugpkg "github.com/BaronBonet/rig/internal/pkg/slug"
 )
@@ -15,10 +16,12 @@ import (
 // source into a persisted task record, an isolated worktree, a prepared
 // workspace, and a started provider session, reporting coarse-grained
 // progress along the way. Failed creations persist the failed step and are
-// retryable from that step.
+// retryable from that step. A new task's Launch choice becomes its Launch
+// provider's Launch default.
 type taskCreation struct {
 	tasks       TaskRepository
 	gitWorktree GitWorktreeClient
+	userConfig  UserConfigStore
 	// repos resolves a target repository given by name.
 	repos      *knownRepos
 	launcher   *sessionLauncher
@@ -28,6 +31,7 @@ type taskCreation struct {
 func newTaskCreation(
 	tasks TaskRepository,
 	gitWorktree GitWorktreeClient,
+	userConfig UserConfigStore,
 	repos *knownRepos,
 	launcher *sessionLauncher,
 	operations *taskOperationCoordinator,
@@ -35,6 +39,7 @@ func newTaskCreation(
 	return &taskCreation{
 		tasks:       tasks,
 		gitWorktree: gitWorktree,
+		userConfig:  userConfig,
 		repos:       repos,
 		launcher:    launcher,
 		operations:  operations,
@@ -89,16 +94,48 @@ func (c *taskCreation) CreateTaskWithProgress(
 	input CreateTaskInput,
 	reporter TaskCreateProgressReporter,
 ) (*Task, error) {
+	input, err := normalizeTaskLaunchChoice(input)
+	if err != nil {
+		return nil, err
+	}
+
 	repoCtx, err := c.targetRepo(ctx, input)
 	if err != nil {
 		return nil, err
 	}
 
+	provider, providerClient, err := c.launcher.resolveProvider(ctx, input.Provider)
+	if err != nil {
+		return nil, err
+	}
+	c.saveLaunchDefault(ctx, input)
+
 	if input.Source.PullRequest != nil {
-		return c.createTaskFromPullRequest(ctx, repoCtx, input, reporter)
+		return c.createTaskFromPullRequest(ctx, repoCtx, provider, input, reporter)
 	}
 
-	return c.createTaskFromPrompt(ctx, repoCtx, input, reporter)
+	return c.createTaskFromPrompt(ctx, repoCtx, provider, providerClient, input, reporter)
+}
+
+// saveLaunchDefault makes a new task's Launch choice, even an empty one, its
+// Launch provider's Launch default, as the provider CLIs keep the last model
+// picked. Only a creation that asks to remember its choice, as the TUI's Task
+// draft does, and whose input names its provider saves one: a task from the
+// CLI makes no choice of model, and a task that falls to the Default provider
+// made no choice for it, which is also why normalizeTaskLaunchChoice refuses
+// a choice without an explicit provider.
+//
+// It runs once the provider is resolved and before the long creation steps,
+// so the next task starts from it whatever becomes of this one, and retries,
+// which make no new choice, never run it. Saving is best-effort and its error
+// is dropped: the default is a convenience, and must never fail or block
+// creating a task.
+func (c *taskCreation) saveLaunchDefault(ctx context.Context, input CreateTaskInput) {
+	if c.userConfig == nil || !input.RememberLaunchChoice || input.Provider == "" {
+		return
+	}
+	choice := LaunchChoice{Model: input.Model, ReasoningLevel: input.ReasoningLevel}
+	_ = c.userConfig.SaveLaunchDefault(ctx, input.Provider, choice)
 }
 
 // RetryTaskCreationWithProgress resumes a failed task creation from its
@@ -155,14 +192,11 @@ func (c *taskCreation) retryTaskCreationWithProgress(
 func (c *taskCreation) createTaskFromPrompt(
 	ctx context.Context,
 	repoCtx RepoContext,
+	provider Provider,
+	providerClient ProviderClient,
 	input CreateTaskInput,
 	reporter TaskCreateProgressReporter,
 ) (*Task, error) {
-	provider, providerClient, err := c.launcher.resolveProvider(ctx, input.Provider)
-	if err != nil {
-		return nil, err
-	}
-
 	reportTaskCreateProgress(reporter, TaskCreateProgressSuggestingName)
 	suggestion, err := suggestTaskName(ctx, providerClient, repoCtx.Root, input.Prompt)
 	if err != nil {
@@ -183,6 +217,8 @@ func (c *taskCreation) createTaskFromPrompt(
 		suggestion.BranchType,
 	)
 	task.Prompt = input.Prompt
+	task.Model = input.Model
+	task.ReasoningLevel = input.ReasoningLevel
 	task.ParentTaskID = parentTaskID(input, existingTasks)
 
 	if err := c.tasks.CreateTask(ctx, task); err != nil {
@@ -206,17 +242,13 @@ func (c *taskCreation) createTaskFromPrompt(
 func (c *taskCreation) createTaskFromPullRequest(
 	ctx context.Context,
 	repoCtx RepoContext,
+	provider Provider,
 	input CreateTaskInput,
 	reporter TaskCreateProgressReporter,
 ) (*Task, error) {
 	pr := input.Source.PullRequest
 	if pr == nil {
 		return nil, fmt.Errorf("pull request source is required")
-	}
-
-	provider, _, err := c.launcher.resolveProvider(ctx, input.Provider)
-	if err != nil {
-		return nil, err
 	}
 
 	existingTasks, err := c.tasks.ListTasks(ctx)
@@ -243,6 +275,8 @@ func (c *taskCreation) createTaskFromPullRequest(
 		taskSlug,
 		pr.BranchName,
 	)
+	task.Model = input.Model
+	task.ReasoningLevel = input.ReasoningLevel
 	task.ParentTaskID = parentTaskID(input, existingTasks)
 	if err := c.tasks.CreateTask(ctx, task); err != nil {
 		return nil, err
@@ -393,6 +427,55 @@ func (c *taskCreation) taskCreateEventStream(
 	}()
 
 	return events, nil
+}
+
+// normalizeTaskLaunchChoice trims and checks a new task's Launch choice, as
+// normalizeLaunchChoice does. A choice also needs an explicit provider: it was
+// chosen for that provider's CLI, and must not fall to the Default provider.
+func normalizeTaskLaunchChoice(input CreateTaskInput) (CreateTaskInput, error) {
+	choice := LaunchChoice{
+		Model:          strings.TrimSpace(input.Model),
+		ReasoningLevel: strings.TrimSpace(input.ReasoningLevel),
+	}
+	if !choice.IsZero() && strings.TrimSpace(string(input.Provider)) == "" {
+		return input, fmt.Errorf("a model or reasoning level needs an explicit provider")
+	}
+	choice, err := normalizeLaunchChoice(choice)
+	if err != nil {
+		return input, err
+	}
+	input.Model, input.ReasoningLevel = choice.Model, choice.ReasoningLevel
+	return input, nil
+}
+
+// normalizeLaunchChoice trims a Launch model and Launch reasoning level and
+// checks them, for a new task and for a Launch default alike. Each is passed to the
+// provider CLI as one argument, so neither may hold whitespace or control
+// characters, nor start with "-", which the CLI would read as a flag. They are
+// not checked against the provider's models: the CLI does that at launch, and
+// a cached model list may be stale.
+func normalizeLaunchChoice(choice LaunchChoice) (LaunchChoice, error) {
+	choice.Model = strings.TrimSpace(choice.Model)
+	choice.ReasoningLevel = strings.TrimSpace(choice.ReasoningLevel)
+	if err := checkLaunchChoiceValue("model", choice.Model); err != nil {
+		return choice, err
+	}
+	if err := checkLaunchChoiceValue("reasoning level", choice.ReasoningLevel); err != nil {
+		return choice, err
+	}
+	return choice, nil
+}
+
+// checkLaunchChoiceValue checks that value reaches the provider CLI as one
+// argument, and as the value of its flag rather than as another flag.
+func checkLaunchChoiceValue(name string, value string) error {
+	if strings.ContainsFunc(value, func(r rune) bool { return unicode.IsSpace(r) || unicode.IsControl(r) }) {
+		return fmt.Errorf("%s %q must not contain whitespace or control characters", name, value)
+	}
+	if strings.HasPrefix(value, "-") {
+		return fmt.Errorf("%s %q must not start with a dash, which the provider CLI reads as a flag", name, value)
+	}
+	return nil
 }
 
 func suggestTaskName(
