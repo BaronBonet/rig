@@ -29,7 +29,7 @@ type fakeTaskService struct {
 	activity   map[string][]core.TaskActivityEvent
 	usage      map[string]*core.TaskUsage
 	prs        map[string][]core.RepoPullRequest
-	prStatuses map[string]*core.PRStatus
+	taskPRs    map[string]core.TaskPullRequests
 	setup      *core.ProviderSetup
 	detections []core.ProviderDetection
 	models     map[core.Provider][]core.ProviderModel
@@ -65,7 +65,7 @@ func newFakeTaskService() *fakeTaskService {
 		activity:       map[string][]core.TaskActivityEvent{},
 		usage:          map[string]*core.TaskUsage{},
 		prs:            map[string][]core.RepoPullRequest{},
-		prStatuses:     map[string]*core.PRStatus{},
+		taskPRs:        map[string]core.TaskPullRequests{},
 		models:         map[core.Provider][]core.ProviderModel{},
 		launchDefaults: map[core.Provider]core.LaunchChoice{},
 		latest:         map[string]*core.TaskStatusUpdate{},
@@ -120,14 +120,10 @@ func (f *fakeTaskService) ListRepoPullRequests(_ context.Context, cwd string) ([
 	return f.prs[cwd], f.errByOp["list_repo_pull_requests"]
 }
 
-func (f *fakeTaskService) PullRequestStatus(
-	_ context.Context,
-	repoRoot string,
-	branchName string,
-) (*core.PRStatus, error) {
+func (f *fakeTaskService) TaskPullRequests(_ context.Context, taskID string) (core.TaskPullRequests, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	return f.prStatuses[repoRoot+"|"+branchName], f.errByOp["pull_request_status"]
+	return f.taskPRs[taskID], f.errByOp["task_pull_requests"]
 }
 
 func (f *fakeTaskService) GetTaskActivity(
@@ -328,7 +324,13 @@ func TestUnaryOperationsRoundTrip(t *testing.T) {
 		AgentCompactions: map[string]core.Compactions{"agent-1": {Total: 3, Auto: 2, Manual: 1}},
 	}
 	svc.prs["/tmp/repo"] = []core.RepoPullRequest{{Number: 7, Title: "retry flow", BranchName: "retries"}}
-	svc.prStatuses["/tmp/repo|retries"] = &core.PRStatus{State: core.PRStateOpen, Number: 7}
+	svc.taskPRs["task-1"] = core.TaskPullRequests{
+		PullRequests: []core.PullRequest{
+			{Number: 5, State: core.PRStateMerged, HeadBranch: "retries", HeadCommit: "5aa"},
+			{Number: 7, State: core.PRStateOpen, HeadBranch: "retries-2", HeadCommit: "7bb"},
+		},
+		UnshippedWork: core.UnshippedWork{Commits: 2, UncommittedChanges: true},
+	}
 	svc.setup = &core.ProviderSetup{
 		Configured: []core.Provider{core.ProviderCodex},
 		Default:    core.ProviderCodex,
@@ -410,16 +412,21 @@ func TestUnaryOperationsRoundTrip(t *testing.T) {
 		require.Equal(t, 7, prs[0].Number)
 	})
 
-	t.Run("pull request status", func(t *testing.T) {
-		status, err := client.PullRequestStatus(ctx, "/tmp/repo", "retries")
+	t.Run("task pull requests", func(t *testing.T) {
+		pullRequests, err := client.TaskPullRequests(ctx, "task-1")
 		require.NoError(t, err)
-		require.Equal(t, core.PRStateOpen, status.State)
+		require.Equal(t, svc.taskPRs["task-1"], pullRequests)
 	})
 
-	t.Run("pull request status maps missing PR to none", func(t *testing.T) {
-		status, err := client.PullRequestStatus(ctx, "/tmp/repo", "no-such-branch")
+	t.Run("task pull requests of a task without any", func(t *testing.T) {
+		pullRequests, err := client.TaskPullRequests(ctx, "task-2")
 		require.NoError(t, err)
-		require.Equal(t, core.PRStateNone, status.State)
+		require.Equal(t, core.TaskPullRequests{}, pullRequests)
+	})
+
+	t.Run("task pull requests requires task id", func(t *testing.T) {
+		_, err := client.TaskPullRequests(ctx, " ")
+		require.ErrorContains(t, err, "task_id required")
 	})
 
 	t.Run("latest task status", func(t *testing.T) {
@@ -616,6 +623,19 @@ func TestUnaryOperationsRoundTrip(t *testing.T) {
 		require.ErrorContains(t, err, "repository offline")
 		svc.mu.Lock()
 		delete(svc.errByOp, "task_at_path")
+		svc.mu.Unlock()
+	})
+
+	// The TUI keeps a task's pull requests when a refresh fails, so the
+	// failure must reach it rather than an empty list.
+	t.Run("task pull request errors surface as client errors", func(t *testing.T) {
+		svc.mu.Lock()
+		svc.errByOp["task_pull_requests"] = errors.New("gh: not logged in")
+		svc.mu.Unlock()
+		_, err := client.TaskPullRequests(ctx, "task-1")
+		require.ErrorContains(t, err, "gh: not logged in")
+		svc.mu.Lock()
+		delete(svc.errByOp, "task_pull_requests")
 		svc.mu.Unlock()
 	})
 }

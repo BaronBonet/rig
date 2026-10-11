@@ -3,8 +3,10 @@ package tui
 import "time"
 
 // Tests execute batched commands synchronously, so the background activity
-// refresh and spinner ticks must not block them at their production intervals.
+// and pull request refreshes and the spinner ticks must not block them at
+// their production intervals.
 func init() {
 	activityRefreshInterval = time.Millisecond
+	pullRequestRefreshInterval = time.Millisecond
 	spinnerTickInterval = time.Millisecond
 }

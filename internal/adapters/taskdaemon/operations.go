@@ -43,11 +43,6 @@ type repoPullRequestsRequest struct {
 	Cwd string `json:"cwd"`
 }
 
-type pullRequestStatusRequest struct {
-	Cwd        string `json:"cwd"`
-	BranchName string `json:"branch_name"`
-}
-
 type taskAtPathRequest struct {
 	Path string `json:"path"`
 }
@@ -121,18 +116,15 @@ var opListRepoPullRequests = unaryOp[repoPullRequestsRequest, []core.RepoPullReq
 	},
 }
 
-var opPullRequestStatus = unaryOp[pullRequestStatusRequest, *core.PRStatus]{
-	command:  "pull_request_status",
-	envelope: "pull_request_status",
-	call: func(ctx context.Context, svc core.TaskService, req pullRequestStatusRequest) (*core.PRStatus, error) {
-		status, err := svc.PullRequestStatus(ctx, strings.TrimSpace(req.Cwd), strings.TrimSpace(req.BranchName))
+var opTaskPullRequests = unaryOp[taskIDRequest, core.TaskPullRequests]{
+	command:  "task_pull_requests",
+	envelope: "task_pull_requests",
+	call: func(ctx context.Context, svc core.TaskService, req taskIDRequest) (core.TaskPullRequests, error) {
+		taskID, err := requiredTaskID("task_pull_requests", req.TaskID)
 		if err != nil {
-			return nil, err
+			return core.TaskPullRequests{}, err
 		}
-		if status == nil {
-			status = &core.PRStatus{State: core.PRStateNone}
-		}
-		return status, nil
+		return svc.TaskPullRequests(ctx, taskID)
 	},
 }
 
@@ -314,7 +306,7 @@ var socketUnaryHandlers = map[string]unaryHandler{
 	opGetTaskActivity.command:      serveUnary(opGetTaskActivity),
 	opGetTaskUsage.command:         serveUnary(opGetTaskUsage),
 	opListRepoPullRequests.command: serveUnary(opListRepoPullRequests),
-	opPullRequestStatus.command:    serveUnary(opPullRequestStatus),
+	opTaskPullRequests.command:     serveUnary(opTaskPullRequests),
 	opReconnectTaskSession.command: serveUnary(opReconnectTaskSession),
 	opGetProviderSetup.command:     serveUnary(opGetProviderSetup),
 	opSaveProviderSetup.command:    serveUnary(opSaveProviderSetup),

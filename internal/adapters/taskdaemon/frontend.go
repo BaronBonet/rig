@@ -39,23 +39,8 @@ func (f *frontend) ListRepoPullRequests(ctx context.Context, cwd string) ([]core
 	return callUnary(ctx, f, opListRepoPullRequests, repoPullRequestsRequest{Cwd: cwd})
 }
 
-func (f *frontend) PullRequestStatus(
-	ctx context.Context,
-	repoRoot string,
-	branchName string,
-) (*core.PRStatus, error) {
-	status, err := callUnary(ctx, f, opPullRequestStatus, pullRequestStatusRequest{
-		Cwd:        repoRoot,
-		BranchName: branchName,
-	})
-	if err != nil {
-		return nil, err
-	}
-	if status == nil {
-		return &core.PRStatus{State: core.PRStateNone}, nil
-	}
-
-	return status, nil
+func (f *frontend) TaskPullRequests(ctx context.Context, taskID string) (core.TaskPullRequests, error) {
+	return callUnary(ctx, f, opTaskPullRequests, taskIDRequest{TaskID: taskID})
 }
 
 func (f *frontend) ReconnectTaskSession(ctx context.Context, taskID string) error {

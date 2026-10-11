@@ -1693,3 +1693,79 @@ func TestRepositoryNew_MigratesOnlyResumeMetadataItCanResume(t *testing.T) {
 		require.Empty(t, open, taskID)
 	}
 }
+
+func TestRepositoryTaskBranches_RecordsEachTasksBranchesOnce(t *testing.T) {
+	repo := newTestRepository(t)
+	ctx := context.Background()
+	createAgentSessionTestTask(t, repo, "task-1")
+	createAgentSessionTestTask(t, repo, "task-2")
+
+	require.NoError(t, repo.RecordTaskBranches(ctx, "task-1", []string{"feat/billing-export", "part-2"}))
+	require.NoError(t, repo.RecordTaskBranches(ctx, "task-1", []string{"part-2", " feat/billing-old ", ""}))
+	require.NoError(t, repo.RecordTaskBranches(ctx, "task-2", []string{"feat/docs"}))
+
+	branches, err := repo.ListTaskBranches(ctx, "task-1")
+	require.NoError(t, err)
+	require.Equal(t, []string{"feat/billing-export", "feat/billing-old", "part-2"}, branches)
+	branches, err = repo.ListTaskBranches(ctx, "task-2")
+	require.NoError(t, err)
+	require.Equal(t, []string{"feat/docs"}, branches)
+	branches, err = repo.ListTaskBranches(ctx, "task-3")
+	require.NoError(t, err)
+	require.Empty(t, branches)
+}
+
+func TestRepositoryRecordTaskBranches_FailsForATaskThatDoesNotExist(t *testing.T) {
+	repo := newTestRepository(t)
+	ctx := context.Background()
+
+	err := repo.RecordTaskBranches(ctx, "no-such-task", []string{"feat/a", "feat/b"})
+
+	require.Error(t, err)
+	var recorded int
+	require.NoError(t, repo.db.QueryRowContext(ctx, "select count(*) from task_branches").Scan(&recorded))
+	require.Zero(t, recorded)
+	require.ErrorContains(t, repo.RecordTaskBranches(ctx, " ", []string{"feat/a"}), "task ID is required")
+}
+
+func TestRepositoryDeleteTask_CascadesTaskBranches(t *testing.T) {
+	repo := newTestRepository(t)
+	ctx := context.Background()
+	createAgentSessionTestTask(t, repo, "task-1")
+	createAgentSessionTestTask(t, repo, "task-2")
+	require.NoError(t, repo.RecordTaskBranches(ctx, "task-1", []string{"feat/a", "feat/b"}))
+	require.NoError(t, repo.RecordTaskBranches(ctx, "task-2", []string{"feat/a"}))
+
+	require.NoError(t, repo.DeleteTask(ctx, "task-1"))
+
+	var remaining int
+	require.NoError(t, repo.db.QueryRowContext(ctx, "select count(*) from task_branches").Scan(&remaining))
+	require.Equal(t, 1, remaining)
+	branches, err := repo.ListTaskBranches(ctx, "task-2")
+	require.NoError(t, err)
+	require.Equal(t, []string{"feat/a"}, branches)
+}
+
+func TestRepositoryNew_AddsTaskBranchesToAnExistingDatabaseAndRollsBack(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "state.db")
+	repo := newTestRepositoryAtPath(t, path)
+	ctx := context.Background()
+	createAgentSessionTestTask(t, repo, "task-1")
+	require.NoError(t, repo.RecordTaskBranches(ctx, "task-1", []string{"feat/a"}))
+	migrationsFS, err := fs.Sub(sqlFiles, "migrations")
+	require.NoError(t, err)
+	provider, err := goose.NewProvider(goose.DialectSQLite3, repo.db, migrationsFS)
+	require.NoError(t, err)
+
+	_, err = provider.DownTo(ctx, 14)
+	require.NoError(t, err)
+	require.Empty(t, tableColumnNames(t, repo.db, "task_branches"))
+	require.NoError(t, repo.db.Close())
+
+	reopened := newTestRepositoryAtPath(t, path)
+	require.Equal(t, []string{"task_id", "branch_name"}, tableColumnNames(t, reopened.db, "task_branches"))
+	require.NoError(t, reopened.RecordTaskBranches(ctx, "task-1", []string{"feat/b"}))
+	branches, err := reopened.ListTaskBranches(ctx, "task-1")
+	require.NoError(t, err)
+	require.Equal(t, []string{"feat/b"}, branches)
+}

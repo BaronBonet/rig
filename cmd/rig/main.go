@@ -592,11 +592,14 @@ func serveTaskDaemon(
 	})
 
 	userConfig := userconfig.New(cfg.UserConfig, cfg.Provider)
+	// The TUI refreshes every task's pull requests on a timer, so the daemon
+	// caches what gh tells it for a while rather than asking gh every time.
+	pullRequests := github.NewPullRequestCache(github.New(runner))
 	service := core.NewTaskService(core.TaskServiceDependencies{
 		Tasks:                taskRepo,
 		GitWorktree:          git.New(runner),
 		TmuxSession:          tmux.New(runner),
-		PullRequests:         github.New(runner),
+		PullRequests:         pullRequests,
 		Providers:            providers,
 		Workspace:            repositoryworkspace.New(),
 		EnableWorkspaceSetup: true,

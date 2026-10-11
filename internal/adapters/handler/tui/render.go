@@ -38,6 +38,27 @@ const (
 	// minTaskNameArea is the narrowest name area a task row keeps: below it,
 	// the row drops its compactions column, then its provider column.
 	minTaskNameArea = 40
+	// maxEarlierPullRequestSymbols is how many of a task's earlier pull
+	// requests its row's marker shows before the current one. Older ones
+	// collapse into one leading hiddenPullRequestsMarker.
+	maxEarlierPullRequestSymbols = 4
+	// hiddenPullRequestsMarker leads a pull requests marker that leaves some
+	// of a task's earlier pull requests out.
+	hiddenPullRequestsMarker = "…"
+	// minNameBesideMarker is how many cells of a task's name its row keeps
+	// beside its pull requests marker, which leaves out more of the earlier
+	// pull requests first.
+	minNameBesideMarker = 8
+	// unshippedWorkMarker follows the current pull request in a task row's
+	// marker when the task has unshipped work.
+	unshippedWorkMarker = "+"
+	// maxUnshippedWorkDetailLines caps the lines the detail panel's words
+	// about unshipped work wrap onto.
+	maxUnshippedWorkDetailLines = 3
+	// maxPullRequestDetailLines caps the detail panel's pull request lines.
+	// Past it, one line counts the earlier pull requests and the newest
+	// follow.
+	maxPullRequestDetailLines = 5
 
 	taskListScrollbarTrack = "│"
 	taskListScrollbarThumb = "█"
@@ -348,8 +369,8 @@ func (m model) renderRepoHeader(task *core.Task, totalWidth int) string {
 }
 
 // renderRow renders a task row on one line: its status symbol, a child
-// task's link marker, its name and pull request, then its agent's provider and
-// compactions and its elapsed time on the right.
+// task's link marker, its name and pull requests, then its agent's provider
+// and compactions and its elapsed time on the right.
 func (m model) renderRow(index int, row taskRow, totalWidth int) string {
 	if row.task == nil {
 		return ""
@@ -386,7 +407,8 @@ func (m model) renderRow(index int, row taskRow, totalWidth int) string {
 	}
 
 	layout := taskRowLayoutFor(totalWidth)
-	line := symbolStyle.Render(symbol) + " " + renderNameAndPR(link, name, nameStyle, row.pullRequest, layout.nameArea)
+	marker := pullRequestsMarker{pullRequests: row.pullRequests, unshipped: row.unshippedWork.Any()}
+	line := symbolStyle.Render(symbol) + " " + renderNameAndPR(link, name, nameStyle, marker, layout.nameArea)
 	if layout.provider {
 		// A task with agent sub-rows leaves its providers to them.
 		providerCell := strings.Repeat(" ", colWidthAgent)
@@ -434,19 +456,32 @@ func taskRowLayoutFor(totalWidth int) taskRowLayout {
 	return layout
 }
 
+// pullRequestsMarker is what a task row's pull requests marker shows: the
+// task's pull requests, oldest first, and whether it has unshipped work.
+type pullRequestsMarker struct {
+	pullRequests []core.PullRequest
+	unshipped    bool
+}
+
 // renderNameAndPR fills a task row's name area: a child task's link marker,
-// when it is given one, the name, then its pull request's marker. A long name
-// is truncated so the markers and a gap after them still fit. The link marker
-// takes its width from the name, so the columns on the right stay in line with
-// the other rows, and it is left out when the name would keep no cell.
+// when it is given one, the name, then its pull requests' marker. The marker
+// leaves out earlier pull requests rather than squeeze the name below
+// minNameBesideMarker cells, and below that a long name is truncated so the
+// markers and a gap after them still fit. The link marker takes its width
+// from the name, so the columns on the right stay in line with the other rows,
+// and it is left out when the name would keep no cell.
 func renderNameAndPR(
 	link string,
 	name string,
 	nameStyle lipgloss.Style,
-	pullRequest *core.PRStatus,
+	pullRequests pullRequestsMarker,
 	width int,
 ) string {
-	marker := prRowText(pullRequest)
+	markerRoom := width - 2*len(nameGap) - min(lipgloss.Width(name), minNameBesideMarker)
+	if link != "" {
+		markerRoom -= linkMarkerWidth
+	}
+	marker := pullRequestsRowText(pullRequests, markerRoom)
 	reserved := len(nameGap)
 	if marker != "" {
 		reserved += len(nameGap) + lipgloss.Width(marker)
@@ -464,18 +499,57 @@ func renderNameAndPR(
 	return padRightVisible(text, width)
 }
 
-// prRowText is a task row's pull request marker: its state symbol and number,
-// or nothing without a pull request.
-func prRowText(status *core.PRStatus) string {
-	if status == nil || status.State == core.PRStateNone {
+// pullRequestsRowText is a task row's pull requests marker, within room
+// cells: the state symbol of each of its earlier pull requests, the ones but
+// the current one, oldest first, then the current one's state symbol and
+// number, each in its state's color, and unshippedWorkMarker when the task
+// has unshipped work. Closed pull requests show only as the current one. It
+// shows at most maxEarlierPullRequestSymbols earlier ones, and fewer when they
+// do not fit, led by hiddenPullRequestsMarker when it leaves any out. The
+// current one and unshippedWorkMarker always show, room or not. A task
+// without pull requests has no marker.
+func pullRequestsRowText(marker pullRequestsMarker, room int) string {
+	pullRequests := marker.pullRequests
+	current := currentPullRequest(pullRequests)
+	if current < 0 {
 		return ""
 	}
 
-	icon, style := prStateIconStyle(status.State)
-	if status.Number > 0 {
-		icon += "#" + strconv.Itoa(status.Number)
+	var earlier []string
+	for index, pullRequest := range pullRequests {
+		if index == current || pullRequest.State == core.PRStateClosed {
+			continue
+		}
+		icon, style := prStateIconStyle(pullRequest.State)
+		earlier = append(earlier, style.Render(icon))
 	}
-	return style.Render(icon)
+	icon, style := prStateIconStyle(pullRequests[current].State)
+	currentText := style.Render(icon + pullRequestNumber(pullRequests[current]))
+	if marker.unshipped {
+		currentText += unshippedWorkStyle.Render(unshippedWorkMarker)
+	}
+
+	for shown := min(len(earlier), maxEarlierPullRequestSymbols); ; shown-- {
+		text := strings.Join(earlier[len(earlier)-shown:], "") + currentText
+		if shown < len(earlier) {
+			text = mutedStyle.Render(hiddenPullRequestsMarker) + text
+		}
+		if shown == 0 || lipgloss.Width(text) <= room {
+			return text
+		}
+	}
+}
+
+// currentPullRequest returns the index of a task's current pull request among
+// its pull requests, oldest first: its newest open or draft one, or else its
+// newest one. It returns -1 when there are none.
+func currentPullRequest(pullRequests []core.PullRequest) int {
+	for index := len(pullRequests) - 1; index >= 0; index-- {
+		if state := pullRequests[index].State; state == core.PRStateOpen || state == core.PRStateDraft {
+			return index
+		}
+	}
+	return len(pullRequests) - 1
 }
 
 // taskRowSymbol is the symbol a task's row leads with: the failed symbol when
@@ -538,8 +612,9 @@ func (m model) selectedTaskDetailView() string {
 			mutedStyle.Render("path")+"   "+dimStyle.Render(task.WorktreePath),
 		)
 	}
-	if prLine := prStatusDetailText(row.pullRequest); prLine != "" {
-		workspaceLines = append(workspaceLines, prLine)
+	workspaceLines = append(workspaceLines, pullRequestDetailLines(row.pullRequests, detailColWidth)...)
+	if len(row.pullRequests) > 0 && row.unshippedWork.Any() {
+		workspaceLines = append(workspaceLines, unshippedWorkDetailLines(row.unshippedWork, detailColWidth)...)
 	}
 	workspaceLines = append(workspaceLines, m.taskLinkDetailLines(task, detailColWidth)...)
 
@@ -1142,26 +1217,77 @@ func countNoun(count int, noun string) string {
 	return strconv.Itoa(count) + " " + noun + "s"
 }
 
-func prStatusText(status *core.PRStatus) string {
-	if status == nil || status.State == core.PRStateNone {
-		return mutedStyle.Render(iconPRNone)
+// pullRequestDetailLines lists a task's pull requests, oldest first, in the
+// detail panel's workspace column, within width columns: one a line, the
+// first after the pr label and the rest lined up under it. Each line has the
+// pull request's state symbol, number and state in its state's color, then
+// its head branch, muted. Past maxPullRequestDetailLines pull requests, the
+// first line counts the earlier ones, muted, and the newest follow.
+func pullRequestDetailLines(pullRequests []core.PullRequest, width int) []string {
+	if len(pullRequests) == 0 {
+		return nil
 	}
 
-	icon, style := prStateIconStyle(status.State)
-	label := icon
-	if status.Number > 0 {
-		label += " #" + strconv.Itoa(status.Number)
+	label := mutedStyle.Render("pr") + "     "
+	var lines []string
+	shown := pullRequests
+	if len(pullRequests) > maxPullRequestDetailLines {
+		shown = pullRequests[len(pullRequests)-maxPullRequestDetailLines+1:]
+		earlier := strconv.Itoa(len(pullRequests)-len(shown)) + " earlier"
+		lines = append(lines, fitDetailLine(label+mutedStyle.Render(earlier), width))
+		label = detailValueIndent
 	}
-	label += " " + string(status.State)
-	return style.Render(label)
+
+	numberWidth, stateWidth := 0, 0
+	for _, pullRequest := range shown {
+		numberWidth = max(numberWidth, len(pullRequestNumber(pullRequest)))
+		stateWidth = max(stateWidth, len(pullRequest.State))
+	}
+	for _, pullRequest := range shown {
+		icon, style := prStateIconStyle(pullRequest.State)
+		text := icon + " " + padRightVisible(pullRequestNumber(pullRequest), numberWidth) + " " +
+			padRightVisible(string(pullRequest.State), stateWidth)
+		line := label + style.Render(text) + nameGap + mutedStyle.Render(pullRequest.HeadBranch)
+		lines = append(lines, fitDetailLine(line, width))
+		label = detailValueIndent
+	}
+	return lines
 }
 
-func prStatusDetailText(status *core.PRStatus) string {
-	if status == nil || status.State == core.PRStateNone {
-		return ""
-	}
+func pullRequestNumber(pullRequest core.PullRequest) string {
+	return "#" + strconv.Itoa(pullRequest.Number)
+}
 
-	return mutedStyle.Render("pr") + "     " + prStatusText(status)
+// unshippedWorkDetailLines says in words, under the detail panel's pull
+// requests, what unshipped work a task has, after the unshippedWorkMarker its
+// row shows. Too wide for width columns, the words break before "not in a
+// pull request", and wrap on lines lined up after the marker, as cutting them
+// short would cut the sentence's point.
+func unshippedWorkDetailLines(work core.UnshippedWork, width int) []string {
+	var parts []string
+	if work.Commits > 0 {
+		parts = append(parts, countNoun(work.Commits, "commit"))
+	}
+	if work.UncommittedChanges {
+		parts = append(parts, "uncommitted changes")
+	}
+	what := strings.Join(parts, " and ")
+	const where = "not in a pull request"
+
+	prefix := unshippedWorkMarker + " "
+	room := width - len(detailValueIndent) - len(prefix)
+	wrapped := []string{what + " " + where}
+	if width > 0 && lipgloss.Width(wrapped[0]) > room {
+		wrapped = append(wrapAndTruncate(what, room, maxUnshippedWorkDetailLines-1), where)
+	}
+	lines := make([]string, 0, len(wrapped))
+	for index, line := range wrapped {
+		if index > 0 {
+			prefix = strings.Repeat(" ", len(prefix))
+		}
+		lines = append(lines, fitDetailLine(detailValueIndent+unshippedWorkStyle.Render(prefix+line), width))
+	}
+	return lines
 }
 
 // taskTokens is a task's token usage, or nil before its usage has loaded.

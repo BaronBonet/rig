@@ -2,6 +2,7 @@ package subprocess
 
 import (
 	"context"
+	"os"
 	"os/exec"
 	"strings"
 	"time"
@@ -23,6 +24,9 @@ type RunWithStdinOptions struct {
 	Stdin string
 	Name  string
 	Args  []string
+	// Env holds NAME=value pairs added to the environment the process
+	// inherits, replacing any it has by the same name.
+	Env []string
 }
 
 type StartLineSessionOptions struct {
@@ -103,6 +107,10 @@ func (ExecRunner) RunWithStdin(ctx context.Context, opts RunWithStdinOptions) (R
 	cmd := exec.CommandContext(ctx, opts.Name, opts.Args...)
 	cmd.Dir = opts.Cwd
 	cmd.WaitDelay = pipeCloseDelay
+	if len(opts.Env) > 0 {
+		// The last value of a name wins, so these replace inherited ones.
+		cmd.Env = append(os.Environ(), opts.Env...)
+	}
 	if opts.Stdin != "" {
 		cmd.Stdin = strings.NewReader(opts.Stdin)
 	}

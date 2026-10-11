@@ -149,8 +149,33 @@ Use `rig` for the CLI command and Rig for the product or system.
   in its current Provider session's root transcript, so `/clear` starts the
   count over, and splits them into auto and manual (`/compact`) where the
   provider records the trigger, as Claude does and Codex does not.
-- Pull request status: The GitHub pull request state associated with a task
-  branch, if any.
+- Task branch: A branch a Task's worktree has had checked out, as the
+  worktree's reflog records, or the branch the Task was created on. Rig
+  records each one it finds, so a branch deleted after its pull request merged,
+  or one git has expired from the reflog, stays the Task's. The repository's
+  default branch on GitHub is never one; while Rig cannot learn it, it adds no
+  branches from the reflog.
+- Pull request: A GitHub pull request whose head is a Task branch, in the
+  Task's own repository rather than a fork. The current one is the Task's
+  newest open or draft pull request, or else its newest. The task list marks a
+  Task's row with the current one's state symbol and number, led by the state
+  symbols of up to four earlier ones, and the detail panel lists the newest
+  five. The daemon looks a Task branch's pull requests up at most once a
+  minute, or once a quarter of an hour when all of them are merged or closed,
+  and keeps the last ones it found while GitHub cannot be reached.
+- Unshipped work: Work in a Task's worktree that none of its Pull requests
+  contains yet: uncommitted changes, untracked files included, and commits
+  that are neither in one of its Pull requests nor on the repository's
+  default branch or a branch one of them merges into. A Pull request contains
+  its commits, also once a squash merge has left them off the branch it
+  merged into and its branch is gone, and an open one also what was pushed to
+  its branch. Pushing alone ships nothing, so commits pushed to a branch
+  without a Pull request, or after its Pull request merged, are unshipped.
+  Merge commits, changes inside a submodule's own working tree, and the files
+  Rig itself writes into the workspace, such as Claude's workspace settings,
+  are never unshipped work. Rig finds it afresh from git on each refresh, and
+  only for a Task with Pull requests; the task list marks it with a `+` after
+  the current Pull request, and the detail panel says what it is.
 
 ## Relationships
 
@@ -191,6 +216,9 @@ Use `rig` for the CLI command and Rig for the product or system.
   its Child tasks working and unlinked.
 - Known repositories are derived from Tasks and Repo directories each time,
   never stored. A Repo directory that is missing is skipped.
+- A Task may have many Task branches over time, and a Task branch many Pull
+  requests, so a Task may have many Pull requests. Closed ones show in the
+  task list only as the current one.
 - A Task may have many Provider sessions over time.
 - A Provider session belongs to exactly one Task and one Provider.
 - A Task may have many Agent sessions, which may use different Providers. At

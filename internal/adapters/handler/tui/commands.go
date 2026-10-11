@@ -26,6 +26,18 @@ func activityRefreshTickCmd() tea.Cmd {
 	})
 }
 
+// pullRequestRefreshInterval paces the refresh of every task's pull
+// requests, so a pull request opened or merged on GitHub shows without
+// reloading the task list. The daemon caches each branch's pull requests for
+// a minute or more, so most refreshes cost it no gh call.
+var pullRequestRefreshInterval = 30 * time.Second
+
+func pullRequestRefreshTickCmd() tea.Cmd {
+	return tea.Tick(pullRequestRefreshInterval, func(time.Time) tea.Msg {
+		return pullRequestRefreshTickMsg{}
+	})
+}
+
 func loadTasksCmd(ctx context.Context, frontend core.TaskFrontend) tea.Cmd {
 	return func() tea.Msg {
 		tasks, err := frontend.ListTasks(ctx)
@@ -266,19 +278,13 @@ func taskUsageCmd(ctx context.Context, frontend core.TaskFrontend, taskID string
 	}
 }
 
-func pullRequestStatusCmd(
-	ctx context.Context,
-	frontend core.TaskFrontend,
-	taskID string,
-	repoRoot string,
-	branchName string,
-) tea.Cmd {
+func taskPullRequestsCmd(ctx context.Context, frontend core.TaskFrontend, taskID string) tea.Cmd {
 	return func() tea.Msg {
-		status, err := frontend.PullRequestStatus(ctx, repoRoot, branchName)
-		return pullRequestStatusLoadedMsg{
-			taskID: taskID,
-			status: status,
-			err:    err,
+		pullRequests, err := frontend.TaskPullRequests(ctx, taskID)
+		return taskPullRequestsLoadedMsg{
+			taskID:       taskID,
+			pullRequests: pullRequests,
+			err:          err,
 		}
 	}
 }

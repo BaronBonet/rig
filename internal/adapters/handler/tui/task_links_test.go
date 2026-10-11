@@ -149,7 +149,7 @@ func TestRenderRow_LinkMarkerKeepsTheRightColumnsAligned(t *testing.T) {
 		row := compactedRow()
 		row.task.DisplayName = strings.Repeat("very long task name ", 10)
 		row.task.ParentTaskID = parentID
-		row.pullRequest = &core.PRStatus{State: core.PRStateOpen, Number: 42}
+		row.pullRequests = []core.PullRequest{{State: core.PRStateOpen, Number: 42}}
 		return row
 	}
 	child, unlinked := linkedRow("parent"), linkedRow("")
@@ -183,7 +183,7 @@ func TestRenderRow_ChildRowIsNeverWiderThanOtherRows(t *testing.T) {
 	parent := rowTask()
 	parent.ID = "parent"
 	linkedRow := func(parentID string) taskRow {
-		row := taskRow{task: rowTask(), pullRequest: &core.PRStatus{State: core.PRStateMerged, Number: 12345}}
+		row := taskRow{task: rowTask(), pullRequests: []core.PullRequest{{State: core.PRStateMerged, Number: 12345}}}
 		row.task.ParentTaskID = parentID
 		return row
 	}
