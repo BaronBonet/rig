@@ -37,3 +37,12 @@ join task_activity a on a.id = (
   limit 1
 )
 where s.task_id = ? and s.ended_at = '';
+
+-- Every prompt of one agent session, oldest first, found through the activity
+-- agent session index. julianday compares the RFC 3339 times as times.
+-- name: ListAgentSessionPrompts :many
+select
+  id, task_id, turn_id, event_name, role, text, observed_at, agent_session_id
+from task_activity
+where agent_session_id = ? and agent_session_id != '' and role = 'user'
+order by julianday(observed_at) asc, id asc;

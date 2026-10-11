@@ -118,6 +118,10 @@ func (r *healthCheckRepository) ListLatestAgentSessionPrompts(
 	return nil, errHealthCheckRepositoryOnly
 }
 
+func (r *healthCheckRepository) ListAgentSessionPrompts(context.Context, string) ([]core.TaskActivityEvent, error) {
+	return nil, errHealthCheckRepositoryOnly
+}
+
 func (r *healthCheckRepository) UpsertTaskProviderSession(context.Context, core.TaskProviderSession) error {
 	return errHealthCheckRepositoryOnly
 }
@@ -288,6 +292,22 @@ func (r *repository) ListLatestAgentSessionPrompts(
 	}
 
 	rows, err := r.queries.ListLatestAgentSessionPrompts(ctx, taskID)
+	if err != nil {
+		return nil, err
+	}
+	return taskActivityEventsFromRows(rows), nil
+}
+
+func (r *repository) ListAgentSessionPrompts(
+	ctx context.Context,
+	agentSessionID string,
+) ([]core.TaskActivityEvent, error) {
+	agentSessionID = strings.TrimSpace(agentSessionID)
+	if agentSessionID == "" {
+		return nil, nil
+	}
+
+	rows, err := r.queries.ListAgentSessionPrompts(ctx, agentSessionID)
 	if err != nil {
 		return nil, err
 	}

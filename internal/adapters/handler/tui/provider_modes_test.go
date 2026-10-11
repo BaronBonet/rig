@@ -383,7 +383,7 @@ func TestModel_ActivityRefreshTickReloadsSelectedTaskActivity(t *testing.T) {
 	requireMsgType[taskUsageLoadedMsg](t, msgs)
 	// The tick re-arms itself so activity keeps refreshing.
 	requireMsgType[activityRefreshTickMsg](t, msgs)
-	require.Contains(t, frontend.getTaskActivityCalls, "task-1:6")
+	require.Contains(t, frontend.getTaskActivityCalls, "task-1:60")
 	require.Contains(t, frontend.getTaskUsageCalls, "task-1")
 	_ = got
 }

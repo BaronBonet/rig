@@ -18,8 +18,10 @@ insert into agent_sessions (
   background_monitors,
   background_workflows,
   background_other,
-  launched_at
-) values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
+  launched_at,
+  name,
+  named_provider_session_id
+) values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
 
 -- name: OpenAgentSessionOnPane :one
 select
@@ -41,7 +43,9 @@ select
   background_monitors,
   background_workflows,
   background_other,
-  launched_at
+  launched_at,
+  name,
+  named_provider_session_id
 from agent_sessions
 where tmux_socket_path = ? and tmux_server_pid = ? and tmux_pane = ? and tmux_pane != '' and ended_at = '';
 
@@ -65,7 +69,9 @@ select
   background_monitors,
   background_workflows,
   background_other,
-  launched_at
+  launched_at,
+  name,
+  named_provider_session_id
 from agent_sessions
 where task_id = ? and ended_at = '';
 
@@ -84,7 +90,9 @@ update agent_sessions set
   background_shells = ?,
   background_monitors = ?,
   background_workflows = ?,
-  background_other = ?
+  background_other = ?,
+  name = ?,
+  named_provider_session_id = ?
 where id = ? and ended_at = '';
 
 -- name: EndAgentSession :exec
@@ -113,7 +121,9 @@ select
   background_monitors,
   background_workflows,
   background_other,
-  launched_at
+  launched_at,
+  name,
+  named_provider_session_id
 from agent_sessions
 where task_id = ?
 order by julianday(started_at) desc, id desc

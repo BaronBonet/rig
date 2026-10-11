@@ -310,15 +310,21 @@ func taskStatusView(taskID string, evidence agentSessionEvidence, liveView agent
 }
 
 // liveAgentSession is a live agent session as its task's status carries it,
-// with latestPrompt as its newest prompt and no location.
+// with latestPrompt as its newest prompt and no location. It carries the
+// agent's name only while the name is its current conversation's: one the
+// agent started afresh shows its prompt until it is named.
 func liveAgentSession(session AgentSession, latestPrompt string) LiveAgentSession {
-	return LiveAgentSession{
+	live := LiveAgentSession{
 		ID:           session.ID,
 		Provider:     session.Provider,
 		Pane:         session.paneRef(),
 		Status:       rolledUpAgentSessionStatus(session),
 		LatestPrompt: latestPrompt,
 	}
+	if !session.unnamed() {
+		live.Name = session.Name
+	}
+	return live
 }
 
 // conversationHistory returns the Provider session history of an agent

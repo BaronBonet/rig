@@ -447,7 +447,7 @@ func TestModel_AfterLoadUsesSubscriptionsAsInitialStatusSource(t *testing.T) {
 	msgs := runBatchCmd(t, cmd)
 	require.Len(t, msgs, 6)
 	require.Empty(t, frontend.latestTaskStatusCalls)
-	require.Equal(t, []string{"task-1:6", "task-2:6"}, frontend.getTaskActivityCalls)
+	require.Equal(t, []string{"task-1:60", "task-2:60"}, frontend.getTaskActivityCalls)
 	require.Equal(t, []string{"task-1", "task-2"}, frontend.getTaskUsageCalls)
 	require.Equal(t, []string{"task-1", "task-2"}, frontend.subscribeTaskStatusCalls)
 }
@@ -600,7 +600,7 @@ func TestModel_AfterLoadRequestsTaskActivityForEachTask(t *testing.T) {
 	require.True(t, ok)
 
 	_ = runBatchCmd(t, cmd)
-	require.Equal(t, []string{"task-1:6", "task-2:6"}, frontend.getTaskActivityCalls)
+	require.Equal(t, []string{"task-1:60", "task-2:60"}, frontend.getTaskActivityCalls)
 }
 
 func TestModel_InitialSubscriptionUpdateRendersPhase(t *testing.T) {
@@ -1164,7 +1164,7 @@ func TestModel_TaskStatusUpdateReloadsTaskActivity(t *testing.T) {
 
 	activityMsg, ok := batchMsg[0]().(taskActivityLoadedMsg)
 	require.True(t, ok)
-	require.Equal(t, []string{"task-1:6", "task-1:6"}, frontend.getTaskActivityCalls)
+	require.Equal(t, []string{"task-1:60", "task-1:60"}, frontend.getTaskActivityCalls)
 	next, _ = got.Update(activityMsg)
 	got, ok = next.(model)
 	require.True(t, ok)

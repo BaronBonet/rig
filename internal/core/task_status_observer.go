@@ -418,8 +418,15 @@ func (o *taskStatusObserver) runCycle() {
 		close(results)
 	}()
 
+	evidenceByTask := make(map[string]agentSessionEvidence, len(inputs))
+	for _, input := range inputs {
+		evidenceByTask[input.taskID] = input.evidence
+	}
 	for result := range results {
 		o.acceptCycleResult(ctx, result)
+		// The cycle's live view tells which agents are lost, and so which
+		// show as sub-rows to be named.
+		o.observation.nameAgentSessions(ctx, taskByID[result.taskID], evidenceByTask[result.taskID], result.liveView)
 	}
 }
 

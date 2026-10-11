@@ -583,7 +583,15 @@ func (m model) selectedTaskDetailView() string {
 		}
 	}
 
-	lastUserPrompt, assistantItems := taskActivityPreview(row.activity)
+	// With an agent sub-row selected, the activity is that agent's own.
+	activity, assistantProvider := row.activity, task.Provider
+	if agentSession != nil {
+		activity, assistantProvider = agentActivity(row.activity, agentSession.ID), agentSession.Provider
+	}
+	lastUserPrompt, assistantItems := taskActivityPreview(activity)
+	if lastUserPrompt == "" && agentSession != nil {
+		lastUserPrompt = terminalSafeText(agentSession.LatestPrompt)
+	}
 	if lastUserPrompt != "" || len(assistantItems) > 0 {
 		builder.WriteString("\n")
 		builder.WriteString("   " + headerLabelStyle.Render("ACTIVITY") + "\n")
@@ -607,7 +615,7 @@ func (m model) selectedTaskDetailView() string {
 			leftLines = append(leftLines, dimStyle.Render("No prompt yet."))
 		}
 
-		rightLines := []string{providerStyle(string(task.Provider)).Render("assistant")}
+		rightLines := []string{providerStyle(string(assistantProvider)).Render("assistant")}
 		if len(assistantItems) == 0 {
 			rightLines = append(rightLines, dimStyle.Render("No assistant activity yet."))
 		} else {

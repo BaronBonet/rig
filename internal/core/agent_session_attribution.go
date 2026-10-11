@@ -837,6 +837,9 @@ func (o *taskObservation) applyAgentSessionEvent(
 	providerSessionID := strings.TrimSpace(input.SessionID)
 	current := providerSessionID == "" || providerSessionID == session.ProviderSessionID
 	if !current && (session.ProviderSessionID == "" || movesAgentSession(input)) {
+		if session.Name != "" && !startsConversationAfresh(input) {
+			session.NamedProviderSessionID = providerSessionID
+		}
 		session.ProviderSessionID = providerSessionID
 		session.Status = AgentSessionStatus{}
 		current = true
@@ -929,6 +932,22 @@ func (c *boundedCache[K, V]) get(key K) (V, bool) {
 func (c *boundedCache[K, V]) put(key K, value V) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
+	c.putLocked(key, value)
+}
+
+// putIfAbsent stores value under key unless the key is present, and reports
+// whether it stored it.
+func (c *boundedCache[K, V]) putIfAbsent(key K, value V) bool {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if _, ok := c.entries[key]; ok {
+		return false
+	}
+	c.putLocked(key, value)
+	return true
+}
+
+func (c *boundedCache[K, V]) putLocked(key K, value V) {
 	if _, ok := c.entries[key]; !ok {
 		if len(c.entries) >= c.limit && len(c.order) > 0 {
 			delete(c.entries, c.order[0])

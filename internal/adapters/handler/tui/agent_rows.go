@@ -124,8 +124,8 @@ func agentSessionStatusUpdate(session core.LiveAgentSession) *core.TaskStatusUpd
 }
 
 // renderAgentSubRow renders one agent session as an indented sub-row under
-// its task: its status symbol, its provider, and its latest prompt or else
-// where the agent runs, then its compaction marker, if it has compacted.
+// its task: its status symbol, its provider, and what agentSubRowText says
+// about it, then its compaction marker, if it has compacted.
 func (m model) renderAgentSubRow(
 	session core.LiveAgentSession,
 	compactions core.Compactions,
@@ -148,11 +148,11 @@ func (m model) renderAgentSubRow(
 	// overflowing.
 	layout := taskRowLayoutFor(totalWidth)
 	textWidth := max(0, statusSymbolWidth+layout.nameArea-subRowLead)
-	text, isPrompt := agentSubRowText(session)
+	text, placeholder := agentSubRowText(session)
 	text = truncateStr(text, textWidth-len(nameGap))
 
 	textStyle, compactionStyle := dimStyle, mutedStyle
-	if !isPrompt {
+	if placeholder {
 		textStyle = mutedStyle
 	}
 	if needsInput(status) {
@@ -180,16 +180,32 @@ func (m model) renderAgentSubRow(
 	return normalRowStyle.Render(line)
 }
 
-// agentSubRowText is what a sub-row says about its agent: its latest prompt,
-// or before the first prompt, where its pane runs. isPrompt reports which.
+// agentSubRowText is what a sub-row says about its agent: its name, its
+// latest prompt until it is named, or before the first prompt, where its pane
+// runs. placeholder reports the last, which says nothing of the agent's work.
 func agentSubRowText(session core.LiveAgentSession) (string, bool) {
+	if name := terminalSafeText(session.Name); name != "" {
+		return name, false
+	}
 	if prompt := terminalSafeText(session.LatestPrompt); prompt != "" {
-		return prompt, true
+		return prompt, false
 	}
 	if pane := agentPaneText(session); pane != "" {
-		return pane, false
+		return pane, true
 	}
-	return "no prompt yet", false
+	return "no prompt yet", true
+}
+
+// agentActivity is the part of a task's activity that came from one of its
+// agent sessions.
+func agentActivity(events []core.TaskActivityEvent, agentSessionID string) []core.TaskActivityEvent {
+	var activity []core.TaskActivityEvent
+	for _, event := range events {
+		if event.AgentSessionID == agentSessionID {
+			activity = append(activity, event)
+		}
+	}
+	return activity
 }
 
 // agentPaneText describes where an agent session's pane runs: its window and

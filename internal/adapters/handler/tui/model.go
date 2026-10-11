@@ -45,6 +45,11 @@ const (
 
 const taskActivityPreviewLimit = 6
 
+// taskActivityFetchLimit is how much of a task's recent activity the detail
+// panel loads: enough that each of its agents' own shows when its sub-row is
+// selected, while the task's other agents keep busy.
+const taskActivityFetchLimit = 60
+
 // nolint:recvcheck // bubbletea requires value receivers for tea.Model.
 type model struct {
 	frontend      core.TaskFrontend
@@ -509,7 +514,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.clampAgentSelection()
 		spinnerCmd := m.startSpinner()
 		return m, tea.Batch(
-			taskActivityCmd(m.statusContext, m.frontend, msg.taskID, taskActivityPreviewLimit),
+			taskActivityCmd(m.statusContext, m.frontend, msg.taskID, taskActivityFetchLimit),
 			taskUsageCmd(m.statusContext, m.frontend, msg.taskID),
 			waitForTaskStatusCmd(msg.taskID, msg.updates),
 			spinnerCmd,
@@ -648,7 +653,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if row := m.selectedRow(); row != nil && row.task != nil && taskID(row.task) != "" {
 			id := taskID(row.task)
 			cmds = append(cmds,
-				taskActivityCmd(m.statusContext, m.frontend, id, taskActivityPreviewLimit),
+				taskActivityCmd(m.statusContext, m.frontend, id, taskActivityFetchLimit),
 				taskUsageCmd(m.statusContext, m.frontend, id),
 			)
 		}
@@ -724,7 +729,7 @@ func (m *model) afterTasksLoadedCmds() []tea.Cmd {
 		taskID := taskID(row.task)
 		cmds = append(cmds, m.taskStatusTrackingCmds(taskID)...)
 		if taskID != "" {
-			cmds = append(cmds, taskActivityCmd(m.statusContext, m.frontend, taskID, taskActivityPreviewLimit))
+			cmds = append(cmds, taskActivityCmd(m.statusContext, m.frontend, taskID, taskActivityFetchLimit))
 			cmds = append(cmds, taskUsageCmd(m.statusContext, m.frontend, taskID))
 		}
 		if cmd := m.taskPullRequestStatusCmd(row.task); cmd != nil {
