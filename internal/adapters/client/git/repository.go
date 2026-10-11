@@ -3,8 +3,10 @@ package git
 import (
 	"context"
 	"fmt"
+	"io/fs"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 
 	"github.com/BaronBonet/rig/internal/core"
@@ -134,6 +136,93 @@ func (r *repository) RemoveTaskWorkspace(ctx context.Context, task *core.Task) e
 		task.WorktreePath,
 	)
 	return err
+}
+
+// ListRepoCheckouts lists the primary checkouts directly inside dir from the
+// filesystem alone. A primary checkout's .git is a directory, while a linked
+// worktree's is a file pointing back at its repository, so worktrees sitting
+// beside their repositories are left out. A symlink to a checkout counts, at
+// the place it links to. The roots are physical paths, as DetectRepo reports
+// a repository's root, so that the same repository is recognised whichever
+// way it was found.
+func (r *repository) ListRepoCheckouts(_ context.Context, dir string) ([]string, error) {
+	physicalDir, err := physicalPath(dir)
+	if err != nil {
+		return nil, err
+	}
+	entries, err := os.ReadDir(physicalDir)
+	if err != nil {
+		return nil, err
+	}
+
+	var roots []string
+	for _, entry := range entries {
+		if strings.HasPrefix(entry.Name(), ".") {
+			continue
+		}
+		root := filepath.Join(physicalDir, entry.Name())
+		// Stat follows a symlink, so a symlinked checkout passes too.
+		gitDir, err := os.Stat(filepath.Join(root, ".git"))
+		if err != nil || !gitDir.IsDir() {
+			continue
+		}
+		if entry.Type()&fs.ModeSymlink != 0 {
+			if root, err = physicalPath(root); err != nil {
+				continue
+			}
+		}
+		roots = append(roots, root)
+	}
+	slices.Sort(roots)
+	return slices.Compact(roots), nil
+}
+
+// physicalPath returns path as git reports a repository's root: with its
+// symlinks resolved and each component spelled the way the filesystem lists
+// it, since a case-insensitive filesystem, as macOS's usually is, finds a
+// path typed in any case.
+func physicalPath(path string) (string, error) {
+	resolved, err := filepath.EvalSymlinks(path)
+	if err != nil {
+		return "", err
+	}
+	return onDiskCase(resolved), nil
+}
+
+// onDiskCase returns the clean absolute path with each component spelled the
+// way the directory holding it lists it. A relative path, or a component in a
+// directory that cannot be read, is left as it is.
+func onDiskCase(path string) string {
+	if !filepath.IsAbs(path) {
+		return path
+	}
+	volume := filepath.VolumeName(path)
+	cased := volume + string(filepath.Separator)
+	for _, name := range strings.Split(path[len(volume):], string(filepath.Separator)) {
+		if name != "" {
+			cased = filepath.Join(cased, onDiskName(cased, name))
+		}
+	}
+	return cased
+}
+
+// onDiskName returns the entry of dir that name finds: the entry named name
+// exactly, else the first whose name matches it ignoring case, else name.
+func onDiskName(dir string, name string) string {
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return name
+	}
+	cased := name
+	for _, entry := range entries {
+		switch {
+		case entry.Name() == name:
+			return name
+		case cased == name && strings.EqualFold(entry.Name(), name):
+			cased = entry.Name()
+		}
+	}
+	return cased
 }
 
 type worktreeEntry struct {

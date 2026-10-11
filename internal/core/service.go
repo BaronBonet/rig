@@ -14,8 +14,11 @@ type TaskServiceDependencies struct {
 	PullRequests         PullRequestClient
 	Providers            map[Provider]ProviderClient
 	Workspace            TaskWorkspaceManager
-	ProviderConfig       ProviderConfigStore
+	UserConfig           UserConfigStore
 	EnableWorkspaceSetup bool
+	// ReportWarning receives problems that do not fail the operation they
+	// happen in, such as a Rig skill setup could not install. Nil drops them.
+	ReportWarning func(error)
 }
 
 // service is the concrete task application service. Composition code holds
@@ -27,16 +30,18 @@ type TaskServiceDependencies struct {
 // launching behaviour shared with reconnect lives in the sessionLauncher
 // module; the service delegates to both.
 type service struct {
-	tasks          TaskRepository
-	gitWorktree    GitWorktreeClient
-	tmuxSession    TmuxSessionClient
-	pullRequests   PullRequestClient
-	providers      map[Provider]ProviderClient
-	providerConfig ProviderConfigStore
-	launcher       *sessionLauncher
-	creation       *taskCreation
-	observation    *taskObservation
-	operations     *taskOperationCoordinator
+	tasks        TaskRepository
+	gitWorktree  GitWorktreeClient
+	tmuxSession  TmuxSessionClient
+	pullRequests PullRequestClient
+	providers    map[Provider]ProviderClient
+	userConfig   UserConfigStore
+	warn         func(error)
+	launcher     *sessionLauncher
+	repos        *knownRepos
+	creation     *taskCreation
+	observation  *taskObservation
+	operations   *taskOperationCoordinator
 }
 
 // The concrete service must satisfy every port it is wired into. These
@@ -77,28 +82,39 @@ func NewTaskService(deps TaskServiceDependencies) *service {
 		deps.Tasks,
 		deps.TmuxSession,
 		deps.Providers,
-		deps.ProviderConfig,
+		deps.UserConfig,
 	)
 	launcher := newSessionLauncher(
 		deps.Providers,
-		deps.ProviderConfig,
+		deps.UserConfig,
 		deps.Workspace,
 		deps.TmuxSession,
 		observation,
 		deps.EnableWorkspaceSetup,
 	)
+	repos := newKnownRepos(deps.Tasks, deps.GitWorktree, deps.UserConfig)
 
 	return &service{
-		tasks:          deps.Tasks,
-		gitWorktree:    deps.GitWorktree,
-		tmuxSession:    deps.TmuxSession,
-		pullRequests:   deps.PullRequests,
-		providers:      deps.Providers,
-		providerConfig: deps.ProviderConfig,
-		launcher:       launcher,
-		creation:       newTaskCreation(deps.Tasks, deps.GitWorktree, launcher, operations),
-		operations:     operations,
-		observation:    observation,
+		tasks:        deps.Tasks,
+		gitWorktree:  deps.GitWorktree,
+		tmuxSession:  deps.TmuxSession,
+		pullRequests: deps.PullRequests,
+		providers:    deps.Providers,
+		userConfig:   deps.UserConfig,
+		warn:         deps.ReportWarning,
+		launcher:     launcher,
+		repos:        repos,
+		creation:     newTaskCreation(deps.Tasks, deps.GitWorktree, repos, launcher, operations),
+		operations:   operations,
+		observation:  observation,
+	}
+}
+
+// reportWarning passes a problem that does not fail the operation it happens
+// in to the warning reporter, if there is one.
+func (s *service) reportWarning(err error) {
+	if s.warn != nil {
+		s.warn(err)
 	}
 }
 
@@ -115,12 +131,21 @@ func (s *service) HealthCheck(ctx context.Context) ([]HealthCheck, error) {
 		checks = append(checks, HealthCheck{Name: "provider setup", Required: true, Err: ErrProviderSetupRequired})
 	default:
 		// Doctor validates every configured provider. Supported providers the
-		// user has not configured are intentionally not checked.
+		// user has not configured are intentionally not checked. A missing or
+		// outdated Rig skill only warns: tasks work without it.
 		for _, provider := range configuredProvidersInOrder(*setup) {
-			checks = append(checks, runRequiredDoctorCheck(ctx, string(provider), s.providers[provider]))
+			providerClient := s.providers[provider]
+			checks = append(checks, runRequiredDoctorCheck(ctx, string(provider), providerClient))
+			if providerClient != nil {
+				checks = append(checks, HealthCheck{
+					Name: string(provider) + " skill",
+					Err:  providerClient.CheckRigSkill(ctx),
+				})
+			}
 		}
 	}
 
+	checks = append(checks, s.repos.healthCheck(ctx))
 	checks = append(checks, runOptionalHealthCheck(ctx, "gh", s.pullRequests))
 	checks = append(checks, runRequiredHealthCheck(ctx, "sqlite", s.tasks))
 

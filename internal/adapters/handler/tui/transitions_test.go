@@ -12,7 +12,7 @@ import (
 func TestCanEnterMatrix(t *testing.T) {
 	allModes := []modelMode{
 		modeBrowse, modePromptInput, modePRPicker,
-		modeCleanupConfirm, modeProviderSetup,
+		modeCleanupConfirm, modeProviderSetup, modeRepoDirsSetup,
 	}
 
 	cases := []struct {
@@ -27,7 +27,7 @@ func TestCanEnterMatrix(t *testing.T) {
 			hasSetup: true,
 			allowed: map[modelMode]bool{
 				modeBrowse: true, modePromptInput: true, modePRPicker: true,
-				modeCleanupConfirm: true, modeProviderSetup: true,
+				modeCleanupConfirm: true, modeProviderSetup: true, modeRepoDirsSetup: true,
 			},
 		},
 		{
@@ -38,9 +38,16 @@ func TestCanEnterMatrix(t *testing.T) {
 			},
 		},
 		{
-			name:      "setup-only session: locked to provider setup",
+			name:      "setup-only session: locked to the setup steps",
 			setupOnly: true,
 			hasSetup:  true,
+			allowed: map[modelMode]bool{
+				modeProviderSetup: true, modeRepoDirsSetup: true,
+			},
+		},
+		{
+			name:      "setup-only session before provider setup: only provider setup",
+			setupOnly: true,
 			allowed: map[modelMode]bool{
 				modeProviderSetup: true,
 			},
@@ -110,6 +117,19 @@ func TestBackTargetMatrix(t *testing.T) {
 		{
 			name:      "provider setup quits in a setup-only session",
 			mode:      modeProviderSetup,
+			hasSetup:  true,
+			setupOnly: true,
+			want:      backDest{quit: true},
+		},
+		{
+			name:     "repo dirs step finishes setup in the task list",
+			mode:     modeRepoDirsSetup,
+			hasSetup: true,
+			want:     backDest{to: modeBrowse},
+		},
+		{
+			name:      "repo dirs step quits in a setup-only session",
+			mode:      modeRepoDirsSetup,
 			hasSetup:  true,
 			setupOnly: true,
 			want:      backDest{quit: true},

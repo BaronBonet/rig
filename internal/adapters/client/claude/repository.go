@@ -8,8 +8,8 @@
 // when the file already exists (Claude Code stores permission decisions
 // there) Rig merges its hook rules in and preserves the rest. Rig never
 // modifies user-level Claude settings (~/.claude/settings.json); only the
-// shared forward-to-rig script, which does not trigger by itself, is
-// installed at user level.
+// shared forward-to-rig script, which does not trigger by itself, and the
+// Rig skill, in Claude's user skills directory, are installed at user level.
 //
 // Running/idle detection was verified against a real Claude CLI (v2.1.200) in
 // tmux: pane_current_command reports the Claude process title, which is the
@@ -97,11 +97,14 @@ var needsInputNotificationTypes = []string{
 var titleSkipPrefixes = []string(nil)
 
 type repository struct {
-	runner       subprocess.Runner
-	rigDataDir   func() (string, error)
-	binary       string
-	collectorURL string
-	hookSecret   string
+	runner     subprocess.Runner
+	rigDataDir func() (string, error)
+	// claudeConfigDir is Claude Code's user-level configuration directory,
+	// which holds the user's skills.
+	claudeConfigDir func() (string, error)
+	binary          string
+	collectorURL    string
+	hookSecret      string
 }
 
 func New(runner subprocess.Runner, cfg Config, hooks HookForwardingConfig) core.ProviderClient {
@@ -111,11 +114,12 @@ func New(runner subprocess.Runner, cfg Config, hooks HookForwardingConfig) core.
 	}
 
 	return &repository{
-		runner:       runner,
-		binary:       cfg.Binary,
-		collectorURL: collectorURL,
-		hookSecret:   strings.TrimSpace(hooks.HookSecret),
-		rigDataDir:   defaultRigDataDir,
+		runner:          runner,
+		binary:          cfg.Binary,
+		collectorURL:    collectorURL,
+		hookSecret:      strings.TrimSpace(hooks.HookSecret),
+		rigDataDir:      defaultRigDataDir,
+		claudeConfigDir: defaultClaudeConfigDir,
 	}
 }
 
@@ -200,6 +204,41 @@ func (r *repository) EnsureTaskSessionEnvironment(context.Context) error {
 	}
 
 	return r.forwarder().WriteScript(scriptPath)
+}
+
+// InstallRigSkill writes the Rig skill to the user's Claude skills, replacing
+// the one an earlier Rig wrote.
+func (r *repository) InstallRigSkill(context.Context) error {
+	path, err := r.rigSkillPath()
+	if err != nil {
+		return err
+	}
+
+	return providerkit.WriteRigSkill(path)
+}
+
+// CheckRigSkill fails when the user's Claude skills lack the Rig skill this
+// Rig version installs.
+func (r *repository) CheckRigSkill(context.Context) error {
+	path, err := r.rigSkillPath()
+	if err != nil {
+		return err
+	}
+
+	return providerkit.CheckRigSkill(path)
+}
+
+func (r *repository) rigSkillPath() (string, error) {
+	configDir, err := r.claudeConfigDir()
+	if err != nil {
+		return "", err
+	}
+	configDir = strings.TrimSpace(configDir)
+	if configDir == "" {
+		return "", fmt.Errorf("claude config dir is required")
+	}
+
+	return filepath.Join(configDir, "skills", "rig", "SKILL.md"), nil
 }
 
 func (r *repository) forwarder() providerkit.Forwarder {
@@ -313,6 +352,28 @@ func defaultRigDataDir() (string, error) {
 	}
 
 	return filepath.Join(home, ".local", "share", "rig"), nil
+}
+
+// defaultClaudeConfigDir is the directory Claude Code keeps the user's
+// configuration and skills in: $CLAUDE_CONFIG_DIR, or else ~/.claude. A
+// CLAUDE_CONFIG_DIR that is not an absolute path, such as one starting with
+// a ~ the shell did not expand, is an error rather than a path resolved
+// against the daemon's working directory. Nor does it fall back to ~/.claude,
+// which this Claude Code may not read: the error is what rig doctor shows.
+func defaultClaudeConfigDir() (string, error) {
+	if custom := strings.TrimSpace(os.Getenv("CLAUDE_CONFIG_DIR")); custom != "" {
+		if !filepath.IsAbs(custom) {
+			return "", fmt.Errorf("CLAUDE_CONFIG_DIR must be an absolute path, not %q", custom)
+		}
+		return filepath.Clean(custom), nil
+	}
+
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return "", fmt.Errorf("resolve claude config dir: %w", err)
+	}
+
+	return filepath.Join(home, ".claude"), nil
 }
 
 // renderWorkspaceHookSettings renders the workspace-level Claude settings

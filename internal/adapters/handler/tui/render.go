@@ -9,6 +9,7 @@ import (
 
 	"github.com/BaronBonet/rig/internal/core"
 
+	"charm.land/bubbles/v2/textarea"
 	"charm.land/lipgloss/v2"
 	"github.com/charmbracelet/x/ansi"
 )
@@ -28,6 +29,9 @@ const (
 	rowGutterWidth = 4
 	// statusSymbolWidth is a row's status symbol and the space after it.
 	statusSymbolWidth = 2
+	// linkMarkerWidth is a child task row's link marker and the space after
+	// it, which the row takes from its name.
+	linkMarkerWidth = 2
 	// nameGap separates a task's name from its pull request, and the pull
 	// request from the columns after it.
 	nameGap = "  "
@@ -343,18 +347,15 @@ func (m model) renderRepoHeader(task *core.Task, totalWidth int) string {
 	return headerLabelStyle.Render(truncateStr(name, totalWidth))
 }
 
-// renderRow renders a task row on one line: its status symbol, its name and
-// pull request, then its agent's provider and compactions and its elapsed
-// time on the right.
+// renderRow renders a task row on one line: its status symbol, a child
+// task's link marker, its name and pull request, then its agent's provider and
+// compactions and its elapsed time on the right.
 func (m model) renderRow(index int, row taskRow, totalWidth int) string {
 	if row.task == nil {
 		return ""
 	}
 
-	symbol, symbolStyle := m.statusSymbol(row.status)
-	if row.task.CreationStatus == core.TaskCreationStatusFailed {
-		symbol, symbolStyle = iconFailed, errorStyle
-	}
+	symbol, symbolStyle := m.taskRowSymbol(row)
 
 	name := row.task.DisplayName
 	if strings.TrimSpace(name) == "" {
@@ -364,21 +365,28 @@ func (m model) renderRow(index int, row taskRow, totalWidth int) string {
 	// A task that needs input stands out from the dimmed rest. The selected
 	// task stands out further, also while the cursor is on one of its agent
 	// sub-rows; the selection border and bold name mark the cursor's line.
-	nameStyle, compactionStyle, timeStyle, rowStyle := dimStyle, mutedStyle, dimStyle, normalRowStyle
+	// Its terse markers, a child task's link marker and its compactions, stay
+	// muted until it is selected.
+	nameStyle, markerStyle, timeStyle, rowStyle := dimStyle, mutedStyle, dimStyle, normalRowStyle
 	if needsInput(row.status) {
 		nameStyle = primaryStyle
 	}
 	if index == m.selected {
 		onTaskRow := m.selectedAgentSession() == nil
 		nameStyle = lipgloss.NewStyle().Foreground(colorAccent).Bold(onTaskRow)
-		compactionStyle, timeStyle = primaryStyle, primaryStyle
+		markerStyle, timeStyle = primaryStyle, primaryStyle
 		if onTaskRow {
 			rowStyle = selectedRowStyle
 		}
 	}
 
+	link := ""
+	if m.parentTask(row.task) != nil {
+		link = markerStyle.Render(iconChildTask)
+	}
+
 	layout := taskRowLayoutFor(totalWidth)
-	line := symbolStyle.Render(symbol) + " " + renderNameAndPR(name, nameStyle, row.pullRequest, layout.nameArea)
+	line := symbolStyle.Render(symbol) + " " + renderNameAndPR(link, name, nameStyle, row.pullRequest, layout.nameArea)
 	if layout.provider {
 		// A task with agent sub-rows leaves its providers to them.
 		providerCell := strings.Repeat(" ", colWidthAgent)
@@ -390,7 +398,7 @@ func (m model) renderRow(index int, row taskRow, totalWidth int) string {
 	if layout.compactions {
 		// As with the provider, a task with agent sub-rows leaves its agents'
 		// compactions to them.
-		line += renderCompactionsCell(taskRowCompactions(row), compactionStyle)
+		line += renderCompactionsCell(taskRowCompactions(row), markerStyle)
 	}
 	line += padLeftVisible(timeStyle.Render(taskElapsed(row.task)), colWidthElapsed)
 	return rowStyle.Render(line)
@@ -426,17 +434,30 @@ func taskRowLayoutFor(totalWidth int) taskRowLayout {
 	return layout
 }
 
-// renderNameAndPR fills a task row's name area: the name, then its pull
-// request's marker. A long name is truncated so the marker and a gap after
-// it still fit.
-func renderNameAndPR(name string, nameStyle lipgloss.Style, pullRequest *core.PRStatus, width int) string {
+// renderNameAndPR fills a task row's name area: a child task's link marker,
+// when it is given one, the name, then its pull request's marker. A long name
+// is truncated so the markers and a gap after them still fit. The link marker
+// takes its width from the name, so the columns on the right stay in line with
+// the other rows, and it is left out when the name would keep no cell.
+func renderNameAndPR(
+	link string,
+	name string,
+	nameStyle lipgloss.Style,
+	pullRequest *core.PRStatus,
+	width int,
+) string {
 	marker := prRowText(pullRequest)
 	reserved := len(nameGap)
 	if marker != "" {
 		reserved += len(nameGap) + lipgloss.Width(marker)
 	}
 
-	text := nameStyle.Render(truncateStr(name, width-reserved))
+	text := ""
+	if link != "" && width-reserved-linkMarkerWidth >= 1 {
+		text = link + " "
+		reserved += linkMarkerWidth
+	}
+	text += nameStyle.Render(truncateStr(name, width-reserved))
 	if marker != "" {
 		text += nameGap + marker
 	}
@@ -455,6 +476,15 @@ func prRowText(status *core.PRStatus) string {
 		icon += "#" + strconv.Itoa(status.Number)
 	}
 	return style.Render(icon)
+}
+
+// taskRowSymbol is the symbol a task's row leads with: the failed symbol when
+// its creation failed, and its status symbol otherwise.
+func (m model) taskRowSymbol(row taskRow) (string, lipgloss.Style) {
+	if row.task != nil && row.task.CreationStatus == core.TaskCreationStatusFailed {
+		return iconFailed, errorStyle
+	}
+	return m.statusSymbol(row.status)
 }
 
 // statusSymbol is the symbol a task or agent row shows for its status: a
@@ -511,6 +541,7 @@ func (m model) selectedTaskDetailView() string {
 	if prLine := prStatusDetailText(row.pullRequest); prLine != "" {
 		workspaceLines = append(workspaceLines, prLine)
 	}
+	workspaceLines = append(workspaceLines, m.taskLinkDetailLines(task, detailColWidth)...)
 
 	sessionLines := []string{
 		headerLabelStyle.Render("SESSION"),
@@ -681,8 +712,6 @@ func taskActivityPreview(events []core.TaskActivityEvent) (string, []string) {
 }
 
 func (m model) promptInputView() string {
-	totalWidth := m.totalWidth()
-
 	var builder strings.Builder
 	builder.WriteString(m.screenHeader(mutedStyle.Render("new task")))
 	builder.WriteString(errorBlock(m.draft.err))
@@ -694,21 +723,12 @@ func (m model) promptInputView() string {
 	}
 	builder.WriteString(providerLine + "\n\n")
 
-	promptBoxWidth := totalWidth - 4
-	if promptBoxWidth < 20 {
-		promptBoxWidth = 20
-	}
 	m.ensurePromptInputInitialized()
 	input := m.draft.input
 	if input.Value() != m.draft.prompt {
 		input.SetValue(m.draft.prompt)
 	}
-	contentWidth := promptBoxWidth - promptBoxStyle.GetHorizontalFrameSize()
-	if contentWidth < 1 {
-		contentWidth = 1
-	}
-	input.SetWidth(contentWidth)
-	builder.WriteString(promptBoxStyle.Width(promptBoxWidth).Render(input.View()))
+	builder.WriteString(m.renderTextBox(input))
 
 	if progress := m.renderCreateProgress(); progress != "" {
 		builder.WriteString("\n\n" + progress)
@@ -722,6 +742,22 @@ func (m model) promptInputView() string {
 	))
 
 	return builder.String()
+}
+
+// textBoxWidth is the width of the box a screen draws a text input in, and
+// textBoxContentWidth the width of the text inside it.
+func (m model) textBoxWidth() int {
+	return max(m.totalWidth()-4, 20)
+}
+
+func (m model) textBoxContentWidth() int {
+	return max(m.textBoxWidth()-promptBoxStyle.GetHorizontalFrameSize(), 1)
+}
+
+// renderTextBox draws a text input in its box, sized to the screen.
+func (m model) renderTextBox(input textarea.Model) string {
+	input.SetWidth(m.textBoxContentWidth())
+	return promptBoxStyle.Width(m.textBoxWidth()).Render(input.View())
 }
 
 func (m model) listKeybindText() string {
@@ -793,6 +829,42 @@ func (m model) providerSetupView() string {
 		[2]string{"d", "default"},
 		[2]string{"enter", "save"},
 		[2]string{"q", "quit"},
+	))
+
+	return builder.String()
+}
+
+func (m model) repoDirsSetupView() string {
+	form := m.repoDirsForm
+
+	var builder strings.Builder
+	builder.WriteString(m.screenHeader(mutedStyle.Render("repo directories")) + "\n")
+
+	builder.WriteString(primaryStyle.Bold(true).Render("Repo directories") + "\n")
+	explanation := "Optional. Rig lists the git repositories directly inside these directories, so agents can " +
+		"find a repository by name. Worktrees are skipped. One path per line, absolute or starting with ~/."
+	for _, line := range wrapAndTruncate(explanation, m.totalWidth(), 4) {
+		builder.WriteString(dimStyle.Render(line) + "\n")
+	}
+	builder.WriteString("\n")
+
+	builder.WriteString(errorBlock(form.err))
+
+	if form.loading {
+		builder.WriteString(renderShimmer("Loading repo directories...", m.shimmerTick) + "\n")
+	} else {
+		builder.WriteString(m.renderTextBox(form.input) + "\n")
+	}
+
+	if form.saving {
+		builder.WriteString("\n" + renderShimmer("Saving repo directories...", m.shimmerTick) + "\n")
+	}
+
+	builder.WriteString("\n")
+	builder.WriteString(footerKeybinds(
+		[2]string{"enter", "save"},
+		[2]string{"ctrl+j", "new line"},
+		[2]string{"esc", "skip"},
 	))
 
 	return builder.String()

@@ -19,19 +19,23 @@ import (
 type taskCreation struct {
 	tasks       TaskRepository
 	gitWorktree GitWorktreeClient
-	launcher    *sessionLauncher
-	operations  *taskOperationCoordinator
+	// repos resolves a target repository given by name.
+	repos      *knownRepos
+	launcher   *sessionLauncher
+	operations *taskOperationCoordinator
 }
 
 func newTaskCreation(
 	tasks TaskRepository,
 	gitWorktree GitWorktreeClient,
+	repos *knownRepos,
 	launcher *sessionLauncher,
 	operations *taskOperationCoordinator,
 ) *taskCreation {
 	return &taskCreation{
 		tasks:       tasks,
 		gitWorktree: gitWorktree,
+		repos:       repos,
 		launcher:    launcher,
 		operations:  operations,
 	}
@@ -85,7 +89,7 @@ func (c *taskCreation) CreateTaskWithProgress(
 	input CreateTaskInput,
 	reporter TaskCreateProgressReporter,
 ) (*Task, error) {
-	repoCtx, err := c.gitWorktree.DetectRepo(ctx, input.Cwd)
+	repoCtx, err := c.targetRepo(ctx, input)
 	if err != nil {
 		return nil, err
 	}
@@ -127,12 +131,15 @@ func (c *taskCreation) retryTaskCreationWithProgress(
 		return nil, fmt.Errorf("task creation is not failed")
 	}
 
+	// The choice to submit the prompt belongs to the initial creation alone:
+	// a retry never submits it.
 	steps, ok := taskCreationStepsFrom(c.creationSteps(
 		task,
 		task.RepoRoot,
 		func(ctx context.Context) error {
 			return c.gitWorktree.CreateTaskWorkspace(ctx, task)
 		},
+		false,
 	), task.CreationStep)
 	if !ok {
 		return nil, fmt.Errorf("task creation failed step %q is not retryable", task.CreationStep)
@@ -176,6 +183,7 @@ func (c *taskCreation) createTaskFromPrompt(
 		suggestion.BranchType,
 	)
 	task.Prompt = input.Prompt
+	task.ParentTaskID = parentTaskID(input, existingTasks)
 
 	if err := c.tasks.CreateTask(ctx, task); err != nil {
 		return nil, err
@@ -187,6 +195,7 @@ func (c *taskCreation) createTaskFromPrompt(
 		func(ctx context.Context) error {
 			return c.gitWorktree.CreateTaskWorkspace(ctx, task)
 		},
+		input.SubmitPrompt,
 	)
 	if err := c.runSteps(ctx, task, reporter, steps, taskCreationStepPersistenceReadyOnly); err != nil {
 		return task, err
@@ -234,6 +243,7 @@ func (c *taskCreation) createTaskFromPullRequest(
 		taskSlug,
 		pr.BranchName,
 	)
+	task.ParentTaskID = parentTaskID(input, existingTasks)
 	if err := c.tasks.CreateTask(ctx, task); err != nil {
 		return nil, err
 	}
@@ -244,6 +254,7 @@ func (c *taskCreation) createTaskFromPullRequest(
 		func(ctx context.Context) error {
 			return c.gitWorktree.CreateTaskWorkspaceFromPullRequest(ctx, task, pr.Number)
 		},
+		input.SubmitPrompt,
 	)
 	if err := c.runSteps(ctx, task, reporter, steps, taskCreationStepPersistenceReadyOnly); err != nil {
 		return task, err
@@ -251,10 +262,14 @@ func (c *taskCreation) createTaskFromPullRequest(
 	return task, nil
 }
 
+// creationSteps returns the retryable steps that turn a task record into a
+// ready task. submitPrompt submits the task's prompt once the session starts
+// with it pasted in; only an initial creation that asked for it sets it.
 func (c *taskCreation) creationSteps(
 	task *Task,
 	repoRoot string,
 	createWorktree func(context.Context) error,
+	submitPrompt bool,
 ) []taskCreationStepAction {
 	return []taskCreationStepAction{
 		{
@@ -275,7 +290,7 @@ func (c *taskCreation) creationSteps(
 		{
 			step: TaskCreateProgressStartingSession,
 			run: func(ctx context.Context) error {
-				_, err := c.launcher.startSession(ctx, task)
+				_, err := c.launcher.startSession(ctx, task, submitPrompt)
 				return err
 			},
 		},

@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -12,6 +13,7 @@ import (
 	"github.com/BaronBonet/rig/internal/adapters/client/git"
 	"github.com/BaronBonet/rig/internal/adapters/client/github"
 	"github.com/BaronBonet/rig/internal/adapters/client/tmux"
+	"github.com/BaronBonet/rig/internal/adapters/handler/cli"
 	"github.com/BaronBonet/rig/internal/adapters/handler/tui"
 	"github.com/BaronBonet/rig/internal/adapters/repository/sqlite"
 	"github.com/BaronBonet/rig/internal/adapters/repository/userconfig"
@@ -25,6 +27,7 @@ import (
 
 	tea "charm.land/bubbletea/v2"
 	"github.com/spf13/cobra"
+	"golang.org/x/term"
 )
 
 const (
@@ -33,6 +36,16 @@ const (
 	// can choose daemon serving instead of the normal TUI flow.
 	daemonModeEnvKey   = "RIG_MODE"
 	daemonModeEnvValue = "task-daemon"
+
+	// codexSandboxEnvKey is set for commands Codex runs in its sandbox, which
+	// cannot reach the daemon's socket.
+	codexSandboxEnvKey = "CODEX_SANDBOX"
+)
+
+// errInCodexSandbox is why the CLI commands refuse to run in the Codex
+// sandbox: they would fail to reach the daemon and start a sandboxed one.
+var errInCodexSandbox = errors.New(
+	"rig must run outside the Codex sandbox: rerun the command with escalated permissions",
 )
 
 var version = "dev"
@@ -52,9 +65,13 @@ func executeWithArgs(args []string, stdout io.Writer, stderr io.Writer) error {
 
 func newProductionCommandRuntime(stdout io.Writer, stderr io.Writer) commandRuntime {
 	return commandRuntime{
-		stdout:  stdout,
-		stderr:  stderr,
-		version: version,
+		stdout:          stdout,
+		stderr:          stderr,
+		stdin:           os.Stdin,
+		version:         version,
+		taskFrontend:    newCLITaskFrontend,
+		getwd:           os.Getwd,
+		stdinIsTerminal: func() bool { return term.IsTerminal(int(os.Stdin.Fd())) },
 		runTUI: func() error {
 			return runTUI(stdout)
 		},
@@ -126,7 +143,13 @@ func newProductionCommandRuntime(stdout io.Writer, stderr io.Writer) commandRunt
 type commandRuntime struct {
 	stdout  io.Writer
 	stderr  io.Writer
+	stdin   io.Reader
 	version string
+
+	// taskFrontend returns the ready task frontend the CLI commands use.
+	taskFrontend    func(ctx context.Context) (core.TaskFrontend, error)
+	getwd           func() (string, error)
+	stdinIsTerminal func() bool
 
 	runTUI           func() error
 	runSetup         func() error
@@ -162,6 +185,16 @@ func newRootCommand(runtime commandRuntime) *cobra.Command {
 	root.AddCommand(newSetupCommand(runtime))
 	root.AddCommand(newDoctorCommand(runtime))
 	root.AddCommand(newDaemonCommand(runtime))
+	cliDeps := cli.Dependencies{
+		Frontend:        runtime.taskFrontend,
+		Stdin:           runtime.stdin,
+		Stdout:          runtime.stdout,
+		Stderr:          runtime.stderr,
+		Getwd:           runtime.getwd,
+		StdinIsTerminal: runtime.stdinIsTerminal,
+	}
+	root.AddCommand(cli.NewTaskCommand(cliDeps))
+	root.AddCommand(cli.NewRepoCommand(cliDeps))
 
 	return root
 }
@@ -169,7 +202,7 @@ func newRootCommand(runtime commandRuntime) *cobra.Command {
 func newSetupCommand(runtime commandRuntime) *cobra.Command {
 	return &cobra.Command{
 		Use:   "setup",
-		Short: "Configure the AI coding providers rig may use",
+		Short: "Configure the AI coding providers and repo directories rig uses",
 		Args:  cobra.NoArgs,
 		RunE: func(_ *cobra.Command, _ []string) error {
 			return runCommand(runtime.runSetup)
@@ -192,6 +225,12 @@ func newDaemonCommand(runtime commandRuntime) *cobra.Command {
 	daemon := &cobra.Command{
 		Use:   "daemon",
 		Short: "Manage the rig task daemon",
+		// A command group prints its help, and an unknown subcommand is an
+		// error rather than help that exits successfully.
+		Args: cobra.NoArgs,
+		RunE: func(cmd *cobra.Command, _ []string) error {
+			return cmd.Help()
+		},
 	}
 	daemon.AddCommand(&cobra.Command{
 		Use:   "start",
@@ -294,6 +333,12 @@ func runTUI(stdout io.Writer) error {
 	// The daemon is not a separate executable. EnsureRunning re-execs this same
 	// binary with RIG_MODE=task-daemon, and that child process takes this path.
 	if os.Getenv(daemonModeEnvKey) == daemonModeEnvValue {
+		// The mode is for this process alone. A tmux server the daemon starts
+		// would otherwise hand it to every pane, where rig would then serve
+		// as a second daemon instead of opening the TUI.
+		if err := os.Unsetenv(daemonModeEnvKey); err != nil {
+			return err
+		}
 		return serveTaskDaemon(ctx, cfg, cancel)
 	}
 
@@ -324,6 +369,28 @@ func runTUI(stdout io.Writer) error {
 	return err
 }
 
+// newCLITaskFrontend returns the daemon-backed task frontend the CLI commands
+// use, starting the daemon first when it is not running. Unlike runTUI it
+// never serves the daemon or launches the TUI.
+func newCLITaskFrontend(ctx context.Context) (core.TaskFrontend, error) {
+	if os.Getenv(codexSandboxEnvKey) != "" {
+		return nil, errInCodexSandbox
+	}
+	cfg, err := infrastructure.LoadConfig()
+	if err != nil {
+		return nil, err
+	}
+	adapter, err := newClientTaskDaemon(cfg)
+	if err != nil {
+		return nil, err
+	}
+	if err := adapter.EnsureRunning(ctx); err != nil {
+		return nil, err
+	}
+
+	return adapter.Frontend(), nil
+}
+
 func runProviderSetup(stdout io.Writer) error {
 	cfg, err := infrastructure.LoadConfig()
 	if err != nil {
@@ -349,8 +416,12 @@ func runProviderSetup(stdout io.Writer) error {
 	if stdout == nil {
 		stdout = os.Stdout
 	}
+	// The working directory only lets setup suggest a repo directory, so
+	// setup runs without one when it cannot be read.
+	launchCwd, _ := os.Getwd()
 	program := tui.NewSetupProgram(
 		frontend,
+		launchCwd,
 		taskdaemon.FrontendBuildVersion(),
 		tea.WithInput(os.Stdin),
 		tea.WithOutput(stdout),
@@ -446,12 +517,12 @@ func newDoctorService(cfg *infrastructure.ApplicationConfig) core.HealthChecker 
 	})
 
 	return core.NewTaskService(core.TaskServiceDependencies{
-		Tasks:          sqlite.NewHealthCheckRepository(cfg.SQLite),
-		GitWorktree:    git.New(runner),
-		TmuxSession:    tmux.New(runner),
-		PullRequests:   github.New(runner),
-		Providers:      providers,
-		ProviderConfig: userconfig.New(cfg.UserConfig, cfg.Provider),
+		Tasks:        sqlite.NewHealthCheckRepository(cfg.SQLite),
+		GitWorktree:  git.New(runner),
+		TmuxSession:  tmux.New(runner),
+		PullRequests: github.New(runner),
+		Providers:    providers,
+		UserConfig:   userconfig.New(cfg.UserConfig, cfg.Provider),
 	})
 }
 
@@ -520,7 +591,7 @@ func serveTaskDaemon(
 		HookSecret:     hookSecret,
 	})
 
-	providerConfig := userconfig.New(cfg.UserConfig, cfg.Provider)
+	userConfig := userconfig.New(cfg.UserConfig, cfg.Provider)
 	service := core.NewTaskService(core.TaskServiceDependencies{
 		Tasks:                taskRepo,
 		GitWorktree:          git.New(runner),
@@ -529,10 +600,13 @@ func serveTaskDaemon(
 		Providers:            providers,
 		Workspace:            repositoryworkspace.New(),
 		EnableWorkspaceSetup: true,
-		ProviderConfig:       providerConfig,
+		UserConfig:           userConfig,
+		ReportWarning: func(err error) {
+			fmt.Fprintln(os.Stderr, err)
+		},
 	})
 
-	for _, refreshErr := range providerregistry.RefreshProviderEnvironments(ctx, providers, providerConfig) {
+	for _, refreshErr := range providerregistry.RefreshProviderEnvironments(ctx, providers, userConfig) {
 		fmt.Fprintln(os.Stderr, refreshErr)
 	}
 	for _, refreshErr := range service.RefreshTaskWorkspaceHooks(ctx) {

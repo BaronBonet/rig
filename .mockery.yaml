@@ -22,7 +22,7 @@ packages:
       TaskWorkspaceManager:
       TmuxSessionClient:
       ProviderClient:
-      ProviderConfigStore:
+      UserConfigStore:
   github.com/BaronBonet/rig/internal/pkg/subprocess:
     interfaces:
       Runner:

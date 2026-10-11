@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"reflect"
 	"slices"
+	"strings"
 	"testing"
 	"time"
 
@@ -474,12 +475,14 @@ func TestRepositoryNew_MigratesDatabaseWithSquashedMigrationHistory(t *testing.T
 	// Rewind to a database created before migrations were squashed into
 	// 00001_init.sql: it records goose versions 2-5 as applied, still has the
 	// original task_status table, and has no agent sessions.
-	for _, statement := range slices.Concat(dropAgentSessionsStatements, dropActivityAgentSessionStatements, []string{
-		originalTaskStatusTable,
-		originalTaskResumeMetadataTable,
-		"delete from goose_db_version where version_id > 1",
-		"insert into goose_db_version (version_id, is_applied) values (2, 1), (3, 1), (4, 1), (5, 1)",
-	}) {
+	for _, statement := range slices.Concat(
+		dropTaskParentStatements, dropAgentSessionsStatements, dropActivityAgentSessionStatements, []string{
+			originalTaskStatusTable,
+			originalTaskResumeMetadataTable,
+			"delete from goose_db_version where version_id > 1",
+			"insert into goose_db_version (version_id, is_applied) values (2, 1), (3, 1), (4, 1), (5, 1)",
+		},
+	) {
 		_, err := repo.db.ExecContext(context.Background(), statement)
 		require.NoError(t, err, statement)
 	}
@@ -523,6 +526,13 @@ var dropAgentSessionsStatements = []string{
 var dropActivityAgentSessionStatements = []string{
 	"drop index idx_task_activity_agent_session",
 	"alter table task_activity drop column agent_session_id",
+}
+
+// dropTaskParentStatements undo 00013, which records each task's parent
+// task.
+var dropTaskParentStatements = []string{
+	"drop index idx_tasks_parent_task_id",
+	"alter table tasks drop column parent_task_id",
 }
 
 // dropAgentSessionLaunchedAtStatements undo 00010, which records when Rig
@@ -640,6 +650,7 @@ func TestRepositoryNew_CreatesSchemaForTasksAndTaskState(t *testing.T) {
 		"creation_status",
 		"creation_step",
 		"creation_error",
+		"parent_task_id",
 	}
 	if !reflect.DeepEqual(names, wantTasks) {
 		t.Fatalf("unexpected tasks columns:\n got: %#v\nwant: %#v", names, wantTasks)
@@ -741,6 +752,148 @@ func createAgentSessionTestTask(t *testing.T, repo *repository, taskID string) {
 }
 
 var agentSessionTestServer = core.TmuxServer{SocketPath: "/private/tmp/tmux-501/default", PID: 4722}
+
+// parentLinkTestTask is a task created at minute, linked to parentID when it
+// is set.
+func parentLinkTestTask(taskID string, parentID string, minute int) *core.Task {
+	at := time.Date(2026, time.October, 11, 10, minute, 0, 0, time.UTC)
+	return &core.Task{
+		ID:             taskID,
+		Slug:           taskID,
+		Prompt:         "prompt",
+		DisplayName:    taskID,
+		RepoRoot:       "/tmp/repo",
+		RepoName:       "repo",
+		BranchName:     "feat/" + taskID,
+		WorktreePath:   "/tmp/repo_" + taskID,
+		TmuxSession:    "repo_" + taskID,
+		Provider:       core.ProviderClaude,
+		CreationStatus: core.TaskCreationStatusReady,
+		CreatedAt:      at,
+		UpdatedAt:      at,
+		ParentTaskID:   parentID,
+	}
+}
+
+func TestRepositoryCreateTask_PersistsTheParentTask(t *testing.T) {
+	repo := newTestRepository(t)
+	ctx := context.Background()
+	parent := parentLinkTestTask("task-backend", "", 0)
+	child := parentLinkTestTask("task-frontend", "task-backend", 1)
+	child.RepoRoot = "/tmp/frontend"
+	child.RepoName = "frontend"
+	require.NoError(t, repo.CreateTask(ctx, parent))
+	require.NoError(t, repo.CreateTask(ctx, child))
+
+	tasks, err := repo.ListTasks(ctx)
+
+	require.NoError(t, err)
+	require.Equal(t, []*core.Task{parent, child}, tasks)
+}
+
+func TestRepositoryCreateTask_RejectsAParentTaskThatDoesNotExist(t *testing.T) {
+	repo := newTestRepository(t)
+
+	err := repo.CreateTask(context.Background(), parentLinkTestTask("task-frontend", "task-gone", 0))
+
+	require.ErrorContains(t, err, "FOREIGN KEY constraint failed")
+}
+
+func TestRepositoryDeleteTask_KeepsItsChildrenUnlinked(t *testing.T) {
+	repo := newTestRepository(t)
+	ctx := context.Background()
+	parent := parentLinkTestTask("task-backend", "", 0)
+	child := parentLinkTestTask("task-frontend", "task-backend", 1)
+	grandchild := parentLinkTestTask("task-docs", "task-frontend", 2)
+	for _, task := range []*core.Task{parent, child, grandchild} {
+		require.NoError(t, repo.CreateTask(ctx, task))
+	}
+
+	require.NoError(t, repo.DeleteTask(ctx, "task-backend"))
+
+	tasks, err := repo.ListTasks(ctx)
+	require.NoError(t, err)
+	child.ParentTaskID = ""
+	require.Equal(t, []*core.Task{child, grandchild}, tasks)
+}
+
+// Deleting a task unlinks its children, which it finds by index rather than
+// by reading every task.
+func TestRepositoryNew_IndexesTasksByTheirParent(t *testing.T) {
+	repo := newTestRepository(t)
+
+	rows, err := repo.db.QueryContext(context.Background(),
+		"explain query plan update tasks set parent_task_id = null where parent_task_id = 'task-backend'")
+	require.NoError(t, err)
+	defer rows.Close()
+	var plan []string
+	for rows.Next() {
+		var id, parent, notUsed int
+		var detail string
+		require.NoError(t, rows.Scan(&id, &parent, &notUsed, &detail))
+		plan = append(plan, detail)
+	}
+	require.NoError(t, rows.Err())
+	require.Contains(t, strings.Join(plan, "\n"), "idx_tasks_parent_task_id")
+	require.NotContains(t, strings.Join(plan, "\n"), "SCAN tasks")
+}
+
+// A task read before its parent was deleted still names the parent, so
+// updating it must neither fail nor link it again.
+func TestRepositoryUpdateTask_LeavesTheParentTaskAsItIs(t *testing.T) {
+	repo := newTestRepository(t)
+	ctx := context.Background()
+	require.NoError(t, repo.CreateTask(ctx, parentLinkTestTask("task-backend", "", 0)))
+	require.NoError(t, repo.CreateTask(ctx, parentLinkTestTask("task-other", "", 1)))
+	child := parentLinkTestTask("task-frontend", "task-backend", 2)
+	require.NoError(t, repo.CreateTask(ctx, child))
+
+	child.ParentTaskID = "task-other"
+	child.DisplayName = "renamed"
+	require.NoError(t, repo.UpdateTask(ctx, child))
+	tasks, err := repo.ListTasks(ctx)
+	require.NoError(t, err)
+	require.Equal(t, "renamed", tasks[2].DisplayName)
+	require.Equal(t, "task-backend", tasks[2].ParentTaskID)
+
+	require.NoError(t, repo.DeleteTask(ctx, "task-backend"))
+	child.ParentTaskID = "task-backend"
+	child.CreationStatus = core.TaskCreationStatusFailed
+	require.NoError(t, repo.UpdateTask(ctx, child))
+	tasks, err = repo.ListTasks(ctx)
+	require.NoError(t, err)
+	require.Equal(t, core.TaskCreationStatusFailed, tasks[1].CreationStatus)
+	require.Empty(t, tasks[1].ParentTaskID)
+}
+
+func TestRepositoryNew_AddsParentTasksToAnExistingDatabaseAndRollsBack(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "state.db")
+	repo := newTestRepositoryAtPath(t, path)
+	ctx := context.Background()
+	migrationsFS, err := fs.Sub(sqlFiles, "migrations")
+	require.NoError(t, err)
+	provider, err := goose.NewProvider(goose.DialectSQLite3, repo.db, migrationsFS)
+	require.NoError(t, err)
+	_, err = provider.DownTo(ctx, 12)
+	require.NoError(t, err)
+	require.NotContains(t, tableColumnNames(t, repo.db, "tasks"), "parent_task_id")
+	_, err = repo.db.ExecContext(ctx, `
+		insert into tasks (
+			id, slug, prompt, display_name, repo_root, repo_name, branch_name, worktree_path, tmux_session,
+			provider, created_at, updated_at
+		) values (
+			'task-1', 'task-1', 'prompt', 'task 1', '/tmp/repo', 'repo', 'feat/task-1', '/tmp/repo_task-1',
+			'repo_task-1', 'claude', '2026-10-11T10:00:00Z', '2026-10-11T10:00:00Z'
+		)`)
+	require.NoError(t, err)
+	require.NoError(t, repo.db.Close())
+
+	reopened := newTestRepositoryAtPath(t, path)
+	tasks, err := reopened.ListTasks(ctx)
+	require.NoError(t, err)
+	require.Len(t, tasks, 1)
+	require.Empty(t, tasks[0].ParentTaskID)
+}
 
 func TestRepositoryAgentSessions_CreateFindListUpdateAndEnd(t *testing.T) {
 	repo := newTestRepository(t)
@@ -987,11 +1140,13 @@ func TestRepositoryNew_AddsAgentSessionsToAnExistingDatabase(t *testing.T) {
 
 	// Rewind to a database migrated before agent sessions existed, when tasks
 	// still had a status row.
-	for _, statement := range slices.Concat(dropAgentSessionsStatements, dropActivityAgentSessionStatements, []string{
-		originalTaskStatusTable,
-		originalTaskResumeMetadataTable,
-		"delete from goose_db_version where version_id >= 6",
-	}) {
+	for _, statement := range slices.Concat(
+		dropTaskParentStatements, dropAgentSessionsStatements, dropActivityAgentSessionStatements, []string{
+			originalTaskStatusTable,
+			originalTaskResumeMetadataTable,
+			"delete from goose_db_version where version_id >= 6",
+		},
+	) {
 		_, err := repo.db.ExecContext(context.Background(), statement)
 		require.NoError(t, err, statement)
 	}
@@ -1041,14 +1196,16 @@ func TestRepositoryNew_DropsTaskStatusFromAnExistingDatabase(t *testing.T) {
 
 	// Rewind to a database migrated before task status moved to agent
 	// sessions, with a status row for the task.
-	for _, statement := range slices.Concat(dropAgentSessionNameStatements, dropAgentSessionLaunchedAtStatements,
+	for _, statement := range slices.Concat(
+		dropTaskParentStatements, dropAgentSessionNameStatements, dropAgentSessionLaunchedAtStatements,
 		dropActivityAgentSessionStatements, []string{
 			originalTaskStatusTable,
 			originalTaskResumeMetadataTable,
 			"insert into task_status (task_id, provider, phase, raw_event_name, observed_at) " +
 				"values ('task-1', 'claude', 'working', 'PostToolUse', '2026-10-09T10:00:00Z')",
 			"delete from goose_db_version where version_id >= 8",
-		}) {
+		},
+	) {
 		_, err := repo.db.ExecContext(context.Background(), statement)
 		require.NoError(t, err, statement)
 	}
@@ -1070,7 +1227,7 @@ func TestRepositoryNew_KeepsAgentSessionsOfAnExistingDatabaseAsHookOpened(t *tes
 
 	// Rewind to a database migrated before Rig recorded agent launches, with
 	// an open agent session a hook event opened.
-	for _, statement := range slices.Concat(dropAgentSessionNameStatements, dropAgentSessionLaunchedAtStatements, []string{
+	for _, statement := range slices.Concat(dropTaskParentStatements, dropAgentSessionNameStatements, dropAgentSessionLaunchedAtStatements, []string{
 		originalTaskResumeMetadataTable,
 		"insert into agent_sessions (id, task_id, provider, tmux_socket_path, tmux_server_pid, tmux_pane, " +
 			"pane_trusted, provider_session_id, started_at) values ('agent-1', 'task-1', 'claude', " +
@@ -1316,7 +1473,7 @@ func TestRepositoryNew_MakesEachTasksLastConversationAnAgentSession(t *testing.T
 	// Rewind to a database migrated before Reconnect restored agent sessions,
 	// where task-1 and task-2 have resume metadata for their last
 	// conversation.
-	for _, statement := range slices.Concat(dropAgentSessionNameStatements, []string{
+	for _, statement := range slices.Concat(dropTaskParentStatements, dropAgentSessionNameStatements, []string{
 		originalTaskResumeMetadataTable,
 		"insert into task_resume_metadata (task_id, provider, session_id, observed_at) values " +
 			"('task-1', 'codex', 'codex-sess-1', '2026-10-09T10:05:00.123456789Z'), " +
@@ -1364,7 +1521,7 @@ func TestRepositoryNew_LeavesOutATaskWhoseIDAnAgentSessionHolds(t *testing.T) {
 		Provider:  core.ProviderClaude,
 		StartedAt: time.Date(2026, time.October, 9, 10, 0, 0, 0, time.UTC),
 	}))
-	for _, statement := range slices.Concat(dropAgentSessionNameStatements, []string{
+	for _, statement := range slices.Concat(dropTaskParentStatements, dropAgentSessionNameStatements, []string{
 		originalTaskResumeMetadataTable,
 		"insert into task_resume_metadata (task_id, provider, session_id, observed_at) values " +
 			"('task-2', 'codex', 'codex-sess-2', '2026-10-09T10:05:00Z')",
@@ -1439,7 +1596,7 @@ func TestRepositoryNew_MigratesOnlyResumeMetadataItCanResume(t *testing.T) {
 	// Rewind to before 00011. task-1's resume metadata has no time, task-2's
 	// no provider and task-3's no conversation; the last row's task is gone,
 	// as foreign keys were off when it was deleted.
-	for _, statement := range slices.Concat(dropAgentSessionNameStatements, []string{
+	for _, statement := range slices.Concat(dropTaskParentStatements, dropAgentSessionNameStatements, []string{
 		originalTaskResumeMetadataTable,
 		"pragma foreign_keys = off",
 		"insert into task_resume_metadata (task_id, provider, session_id, observed_at) values " +

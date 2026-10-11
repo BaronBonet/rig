@@ -261,7 +261,7 @@ func TestReconnect_LeavesAnAgentTheUserExitedGone(t *testing.T) {
 
 func TestReconnect_SkipsAnAgentWhoseProviderIsNoLongerConfigured(t *testing.T) {
 	svc := newLostSessionHarness(t)
-	svc.providerConfig.setup = &ProviderSetup{Configured: []Provider{ProviderClaude}, Default: ProviderClaude}
+	svc.userConfig.setup = &ProviderSetup{Configured: []Provider{ProviderClaude}, Default: ProviderClaude}
 
 	err := svc.service.ReconnectTaskSession(t.Context(), "task-1")
 
@@ -355,7 +355,7 @@ func TestReconnect_LaunchesTheLaunchProviderFreshWhenItsOnlyAgentIsSkipped(t *te
 	svc.handleAgentHook(t, agentHook(ProviderCodex, HookEventUserPromptSubmit, "codex-1", 101, "%1", 0),
 		TaskStatusPhaseWorking)
 	svc.loseSession()
-	svc.providerConfig.setup = &ProviderSetup{Configured: []Provider{ProviderClaude}, Default: ProviderClaude}
+	svc.userConfig.setup = &ProviderSetup{Configured: []Provider{ProviderClaude}, Default: ProviderClaude}
 
 	err := svc.service.ReconnectTaskSession(t.Context(), "task-1")
 
@@ -740,7 +740,7 @@ func TestReconnect_NamesEveryAgentItLeavesBehind(t *testing.T) {
 	svc.handleAgentHook(t, agentHook(ProviderClaude, HookEventUserPromptSubmit, "claude-2", 103, "%3", 2),
 		TaskStatusPhaseWorking)
 	svc.loseSession()
-	svc.providerConfig.setup = &ProviderSetup{Configured: []Provider{ProviderClaude}, Default: ProviderClaude}
+	svc.userConfig.setup = &ProviderSetup{Configured: []Provider{ProviderClaude}, Default: ProviderClaude}
 	svc.sessionClient.agentPaneErrByCommand = map[string]error{"claude": errors.New("create pane failed")}
 
 	err := svc.service.ReconnectTaskSession(t.Context(), "task-1")
@@ -765,7 +765,7 @@ func TestReconnect_ASessionTmuxCannotCreateStillNamesTheSkippedAgents(t *testing
 		t.Run(name, func(t *testing.T) {
 			svc := newLostSessionHarness(t)
 			setup(svc)
-			svc.providerConfig.setup = &ProviderSetup{Configured: []Provider{ProviderClaude}, Default: ProviderClaude}
+			svc.userConfig.setup = &ProviderSetup{Configured: []Provider{ProviderClaude}, Default: ProviderClaude}
 			svc.sessionClient.startErr = errors.New("tmux new-session failed")
 
 			err := svc.service.ReconnectTaskSession(t.Context(), "task-1")

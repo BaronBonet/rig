@@ -56,6 +56,7 @@ Hexagonal architecture (Ports & Adapters) with dependency injection.
 
 ### Adapters (`internal/adapters/`)
 - `handler/tui/` — Bubbletea TUI (root command launches interactive task list; also the provider setup and switch screens)
+- `handler/cli/` — Non-interactive `rig task` and `rig repo` commands for people, scripts and agents; another `TaskFrontend` client
 - `client/tmux/` — Tmux session management
 - `client/git/` — Git worktree operations
 - `client/codex/` — Codex implementation of `ProviderClient`
@@ -63,7 +64,7 @@ Hexagonal architecture (Ports & Adapters) with dependency injection.
 - `client/github/` — PR status checks
 - `registry/` — Provider client and hook-route composition for all supported providers
 - `repository/sqlite/` — SQLite persistence (goose migrations, sqlc-generated queries)
-- `repository/userconfig/` — User-level provider setup config (`~/.config/rig/config.json`)
+- `repository/userconfig/` — User config: provider setup and repo directories (`~/.config/rig/config.json`)
 - `repository/workspace/` — Workspace config loading, seeding, and setup scripts
 - `taskdaemon/` — Daemon process, Unix socket frontend, and hook HTTP server
 

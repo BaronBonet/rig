@@ -9,9 +9,9 @@ import (
 // without a valid provider setup. Pure so the full matrix is testable.
 func canEnter(to modelMode, pending pendingOp, setupOnly bool, hasSetup bool) bool {
 	if setupOnly {
-		// rig setup locks the TUI to the provider setup screen; the only way
-		// out is quitting.
-		return to == modeProviderSetup
+		// rig setup locks the TUI to the setup steps; the only way out is
+		// quitting. The repo directories step follows a valid provider setup.
+		return to == modeProviderSetup || (to == modeRepoDirsSetup && hasSetup)
 	}
 	if pending != opNone {
 		// One operation at a time: while a create or a delete is in flight,
@@ -22,7 +22,8 @@ func canEnter(to modelMode, pending pendingOp, setupOnly bool, hasSetup bool) bo
 	case modeBrowse, modeProviderSetup:
 		return true
 	default:
-		// Creating and deleting both need a valid provider setup.
+		// Creating, deleting and the repo directories step all need a valid
+		// provider setup.
 		return hasSetup
 	}
 }
@@ -51,6 +52,14 @@ func backTarget(mode modelMode, hasSetup bool, setupOnly bool) backDest {
 			return backDest{quit: true}
 		}
 		return backDest{to: modeBrowse}
+	case modeRepoDirsSetup:
+		// The repo directories step is optional and the last of setup:
+		// leaving it, skipped or saved, finishes setup. rig setup then quits,
+		// and setup in the TUI goes on to the task list.
+		if setupOnly {
+			return backDest{quit: true}
+		}
+		return backDest{to: modeBrowse}
 	default:
 		return backDest{quit: true}
 	}
@@ -70,7 +79,7 @@ func familyOf(mode modelMode) modeFamily {
 	switch mode {
 	case modePromptInput, modePRPicker:
 		return familyDraft
-	case modeProviderSetup:
+	case modeProviderSetup, modeRepoDirsSetup:
 		return familySetup
 	default: // browse and cleanup confirm own no mode state
 		return familyBrowse
@@ -97,6 +106,7 @@ func (m *model) clearFamilyState(family modeFamily) {
 		m.draft = taskDraft{}
 	case familySetup:
 		m.setupForm = setupFormState{}
+		m.repoDirsForm = repoDirsFormState{}
 	}
 }
 
@@ -123,6 +133,10 @@ func (m model) handleBack() (tea.Model, tea.Cmd) {
 		// Same family: the draft survives, minus the picker's validation error.
 		m.draft.err = nil
 		return m, m.draft.input.Focus()
+	case modeRepoDirsSetup:
+		// Finishing setup reloads the task list it goes on to.
+		m.loading = true
+		return m, loadTasksCmd(m.statusContext, m.frontend)
 	default:
 		return m, nil
 	}

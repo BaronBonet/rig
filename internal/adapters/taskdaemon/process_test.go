@@ -92,6 +92,60 @@ func TestSpawnTaskDaemonProcess_StartsDaemonWithDetachedStdio(t *testing.T) {
 	require.NoError(t, waitForSocketRemoval(socketPath, 2*time.Second))
 }
 
+// A daemon started by an agent's command must launch agents of its own, so it
+// drops the variables that mark a process as running inside an agent session.
+func TestTaskDaemonCommand_DropsTheCallersAgentSessionFromTheEnvironment(t *testing.T) {
+	t.Parallel()
+
+	cmd := taskDaemonCommand(context.Background(), "/usr/local/bin/rig", []string{
+		"HOME=/Users/ada",
+		"PATH=/usr/bin:/bin",
+		"CLAUDECODE=1",
+		"CLAUDE_CODE_ENTRYPOINT=cli",
+		"CLAUDE_CODE_SSE_PORT=53412",
+		"CLAUDE_CONFIG_DIR=/Users/ada/.claude-work",
+		"CODEX_SANDBOX=seatbelt",
+		"CODEX_SANDBOX_NETWORK_DISABLED=1",
+		"CODEX_THREAD_ID=0199a1b2",
+		"CODEX_HOME=/Users/ada/.codex",
+		"NO_VALUE",
+	}, "/Users/ada", []string{"RIG_MODE=task-daemon"})
+
+	require.Equal(t, "/usr/local/bin/rig", cmd.Path)
+	require.Equal(t, []string{
+		"HOME=/Users/ada",
+		"PATH=/usr/bin:/bin",
+		"CLAUDE_CONFIG_DIR=/Users/ada/.claude-work",
+		"CODEX_HOME=/Users/ada/.codex",
+		"NO_VALUE",
+		"RIG_MODE=task-daemon",
+	}, cmd.Env)
+}
+
+// The caller may run in a task worktree that is deleted later, so the daemon
+// never keeps the caller's working directory.
+func TestTaskDaemonCommand_RunsFromTheGivenDirectory(t *testing.T) {
+	t.Parallel()
+
+	cmd := taskDaemonCommand(context.Background(), "/usr/local/bin/rig", []string{"PATH=/bin"}, "/Users/ada", nil)
+
+	require.Equal(t, "/Users/ada", cmd.Dir)
+	require.Equal(t, []string{"PATH=/bin"}, cmd.Env)
+}
+
+func TestTaskDaemonWorkingDir_IsTheHomeDirectory(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+
+	require.Equal(t, home, taskDaemonWorkingDir())
+}
+
+func TestTaskDaemonWorkingDir_FallsBackToTheRootDirectory(t *testing.T) {
+	t.Setenv("HOME", "")
+
+	require.Equal(t, "/", taskDaemonWorkingDir())
+}
+
 func TestAdapterEnsureRunning_ReturnsWhenDaemonAlreadyHealthy(t *testing.T) {
 	t.Parallel()
 
@@ -309,7 +363,7 @@ func TestFrontendBuildVersion_DefaultsToDev(t *testing.T) {
 func TestFrontendProtocolVersion_DefaultsToCurrentValue(t *testing.T) {
 	t.Parallel()
 
-	require.Equal(t, 15, currentFrontendProtocolVersion)
+	require.Equal(t, 18, currentFrontendProtocolVersion)
 }
 
 func TestAdapterEnsureRunning_RestartsStaleHealthyDaemonMissingFrontendProtocol(t *testing.T) {

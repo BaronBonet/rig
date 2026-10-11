@@ -20,10 +20,10 @@ const defaultTaskStatusRecoveryWorkerLimit = 2
 // provider-side recovery of stale status), the task's runtime status rolled
 // up from them, persisted activity, and usage: token usage and compactions.
 type taskObservation struct {
-	tasks          TaskRepository
-	tmuxSession    TmuxSessionClient
-	providers      map[Provider]ProviderClient
-	providerConfig ProviderConfigStore
+	tasks       TaskRepository
+	tmuxSession TmuxSessionClient
+	providers   map[Provider]ProviderClient
+	userConfig  UserConfigStore
 	// recoveryPollInterval paces the subscription recovery loop that
 	// re-derives status while at least one task has live interest.
 	recoveryPollInterval time.Duration
@@ -58,13 +58,13 @@ func newTaskObservation(
 	tasks TaskRepository,
 	tmuxSession TmuxSessionClient,
 	providers map[Provider]ProviderClient,
-	providerConfig ProviderConfigStore,
+	userConfig UserConfigStore,
 ) *taskObservation {
 	return newTaskObservationWithOptions(
 		tasks,
 		tmuxSession,
 		providers,
-		providerConfig,
+		userConfig,
 		taskObservationOptions{},
 	)
 }
@@ -73,7 +73,7 @@ func newTaskObservationWithOptions(
 	tasks TaskRepository,
 	tmuxSession TmuxSessionClient,
 	providers map[Provider]ProviderClient,
-	providerConfig ProviderConfigStore,
+	userConfig UserConfigStore,
 	options taskObservationOptions,
 ) *taskObservation {
 	if options.recoveryPollInterval <= 0 {
@@ -89,7 +89,7 @@ func newTaskObservationWithOptions(
 		tasks:                tasks,
 		tmuxSession:          tmuxSession,
 		providers:            providers,
-		providerConfig:       providerConfig,
+		userConfig:           userConfig,
 		recoveryPollInterval: options.recoveryPollInterval,
 		recoveryWorkerLimit:  options.recoveryWorkerLimit,
 		statusCacheMaxAge:    options.statusCacheMaxAge,
@@ -266,10 +266,10 @@ func (o *taskObservation) HandleHookEvent(ctx context.Context, input HookEventIn
 	// Hook routes exist for every supported provider, so observation decides
 	// here whether an incoming hook is actionable: hooks from providers the
 	// user has not configured are ignored without task changes.
-	if o.providerConfig == nil {
-		return fmt.Errorf("provider config store not configured")
+	if o.userConfig == nil {
+		return fmt.Errorf("user config store not configured")
 	}
-	setup, err := o.providerConfig.GetProviderSetup(ctx)
+	setup, err := o.userConfig.GetProviderSetup(ctx)
 	if err != nil {
 		return err
 	}
@@ -317,6 +317,8 @@ func (o *taskObservation) resolveTaskIDFromCwd(ctx context.Context, cwd string) 
 		return "", fmt.Errorf("list tasks for hook resolution: %w", err)
 	}
 
+	// Only an agent at the worktree root is the task's: Reconnect restores
+	// agents there, where one started in a subdirectory could not resume.
 	for _, task := range tasks {
 		if task != nil && strings.TrimSpace(task.WorktreePath) == cwd {
 			return strings.TrimSpace(task.ID), nil

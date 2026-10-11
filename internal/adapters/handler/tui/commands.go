@@ -135,6 +135,31 @@ func saveProviderSetupCmd(ctx context.Context, frontend core.TaskFrontend, setup
 	}
 }
 
+// loadRepoDirsCmd loads the directories the repo directories step starts
+// with: the user's repo directories, or else the one suggested for the
+// directory setup runs from, if any.
+func loadRepoDirsCmd(ctx context.Context, frontend core.TaskFrontend, cwd string, load int) tea.Cmd {
+	return func() tea.Msg {
+		dirs, err := frontend.GetRepoDirs(ctx)
+		if err != nil || len(dirs) > 0 {
+			return repoDirsLoadedMsg{dirs: dirs, err: err, load: load}
+		}
+		// The suggestion only prefills the step, so without one the step
+		// starts empty.
+		suggestion, err := frontend.SuggestRepoDir(ctx, cwd)
+		if err != nil || suggestion == "" {
+			return repoDirsLoadedMsg{load: load}
+		}
+		return repoDirsLoadedMsg{dirs: []string{suggestion}, load: load}
+	}
+}
+
+func saveRepoDirsCmd(ctx context.Context, frontend core.TaskFrontend, dirs []string) tea.Cmd {
+	return func() tea.Msg {
+		return repoDirsSavedMsg{err: frontend.SaveRepoDirs(ctx, dirs)}
+	}
+}
+
 func shimmerTickCmd() tea.Cmd {
 	return tea.Tick(shimmerTickInterval, func(time.Time) tea.Msg {
 		return shimmerTickMsg{}

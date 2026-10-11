@@ -265,6 +265,48 @@ func TestRepositoryDoctorReportsStaleHookCollectorURL(t *testing.T) {
 	require.ErrorContains(t, err, "http://127.0.0.1:4999/codex-hook")
 }
 
+func TestRepositoryInstallRigSkill_WritesTheSkillToTheUsersAgentsSkills(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	// Codex reads user skills from ~/.agents/skills, not from Codex home.
+	codexHome := filepath.Join(home, "codex-home")
+	t.Setenv("CODEX_HOME", codexHome)
+	repo := New(subprocess.NewMockRunner(t), Config{Binary: "codex"}, HookForwardingConfig{})
+
+	require.NoError(t, repo.InstallRigSkill(t.Context()))
+
+	installed, err := os.ReadFile(filepath.Join(home, ".agents", "skills", "rig", "SKILL.md"))
+	require.NoError(t, err)
+	require.Equal(t, providerkit.RigSkill(), installed)
+	require.NoDirExists(t, codexHome)
+	require.NoError(t, repo.CheckRigSkill(t.Context()))
+}
+
+func TestRepositoryInstallRigSkill_ReplacesAnOutdatedSkill(t *testing.T) {
+	home := t.TempDir()
+	repo := New(subprocess.NewMockRunner(t), Config{Binary: "codex"}, HookForwardingConfig{}).(*repository)
+	repo.userHomeDir = func() (string, error) { return home, nil }
+	skillPath := filepath.Join(home, ".agents", "skills", "rig", "SKILL.md")
+	require.NoError(t, os.MkdirAll(filepath.Dir(skillPath), 0o755))
+	require.NoError(t, os.WriteFile(skillPath, []byte("An earlier rig skill.\n"), 0o644))
+	require.ErrorContains(t, repo.CheckRigSkill(t.Context()), "run rig setup to update it")
+
+	require.NoError(t, repo.InstallRigSkill(t.Context()))
+
+	require.NoError(t, repo.CheckRigSkill(t.Context()))
+}
+
+func TestRepositoryCheckRigSkill_ReportsAMissingSkill(t *testing.T) {
+	home := t.TempDir()
+	repo := New(subprocess.NewMockRunner(t), Config{Binary: "codex"}, HookForwardingConfig{}).(*repository)
+	repo.userHomeDir = func() (string, error) { return home, nil }
+
+	err := repo.CheckRigSkill(t.Context())
+
+	require.ErrorContains(t, err, "not installed at")
+	require.ErrorContains(t, err, "run rig setup to install it")
+}
+
 func TestRepositoryEnsureTaskSessionEnvironment_MergesExistingHooks(t *testing.T) {
 	tempDir := t.TempDir()
 	require.NoError(t, os.WriteFile(filepath.Join(tempDir, "hooks.json"), []byte(`{

@@ -70,6 +70,175 @@ func TestRepositoryStartTaskSession_LaunchesCommandAndPrefillsInputWithoutSubmit
 	require.Equal(t, []time.Duration{promptSubmitDelay, promptInputSettleDelay}, slept)
 }
 
+// expectPrefilledLaunch expects StartTaskSession to start codex in a new
+// repo_task session and paste "fix billing retry flow" into it.
+func expectPrefilledLaunch(runner *subprocess.MockRunner) []*mock.Call {
+	return []*mock.Call{
+		expectTmuxRun(runner, subprocess.Result{}, errors.New("no session"),
+			"has-session", "-t", "=repo_task:",
+		),
+		expectTmuxRun(runner, subprocess.Result{Stdout: "%4\t/private/tmp/tmux-501/default\t4722\n"}, nil,
+			"new-session", "-d", "-P", "-F", paneRefFormat, "-s", "repo_task", "-n", "task", "-c", "/tmp/repo-task",
+		),
+		expectTmuxRun(runner, subprocess.Result{}, nil,
+			"new-window", "-d", "-t", "=repo_task", "-n", "editor", "-c", "/tmp/repo-task",
+		),
+		expectTmuxRun(runner, subprocess.Result{}, nil,
+			"send-keys", "-t", "=repo_task:task", "codex", "C-m",
+		),
+		expectTmuxRun(runner, subprocess.Result{Stdout: "›"}, nil,
+			"capture-pane", "-t", "=repo_task:task", "-p",
+		),
+		expectTmuxRunWithStdin(runner, subprocess.RunWithStdinOptions{
+			Cwd:   "",
+			Name:  "tmux",
+			Args:  []string{"load-buffer", "-b", "rig-prefill-repo_task-task", "-"},
+			Stdin: "fix billing retry flow",
+		}, subprocess.Result{}, nil),
+		expectTmuxRun(runner, subprocess.Result{}, nil,
+			"paste-buffer", "-p", "-t", "=repo_task:task", "-b", "rig-prefill-repo_task-task",
+		),
+		expectTmuxRun(runner, subprocess.Result{}, nil,
+			"delete-buffer", "-b", "rig-prefill-repo_task-task",
+		),
+	}
+}
+
+func startSubmittingPrefill(repo *repository) (core.TmuxPaneRef, error) {
+	return repo.StartTaskSession(context.Background(), &core.Task{
+		TmuxSession:  "repo_task",
+		WorktreePath: "/tmp/repo-task",
+	}, core.TaskSessionLaunchSpec{
+		Command:       []string{"codex"},
+		ReadyMarker:   "›",
+		PrefillInput:  []string{"fix billing retry flow"},
+		SubmitPrefill: true,
+	})
+}
+
+// The agent need not show its own name in tmux: native Claude Code shows its
+// version.
+func TestRepositoryStartTaskSession_SubmitsThePrefilledInputToTheAgent(t *testing.T) {
+	for _, command := range []string{"codex", "2.1.296"} {
+		t.Run(command, func(t *testing.T) {
+			runner := subprocess.NewMockRunner(t)
+			repo := New(runner).(*repository)
+			repo.now = func() time.Time { return time.Unix(0, 0) }
+			repo.getenv = func(string) string { return "/bin/zsh" }
+			var slept []time.Duration
+			repo.sleep = func(d time.Duration) { slept = append(slept, d) }
+
+			mock.InOrder(append(expectPrefilledLaunch(runner),
+				expectTmuxRun(runner, subprocess.Result{Stdout: command + "\n"}, nil,
+					"display-message", "-p", "-t", "=repo_task:task", "#{pane_current_command}",
+				),
+				expectTmuxRun(runner, subprocess.Result{}, nil,
+					"send-keys", "-t", "=repo_task:task", "Enter",
+				),
+			)...)
+
+			pane, err := startSubmittingPrefill(repo)
+
+			require.NoError(t, err)
+			require.Equal(t, "%4", pane.ID)
+			// The paste settles before Enter, so the agent reads Enter as a submit.
+			require.Equal(t, []time.Duration{promptSubmitDelay, promptInputSettleDelay, prefillSubmitDelay}, slept)
+		})
+	}
+}
+
+// A shell prompt can show the agent's ready marker, as Claude's ❯ is common
+// in shell prompts. Pressing Enter in a shell would run the prompt as a
+// command, so the launch fails instead and its Session is cleaned up.
+func TestRepositoryStartTaskSession_RefusesToSubmitThePrefilledInputToAShell(t *testing.T) {
+	tests := []struct {
+		command   string
+		userShell string
+	}{
+		{command: "zsh", userShell: "/bin/zsh"},
+		{command: "-zsh", userShell: "/bin/zsh"},
+		{command: "bash", userShell: ""},
+		{command: "xonsh", userShell: "/opt/homebrew/bin/xonsh"},
+		{command: "", userShell: "/bin/zsh"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.command, func(t *testing.T) {
+			runner := subprocess.NewMockRunner(t)
+			repo := New(runner).(*repository)
+			repo.now = func() time.Time { return time.Unix(0, 0) }
+			repo.sleep = func(time.Duration) {}
+			repo.getenv = func(key string) string {
+				if key == "SHELL" {
+					return tt.userShell
+				}
+				return ""
+			}
+
+			mock.InOrder(append(expectPrefilledLaunch(runner),
+				expectTmuxRun(runner, subprocess.Result{Stdout: tt.command + "\n"}, nil,
+					"display-message", "-p", "-t", "=repo_task:task", "#{pane_current_command}",
+				),
+				expectTmuxRun(runner, subprocess.Result{}, nil,
+					"kill-session", "-t", "=repo_task",
+				),
+			)...)
+
+			_, err := startSubmittingPrefill(repo)
+
+			require.EqualError(t, err, fmt.Sprintf(
+				"the agent is not running in the task window (%q is), so the prompt was not submitted",
+				tt.command,
+			))
+		})
+	}
+}
+
+func TestRepositoryStartTaskSession_CleansUpSessionWhenSubmittingThePrefillFails(t *testing.T) {
+	runner := subprocess.NewMockRunner(t)
+	repo := New(runner).(*repository)
+	repo.now = func() time.Time { return time.Unix(0, 0) }
+	repo.sleep = func(time.Duration) {}
+	repo.getenv = func(string) string { return "" }
+
+	mock.InOrder(append(expectPrefilledLaunch(runner),
+		expectTmuxRun(runner, subprocess.Result{Stdout: "codex\n"}, nil,
+			"display-message", "-p", "-t", "=repo_task:task", "#{pane_current_command}",
+		),
+		expectTmuxRun(runner, subprocess.Result{}, errors.New("send-keys failed"),
+			"send-keys", "-t", "=repo_task:task", "Enter",
+		),
+		expectTmuxRun(runner, subprocess.Result{}, nil,
+			"kill-session", "-t", "=repo_task",
+		),
+	)...)
+
+	_, err := startSubmittingPrefill(repo)
+
+	require.EqualError(t, err, "submit task input: send-keys failed")
+}
+
+func TestRepositoryStartTaskSession_CleansUpSessionWhenTheForegroundCommandCannotBeRead(t *testing.T) {
+	runner := subprocess.NewMockRunner(t)
+	repo := New(runner).(*repository)
+	repo.now = func() time.Time { return time.Unix(0, 0) }
+	repo.sleep = func(time.Duration) {}
+
+	mock.InOrder(append(expectPrefilledLaunch(runner),
+		expectTmuxRun(runner, subprocess.Result{}, errors.New("display-message failed"),
+			"display-message", "-p", "-t", "=repo_task:task", "#{pane_current_command}",
+		),
+		expectTmuxRun(runner, subprocess.Result{}, nil,
+			"kill-session", "-t", "=repo_task",
+		),
+	)...)
+
+	_, err := startSubmittingPrefill(repo)
+
+	require.EqualError(t, err,
+		"check the command in the task window before submitting the prompt: display-message failed")
+}
+
 func TestRepositoryStartTaskSession_PrefillsLargeInputThroughTmuxBuffer(t *testing.T) {
 	runner := subprocess.NewMockRunner(t)
 	repo := New(runner).(*repository)

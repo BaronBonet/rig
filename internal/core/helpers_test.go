@@ -3,6 +3,7 @@ package core
 import (
 	"context"
 	"fmt"
+	"io/fs"
 	"slices"
 	"strings"
 	"sync"
@@ -38,15 +39,22 @@ type testTaskServiceHarness struct {
 	claudeRepo            providerClientState
 	workspaceMock         *MockTaskWorkspaceManager
 	workspace             workspaceManagerState
-	providerConfigMock    *MockProviderConfigStore
-	providerConfig        providerConfigState
+	userConfigMock        *MockUserConfigStore
+	userConfig            userConfigState
+	// warnings are the problems the service reported without failing.
+	warnings []error
 }
 
-type providerConfigState struct {
+type userConfigState struct {
 	getErr     error
 	saveErr    error
 	setup      *ProviderSetup
 	savedSetup *ProviderSetup
+	// repoDirs are the saved repo directories, which SaveRepoDirs replaces.
+	repoDirs        []string
+	getRepoDirsErr  error
+	saveRepoDirsErr error
+	repoDirsSaves   int
 }
 
 type taskRepositoryState struct {
@@ -84,6 +92,13 @@ type repoClientState struct {
 	createdTask     *Task
 	removedTask     *Task
 	createdPRNumber int
+	// detectedCwds are the paths DetectRepo was asked about, in order.
+	detectedCwds []string
+	// checkouts are the primary checkouts ListRepoCheckouts finds in each
+	// directory. A directory missing from it does not exist, unless
+	// checkoutErrs fails its listing.
+	checkouts    map[string][]string
+	checkoutErrs map[string]error
 }
 
 type sessionClientState struct {
@@ -153,7 +168,13 @@ type providerClientState struct {
 	sessionEnvCalls int
 	// sessionEnvRan runs as each session environment is ensured, as a hook
 	// event arriving meanwhile would.
-	sessionEnvRan        func()
+	sessionEnvRan func()
+	// skillInstallErr is what InstallRigSkill returns, and skillInstallCalls
+	// counts its calls.
+	skillInstallErr   error
+	skillInstallCalls int
+	// skillCheckErr is what CheckRigSkill returns.
+	skillCheckErr        error
 	events               *[]string
 	bootstrapErr         error
 	bootstrapSpec        WorkspaceBootstrapSpec
@@ -253,7 +274,7 @@ func newTestTaskService(t *testing.T) *testTaskServiceHarness {
 	h.providerRepo.commandName = "codex"
 	h.claudeRepo.events = &h.events
 	h.claudeRepo.commandName = "claude"
-	h.providerConfig.setup = &ProviderSetup{
+	h.userConfig.setup = &ProviderSetup{
 		Configured: []Provider{ProviderCodex},
 		Default:    ProviderCodex,
 	}
@@ -267,7 +288,7 @@ func newTestTaskService(t *testing.T) *testTaskServiceHarness {
 	h.providerClientMock = NewMockProviderClient(t)
 	h.claudeClientMock = NewMockProviderClient(t)
 	h.workspaceMock = NewMockTaskWorkspaceManager(t)
-	h.providerConfigMock = NewMockProviderConfigStore(t)
+	h.userConfigMock = NewMockUserConfigStore(t)
 	h.providerRepo.statusRecoveryCalls = make(map[string]int)
 	h.claudeRepo.statusRecoveryCalls = make(map[string]int)
 	configureTaskRepositoryMock(h.taskRepoMock, &h.taskRepo)
@@ -277,7 +298,7 @@ func newTestTaskService(t *testing.T) *testTaskServiceHarness {
 	configureProviderClientMock(h.providerClientMock, &h.providerRepo)
 	configureProviderClientMock(h.claudeClientMock, &h.claudeRepo)
 	configureWorkspaceManagerMock(h.workspaceMock, &h.workspace, &h.sessionClient)
-	configureProviderConfigMock(h.providerConfigMock, &h.providerConfig)
+	configureUserConfigMock(h.userConfigMock, &h.userConfig)
 
 	h.service = NewTaskService(TaskServiceDependencies{
 		Tasks:        h.taskRepoMock,
@@ -290,7 +311,10 @@ func newTestTaskService(t *testing.T) *testTaskServiceHarness {
 		},
 		Workspace:            h.workspaceMock,
 		EnableWorkspaceSetup: true,
-		ProviderConfig:       h.providerConfigMock,
+		UserConfig:           h.userConfigMock,
+		ReportWarning: func(err error) {
+			h.warnings = append(h.warnings, err)
+		},
 	})
 	h.creation = h.service.creation
 	h.launcher = h.service.launcher
@@ -299,7 +323,7 @@ func newTestTaskService(t *testing.T) *testTaskServiceHarness {
 	return h
 }
 
-func configureProviderConfigMock(store *MockProviderConfigStore, state *providerConfigState) {
+func configureUserConfigMock(store *MockUserConfigStore, state *userConfigState) {
 	store.EXPECT().GetProviderSetup(mock.Anything).RunAndReturn(
 		func(context.Context) (*ProviderSetup, error) {
 			if state.getErr != nil {
@@ -323,6 +347,24 @@ func configureProviderConfigMock(store *MockProviderConfigStore, state *provider
 			return nil
 		},
 	).Maybe()
+	store.EXPECT().GetRepoDirs(mock.Anything).RunAndReturn(
+		func(context.Context) ([]string, error) {
+			if state.getRepoDirsErr != nil {
+				return nil, state.getRepoDirsErr
+			}
+			return slices.Clone(state.repoDirs), nil
+		},
+	).Maybe()
+	store.EXPECT().SaveRepoDirs(mock.Anything, mock.Anything).RunAndReturn(
+		func(_ context.Context, dirs []string) error {
+			if state.saveRepoDirsErr != nil {
+				return state.saveRepoDirsErr
+			}
+			state.repoDirs = slices.Clone(dirs)
+			state.repoDirsSaves++
+			return nil
+		},
+	).Maybe()
 }
 
 func configureGitWorktreeMock(client *MockGitWorktreeClient, state *repoClientState) {
@@ -332,7 +374,8 @@ func configureGitWorktreeMock(client *MockGitWorktreeClient, state *repoClientSt
 		},
 	).Maybe()
 	client.EXPECT().DetectRepo(mock.Anything, mock.Anything).RunAndReturn(
-		func(context.Context, string) (RepoContext, error) {
+		func(_ context.Context, cwd string) (RepoContext, error) {
+			state.detectedCwds = append(state.detectedCwds, cwd)
 			if state.detectRepoErr != nil {
 				return RepoContext{}, state.detectRepoErr
 			}
@@ -370,6 +413,18 @@ func configureGitWorktreeMock(client *MockGitWorktreeClient, state *repoClientSt
 		func(_ context.Context, task *Task) error {
 			state.removedTask = cloneTask(task)
 			return state.removeErr
+		},
+	).Maybe()
+	client.EXPECT().ListRepoCheckouts(mock.Anything, mock.Anything).RunAndReturn(
+		func(_ context.Context, dir string) ([]string, error) {
+			if err := state.checkoutErrs[dir]; err != nil {
+				return nil, err
+			}
+			checkouts, ok := state.checkouts[dir]
+			if !ok {
+				return nil, &fs.PathError{Op: "open", Path: dir, Err: fs.ErrNotExist}
+			}
+			return slices.Clone(checkouts), nil
 		},
 	).Maybe()
 }
@@ -580,6 +635,17 @@ func configureProviderClientMock(client *MockProviderClient, state *providerClie
 				state.sessionEnvRan()
 			}
 			return state.sessionEnvErr
+		},
+	).Maybe()
+	client.EXPECT().InstallRigSkill(mock.Anything).RunAndReturn(
+		func(context.Context) error {
+			state.skillInstallCalls++
+			return state.skillInstallErr
+		},
+	).Maybe()
+	client.EXPECT().CheckRigSkill(mock.Anything).RunAndReturn(
+		func(context.Context) error {
+			return state.skillCheckErr
 		},
 	).Maybe()
 	client.EXPECT().BuildWorkspaceBootstrapSpec(mock.Anything).RunAndReturn(

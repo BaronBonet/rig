@@ -6,16 +6,16 @@ import (
 )
 
 func (s *service) GetProviderSetup(ctx context.Context) (*ProviderSetup, error) {
-	if s.providerConfig == nil {
-		return nil, fmt.Errorf("provider config store not configured")
+	if s.userConfig == nil {
+		return nil, fmt.Errorf("user config store not configured")
 	}
 
-	return s.providerConfig.GetProviderSetup(ctx)
+	return s.userConfig.GetProviderSetup(ctx)
 }
 
 func (s *service) SaveProviderSetup(ctx context.Context, setup ProviderSetup) error {
-	if s.providerConfig == nil {
-		return fmt.Errorf("provider config store not configured")
+	if s.userConfig == nil {
+		return fmt.Errorf("user config store not configured")
 	}
 	if err := setup.Validate(); err != nil {
 		return err
@@ -36,8 +36,22 @@ func (s *service) SaveProviderSetup(ctx context.Context, setup ProviderSetup) er
 			return fmt.Errorf("provider %s failed setup checks: %w", provider, err)
 		}
 	}
+	if err := s.userConfig.SaveProviderSetup(ctx, setup); err != nil {
+		return err
+	}
 
-	return s.providerConfig.SaveProviderSetup(ctx, setup)
+	// Each configured provider then gets the Rig skill this Rig version
+	// installs. Tasks work without it, so a skill that cannot be installed,
+	// say into a read-only skills directory, is only a warning, which rig
+	// doctor repeats. Skills of providers that are not configured are left
+	// alone.
+	for _, provider := range setup.Configured {
+		if err := s.providers[provider].InstallRigSkill(ctx); err != nil {
+			s.reportWarning(fmt.Errorf("install the rig skill for %s: %w", provider, err))
+		}
+	}
+
+	return nil
 }
 
 func (s *service) DetectProviders(ctx context.Context) ([]ProviderDetection, error) {

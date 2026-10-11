@@ -117,7 +117,7 @@ func TestSessionLauncherSeam_ResolveProviderDefaultsAndGates(t *testing.T) {
 	t.Run("empty provider resolves to the configured default", func(t *testing.T) {
 		provider, client, err := h.launcher.resolveProvider(t.Context(), "")
 		require.NoError(t, err)
-		require.Equal(t, h.providerConfig.setup.Default, provider)
+		require.Equal(t, h.userConfig.setup.Default, provider)
 		require.NotNil(t, client)
 	})
 
@@ -127,7 +127,7 @@ func TestSessionLauncherSeam_ResolveProviderDefaultsAndGates(t *testing.T) {
 	})
 
 	t.Run("missing setup requires provider setup", func(t *testing.T) {
-		h.providerConfig.setup = nil
+		h.userConfig.setup = nil
 		_, _, err := h.launcher.resolveProvider(t.Context(), ProviderCodex)
 		require.ErrorIs(t, err, ErrProviderSetupRequired)
 	})
@@ -153,7 +153,7 @@ func TestSessionLauncherSeam_PrepareWorkspaceSeedsBeforeBootstrap(t *testing.T) 
 		},
 	)
 
-	config := NewMockProviderConfigStore(t)
+	config := NewMockUserConfigStore(t)
 	config.EXPECT().GetProviderSetup(mock.Anything).Return(&ProviderSetup{
 		Configured: []Provider{ProviderCodex},
 		Default:    ProviderCodex,
@@ -184,7 +184,7 @@ func TestSessionLauncherSeam_BootstrapWorkspaceNeverSeeds(t *testing.T) {
 
 	launcher := newSessionLauncher(
 		map[Provider]ProviderClient{ProviderCodex: providerClient},
-		NewMockProviderConfigStore(t),
+		NewMockUserConfigStore(t),
 		workspace,
 		NewMockTmuxSessionClient(t),
 		nil,
@@ -197,7 +197,7 @@ func TestSessionLauncherSeam_BootstrapWorkspaceNeverSeeds(t *testing.T) {
 
 func TestSessionLauncherSeam_PrepareWorkspaceBootstrapsOtherConfiguredProviders(t *testing.T) {
 	h := newTestTaskService(t)
-	h.providerConfig.setup = &ProviderSetup{
+	h.userConfig.setup = &ProviderSetup{
 		Configured: []Provider{ProviderCodex, ProviderClaude},
 		Default:    ProviderCodex,
 	}
@@ -226,7 +226,7 @@ func TestSessionLauncherSeam_PrepareWorkspaceBootstrapsOtherConfiguredProviders(
 
 func TestServiceRefreshTaskWorkspaceHooks_BootstrapsConfiguredProvidersIntoReadyTasks(t *testing.T) {
 	h := newTestTaskService(t)
-	h.providerConfig.setup = &ProviderSetup{
+	h.userConfig.setup = &ProviderSetup{
 		Configured: []Provider{ProviderCodex, ProviderClaude},
 		Default:    ProviderCodex,
 	}

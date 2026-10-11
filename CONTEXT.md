@@ -5,7 +5,8 @@
 Rig is a local terminal app for running AI-assisted coding tasks in isolated
 workspaces. The foreground `rig` command provides the TUI, while a background
 task daemon owns long-running task operations, durable task state, provider hook
-events, and live status updates.
+events, and live status updates. The CLI's non-interactive commands let people,
+scripts and agents create and inspect tasks beside the TUI.
 
 Use `rig` for the CLI command and Rig for the product or system.
 
@@ -13,7 +14,12 @@ Use `rig` for the CLI command and Rig for the product or system.
 
 - Task: A durable unit of AI-assisted coding work managed by Rig.
 - Task creation: The workflow that turns a prompt or pull request source into a
-  prepared task workspace and interactive provider session.
+  prepared task workspace and interactive provider session, started from the
+  TUI or the CLI.
+- Parent task: The Task another Task was created from: the one whose worktree
+  contained the working directory of the `rig task create` that created it.
+- Child task: A Task with a Parent task. The TUI marks its row with `↳`, and
+  its parent's detail panel lists it as spawned.
 - Task draft: The in-progress task the TUI user is assembling before
   submission: the prompt text, the chosen provider, and the optional pull
   request source. Discarded on cancel; cleared once creation is submitted.
@@ -31,6 +37,11 @@ Use `rig` for the CLI command and Rig for the product or system.
 - Worktree: A git worktree used to isolate task changes from the main checkout.
 - Repository context: The repository root, name, and base branch used when Rig
   creates or inspects a task.
+- Repo directory: A parent directory, such as `~/code`, whose git repositories
+  Rig knows by name. Chosen during Setup and kept in the User config.
+- Known repository: A repository a task can be created in by name: the
+  repository of an existing Task, or a primary git checkout directly inside a
+  Repo directory. A worktree is never one.
 - Session: The tmux-backed interactive environment for a task.
 - Session launcher: The core component that resolves a task's configured
   provider, prepares its workspace, starts or bootstraps its session and the
@@ -44,8 +55,17 @@ Use `rig` for the CLI command and Rig for the product or system.
 - Supported provider: A provider Rig knows how to integrate with.
 - Configured provider: A supported provider the user has enabled for task
   creation and for agents started in a task.
-- Provider setup: The mandatory first-run flow where the user chooses configured
+- Setup: The flow, `rig setup` or the TUI's first-run screen, that produces the
+  User config: the mandatory Provider setup, then an optional step for Repo
+  directories. It installs the Rig skill of each Configured provider.
+- Provider setup: The mandatory part of Setup where the user chooses configured
   providers and a default provider.
+- User config: Rig's user-level configuration, written by Setup: the
+  Configured providers, the Default provider and the Repo directories. It is
+  not kept in the task database.
+- Rig skill: The user-level skill Setup installs for each Configured provider,
+  which teaches its agents when and how to hand work off to a new Task with the
+  CLI. Rig owns it and rewrites it on every Setup.
 - Launch provider: The provider Rig launches for a task at creation, and on
   Reconnect when there is no Agent session it can restore. Nothing changes it
   afterwards: other agents started in the task are Agent sessions.
@@ -68,9 +88,13 @@ Use `rig` for the CLI command and Rig for the product or system.
   task state, provider hook handling, and frontend updates.
 - TUI: The foreground terminal interface for creating tasks, browsing task
   state, and attaching to sessions.
-- Frontend: The application-facing interface used by the TUI. In normal use it
-  talks to the daemon over a local Unix socket.
-- Unix socket server: The local control channel between the TUI and daemon.
+- CLI: The non-interactive `rig` commands beside the TUI, such as
+  `rig task create`, `rig task list`, `rig task show` and `rig repo list`, for
+  people, scripts and agents. It never attaches a terminal to a Session.
+- Frontend: The application-facing interface used by the TUI and the CLI. In
+  normal use it talks to the daemon over a local Unix socket.
+- Unix socket server: The local control channel between the daemon and the TUI
+  or the CLI.
 - Hook server: The loopback HTTP endpoint that receives provider hook events.
 - Hook event: A structured provider event, such as session, prompt, tool, or
   stop activity, consumed by the daemon.
@@ -117,9 +141,23 @@ Use `rig` for the CLI command and Rig for the product or system.
 - A Configured provider must pass Rig's provider setup checks before it can be
   used for Task creation.
 - The Task creation UI offers only Configured providers.
-- Provider setup produces the user's Configured providers.
+- Setup produces the User config. Provider setup produces the user's
+  Configured providers.
+- Each Configured provider gets a Rig skill in its user-level skills, never in
+  a repository or worktree. Skills of providers that are not configured are
+  left alone. A Rig skill Setup cannot install does not fail Setup:
+  `rig doctor` warns about it, as about one that is missing or outdated.
 - Tasks remain visible even when their Launch provider is not currently a
   Configured provider.
+- A Task has at most one Parent task, set only at Task creation from the CLI
+  inside the parent's worktree, unless the CLI is told not to. It may be in
+  another repository, and nothing changes it afterwards. The TUI never sets
+  one.
+- A Task's Child tasks are derived from their Parent task links, so a deleted
+  Child task is no longer listed by its parent. Deleting a Parent task leaves
+  its Child tasks working and unlinked.
+- Known repositories are derived from Tasks and Repo directories each time,
+  never stored. A Repo directory that is missing is skipped.
 - A Task may have many Provider sessions over time.
 - A Provider session belongs to exactly one Task and one Provider.
 - A Task may have many Agent sessions, which may use different Providers. At

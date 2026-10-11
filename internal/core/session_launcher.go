@@ -15,10 +15,10 @@ import (
 // ordering, and recording the agent sessions it launches live here and nowhere
 // else.
 type sessionLauncher struct {
-	providers      map[Provider]ProviderClient
-	providerConfig ProviderConfigStore
-	workspace      TaskWorkspaceManager
-	tmuxSession    TmuxSessionClient
+	providers   map[Provider]ProviderClient
+	userConfig  UserConfigStore
+	workspace   TaskWorkspaceManager
+	tmuxSession TmuxSessionClient
 	// observation records the agent sessions the launcher starts.
 	observation          *taskObservation
 	enableWorkspaceSetup bool
@@ -26,7 +26,7 @@ type sessionLauncher struct {
 
 func newSessionLauncher(
 	providers map[Provider]ProviderClient,
-	providerConfig ProviderConfigStore,
+	userConfig UserConfigStore,
 	workspace TaskWorkspaceManager,
 	tmuxSession TmuxSessionClient,
 	observation *taskObservation,
@@ -34,7 +34,7 @@ func newSessionLauncher(
 ) *sessionLauncher {
 	return &sessionLauncher{
 		providers:            providers,
-		providerConfig:       providerConfig,
+		userConfig:           userConfig,
 		workspace:            workspace,
 		tmuxSession:          tmuxSession,
 		observation:          observation,
@@ -51,10 +51,10 @@ func (l *sessionLauncher) resolveProvider(
 	ctx context.Context,
 	provider Provider,
 ) (Provider, ProviderClient, error) {
-	if l.providerConfig == nil {
-		return "", nil, fmt.Errorf("provider config store not configured")
+	if l.userConfig == nil {
+		return "", nil, fmt.Errorf("user config store not configured")
 	}
-	setup, err := l.providerConfig.GetProviderSetup(ctx)
+	setup, err := l.userConfig.GetProviderSetup(ctx)
 	if err != nil {
 		return "", nil, err
 	}
@@ -123,10 +123,10 @@ func (l *sessionLauncher) bootstrapConfiguredProviders(
 	task *Task,
 	skip ...Provider,
 ) []error {
-	if l.workspace == nil || l.providerConfig == nil {
+	if l.workspace == nil || l.userConfig == nil {
 		return nil
 	}
-	setup, err := l.providerConfig.GetProviderSetup(ctx)
+	setup, err := l.userConfig.GetProviderSetup(ctx)
 	if err != nil || setup == nil {
 		return nil
 	}
@@ -179,9 +179,9 @@ func (l *sessionLauncher) bootstrapWorkspace(
 }
 
 // startSession creates the task's tmux session and launches the task's launch
-// provider fresh in its task window, prefilling the task prompt, then records
-// the agent's agent session.
-func (l *sessionLauncher) startSession(ctx context.Context, task *Task) (*Task, error) {
+// provider fresh in its task window, prefilling the task prompt and, when
+// submitPrompt is set, submitting it, then records the agent's agent session.
+func (l *sessionLauncher) startSession(ctx context.Context, task *Task, submitPrompt bool) (*Task, error) {
 	provider, providerClient, err := l.resolveProvider(ctx, task.Provider)
 	if err != nil {
 		return task, err
@@ -194,6 +194,7 @@ func (l *sessionLauncher) startSession(ctx context.Context, task *Task) (*Task, 
 	if err != nil {
 		return task, fmt.Errorf("build task session launch spec: %w", err)
 	}
+	launch.SubmitPrefill = submitPrompt
 	pane, err := l.tmuxSession.StartTaskSession(ctx, task, launch)
 	if err != nil {
 		return task, fmt.Errorf("start task session: %w", err)

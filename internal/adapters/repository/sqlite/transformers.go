@@ -1,6 +1,8 @@
 package sqlite
 
 import (
+	"database/sql"
+	"strings"
 	"time"
 
 	"github.com/BaronBonet/rig/internal/adapters/repository/sqlite/generated"
@@ -24,7 +26,15 @@ func createTaskParams(task *core.Task) generated.CreateTaskParams {
 		CreationError:  task.CreationError,
 		CreatedAt:      formatTime(task.CreatedAt),
 		UpdatedAt:      formatTime(task.UpdatedAt),
+		ParentTaskID:   nullableTaskID(task.ParentTaskID),
 	}
+}
+
+// nullableTaskID stores a task ID that refers to another task, such as a
+// parent task, as null when it is empty, as a reference to no task must be.
+func nullableTaskID(taskID string) sql.NullString {
+	taskID = strings.TrimSpace(taskID)
+	return sql.NullString{String: taskID, Valid: taskID != ""}
 }
 
 func updateTaskParams(task *core.Task) generated.UpdateTaskParams {
@@ -112,6 +122,7 @@ func taskFromRow(row generated.ListTasksRow) *core.Task {
 		CreationError:  row.CreationError,
 		CreatedAt:      parseTime(row.CreatedAt),
 		UpdatedAt:      parseTime(row.UpdatedAt),
+		ParentTaskID:   row.ParentTaskID.String,
 	}
 }
 

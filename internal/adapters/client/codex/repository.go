@@ -72,8 +72,11 @@ var hookCatalog = providerkit.Catalog{
 var titleSkipPrefixes = []string{"tokens used", "openai codex"}
 
 type repository struct {
-	runner              subprocess.Runner
-	codexHomeDir        func() (string, error)
+	runner       subprocess.Runner
+	codexHomeDir func() (string, error)
+	// userHomeDir is the user's home directory. Codex reads user skills from
+	// ~/.agents/skills, not from Codex home.
+	userHomeDir         func() (string, error)
 	binary              string
 	collectorURL        string
 	hookSecret          string
@@ -96,6 +99,7 @@ func New(runner subprocess.Runner, cfg Config, hooks HookForwardingConfig) core.
 		collectorURL: collectorURL,
 		hookSecret:   strings.TrimSpace(hooks.HookSecret),
 		codexHomeDir: defaultCodexHomeDir,
+		userHomeDir:  os.UserHomeDir,
 		transcripts:  newCodexTranscriptIndex(defaultCodexTranscriptIndexBudget),
 	}
 }
@@ -208,6 +212,41 @@ func (r *repository) EnsureTaskSessionEnvironment(context.Context) error {
 	}
 
 	return nil
+}
+
+// InstallRigSkill writes the Rig skill to the user's Codex skills, replacing
+// the one an earlier Rig wrote.
+func (r *repository) InstallRigSkill(context.Context) error {
+	path, err := r.rigSkillPath()
+	if err != nil {
+		return err
+	}
+
+	return providerkit.WriteRigSkill(path)
+}
+
+// CheckRigSkill fails when the user's Codex skills lack the Rig skill this
+// Rig version installs.
+func (r *repository) CheckRigSkill(context.Context) error {
+	path, err := r.rigSkillPath()
+	if err != nil {
+		return err
+	}
+
+	return providerkit.CheckRigSkill(path)
+}
+
+func (r *repository) rigSkillPath() (string, error) {
+	home, err := r.userHomeDir()
+	if err != nil {
+		return "", fmt.Errorf("resolve codex user skills dir: %w", err)
+	}
+	home = strings.TrimSpace(home)
+	if home == "" {
+		return "", fmt.Errorf("home directory is required")
+	}
+
+	return filepath.Join(home, ".agents", "skills", "rig", "SKILL.md"), nil
 }
 
 func (r *repository) BuildWorkspaceBootstrapSpec(_ *core.Task) (core.WorkspaceBootstrapSpec, error) {

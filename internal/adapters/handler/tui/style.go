@@ -33,6 +33,9 @@ const (
 	iconFailed           = "×"
 	iconPRNone           = "—"
 	iconCompacted        = "↻"
+	// iconChildTask marks the row of a child task, one created from another
+	// task in the list.
+	iconChildTask = "↳"
 )
 
 // spinnerFrames animate the status symbol of a task or agent that is working.
