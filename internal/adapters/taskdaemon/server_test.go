@@ -26,7 +26,7 @@ type fakeTaskService struct {
 
 	tasks      []*core.Task
 	activity   map[string][]core.TaskActivityEvent
-	usage      map[string]*core.TaskTokenUsage
+	usage      map[string]*core.TaskUsage
 	prs        map[string][]core.RepoPullRequest
 	prStatuses map[string]*core.PRStatus
 	setup      *core.ProviderSetup
@@ -50,7 +50,7 @@ type fakeTaskService struct {
 func newFakeTaskService() *fakeTaskService {
 	return &fakeTaskService{
 		activity:     map[string][]core.TaskActivityEvent{},
-		usage:        map[string]*core.TaskTokenUsage{},
+		usage:        map[string]*core.TaskUsage{},
 		prs:          map[string][]core.RepoPullRequest{},
 		prStatuses:   map[string]*core.PRStatus{},
 		latest:       map[string]*core.TaskStatusUpdate{},
@@ -127,10 +127,10 @@ func (f *fakeTaskService) GetTaskActivity(
 	return events, f.errByOp["get_task_activity"]
 }
 
-func (f *fakeTaskService) GetTaskTokenUsage(_ context.Context, taskID string) (*core.TaskTokenUsage, error) {
+func (f *fakeTaskService) GetTaskUsage(_ context.Context, taskID string) (*core.TaskUsage, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	return f.usage[taskID], f.errByOp["get_task_token_usage"]
+	return f.usage[taskID], f.errByOp["get_task_usage"]
 }
 
 func (f *fakeTaskService) ListTasks(context.Context) ([]*core.Task, error) {
@@ -238,7 +238,10 @@ func TestUnaryOperationsRoundTrip(t *testing.T) {
 		{TaskID: "task-1", Role: core.TaskActivityRoleUser, Text: "add retries"},
 		{TaskID: "task-1", Role: core.TaskActivityRoleAssistant, Text: "editing main.go"},
 	}
-	svc.usage["task-1"] = &core.TaskTokenUsage{InputTokens: 100, OutputTokens: 25}
+	svc.usage["task-1"] = &core.TaskUsage{
+		Tokens:           &core.TaskTokenUsage{InputTokens: 100, OutputTokens: 25},
+		AgentCompactions: map[string]core.Compactions{"agent-1": {Total: 3, Auto: 2, Manual: 1}},
+	}
 	svc.prs["/tmp/repo"] = []core.RepoPullRequest{{Number: 7, Title: "retry flow", BranchName: "retries"}}
 	svc.prStatuses["/tmp/repo|retries"] = &core.PRStatus{State: core.PRStateOpen, Number: 7}
 	svc.setup = &core.ProviderSetup{
@@ -281,14 +284,14 @@ func TestUnaryOperationsRoundTrip(t *testing.T) {
 		require.ErrorContains(t, err, "task_id required")
 	})
 
-	t.Run("get task token usage", func(t *testing.T) {
-		usage, err := client.GetTaskTokenUsage(ctx, "task-1")
+	t.Run("get task usage", func(t *testing.T) {
+		usage, err := client.GetTaskUsage(ctx, "task-1")
 		require.NoError(t, err)
-		require.Equal(t, 100, usage.InputTokens)
+		require.Equal(t, svc.usage["task-1"], usage)
 	})
 
-	t.Run("get task token usage requires task id", func(t *testing.T) {
-		_, err := client.GetTaskTokenUsage(ctx, "")
+	t.Run("get task usage requires task id", func(t *testing.T) {
+		_, err := client.GetTaskUsage(ctx, "")
 		require.ErrorContains(t, err, "task_id required")
 	})
 

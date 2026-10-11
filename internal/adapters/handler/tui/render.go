@@ -14,9 +14,14 @@ import (
 )
 
 const (
-	colWidthAgent   = 7
-	colWidthTokens  = 11
-	colWidthElapsed = 8
+	colWidthAgent = 7
+	// colWidthCompactions fits an agent's compaction marker, from "↻1" to
+	// "↻99+".
+	colWidthCompactions = 4
+	colWidthElapsed     = 8
+	// maxCompactionsMarker is the highest count a compaction marker spells
+	// out.
+	maxCompactionsMarker = 99
 
 	// rowGutterWidth is a row style's left border and padding plus the
 	// scrollbar column on the right.
@@ -27,7 +32,7 @@ const (
 	// request from the columns after it.
 	nameGap = "  "
 	// minTaskNameArea is the narrowest name area a task row keeps: below it,
-	// the row drops its token column, then its provider column.
+	// the row drops its compactions column, then its provider column.
 	minTaskNameArea = 40
 
 	taskListScrollbarTrack = "│"
@@ -232,7 +237,8 @@ func (m model) taskListBlocks(totalWidth int) []taskListBlock {
 			if selected {
 				selectedLine = len(lines)
 			}
-			lines = append(lines, m.renderAgentSubRow(session, i == len(subRows)-1, selected, totalWidth))
+			compactions := agentCompactions(row, session.ID)
+			lines = append(lines, m.renderAgentSubRow(session, compactions, i == len(subRows)-1, selected, totalWidth))
 		}
 		// A blank line sets a task with agent sub-rows apart from the tasks
 		// next to it.
@@ -338,7 +344,8 @@ func (m model) renderRepoHeader(task *core.Task, totalWidth int) string {
 }
 
 // renderRow renders a task row on one line: its status symbol, its name and
-// pull request, then its provider, tokens and elapsed time on the right.
+// pull request, then its agent's provider and compactions and its elapsed
+// time on the right.
 func (m model) renderRow(index int, row taskRow, totalWidth int) string {
 	if row.task == nil {
 		return ""
@@ -357,14 +364,14 @@ func (m model) renderRow(index int, row taskRow, totalWidth int) string {
 	// A task that needs input stands out from the dimmed rest. The selected
 	// task stands out further, also while the cursor is on one of its agent
 	// sub-rows; the selection border and bold name mark the cursor's line.
-	nameStyle, tokenStyle, timeStyle, rowStyle := dimStyle, mutedStyle, dimStyle, normalRowStyle
+	nameStyle, compactionStyle, timeStyle, rowStyle := dimStyle, mutedStyle, dimStyle, normalRowStyle
 	if needsInput(row.status) {
 		nameStyle = primaryStyle
 	}
 	if index == m.selected {
 		onTaskRow := m.selectedAgentSession() == nil
 		nameStyle = lipgloss.NewStyle().Foreground(colorAccent).Bold(onTaskRow)
-		tokenStyle, timeStyle = primaryStyle, primaryStyle
+		compactionStyle, timeStyle = primaryStyle, primaryStyle
 		if onTaskRow {
 			rowStyle = selectedRowStyle
 		}
@@ -380,8 +387,10 @@ func (m model) renderRow(index int, row taskRow, totalWidth int) string {
 		}
 		line += providerCell
 	}
-	if layout.tokens {
-		line += padLeftVisible(tokenStyle.Render(taskTokenUsageRowText(row.tokenUsage)), colWidthTokens)
+	if layout.compactions {
+		// As with the provider, a task with agent sub-rows leaves its agents'
+		// compactions to them.
+		line += renderCompactionsCell(taskRowCompactions(row), compactionStyle)
 	}
 	line += padLeftVisible(timeStyle.Render(taskElapsed(row.task)), colWidthElapsed)
 	return rowStyle.Render(line)
@@ -390,23 +399,24 @@ func (m model) renderRow(index int, row taskRow, totalWidth int) string {
 // taskRowLayout is which columns a task row has room for, and how wide its
 // name area is.
 type taskRowLayout struct {
-	nameArea int
-	provider bool
-	tokens   bool
+	nameArea    int
+	provider    bool
+	compactions bool
 }
 
 // taskRowLayoutFor fits a task row's columns to the terminal: as it narrows,
-// the token column goes first and the provider column next, so the name area
-// keeps minTaskNameArea columns for as long as it can.
+// the compactions column goes first and the provider column next, so the name
+// area keeps minTaskNameArea columns for as long as it can.
 func taskRowLayoutFor(totalWidth int) taskRowLayout {
+	fixedWidth := rowGutterWidth + statusSymbolWidth + colWidthAgent + colWidthCompactions + colWidthElapsed
 	layout := taskRowLayout{
-		nameArea: totalWidth - rowGutterWidth - statusSymbolWidth - colWidthElapsed - colWidthAgent - colWidthTokens,
-		provider: true,
-		tokens:   true,
+		nameArea:    totalWidth - fixedWidth,
+		provider:    true,
+		compactions: true,
 	}
 	if layout.nameArea < minTaskNameArea {
-		layout.nameArea += colWidthTokens
-		layout.tokens = false
+		layout.nameArea += colWidthCompactions
+		layout.compactions = false
 	}
 	if layout.nameArea < minTaskNameArea {
 		layout.nameArea += colWidthAgent
@@ -539,10 +549,18 @@ func (m model) selectedTaskDetailView() string {
 			fitDetailLine(mutedStyle.Render("provider")+"  "+renderProviderNames(providers), sessionWidth),
 		)
 	}
+	compactions := taskRowCompactions(*row)
 	if agentSession != nil {
 		if pane := agentPaneText(*agentSession); pane != "" {
 			sessionLines = append(sessionLines, detailFieldLines("pane", "   ", pane, dimStyle, sessionWidth)...)
 		}
+		compactions = agentCompactions(*row, agentSession.ID)
+	}
+	if compactions.Total > 0 {
+		sessionLines = append(
+			sessionLines,
+			detailFieldLines("compacted", "  ", compactionsDetailText(compactions), primaryStyle, sessionWidth)...,
+		)
 	}
 
 	var builder strings.Builder
@@ -550,7 +568,7 @@ func (m model) selectedTaskDetailView() string {
 		builder.WriteString(line + "\n")
 	}
 
-	if tokenLines := taskTokenUsageDetailLines(row.tokenUsage); len(tokenLines) > 0 {
+	if tokenLines := taskTokenUsageDetailLines(taskTokens(*row)); len(tokenLines) > 0 {
 		builder.WriteString("\n")
 		for _, line := range tokenLines {
 			builder.WriteString("   " + line + "\n")
@@ -1017,12 +1035,12 @@ func prStatusDetailText(status *core.PRStatus) string {
 	return mutedStyle.Render("pr") + "     " + prStatusText(status)
 }
 
-func taskTokenUsageRowText(usage *core.TaskTokenUsage) string {
-	if usage == nil || usage.TotalTokens <= 0 {
-		return ""
+// taskTokens is a task's token usage, or nil before its usage has loaded.
+func taskTokens(row taskRow) *core.TaskTokenUsage {
+	if row.usage == nil {
+		return nil
 	}
-
-	return formatTokenCount(usage.TotalTokens) + " tok"
+	return row.usage.Tokens
 }
 
 func taskTokenUsageDetailLines(usage *core.TaskTokenUsage) []string {

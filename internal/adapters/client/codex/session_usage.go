@@ -23,6 +23,24 @@ func (r *repository) ReadSessionTokenUsage(
 	return snapshot.usage, err
 }
 
+// ReadConversationCompactions counts the compactions in the root agent's
+// rollout, as subagents compact their own contexts. Codex does not record
+// what triggered a compaction.
+func (r *repository) ReadConversationCompactions(
+	ctx context.Context,
+	conversation []core.TaskProviderSession,
+) (core.Compactions, error) {
+	root, err := r.rootCodexTranscriptSession(ctx, conversation)
+	if err != nil || root == nil {
+		return core.Compactions{}, err
+	}
+	snapshot, err := r.getTranscriptIndex().read(ctx, root.TranscriptPath)
+	if err != nil {
+		return core.Compactions{}, err
+	}
+	return core.Compactions{Total: snapshot.compactions}, nil
+}
+
 type codexTranscriptEnvelope struct {
 	Timestamp time.Time       `json:"timestamp"`
 	Type      string          `json:"type"`

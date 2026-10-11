@@ -183,9 +183,10 @@ type TaskService interface {
 	// GetTaskActivity returns recent persisted activity events for the selected
 	// task detail view, ordered oldest-to-newest within the requested window.
 	GetTaskActivity(ctx context.Context, taskID string, limit int) ([]TaskActivityEvent, error)
-	// GetTaskTokenUsage returns the summed token usage across provider sessions
-	// observed for the selected task.
-	GetTaskTokenUsage(ctx context.Context, taskID string) (*TaskTokenUsage, error)
+	// GetTaskUsage returns the summed token usage across provider sessions
+	// observed for the task, and the compactions of each of its open agent
+	// sessions' current conversations.
+	GetTaskUsage(ctx context.Context, taskID string) (*TaskUsage, error)
 	// ListTasks returns all known tasks.
 	ListTasks(ctx context.Context) ([]*Task, error)
 	// LatestTaskStatus returns the latest published live status for a task, or
@@ -341,6 +342,10 @@ type ProviderClient interface {
 	// ReadSessionTokenUsage reads provider-specific token usage from one
 	// provider transcript.
 	ReadSessionTokenUsage(ctx context.Context, transcriptPath string) (*SessionTokenUsage, error)
+	// ReadConversationCompactions counts how many times the root agent's
+	// context was compacted in one conversation: the Provider session history
+	// of one Provider session ID, as RecoverAgentSessionStatus takes it.
+	ReadConversationCompactions(ctx context.Context, conversation []TaskProviderSession) (Compactions, error)
 }
 
 // GitWorktreeClient manages the Git worktree operations needed by the new task

@@ -32,6 +32,7 @@ const (
 	iconDone             = "✓"
 	iconFailed           = "×"
 	iconPRNone           = "—"
+	iconCompacted        = "↻"
 )
 
 // spinnerFrames animate the status symbol of a task or agent that is working.

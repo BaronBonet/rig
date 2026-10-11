@@ -2,6 +2,7 @@ package claude
 
 import (
 	"bufio"
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -67,6 +68,60 @@ func (r *repository) ReadSessionTokenUsage(
 	}
 
 	return &total, nil
+}
+
+// compactBoundaryMarker is the subtype of the system entry Claude Code
+// records where it compacted the conversation. Lines without it are skipped
+// undecoded.
+var compactBoundaryMarker = []byte(`"compact_boundary"`)
+
+// ReadConversationCompactions counts the compaction boundaries Claude Code
+// recorded in a conversation's transcript, split by what triggered each:
+// running out of context, or /compact.
+func (r *repository) ReadConversationCompactions(
+	ctx context.Context,
+	conversation []core.TaskProviderSession,
+) (core.Compactions, error) {
+	session := claudeConversationTranscript(conversation)
+	if session == nil {
+		return core.Compactions{}, nil
+	}
+
+	var compactions core.Compactions
+	err := scanTranscriptLines(ctx, session.TranscriptPath, func(line []byte) {
+		if !bytes.Contains(line, compactBoundaryMarker) {
+			return
+		}
+		var entry claudeCompactBoundaryLine
+		if err := json.Unmarshal(line, &entry); err != nil ||
+			entry.IsSidechain ||
+			entry.Type != "system" ||
+			entry.Subtype != "compact_boundary" {
+			return
+		}
+
+		compactions.Total++
+		switch entry.CompactMetadata.Trigger {
+		case "auto":
+			compactions.Auto++
+		case "manual":
+			compactions.Manual++
+		}
+	})
+	if err != nil {
+		return core.Compactions{}, err
+	}
+
+	return compactions, nil
+}
+
+type claudeCompactBoundaryLine struct {
+	Type            string `json:"type"`
+	Subtype         string `json:"subtype"`
+	IsSidechain     bool   `json:"isSidechain"`
+	CompactMetadata struct {
+		Trigger string `json:"trigger"`
+	} `json:"compactMetadata"`
 }
 
 type claudeTranscriptLine struct {

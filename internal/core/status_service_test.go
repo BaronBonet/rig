@@ -2,6 +2,7 @@ package core
 
 import (
 	"context"
+	"errors"
 	"strconv"
 	"testing"
 	"time"
@@ -112,7 +113,7 @@ func TestTaskStatusService_GetTaskActivityIncludesRecoveredTranscriptActivity(t 
 	}}, svc.providerRepo.activityCalls)
 }
 
-func TestTaskStatusService_GetTaskTokenUsageSumsLatestTranscriptPerProviderSession(t *testing.T) {
+func TestTaskStatusService_GetTaskUsageSumsLatestTranscriptPerProviderSession(t *testing.T) {
 	svc := newTestTaskService(t)
 	svc.taskRepo.providerSessionsByTask["task-123"] = []TaskProviderSession{
 		{
@@ -166,9 +167,9 @@ func TestTaskStatusService_GetTaskTokenUsageSumsLatestTranscriptPerProviderSessi
 		},
 	}
 
-	usage, err := svc.service.GetTaskTokenUsage(t.Context(), "task-123")
+	usage, err := svc.service.GetTaskUsage(t.Context(), "task-123")
 	require.NoError(t, err)
-	require.Equal(t, &TaskTokenUsage{
+	require.Equal(t, &TaskUsage{Tokens: &TaskTokenUsage{
 		SessionCount:             2,
 		InputTokens:              130,
 		CachedInputTokens:        30,
@@ -176,11 +177,96 @@ func TestTaskStatusService_GetTaskTokenUsageSumsLatestTranscriptPerProviderSessi
 		OutputTokens:             60,
 		ReasoningOutputTokens:    10,
 		TotalTokens:              190,
-	}, usage)
+	}}, usage)
 	require.Equal(t, []providerTokenUsageCall{
 		{transcriptPath: "/tmp/codex-b.jsonl"},
 		{transcriptPath: "/tmp/codex-a-resumed.jsonl"},
 	}, svc.providerRepo.tokenUsageCalls)
+}
+
+// Each open agent session's compactions come from its current conversation
+// alone: an earlier conversation it cleared and an ended agent session's
+// conversation do not count, and an agent that never compacted is left out.
+func TestTaskStatusService_GetTaskUsageCountsEachOpenAgentSessionsCompactions(t *testing.T) {
+	svc := newTestTaskService(t)
+	observedAt := time.Date(2026, time.April, 25, 9, 0, 0, 0, time.UTC)
+	providerSession := func(sessionID string, transcriptPath string) TaskProviderSession {
+		return TaskProviderSession{
+			TaskID:            "task-123",
+			Provider:          ProviderCodex,
+			ProviderSessionID: sessionID,
+			TranscriptPath:    transcriptPath,
+			LastObservedAt:    observedAt,
+		}
+	}
+	svc.taskRepo.providerSessionsByTask["task-123"] = []TaskProviderSession{
+		providerSession("cleared", "/tmp/cleared.jsonl"),
+		providerSession("current", "/tmp/current.jsonl"),
+		providerSession("current", "/tmp/current-subagent.jsonl"),
+		providerSession("fresh", "/tmp/fresh.jsonl"),
+		providerSession("ended", "/tmp/ended.jsonl"),
+	}
+	svc.taskRepo.agentSessions = []AgentSession{
+		{ID: "compacted", TaskID: "task-123", Provider: ProviderCodex, ProviderSessionID: "current"},
+		{ID: "never-compacted", TaskID: "task-123", Provider: ProviderCodex, ProviderSessionID: "fresh"},
+		{
+			ID:                "ended",
+			TaskID:            "task-123",
+			Provider:          ProviderCodex,
+			ProviderSessionID: "ended",
+			EndedAt:           observedAt,
+		},
+	}
+	svc.providerRepo.compactionsBySession = map[string]Compactions{
+		"cleared": {Total: 4},
+		"current": {Total: 3, Auto: 2, Manual: 1},
+		"ended":   {Total: 5},
+	}
+
+	usage, err := svc.service.GetTaskUsage(t.Context(), "task-123")
+
+	require.NoError(t, err)
+	require.Equal(t, &TaskUsage{AgentCompactions: map[string]Compactions{
+		"compacted": {Total: 3, Auto: 2, Manual: 1},
+	}}, usage)
+	require.Equal(t, [][]TaskProviderSession{
+		{providerSession("current", "/tmp/current.jsonl"), providerSession("current", "/tmp/current-subagent.jsonl")},
+		{providerSession("fresh", "/tmp/fresh.jsonl")},
+	}, svc.providerRepo.compactionCalls)
+}
+
+func TestTaskStatusService_GetTaskUsageIsNilWithoutTokensOrCompactions(t *testing.T) {
+	svc := newTestTaskService(t)
+	svc.taskRepo.agentSessions = []AgentSession{
+		{ID: "agent", TaskID: "task-123", Provider: ProviderCodex, ProviderSessionID: "sess"},
+	}
+
+	usage, err := svc.service.GetTaskUsage(t.Context(), "task-123")
+
+	require.NoError(t, err)
+	require.Nil(t, usage)
+}
+
+func TestTaskStatusService_GetTaskUsageKeepsTokensWhenCompactionsCannotBeRead(t *testing.T) {
+	svc := newTestTaskService(t)
+	svc.taskRepo.providerSessionsByTask["task-123"] = []TaskProviderSession{{
+		TaskID:            "task-123",
+		Provider:          ProviderCodex,
+		ProviderSessionID: "sess",
+		TranscriptPath:    "/tmp/sess.jsonl",
+	}}
+	svc.taskRepo.agentSessions = []AgentSession{
+		{ID: "agent", TaskID: "task-123", Provider: ProviderCodex, ProviderSessionID: "sess"},
+	}
+	svc.providerRepo.usageByTranscript = map[string]*SessionTokenUsage{
+		"/tmp/sess.jsonl": {InputTokens: 10, TotalTokens: 10},
+	}
+	svc.providerRepo.compactionsErr = errors.New("transcript unreadable")
+
+	usage, err := svc.service.GetTaskUsage(t.Context(), "task-123")
+
+	require.NoError(t, err)
+	require.Equal(t, &TaskUsage{Tokens: &TaskTokenUsage{SessionCount: 1, InputTokens: 10, TotalTokens: 10}}, usage)
 }
 
 func TestTaskStatusService_LatestReturnsNilWhenTaskHasNoStatus(t *testing.T) {

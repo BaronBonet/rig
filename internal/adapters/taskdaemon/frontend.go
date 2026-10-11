@@ -31,8 +31,8 @@ func (f *frontend) GetTaskActivity(ctx context.Context, taskID string, limit int
 	return callUnary(ctx, f, opGetTaskActivity, taskActivityRequest{TaskID: taskID, Limit: limit})
 }
 
-func (f *frontend) GetTaskTokenUsage(ctx context.Context, taskID string) (*core.TaskTokenUsage, error) {
-	return callUnary(ctx, f, opGetTaskTokenUsage, taskIDRequest{TaskID: taskID})
+func (f *frontend) GetTaskUsage(ctx context.Context, taskID string) (*core.TaskUsage, error) {
+	return callUnary(ctx, f, opGetTaskUsage, taskIDRequest{TaskID: taskID})
 }
 
 func (f *frontend) ListRepoPullRequests(ctx context.Context, cwd string) ([]core.RepoPullRequest, error) {

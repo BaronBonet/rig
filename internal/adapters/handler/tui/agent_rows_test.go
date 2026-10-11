@@ -214,15 +214,13 @@ func TestModel_TaskRowStaysHighlightedWhileOneOfItsAgentsIsSelected(t *testing.T
 	m = withAgentSessions(t, m, "task-1", claudeAgent(), codexAgent())
 	for i := range m.rows {
 		m.rows[i].task.CreatedAt = time.Now().Add(-15 * time.Minute)
-		m.rows[i].tokenUsage = &core.TaskTokenUsage{TotalTokens: 45200}
 	}
 	taskLine := func(m model, index int) string { return m.renderRow(index, m.rows[index], m.totalWidth()) }
 
-	// On the task row itself, its name, tokens and time stand out.
+	// On the task row itself, its name and time stand out.
 	selectedRow := taskLine(m, 0)
 	require.True(t, strings.HasPrefix(stripANSI(selectedRow), "│"))
 	require.Contains(t, selectedRow, lipgloss.NewStyle().Foreground(colorAccent).Bold(true).Render("first task"))
-	require.Contains(t, selectedRow, primaryStyle.Render("45.2k tok"))
 	require.Contains(t, selectedRow, primaryStyle.Render("15m"))
 
 	// On one of its agent sub-rows, the cursor's border moves to the sub-row,
@@ -232,12 +230,10 @@ func TestModel_TaskRowStaysHighlightedWhileOneOfItsAgentsIsSelected(t *testing.T
 	parentRow := taskLine(m, 0)
 	require.False(t, strings.HasPrefix(stripANSI(parentRow), "│"))
 	require.Contains(t, parentRow, lipgloss.NewStyle().Foreground(colorAccent).Render("first task"))
-	require.Contains(t, parentRow, primaryStyle.Render("45.2k tok"))
 	require.Contains(t, parentRow, primaryStyle.Render("15m"))
 
 	otherRow := taskLine(m, 1)
 	require.Contains(t, otherRow, dimStyle.Render("second task"))
-	require.Contains(t, otherRow, mutedStyle.Render("45.2k tok"))
 	require.Contains(t, otherRow, dimStyle.Render("15m"))
 }
 
@@ -702,4 +698,122 @@ func TestModel_AgentTextNeverReachesTheTerminalRaw(t *testing.T) {
 	plain := stripANSI(view)
 	require.Contains(t, plain, "run the green suite")
 	require.Contains(t, plain, "done all passing")
+}
+
+// withUsage loads a task's usage into the model as the frontend reports it.
+func withUsage(t *testing.T, m model, taskID string, compactions map[string]core.Compactions) model {
+	t.Helper()
+	next, _ := m.Update(taskUsageLoadedMsg{taskID: taskID, usage: &core.TaskUsage{AgentCompactions: compactions}})
+	return asModel(t, next)
+}
+
+// compactedAgentsModel has task-1 with a Claude and a Codex agent, of which
+// Codex compacted three times, and task-2 with a single agent that compacted
+// once.
+func compactedAgentsModel(t *testing.T, width int) model {
+	t.Helper()
+	m := agentsTaskModel(newFrontendHarness())
+	m.width = width
+	soleAgent := codexAgent()
+	soleAgent.ID = "agent-sole"
+	soleAgent.LatestPrompt = "tidy the docs"
+	m = withAgentSessions(t, m, "task-1", claudeAgent(), codexAgent())
+	m = withAgentSessions(t, m, "task-2", soleAgent)
+	m = withUsage(t, m, "task-1", map[string]core.Compactions{"agent-codex": {Total: 3}})
+	return withUsage(t, m, "task-2", map[string]core.Compactions{"agent-sole": {Total: 1, Manual: 1}})
+}
+
+func TestModel_AgentSubRowShowsItsCompactionsInTheTaskRowsColumn(t *testing.T) {
+	m := compactedAgentsModel(t, 96)
+
+	// A task with sub-rows leaves compactions to the agent that compacted.
+	require.NotContains(t, viewLineContaining(t, m, "first task"), iconCompacted)
+	require.NotContains(t, viewLineContaining(t, m, "fix the flaky retry test"), iconCompacted)
+	codexLine := viewLineContaining(t, m, "review the retry change")
+	require.Contains(t, codexLine, iconCompacted+"3")
+
+	// The sub-row's marker lines up with a single-agent task row's.
+	require.Equal(
+		t,
+		statusColumn(t, viewLineContaining(t, m, "second task"), iconCompacted+"1"),
+		statusColumn(t, codexLine, iconCompacted+"3"),
+	)
+
+	// Like the task row's time, the marker stands out on the selected line.
+	require.Contains(t, m.renderAgentSubRow(codexAgent(), core.Compactions{Total: 3}, true, false, 96),
+		mutedStyle.Render(iconCompacted+"3"))
+	require.Contains(t, m.renderAgentSubRow(codexAgent(), core.Compactions{Total: 3}, true, true, 96),
+		primaryStyle.Render(iconCompacted+"3"))
+	require.Contains(t, model{selected: 0}.renderRow(0, compactedRow(), 96), primaryStyle.Render(iconCompacted+"2"))
+	require.Contains(t, model{selected: 1}.renderRow(0, compactedRow(), 96), mutedStyle.Render(iconCompacted+"2"))
+}
+
+func TestRenderCompactionsCell_FitsLargeCountsInItsColumn(t *testing.T) {
+	for total, want := range map[int]string{0: "    ", 7: "↻7  ", 99: "↻99 ", 100: "↻99+", 4321: "↻99+"} {
+		cell := stripANSI(renderCompactionsCell(core.Compactions{Total: total}, mutedStyle))
+		require.Equal(t, want, cell, "total %d", total)
+	}
+}
+
+func TestModel_CompactionMarkersFitEveryWidth(t *testing.T) {
+	for width := 40; width <= 120; width++ {
+		m := compactedAgentsModel(t, width)
+		m.detailsHidden = true
+
+		for _, line := range strings.Split(m.View().Content, "\n")[1:] {
+			require.LessOrEqual(t, lipgloss.Width(line), width, "width %d: %q", width, stripANSI(line))
+		}
+		if !taskRowLayoutFor(width).compactions {
+			require.NotContains(t, stripANSI(m.View().Content), iconCompacted, "width %d", width)
+			continue
+		}
+		require.Equal(
+			t,
+			statusColumn(t, viewLineContaining(t, m, "second task"), iconCompacted),
+			statusColumn(t, viewLineContaining(t, m, "└"), iconCompacted),
+			"width %d", width,
+		)
+	}
+}
+
+func TestModel_DetailViewShowsTheAgentsCompactions(t *testing.T) {
+	m := compactedAgentsModel(t, 96)
+	m = withUsage(t, m, "task-1", map[string]core.Compactions{
+		"agent-claude": {Total: 3, Auto: 2, Manual: 1},
+		"agent-codex":  {Total: 2},
+	})
+
+	// On a task with sub-rows, each agent's compactions are left to it.
+	require.NotContains(t, stripANSI(m.View().Content), "compacted")
+
+	m = pressKey(t, m, tea.KeyPressMsg{Code: 'j', Text: "j"})
+	require.Equal(t, "agent-claude", m.selectedAgent)
+	require.Contains(t, stripANSI(m.View().Content), "compacted  3× (2 auto, 1 manual)")
+
+	// Codex does not record what triggered a compaction.
+	m = pressKey(t, m, tea.KeyPressMsg{Code: 'j', Text: "j"})
+	require.Equal(t, "agent-codex", m.selectedAgent)
+	view := stripANSI(m.View().Content)
+	require.Contains(t, view, "compacted  2×")
+	require.NotContains(t, view, "2× (")
+
+	// A task with one agent shows that agent's compactions.
+	m = pressKey(t, m, tea.KeyPressMsg{Code: 'j', Text: "j"})
+	require.Equal(t, 1, m.selected)
+	require.Contains(t, stripANSI(m.View().Content), "compacted  1× (manual)")
+}
+
+func TestCompactionsDetailText(t *testing.T) {
+	for _, tc := range []struct {
+		compactions core.Compactions
+		want        string
+	}{
+		{core.Compactions{Total: 2}, "2×"},
+		{core.Compactions{Total: 2, Auto: 2}, "2× (auto)"},
+		{core.Compactions{Total: 1, Manual: 1}, "1× (manual)"},
+		{core.Compactions{Total: 3, Auto: 2, Manual: 1}, "3× (2 auto, 1 manual)"},
+		{core.Compactions{Total: 3, Auto: 1}, "3× (1 auto)"},
+	} {
+		require.Equal(t, tc.want, compactionsDetailText(tc.compactions), "%+v", tc.compactions)
+	}
 }
