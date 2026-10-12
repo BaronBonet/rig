@@ -55,6 +55,7 @@ func TestModel_ViewRendersTaskMetadata(t *testing.T) {
 			DisplayName: "first task",
 			BranchName:  "feat/first-task",
 			Provider:    core.ProviderCodex,
+			Model:       "gpt-6-sol",
 			CreatedAt:   time.Now().Add(-15 * time.Minute),
 		},
 	}
@@ -76,11 +77,9 @@ func TestModel_ViewRendersTaskMetadata(t *testing.T) {
 	require.Contains(t, view, "n new   r refresh   space details   x clean   q quit")
 	require.Contains(t, view, "first task")
 	require.Contains(t, view, "repo-a")
-	require.Contains(t, view, "feat/first-task")
 	require.Contains(t, view, "codex")
-	require.Contains(t, view, "WORKSPACE")
-	require.Contains(t, view, "SESSION")
 	require.Contains(t, view, "15m")
+	require.Contains(t, view, "\n"+detailGutter+"gpt-6-sol")
 }
 
 func TestModel_SpaceTogglesTaskDetailPanel(t *testing.T) {
@@ -92,6 +91,7 @@ func TestModel_SpaceTogglesTaskDetailPanel(t *testing.T) {
 			DisplayName: "first task",
 			BranchName:  "feat/first-task",
 			Provider:    core.ProviderCodex,
+			Prompt:      "first task prompt",
 		},
 	}
 
@@ -100,17 +100,17 @@ func TestModel_SpaceTogglesTaskDetailPanel(t *testing.T) {
 	next, _ := m.Update(msg)
 	got, ok := next.(model)
 	require.True(t, ok)
-	require.NotContains(t, stripANSI(got.View().Content), "WORKSPACE")
+	require.NotContains(t, stripANSI(got.View().Content), "PROMPT")
 
 	next, _ = got.Update(tea.KeyPressMsg{Code: tea.KeySpace, Text: " "})
 	shown, ok := next.(model)
 	require.True(t, ok)
-	require.Contains(t, stripANSI(shown.View().Content), "WORKSPACE")
+	require.Contains(t, stripANSI(shown.View().Content), "PROMPT")
 
 	next, _ = shown.Update(tea.KeyPressMsg{Code: tea.KeySpace, Text: " "})
 	hidden, ok := next.(model)
 	require.True(t, ok)
-	require.NotContains(t, stripANSI(hidden.View().Content), "WORKSPACE")
+	require.NotContains(t, stripANSI(hidden.View().Content), "PROMPT")
 }
 
 func TestModel_ViewRendersConfiguredVersionInHeader(t *testing.T) {
@@ -300,6 +300,7 @@ func TestModel_ViewKeepsSelectedTaskDetailsVisibleWhenRowsExceedHeight(t *testin
 			BranchName:   "feat/task-" + suffix,
 			WorktreePath: "/tmp/task-" + suffix,
 			Provider:     core.ProviderCodex,
+			Prompt:       "prompt for task " + suffix,
 		})
 	}
 
@@ -309,8 +310,7 @@ func TestModel_ViewKeepsSelectedTaskDetailsVisibleWhenRowsExceedHeight(t *testin
 	m.selected = 15
 
 	view := stripANSI(m.View().Content)
-	require.Contains(t, view, "WORKSPACE")
-	require.Contains(t, view, "feat/task-15")
+	require.Contains(t, view, "PROMPT\n"+detailGutter+"prompt for task 15")
 	require.LessOrEqual(t, len(strings.Split(view, "\n")), m.height)
 }
 
@@ -714,15 +714,15 @@ func TestModel_ViewRendersTaskActivity(t *testing.T) {
 	got = next.(model)
 
 	view := stripANSI(got.View().Content)
-	require.Contains(t, view, "INITIAL PROMPT")
-	require.Contains(t, view, "ACTIVITY")
+	require.Contains(t, view, "PROMPT")
+	require.Contains(t, view, "LATEST")
 	require.Contains(t, view, "top-level task prompt")
 	require.Contains(t, view, "restore the task preview")
 	require.Contains(t, view, "rg -n task detail")
 	require.Contains(t, view, "go test")
 	require.Contains(t, view, "./internal/adapters/handler/tui")
 	require.Contains(t, view, "Restored the task detail preview.")
-	require.Less(t, strings.Index(view, "INITIAL PROMPT"), strings.Index(view, "ACTIVITY"))
+	require.Less(t, strings.Index(view, "PROMPT"), strings.Index(view, "LATEST"))
 	require.Less(
 		t,
 		strings.Index(view, "Restored the task detail preview."),
@@ -1117,13 +1117,6 @@ func TestTaskListBlocks_PacksTasksWithoutSubRows(t *testing.T) {
 	require.Contains(t, lines[5], "third task")
 }
 
-func TestTaskStatusDetailText_NoStatusDoesNotRenderIdle(t *testing.T) {
-	statusText, _ := taskStatusDetailText(nil)
-
-	require.Contains(t, statusText, "no status")
-	require.NotContains(t, statusText, "idle")
-}
-
 func TestModel_SpinnerTurnsOnlyWhileSomethingWorks(t *testing.T) {
 	frontend := newFrontendHarness()
 	frontend.listTasks = []*core.Task{
@@ -1310,23 +1303,15 @@ func TestModel_UsageLoadedRendersTokensInSelectedTaskDetail(t *testing.T) {
 
 	got, ok := next.(model)
 	require.True(t, ok)
-	view := stripANSI(got.selectedTaskDetailView())
-	require.Contains(t, view, "TOKENS")
-	require.Contains(t, view, "total 190")
-	require.Contains(t, view, "input 130")
-	require.Contains(t, view, "output 60")
-	require.Contains(t, view, "cached 30")
-	require.Contains(t, view, "cache created 15")
-	require.Contains(t, view, "reasoning 10")
-	require.Contains(t, view, "190")
-	require.Contains(t, view, "2 sessions")
-	require.Contains(
+	got.width = 120
+	lines := detailLines(got)
+	require.Equal(
 		t,
-		view,
-		"total 190   input 130   output 60   cached 30   cache created 15   reasoning 10   2 sessions",
+		"tokens  total 190 · input 130 · output 60 · cached 30 · cache created 15 · reasoning 10 · 2 sessions",
+		lines[len(lines)-1],
 	)
-	require.Less(t, strings.Index(view, "SESSION"), strings.Index(view, "TOKENS"))
-	require.Less(t, strings.Index(view, "TOKENS"), strings.Index(view, "INITIAL PROMPT"))
+	require.Empty(t, lines[len(lines)-2])
+	require.Less(t, slices.Index(lines, "PROMPT"), len(lines)-2)
 }
 
 func TestModel_UsageLoadedErrorRendersError(t *testing.T) {
@@ -1366,65 +1351,6 @@ func TestModel_ErrorSurvivesBackgroundLoadsAndClearsOnNextKeyPress(t *testing.T)
 	got, ok = next.(model)
 	require.True(t, ok)
 	require.NoError(t, got.err)
-}
-
-func TestModel_DetailStatusUsesTaskStatusStyle(t *testing.T) {
-	status := &core.TaskStatusUpdate{
-		TaskID: "task-1",
-		Phase:  core.TaskStatusPhaseWaitingForInput,
-	}
-	m := model{
-		rows: []taskRow{{
-			task:   &core.Task{ID: "task-1", DisplayName: "first task", Provider: core.ProviderCodex},
-			status: status,
-		}},
-		width: 80,
-	}
-
-	statusText, statusStyle := taskStatusDetailText(status)
-
-	view := m.selectedTaskDetailView()
-
-	require.Contains(t, view, mutedStyle.Render("state")+"  "+statusStyle.Render(statusText))
-	require.NotContains(t, view, mutedStyle.Render("state")+"  "+primaryStyle.Render(statusText))
-}
-
-func TestTaskStatusDetailText_NamesBackgroundWorkByKind(t *testing.T) {
-	cases := []struct {
-		work   core.TaskBackgroundWork
-		detail string
-	}{
-		{
-			work:   core.TaskBackgroundWork{},
-			detail: "◐ working in background",
-		},
-		{
-			work:   core.TaskBackgroundWork{Subagents: 1},
-			detail: "◐ working in background · 1 subagent",
-		},
-		{
-			work:   core.TaskBackgroundWork{Shells: 1},
-			detail: "◐ working in background · 1 shell",
-		},
-		{
-			work:   core.TaskBackgroundWork{Subagents: 2, Monitors: 1, Shells: 1},
-			detail: "◐ working in background · 2 subagents, 1 monitor, 1 shell",
-		},
-		{
-			work:   core.TaskBackgroundWork{Subagents: 12},
-			detail: "◐ working in background · 12 subagents",
-		},
-	}
-	for _, tc := range cases {
-		status := &core.TaskStatusUpdate{
-			Phase:          core.TaskStatusPhaseWorkingInBackground,
-			BackgroundWork: tc.work,
-		}
-
-		detail, detailStyle := taskStatusDetailText(status)
-		require.Equal(t, tc.detail, detail)
-		require.Equal(t, healthyStyle.Render(detail), detailStyle.Render(detail))
-	}
 }
 
 func TestModel_StatusEnrichmentFailuresDoNotCollapseListView(t *testing.T) {
@@ -2019,7 +1945,6 @@ func TestModel_CreateTaskReloadsAuthoritativeTaskSnapshotWhenCreateResponseIsPar
 
 	view := stripANSI(reloaded.View().Content)
 	require.Contains(t, view, "verify new rig behavior")
-	require.Contains(t, view, "feat/verify-new-rig-behavior")
 	require.Contains(t, view, "testing if new rig things work")
 }
 
@@ -2663,7 +2588,7 @@ func TestModel_ListStaysUsableWhileATaskIsDeleted(t *testing.T) {
 	taskDeleted, ok := runCmd(t, cmd).(taskDeletedMsg)
 	require.True(t, ok)
 	m = asModel(t, next)
-	require.Contains(t, stripANSI(m.View().Content), iconRemoving+" cleaning up")
+	require.Contains(t, stripANSI(m.View().Content), iconRemoving+" first task")
 
 	// The task being deleted takes no action.
 	m = pressKey(t, m, tea.KeyPressMsg{Text: "x"})

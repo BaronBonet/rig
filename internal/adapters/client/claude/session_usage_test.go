@@ -136,7 +136,50 @@ func TestReadConversationUsage_ReadsTheLatestRequestsContext(t *testing.T) {
 	}})
 
 	require.NoError(t, err)
-	require.Equal(t, core.ConversationUsage{Context: &core.ContextUsage{Tokens: 52637}}, usage)
+	require.Equal(
+		t,
+		core.ConversationUsage{Context: &core.ContextUsage{Tokens: 52637}, Model: "claude-opus-5-5"},
+		usage,
+	)
+}
+
+// The model and reasoning level are the latest request's. A subagent's
+// request on the sidechain and a synthetic message say nothing about them.
+// The repository is built without New, so no context window probe starts for
+// the hook's model.
+func TestReadConversationUsage_ReadsTheLatestRequestsModel(t *testing.T) {
+	transcript := writeTranscript(t,
+		claudeRequestEntry("claude-opus-5-5", "xhigh"),
+		claudeModelCommandEntry,
+		claudeRequestEntry("claude-sonnet-5-5", "high"),
+		claudeAssistantEntry(true, "claude-haiku-5-5", 5, 30000, 90000),
+		claudeAssistantEntry(false, "<synthetic>", 0, 0, 0),
+	)
+
+	usage, err := (&repository{}).ReadConversationUsage(t.Context(), []core.TaskProviderSession{{
+		Provider:       core.ProviderClaude,
+		TranscriptPath: transcript,
+		Model:          "claude-opus-5-5[1m]",
+	}})
+
+	require.NoError(t, err)
+	require.Equal(t, "claude-sonnet-5-5", usage.Model)
+	require.Equal(t, "high", usage.ReasoningLevel)
+}
+
+// Before the agent's first request, the model is the one the conversation's
+// hooks reported, and the reasoning level is unknown.
+func TestReadConversationUsage_ReadsTheHookModelBeforeTheFirstRequest(t *testing.T) {
+	transcript := writeTranscript(t, `{"type":"user","message":{"role":"user","content":"fix the bug"}}`)
+
+	usage, err := (&repository{}).ReadConversationUsage(t.Context(), []core.TaskProviderSession{{
+		Provider:       core.ProviderClaude,
+		TranscriptPath: transcript,
+		Model:          "claude-opus-5-5[1m]",
+	}})
+
+	require.NoError(t, err)
+	require.Equal(t, core.ConversationUsage{Model: "claude-opus-5-5[1m]"}, usage)
 }
 
 // A compaction after the root agent's latest request leaves its context
@@ -152,7 +195,10 @@ func TestReadConversationUsage_LeavesTheContextUnknownAfterACompaction(t *testin
 
 	usage, err := repo.ReadConversationUsage(t.Context(), conversation)
 	require.NoError(t, err)
-	require.Equal(t, core.ConversationUsage{Compactions: core.Compactions{Total: 1, Manual: 1}}, usage)
+	require.Equal(t, core.ConversationUsage{
+		Compactions: core.Compactions{Total: 1, Manual: 1},
+		Model:       "claude-opus-5-5",
+	}, usage)
 
 	appendTranscript(t, transcript, claudeAssistantEntry(false, "claude-opus-5-5", 2, 23528, 29055)+"\n")
 	usage, err = repo.ReadConversationUsage(t.Context(), conversation)
@@ -160,6 +206,7 @@ func TestReadConversationUsage_LeavesTheContextUnknownAfterACompaction(t *testin
 	require.Equal(t, core.ConversationUsage{
 		Compactions: core.Compactions{Total: 1, Manual: 1},
 		Context:     &core.ContextUsage{Tokens: 52585},
+		Model:       "claude-opus-5-5",
 	}, usage)
 }
 
@@ -184,6 +231,48 @@ func claudeAssistantEntry(sidechain bool, model string, input int, cacheCreation
 		`,"cache_creation_input_tokens":` + strconv.Itoa(cacheCreation) +
 		`,"cache_read_input_tokens":` + strconv.Itoa(cacheRead) +
 		`,"output_tokens":455}},"type":"assistant"}`
+}
+
+// After a /model command, the model is the one the switch hook recorded until
+// the next request, whose level is unknown till then. A request that records
+// no effort leaves the level unknown too.
+func TestReadConversationUsage_FollowsAModelCommandBeforeTheNextRequest(t *testing.T) {
+	transcript := writeTranscript(t, claudeRequestEntry("claude-opus-5-5", "xhigh"), claudeModelCommandEntry)
+	conversation := []core.TaskProviderSession{{
+		Provider:       core.ProviderClaude,
+		TranscriptPath: transcript,
+		Model:          "claude-sonnet-5-5",
+	}}
+	repo := &repository{}
+
+	usage, err := repo.ReadConversationUsage(t.Context(), conversation)
+	require.NoError(t, err)
+	require.Equal(t, "claude-sonnet-5-5", usage.Model)
+	require.Empty(t, usage.ReasoningLevel)
+
+	appendTranscript(
+		t,
+		transcript,
+		strings.Replace(claudeRequestEntry("claude-sonnet-5-5", ""), `"effort":"",`, "", 1)+"\n",
+	)
+	usage, err = repo.ReadConversationUsage(t.Context(), conversation)
+	require.NoError(t, err)
+	require.Equal(t, "claude-sonnet-5-5", usage.Model)
+	require.Empty(t, usage.ReasoningLevel)
+}
+
+// claudeModelCommandEntry is the user entry Claude Code records for a /model
+// command.
+const claudeModelCommandEntry = `{"isSidechain":false,"type":"user","message":{"role":"user",` +
+	`"content":"<command-name>/model</command-name>\n            <command-message>model</command-message>\n` +
+	`            <command-args></command-args>"}}`
+
+// claudeRequestEntry is the root agent's assistant entry for one API request
+// on model at the effort level, as Claude Code records both.
+func claudeRequestEntry(model string, effort string) string {
+	return `{"isSidechain":false,"type":"assistant","effort":"` + effort + `","perTurnEffort":"` + effort +
+		`","message":{"model":"` + model + `","role":"assistant","content":[{"type":"text","text":"Done."}],` +
+		`"usage":{"input_tokens":3,"cache_read_input_tokens":20000,"output_tokens":10}}}`
 }
 
 func appendTranscript(t *testing.T, path string, content string) {

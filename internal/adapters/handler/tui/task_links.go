@@ -12,7 +12,7 @@ const (
 	// spawned when it counts the rest.
 	maxSpawnedTasks = 5
 	// detailValueIndent lines a detail panel value up with the values after
-	// the workspace column's labels, such as repo and path.
+	// its labels, such as the parent task after from.
 	detailValueIndent = "       "
 )
 
@@ -44,8 +44,8 @@ func (m model) childRows(task *core.Task) []taskRow {
 	return children
 }
 
-// taskLinkDetailLines describes a task's links in the detail panel's workspace
-// column, within width columns: the parent task it came from, and the child
+// taskLinkDetailLines describes a task's links in the detail panel's linked
+// tasks section, within width columns: the parent task it came from, and the child
 // tasks it spawned, each led by the status symbol its row shows.
 func (m model) taskLinkDetailLines(task *core.Task, width int) []string {
 	var lines []string

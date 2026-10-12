@@ -137,8 +137,10 @@ type initializeResponse struct {
 }
 
 type initializeModel struct {
-	// Value is what claude --model takes.
+	// Value is what claude --model takes, and ResolvedModel the model ID it
+	// stands for, as transcripts record it.
 	Value                 string   `json:"value"`
+	ResolvedModel         string   `json:"resolvedModel"`
 	DisplayName           string   `json:"displayName"`
 	SupportsEffort        bool     `json:"supportsEffort"`
 	SupportedEffortLevels []string `json:"supportedEffortLevels"`
@@ -237,5 +239,10 @@ func (m initializeModel) providerModel() (core.ProviderModel, bool) {
 		}
 	}
 
-	return core.ProviderModel{ID: id, DisplayName: displayName, ReasoningLevels: levels}, true
+	return core.ProviderModel{
+		ID:              id,
+		ResolvedID:      strings.TrimSpace(m.ResolvedModel),
+		DisplayName:     displayName,
+		ReasoningLevels: levels,
+	}, true
 }

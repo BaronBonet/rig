@@ -65,6 +65,9 @@ type codexTranscriptEntry struct {
 	compactions int
 	// context is the latest token_count's context usage.
 	context *core.ContextUsage
+	// turnContext is the latest default-mode turn's model and reasoning
+	// effort.
+	turnContext codexTurnContext
 }
 
 type codexTranscriptSnapshot struct {
@@ -74,6 +77,7 @@ type codexTranscriptSnapshot struct {
 	turn        codexTranscriptTurn
 	compactions int
 	context     *core.ContextUsage
+	turnContext codexTurnContext
 }
 
 // codexTranscriptTurn is a transcript's latest turn-lifecycle record, in file
@@ -228,6 +232,7 @@ func (i *codexTranscriptIndex) refreshLocked(ctx context.Context, entry *codexTr
 	turn := entry.turn
 	compactions := entry.compactions
 	contextUsage := cloneContextUsage(entry.context)
+	turnContext := entry.turnContext
 	if rebuild {
 		offset = 0
 		trailing = nil
@@ -237,6 +242,7 @@ func (i *codexTranscriptIndex) refreshLocked(ctx context.Context, entry *codexTr
 		turn = codexTranscriptTurn{}
 		compactions = 0
 		contextUsage = nil
+		turnContext = codexTurnContext{}
 	}
 
 	readOffset := offset + int64(len(trailing))
@@ -267,6 +273,7 @@ func (i *codexTranscriptIndex) refreshLocked(ctx context.Context, entry *codexTr
 			&turn,
 			&compactions,
 			&contextUsage,
+			&turnContext,
 		)
 		consumed = lineEnd + 1
 	}
@@ -282,6 +289,7 @@ func (i *codexTranscriptIndex) refreshLocked(ctx context.Context, entry *codexTr
 	entry.turn = turn
 	entry.compactions = compactions
 	entry.context = contextUsage
+	entry.turnContext = turnContext
 	if rebuild {
 		i.metrics.rebuilds.Add(1)
 	}
@@ -323,6 +331,7 @@ func parseCodexTranscriptRecord(
 	turn *codexTranscriptTurn,
 	compactions *int,
 	contextUsage **core.ContextUsage,
+	turnContext *codexTurnContext,
 ) {
 	var envelope codexTranscriptEnvelope
 	if err := jsonUnmarshalTranscriptLine(line, &envelope); err != nil {
@@ -349,6 +358,9 @@ func parseCodexTranscriptRecord(
 	}
 	if candidate, ok := codexTranscriptEnvelopeTurn(envelope); ok {
 		*turn = candidate
+	}
+	if candidate, ok := envelopeTurnContext(envelope); ok {
+		*turnContext = candidate
 	}
 }
 
@@ -444,6 +456,7 @@ func snapshotTranscriptEntry(entry *codexTranscriptEntry) codexTranscriptSnapsho
 		turn:        entry.turn,
 		compactions: entry.compactions,
 		context:     cloneContextUsage(entry.context),
+		turnContext: entry.turnContext,
 	}
 }
 

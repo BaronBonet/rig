@@ -23,9 +23,12 @@ func (r *repository) ReadSessionTokenUsage(
 	return snapshot.usage, err
 }
 
-// ReadConversationUsage reads the compactions and context usage in the root
-// agent's rollout, as subagents have contexts of their own. Codex does not
-// record what triggered a compaction.
+// ReadConversationUsage reads the compactions, context usage and model in the
+// root agent's rollout, as subagents have contexts of their own. Codex does
+// not record what triggered a compaction. The model and reasoning level are
+// the latest default-mode turn's, as Reconnect resumes on them, so they follow
+// a /model change once the next turn starts. Before the first turn, the model
+// is the one the root agent's hooks reported.
 func (r *repository) ReadConversationUsage(
 	ctx context.Context,
 	conversation []core.TaskProviderSession,
@@ -38,10 +41,16 @@ func (r *repository) ReadConversationUsage(
 	if err != nil {
 		return core.ConversationUsage{}, err
 	}
-	return core.ConversationUsage{
-		Compactions: core.Compactions{Total: snapshot.compactions},
-		Context:     snapshot.context,
-	}, nil
+	usage := core.ConversationUsage{
+		Compactions:    core.Compactions{Total: snapshot.compactions},
+		Context:        snapshot.context,
+		Model:          snapshot.turnContext.Model,
+		ReasoningLevel: snapshot.turnContext.Effort,
+	}
+	if usage.Model == "" {
+		usage.Model = strings.TrimSpace(root.Model)
+	}
+	return usage, nil
 }
 
 type codexTranscriptEnvelope struct {

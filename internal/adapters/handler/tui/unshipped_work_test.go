@@ -102,22 +102,22 @@ func TestUnshippedWorkDetailLine_SaysWhatNoPullRequestContains(t *testing.T) {
 	for name, tc := range cases {
 		lines := unshippedWorkDetailLines(tc.work, 80)
 
-		require.Equal(t, []string{detailValueIndent + primaryStyle.Render(tc.line)}, lines, name)
+		require.Equal(t, []string{primaryStyle.Render(tc.line)}, lines, name)
 	}
 }
 
-// Words too wide for the column wrap, lined up after the +, rather than being
+// Words too wide for the panel wrap, lined up after the +, rather than being
 // cut short.
-func TestUnshippedWorkDetailLines_WrapToTheColumn(t *testing.T) {
+func TestUnshippedWorkDetailLines_WrapToTheWidth(t *testing.T) {
 	for _, width := range []int{42, 54} {
 		lines := unshippedWorkDetailLines(core.UnshippedWork{Commits: 12, UncommittedChanges: true}, width)
 
 		require.Greater(t, len(lines), 1, "width %d", width)
-		require.True(t, strings.HasPrefix(stripANSI(lines[0]), detailValueIndent+"+ 12 commits"), "width %d", width)
+		require.True(t, strings.HasPrefix(stripANSI(lines[0]), "+ 12 commits"), "width %d", width)
 		var words []string
 		for index, line := range lines {
 			require.LessOrEqual(t, lipgloss.Width(line), width, "width %d", width)
-			text := strings.TrimPrefix(stripANSI(line), detailValueIndent)
+			text := stripANSI(line)
 			if index == 0 {
 				text = strings.TrimPrefix(text, "+ ")
 			} else {
@@ -136,22 +136,24 @@ func TestModel_DetailPanelSaysWhatNoPullRequestContainsUnderThePullRequests(t *t
 	m.rows[0].pullRequests = manyPullRequests(6)
 	m.rows[0].unshippedWork = core.UnshippedWork{Commits: 2, UncommittedChanges: true}
 
-	column := workspaceColumn(t, m)
-
 	require.Equal(t, []string{
-		"WORKSPACE",
-		"repo   repo",
-		"pr     3 earlier",
-		"       " + iconDone + " #4    merged  feat/part-4",
-		"       " + iconDone + " #5    merged  feat/part-5",
-		"       " + iconDone + " #6    merged  feat/part-6",
-		"       " + iconStatusActive + " #1234 open    feat/now",
-		"       + 2 commits and uncommitted changes",
-		"         not in a pull request",
-	}, column)
+		"3 earlier",
+		iconDone + " #4    merged  feat/part-4",
+		iconDone + " #5    merged  feat/part-5",
+		iconDone + " #6    merged  feat/part-6",
+		iconStatusActive + " #1234 open    feat/now",
+		"+ 2 commits and uncommitted changes not in a pull request",
+	}, detailSection(m, "PULL REQUESTS"))
+
+	// Too wide for a narrower panel, the words wrap under the pull requests.
+	m.width = 50
+	require.Equal(t, []string{
+		"+ 2 commits and uncommitted changes",
+		"  not in a pull request",
+	}, detailSection(m, "PULL REQUESTS")[5:])
 
 	m.rows[0].unshippedWork = core.UnshippedWork{}
-	require.NotContains(t, strings.Join(workspaceColumn(t, m), "\n"), "not in a pull request")
+	require.NotContains(t, strings.Join(detailSection(m, "PULL REQUESTS"), "\n"), "not in a pull request")
 }
 
 // The unshipped work loaded last stays when a refresh fails or the task list

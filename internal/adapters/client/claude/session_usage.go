@@ -71,12 +71,14 @@ func (r *repository) ReadSessionTokenUsage(
 }
 
 // compactBoundaryMarker is the subtype of the system entry Claude Code
-// records where it compacted the conversation, and assistantEntryMarker the
-// type of the entry that records an API request's usage. Lines with neither
+// records where it compacted the conversation, assistantEntryMarker the type
+// of the entry that records an API request's usage, and modelCommandMarker
+// the start of the user entry that records a /model command. Lines with none
 // are skipped undecoded.
 var (
 	compactBoundaryMarker = []byte(`"compact_boundary"`)
 	assistantEntryMarker  = []byte(`"type":"assistant"`)
+	modelCommandMarker    = []byte(`"content":"<command-name>/model</command-name>`)
 )
 
 // ReadConversationUsage reads, in one pass over a conversation's transcript,
@@ -92,6 +94,11 @@ var (
 // context window cache holds, and 0 until Claude has reported it. The window
 // is looked up even while the context is unknown, so the first read after the
 // conversation starts sets Claude probing before the agent's first request.
+//
+// The model and reasoning level are the latest request's. Before the first
+// request, and after a /model command until the next, the model is the one
+// the conversation's hooks reported, which a switch updates at once, and the
+// reasoning level is unknown.
 func (r *repository) ReadConversationUsage(
 	ctx context.Context,
 	conversation []core.TaskProviderSession,
@@ -102,9 +109,10 @@ func (r *repository) ReadConversationUsage(
 	}
 	window := r.contextWindows.lookup(ctx, session.Model)
 
-	var usage core.ConversationUsage
+	usage := core.ConversationUsage{Model: session.Model}
 	err := scanTranscriptLines(ctx, session.TranscriptPath, func(line []byte) {
-		if !bytes.Contains(line, compactBoundaryMarker) && !bytes.Contains(line, assistantEntryMarker) {
+		if !bytes.Contains(line, compactBoundaryMarker) && !bytes.Contains(line, assistantEntryMarker) &&
+			!bytes.Contains(line, modelCommandMarker) {
 			return
 		}
 		var entry claudeConversationUsageLine
@@ -122,15 +130,21 @@ func (r *repository) ReadConversationUsage(
 				usage.Compactions.Manual++
 			}
 			usage.Context = nil
+		case entry.Type == "user" && bytes.Contains(line, modelCommandMarker):
+			usage.Model, usage.ReasoningLevel = session.Model, ""
 		case entry.Type == "assistant" && entry.Message.Usage != nil:
 			// Output tokens are left out, as the status line leaves them. A
 			// synthetic message, such as an API error, reports no usage and
-			// says nothing about the context.
+			// says nothing about the context, nor the model: its model is
+			// "<synthetic>".
 			requestUsage := entry.Message.Usage
 			if tokens := requestUsage.InputTokens +
 				requestUsage.CacheCreationInputTokens +
 				requestUsage.CacheReadInputTokens; tokens > 0 {
 				usage.Context = &core.ContextUsage{Tokens: tokens}
+				if model := strings.TrimSpace(entry.Message.Model); model != "" {
+					usage.Model, usage.ReasoningLevel = model, strings.TrimSpace(entry.Effort)
+				}
 			}
 		}
 	})
@@ -150,7 +164,10 @@ type claudeConversationUsageLine struct {
 	Type        string `json:"type"`
 	Subtype     string `json:"subtype"`
 	IsSidechain bool   `json:"isSidechain"`
-	Message     struct {
+	// Effort is the reasoning level the request ran on.
+	Effort  string `json:"effort"`
+	Message struct {
+		Model string       `json:"model"`
 		Usage *claudeUsage `json:"usage"`
 	} `json:"message"`
 	CompactMetadata struct {

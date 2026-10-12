@@ -903,27 +903,36 @@ func launchChoiceTasksModel(t *testing.T, frontend *frontendHarness) model {
 func TestModel_DetailPanelShowsTheTasksLaunchModel(t *testing.T) {
 	m := launchChoiceTasksModel(t, launchChoiceFrontend(nil))
 
-	require.Contains(t, viewLineContaining(t, m, "model  "), "model  GPT-6-Sol · high")
+	require.Equal(t, "GPT-6-Sol · high", detailLines(m)[0])
 
 	// A model the list lacks reads by its ID.
 	m = pressKey(t, m, tea.KeyPressMsg{Code: 'j', Text: "j"})
-	require.True(t, strings.HasSuffix(viewLineContaining(t, m, "model  "), "model  gpt-4-retired"))
+	require.Equal(t, "gpt-4-retired", detailLines(m)[0])
 
-	// A task without a Launch choice ran the CLI's default.
+	// A task without a Launch choice ran the CLI's default, which says
+	// nothing, so its panel has nothing to show.
 	m.rows[1].task.Model = ""
-	require.True(t, strings.HasSuffix(viewLineContaining(t, m, "model  "), "model  default"))
+	require.Empty(t, stripANSI(m.selectedTaskDetailView()))
 }
 
-func TestModel_DetailPanelLeavesTheModelLineOutForAnAgentSubRow(t *testing.T) {
-	frontend := launchChoiceFrontend(nil)
-	m := agentsTaskModel(frontend)
-	m.rows[0].task.Model = "gpt-6-sol"
+// With two or more agents, the task row leaves the model to each agent's
+// sub-row, which names the model that agent runs on, and nothing until that
+// is known: the task's Launch choice need not be what it runs.
+func TestModel_DetailPanelNamesEachSubRowsOwnModel(t *testing.T) {
+	m := launchChoiceTasksModel(t, launchChoiceFrontend(nil))
 	m = withAgentSessions(t, m, "task-1", claudeAgent(), codexAgent())
-	require.Contains(t, stripANSI(m.View().Content), "model  gpt-6-sol")
+	m = withTaskUsage(t, m, "task-1", &core.TaskUsage{
+		AgentModels: map[string]core.AgentModel{"agent-codex": {Model: "gpt-6-mini", ReasoningLevel: "minimal"}},
+	})
+	require.NotContains(t, stripANSI(m.selectedTaskDetailView()), "GPT-6")
 
 	m = pressKey(t, m, tea.KeyPressMsg{Code: 'j', Text: "j"})
 	require.Equal(t, "agent-claude", m.selectedAgent)
-	require.NotContains(t, stripANSI(m.View().Content), "model  ")
+	require.Equal(t, "window 0 (task) · pane 0", detailLines(m)[0])
+
+	m = pressKey(t, m, tea.KeyPressMsg{Code: 'j', Text: "j"})
+	require.Equal(t, "agent-codex", m.selectedAgent)
+	require.Equal(t, "GPT-6-Mini · minimal    window 2 (review) · pane 1", detailLines(m)[0])
 }
 
 func TestModel_LaunchChoiceFitsNarrowTerminals(t *testing.T) {
@@ -946,15 +955,9 @@ func TestModel_LaunchChoiceFitsNarrowTerminals(t *testing.T) {
 			require.Equal(t, []string{"codex · tab", "GPT-6-Sol · ctrl+o", "medium · ctrl+r"}, choiceRows(t, m))
 		}
 
-		// Below about 55 columns the panel's column headers overflow anyway.
-		if width < 60 {
-			continue
-		}
 		browse := loaded
 		browse.width = width
-		view := browse.View().Content
-		panel := view[strings.Index(view, "WORKSPACE"):]
-		for _, line := range strings.Split(panel, "\n") {
+		for _, line := range strings.Split(browse.selectedTaskDetailView(), "\n") {
 			require.LessOrEqual(t, lipgloss.Width(line), width, "panel at %d: %q", width, stripANSI(line))
 		}
 	}

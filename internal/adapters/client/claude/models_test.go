@@ -109,6 +109,7 @@ func TestRepositoryListModels_MapsTheRecordedModelsWithoutTheDefaultEntry(t *tes
 	}, ids)
 	require.Equal(t, core.ProviderModel{
 		ID:              "opus",
+		ResolvedID:      "claude-opus-5-5",
 		DisplayName:     "Opus 5.5",
 		ReasoningLevels: []string{"low", "medium", "high", "xhigh", "max"},
 	}, models[0])

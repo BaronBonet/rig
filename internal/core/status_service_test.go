@@ -184,11 +184,11 @@ func TestTaskStatusService_GetTaskUsageSumsLatestTranscriptPerProviderSession(t 
 	}, svc.providerRepo.tokenUsageCalls)
 }
 
-// Each open agent session's compactions and context usage come from its
-// current conversation alone: an earlier conversation it cleared and an ended
-// agent session's conversation do not count, an agent that never compacted
-// has no compactions, and one whose transcript does not record its context
-// has no context usage.
+// Each open agent session's compactions, context usage and model come from
+// its current conversation alone: an earlier conversation it cleared and an
+// ended agent session's conversation do not count, an agent that never
+// compacted has no compactions, and one whose transcript does not record its
+// context or model has no context usage or model.
 func TestTaskStatusService_GetTaskUsageReadsEachOpenAgentSessionsConversation(t *testing.T) {
 	svc := newTestTaskService(t)
 	observedAt := time.Date(2026, time.April, 25, 9, 0, 0, 0, time.UTC)
@@ -222,12 +222,18 @@ func TestTaskStatusService_GetTaskUsageReadsEachOpenAgentSessionsConversation(t 
 		},
 	}
 	svc.providerRepo.conversationUsageBySession = map[string]ConversationUsage{
-		"cleared": {Compactions: Compactions{Total: 4}, Context: &ContextUsage{Tokens: 1000, Window: 258400}},
-		"current": {
-			Compactions: Compactions{Total: 3, Auto: 2, Manual: 1},
-			Context:     &ContextUsage{Tokens: 42000, Window: 258400},
+		"cleared": {
+			Compactions: Compactions{Total: 4},
+			Context:     &ContextUsage{Tokens: 1000, Window: 258400},
+			Model:       "gpt-6-luna",
 		},
-		"fresh": {Context: &ContextUsage{Tokens: 9000}},
+		"current": {
+			Compactions:    Compactions{Total: 3, Auto: 2, Manual: 1},
+			Context:        &ContextUsage{Tokens: 42000, Window: 258400},
+			Model:          "gpt-6-astra",
+			ReasoningLevel: "medium",
+		},
+		"fresh": {Context: &ContextUsage{Tokens: 9000}, Model: "gpt-6-luna"},
 		"ended": {Compactions: Compactions{Total: 5}, Context: &ContextUsage{Tokens: 2000, Window: 258400}},
 	}
 
@@ -241,6 +247,10 @@ func TestTaskStatusService_GetTaskUsageReadsEachOpenAgentSessionsConversation(t 
 		AgentContext: map[string]ContextUsage{
 			"compacted":       {Tokens: 42000, Window: 258400},
 			"never-compacted": {Tokens: 9000},
+		},
+		AgentModels: map[string]AgentModel{
+			"compacted":       {Model: "gpt-6-astra", ReasoningLevel: "medium"},
+			"never-compacted": {Model: "gpt-6-luna"},
 		},
 	}, usage)
 	require.Equal(t, [][]TaskProviderSession{
@@ -271,7 +281,30 @@ func TestTaskStatusService_GetTaskUsageReturnsContextUsageAlone(t *testing.T) {
 	require.Equal(t, &TaskUsage{AgentContext: map[string]ContextUsage{"agent": {Tokens: 20437}}}, usage)
 }
 
-func TestTaskStatusService_GetTaskUsageIsNilWithoutTokensCompactionsOrContext(t *testing.T) {
+// An agent's model is known from its hooks before its transcript records
+// anything else.
+func TestTaskStatusService_GetTaskUsageReturnsAModelAlone(t *testing.T) {
+	svc := newTestTaskService(t)
+	svc.taskRepo.providerSessionsByTask["task-123"] = []TaskProviderSession{{
+		TaskID:            "task-123",
+		Provider:          ProviderClaude,
+		ProviderSessionID: "sess",
+		TranscriptPath:    "/tmp/sess.jsonl",
+	}}
+	svc.taskRepo.agentSessions = []AgentSession{
+		{ID: "agent", TaskID: "task-123", Provider: ProviderClaude, ProviderSessionID: "sess"},
+	}
+	svc.claudeRepo.conversationUsageBySession = map[string]ConversationUsage{
+		"sess": {Model: "claude-opus-5-5[1m]"},
+	}
+
+	usage, err := svc.service.GetTaskUsage(t.Context(), "task-123")
+
+	require.NoError(t, err)
+	require.Equal(t, &TaskUsage{AgentModels: map[string]AgentModel{"agent": {Model: "claude-opus-5-5[1m]"}}}, usage)
+}
+
+func TestTaskStatusService_GetTaskUsageIsNilWithoutTokensCompactionsContextOrModel(t *testing.T) {
 	svc := newTestTaskService(t)
 	svc.taskRepo.providerSessionsByTask["task-123"] = []TaskProviderSession{{
 		TaskID:            "task-123",

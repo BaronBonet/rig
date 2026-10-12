@@ -533,7 +533,8 @@ type ProviderClient interface {
 	// provider transcript.
 	ReadSessionTokenUsage(ctx context.Context, transcriptPath string) (*SessionTokenUsage, error)
 	// ReadConversationUsage reads how many times the root agent's context was
-	// compacted in one conversation, and how full it is now. A conversation
+	// compacted in one conversation, how full it is now, and the model and
+	// reasoning level the root agent runs on. A conversation
 	// is the Provider session history of one Provider session ID, as
 	// RecoverAgentSessionStatus takes it.
 	ReadConversationUsage(ctx context.Context, conversation []TaskProviderSession) (ConversationUsage, error)

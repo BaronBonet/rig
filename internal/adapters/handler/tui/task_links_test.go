@@ -10,7 +10,6 @@ import (
 
 	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
-	"github.com/charmbracelet/x/ansi"
 	"github.com/stretchr/testify/require"
 )
 
@@ -70,27 +69,6 @@ func selectTask(t *testing.T, m model, id string) model {
 	}
 	t.Fatalf("no row for task %q", id)
 	return m
-}
-
-// workspaceColumn returns the detail panel's workspace column, one entry per
-// line without styling, down to its last line.
-func workspaceColumn(t *testing.T, m model) []string {
-	t.Helper()
-	view := stripANSI(m.View().Content)
-	start := strings.Index(view, "   WORKSPACE")
-	require.GreaterOrEqual(t, start, 0, "no detail panel in %q", view)
-	panel := strings.Split(view[start:], "\n")
-	end := statusColumn(t, panel[0], "SESSION") - len("   ")
-
-	var column []string
-	for _, line := range panel {
-		cell := strings.TrimRight(ansi.Cut(line, len("   "), end), " ")
-		if cell == "" {
-			break
-		}
-		column = append(column, cell)
-	}
-	return column
 }
 
 func TestModel_ChildTaskRowCarriesTheLinkMarker(t *testing.T) {
@@ -245,32 +223,26 @@ func TestModel_DetailViewNamesAChildsParentTask(t *testing.T) {
 	m := linkedTasksModel()
 
 	for _, id := range []string{"frontend-ui", "backend-docs"} {
-		column := workspaceColumn(t, selectTask(t, m, id))
-		require.Equal(t, "from   "+backendTaskName, column[len(column)-1], id)
-		require.NotContains(t, column, "spawned", id)
+		require.Equal(t, []string{"from   " + backendTaskName}, detailSection(selectTask(t, m, id), "LINKED TASKS"), id)
 	}
 
-	// A task whose parent is gone, or that has none, names no parent.
+	// A task whose parent is gone, or that has none, has no linked tasks.
 	for _, id := range []string{"orphan", "unlinked"} {
-		column := strings.Join(workspaceColumn(t, selectTask(t, m, id)), "\n")
-		require.NotContains(t, column, "from", id)
-		require.NotContains(t, column, "spawned", id)
+		require.Nil(t, detailSection(selectTask(t, m, id), "LINKED TASKS"), id)
 	}
 }
 
-func TestModel_DetailViewTruncatesLongLinkedNamesToItsColumn(t *testing.T) {
+func TestModel_DetailViewTruncatesLongLinkedNamesToThePanel(t *testing.T) {
 	m := linkedTasksModel()
 	// backend-api and frontend-ui, the first and fourth rows, get long names.
 	m.rows[0].task.DisplayName = strings.Repeat("Backend: add the orders endpoint ", 5)
 	m.rows[3].task.DisplayName = strings.Repeat("Frontend: call the orders endpoint ", 5)
 
-	// A long parent name ends at the column's edge, and the session column
-	// beside it keeps its place.
+	// A long parent name ends at the panel's right margin.
 	child := selectTask(t, m, "frontend-ui")
 	fromLine := viewLineContaining(t, child, "from   ")
-	require.Contains(t, fromLine, "…")
-	sessionColumn := statusColumn(t, viewLineContaining(t, child, "WORKSPACE"), "SESSION")
-	require.Equal(t, sessionColumn, statusColumn(t, fromLine, "provider"))
+	require.True(t, strings.HasSuffix(fromLine, "…"), fromLine)
+	require.Equal(t, child.totalWidth()-len(detailGutter), lipgloss.Width(fromLine))
 
 	// So does a long child name in the spawned list.
 	childLine := strings.TrimRight(
@@ -278,7 +250,7 @@ func TestModel_DetailViewTruncatesLongLinkedNamesToItsColumn(t *testing.T) {
 		" ",
 	)
 	require.True(t, strings.HasSuffix(childLine, "…"), childLine)
-	require.Equal(t, sessionColumn-len("   "), lipgloss.Width(childLine))
+	require.Equal(t, child.totalWidth()-len(detailGutter), lipgloss.Width(childLine))
 }
 
 func TestModel_DetailViewShowsBothLinksOfATaskInAChain(t *testing.T) {
@@ -292,12 +264,11 @@ func TestModel_DetailViewShowsBothLinksOfATaskInAChain(t *testing.T) {
 	m.width = 100
 
 	// The middle task came from one task and spawned another.
-	column := workspaceColumn(t, selectTask(t, m, "task-b"))
 	require.Equal(t, []string{
 		"from   task a",
 		"spawned",
 		detailValueIndent + iconStatusNone + " task c",
-	}, column[len(column)-3:])
+	}, detailSection(selectTask(t, m, "task-b"), "LINKED TASKS"))
 	require.Contains(t, rowContent(viewLineContaining(t, m, "task b")), iconChildTask+" task b")
 }
 
@@ -307,14 +278,11 @@ func TestModel_DetailViewListsTheTasksAParentSpawned(t *testing.T) {
 	m = selectTask(t, m, "backend-api")
 
 	// Each child shows the symbol its row leads with, in list order.
-	column := workspaceColumn(t, m)
-	spawned := column[len(column)-3:]
 	require.Equal(t, []string{
 		"spawned",
 		detailValueIndent + iconFailed + " " + docsTaskName,
 		detailValueIndent + iconStatusNeedsInput + " " + frontendTaskName,
-	}, spawned)
-	require.NotContains(t, strings.Join(column, "\n"), "from")
+	}, detailSection(m, "LINKED TASKS"))
 
 	view := m.View().Content
 	require.Contains(t, view, detailValueIndent+errorStyle.Render(iconFailed)+" ")
@@ -338,8 +306,8 @@ func spawnedListOf(t *testing.T, count int) []string {
 	m := newLoadedModel(frontend)
 	m.width = 100
 
-	column := workspaceColumn(t, m)
-	return column[slices.Index(column, "spawned")+1:]
+	section := detailSection(m, "LINKED TASKS")
+	return section[slices.Index(section, "spawned")+1:]
 }
 
 func childTaskLines(count int) []string {

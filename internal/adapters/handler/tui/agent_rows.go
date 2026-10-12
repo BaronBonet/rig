@@ -107,19 +107,17 @@ func (m *model) clampAgentSelection() {
 	}
 }
 
-// agentSessionStatusUpdate presents an agent session's status in the shape
-// the task status labels take, so a sub-row shows the same labels.
+// agentSessionStatusUpdate presents an agent session's status in the shape a
+// task's status takes, so a sub-row shows the same symbols.
 func agentSessionStatusUpdate(session core.LiveAgentSession) *core.TaskStatusUpdate {
 	phase := session.Status.Phase
 	if phase == "" {
 		phase = core.TaskStatusPhaseStarting
 	}
 	return &core.TaskStatusUpdate{
-		ObservedAt:     session.Status.ObservedAt,
-		RawEventName:   session.Status.RawEventName,
-		Provider:       session.Provider,
-		Phase:          phase,
-		BackgroundWork: session.Status.BackgroundWork,
+		ObservedAt: session.Status.ObservedAt,
+		Provider:   session.Provider,
+		Phase:      phase,
 	}
 }
 
@@ -305,6 +303,16 @@ func taskRowContext(row taskRow) *core.ContextUsage {
 	return agentContext(row, row.status.AgentSessions[0].ID)
 }
 
+// agentModel is the model and reasoning level an agent session runs on, as
+// its task's usage reports them, and whether the usage reports them.
+func agentModel(row taskRow, agentSessionID string) (core.AgentModel, bool) {
+	if row.usage == nil {
+		return core.AgentModel{}, false
+	}
+	running, ok := row.usage.AgentModels[agentSessionID]
+	return running, ok
+}
+
 // contextPercent is how full a context window is, in whole percent rounded
 // down. It is capped at 100, as Codex can count more tokens than its window
 // holds. ok is false when the context or its window is unknown.
@@ -323,6 +331,21 @@ func renderContextCell(contextUsage *core.ContextUsage, style lipgloss.Style) st
 		return strings.Repeat(" ", colWidthContext)
 	}
 	return " " + padLeftVisible(style.Render(strconv.Itoa(percent)+"%"), colWidthContext-2) + " "
+}
+
+// contextStyle colors how full a context window is: plain while it has room,
+// amber as it nears compaction, which may need the user, and red when nearly
+// full.
+func contextStyle(contextUsage *core.ContextUsage) lipgloss.Style {
+	percent, ok := contextPercent(contextUsage)
+	switch {
+	case !ok || percent < 70:
+		return primaryStyle
+	case percent < 90:
+		return warningStyle
+	default:
+		return errorStyle
+	}
 }
 
 // contextDetailText describes an agent's context for the detail panel: how
@@ -380,33 +403,6 @@ func compactionsDetailText(compactions core.Compactions) string {
 // column.
 func renderProviderCell(name string) string {
 	return providerStyle(name).Render(padRightVisible(name, colWidthAgent))
-}
-
-// renderProviderNames renders providers each in its color, joined by "+".
-func renderProviderNames(names []string) string {
-	parts := make([]string, 0, len(names))
-	for _, name := range names {
-		parts = append(parts, providerStyle(name).Render(name))
-	}
-	return strings.Join(parts, mutedStyle.Render("+"))
-}
-
-// detailFieldLines renders a labelled detail panel field within width
-// columns. A value too wide for one line continues after each " · " on lines
-// indented under the value, and a part still too wide is truncated.
-func detailFieldLines(label string, gap string, value string, style lipgloss.Style, width int) []string {
-	prefix := mutedStyle.Render(label) + gap
-	if width <= 0 || lipgloss.Width(label+gap+value) <= width {
-		return []string{prefix + style.Render(value)}
-	}
-
-	indent := strings.Repeat(" ", lipgloss.Width(label+gap))
-	parts := strings.Split(value, " · ")
-	lines := []string{fitDetailLine(prefix+style.Render(parts[0]), width)}
-	for _, part := range parts[1:] {
-		lines = append(lines, fitDetailLine(indent+style.Render(part), width))
-	}
-	return lines
 }
 
 // fitDetailLine truncates a detail panel line to width columns, when the

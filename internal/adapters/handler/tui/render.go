@@ -64,6 +64,16 @@ const (
 	// Past it, one line counts the earlier pull requests and the newest
 	// follow.
 	maxPullRequestDetailLines = 5
+	// detailGutter indents the detail panel from the screen's left edge, and
+	// the panel leaves as wide a margin at its right.
+	detailGutter = "   "
+	// detailSummaryGap separates the parts of the detail panel's summary line.
+	detailSummaryGap = "    "
+	// detailLabelGap separates a detail panel label, such as tokens, from its
+	// value.
+	detailLabelGap = "  "
+	// latestUserLabel leads the user's last prompt in the detail panel.
+	latestUserLabel = "you"
 
 	taskListScrollbarTrack = "│"
 	taskListScrollbarThumb = "█"
@@ -142,11 +152,30 @@ func (m model) constrainedListSections(totalWidth int, totalHeight int, baseLine
 			maxDetailLines = 0
 		}
 		if len(detailSection) > maxDetailLines {
-			detailSection = detailSection[:maxDetailLines]
+			detailSection = withoutDanglingEnd(detailSection[:maxDetailLines])
 		}
 	}
 
 	return createSection, detailSection, totalHeight - baseLineCount - len(detailSection) - len(createSection)
+}
+
+// withoutDanglingEnd drops what a cut can leave at the end of the detail
+// panel with nothing under it: blank lines, and a section's header.
+func withoutDanglingEnd(lines []string) []string {
+	for len(lines) > 0 && lines[len(lines)-1] == "" {
+		lines = lines[:len(lines)-1]
+	}
+	if n := len(lines); n >= 2 && lines[n-2] == "" && isDetailHeader(lines[n-1]) {
+		lines = lines[:n-2]
+	}
+	return lines
+}
+
+// isDetailHeader reports whether a detail panel line is a section's header,
+// the only lines in capitals: the tokens line also follows a blank line.
+func isDetailHeader(line string) bool {
+	text := strings.TrimSpace(ansi.Strip(line))
+	return text != "" && text == strings.ToUpper(text) && text != strings.ToLower(text)
 }
 
 func (m model) taskListRowBudget(totalWidth int, totalHeight int) int {
@@ -587,7 +616,7 @@ func (m model) taskRowSymbol(row taskRow) (string, lipgloss.Style) {
 // statusSymbol is the symbol a task or agent row shows for its status: a
 // spinner frame while it works, and its status symbol otherwise.
 func (m model) statusSymbol(update *core.TaskStatusUpdate) (string, lipgloss.Style) {
-	symbol, _, style := taskStatusParts(update)
+	symbol, style := taskStatusSymbol(update)
 	if update != nil && update.Phase == core.TaskStatusPhaseWorking {
 		symbol = spinnerFrames[m.spinnerFrame%len(spinnerFrames)]
 	}
@@ -598,6 +627,10 @@ func needsInput(update *core.TaskStatusUpdate) bool {
 	return update != nil && update.Phase == core.TaskStatusPhaseWaitingForInput
 }
 
+// selectedTaskDetailView describes the selected task, or the agent of the
+// selected sub-row, full width: a summary line, then a section each for what
+// it has of pull requests, linked tasks, its prompt and its latest exchange,
+// and its token usage last.
 func (m model) selectedTaskDetailView() string {
 	if m.detailsHidden {
 		return ""
@@ -608,128 +641,43 @@ func (m model) selectedTaskDetailView() string {
 	}
 
 	task := row.task
-	totalWidth := m.totalWidth()
-	detailColWidth := totalWidth * 45 / 100
-	if detailColWidth < 42 {
-		detailColWidth = 42
-	}
-
-	workspaceLines := []string{
-		headerLabelStyle.Render("WORKSPACE"),
-	}
-	if strings.TrimSpace(task.BranchName) != "" {
-		workspaceLines = append(
-			workspaceLines,
-			mutedStyle.Render("branch")+" "+primaryStyle.Render(task.BranchName),
-		)
-	}
-	if strings.TrimSpace(task.RepoName) != "" {
-		workspaceLines = append(
-			workspaceLines,
-			mutedStyle.Render("repo")+"   "+primaryStyle.Render(task.RepoName),
-		)
-	}
-	if strings.TrimSpace(task.WorktreePath) != "" {
-		workspaceLines = append(
-			workspaceLines,
-			mutedStyle.Render("path")+"   "+dimStyle.Render(task.WorktreePath),
-		)
-	}
-	workspaceLines = append(workspaceLines, pullRequestDetailLines(row.pullRequests, detailColWidth)...)
-	if len(row.pullRequests) > 0 && row.unshippedWork.Any() {
-		workspaceLines = append(workspaceLines, unshippedWorkDetailLines(row.unshippedWork, detailColWidth)...)
-	}
-	workspaceLines = append(workspaceLines, m.taskLinkDetailLines(task, detailColWidth)...)
-
-	sessionLines := []string{
-		headerLabelStyle.Render("SESSION"),
-	}
-	if task.CreationStatus == core.TaskCreationStatusFailed {
-		sessionLines = append(
-			sessionLines,
-			errorStyle.Render("Failed while "+lowerFirst(taskCreateProgressLabel(task.CreationStep))),
-		)
-		if creationErr := strings.TrimSpace(task.CreationError); creationErr != "" {
-			sessionLines = append(sessionLines, errorStyle.Render(creationErr))
-		}
-	}
-	if elapsed := taskElapsed(task); elapsed != "" {
-		sessionLines = append(
-			sessionLines,
-			mutedStyle.Render("time")+"   "+primaryStyle.Bold(true).Render(elapsed)+mutedStyle.Render(" total"),
-		)
-	}
-	// With an agent sub-row selected, the session column describes that agent;
-	// on the task row, it names the providers of the task's agents and the
-	// task's Launch choice.
-	sessionWidth := totalWidth - detailColWidth - 6
-	status := row.status
-	providers := taskProviderNames(*row)
+	width := m.totalWidth() - 2*len(detailGutter)
 	agentSession := m.selectedAgentSession()
-	if agentSession != nil {
-		status = agentSessionStatusUpdate(*agentSession)
-		providers = []string{emptyFallback(string(agentSession.Provider), "-")}
-	}
-	statusText, statusStyle := taskStatusDetailText(status)
-	switch {
-	case m.deleting[taskID(task)]:
-		statusText, statusStyle = iconRemoving+" cleaning up", mutedStyle
-	case agentSession != nil && m.removingAgents[agentSession.ID]:
-		statusText, statusStyle = iconRemoving+" removing", mutedStyle
-	}
-	if statusText != "" {
-		sessionLines = append(sessionLines, detailFieldLines("state", "  ", statusText, statusStyle, sessionWidth)...)
-	}
-	if providers[0] != "-" {
-		sessionLines = append(
-			sessionLines,
-			fitDetailLine(mutedStyle.Render("provider")+"  "+renderProviderNames(providers), sessionWidth),
-		)
-	}
-	contextUsage, compactions := taskRowContext(*row), taskRowCompactions(*row)
-	if agentSession != nil {
-		if pane := agentPaneText(*agentSession); pane != "" {
-			sessionLines = append(sessionLines, detailFieldLines("pane", "   ", pane, dimStyle, sessionWidth)...)
-		}
-		contextUsage, compactions = agentContext(*row, agentSession.ID), agentCompactions(*row, agentSession.ID)
-	} else {
-		sessionLines = append(sessionLines, m.launchChoiceDetailLines(task, sessionWidth)...)
-	}
-	if contextUsage != nil {
-		sessionLines = append(
-			sessionLines,
-			detailFieldLines("context", "  ", contextDetailText(*contextUsage), primaryStyle, sessionWidth)...,
-		)
-	}
-	if compactions.Total > 0 {
-		sessionLines = append(
-			sessionLines,
-			detailFieldLines("compacted", "  ", compactionsDetailText(compactions), primaryStyle, sessionWidth)...,
-		)
-	}
 
-	var builder strings.Builder
-	for _, line := range zipColumns(workspaceLines, sessionLines, detailColWidth) {
-		builder.WriteString(line + "\n")
-	}
-
-	if tokenLines := taskTokenUsageDetailLines(taskTokens(*row)); len(tokenLines) > 0 {
-		builder.WriteString("\n")
-		for _, line := range tokenLines {
-			builder.WriteString("   " + line + "\n")
+	var lines []string
+	if task.CreationStatus == core.TaskCreationStatusFailed {
+		failed := "Failed while " + lowerFirst(taskCreateProgressLabel(task.CreationStep))
+		lines = append(lines, fitDetailLine(errorStyle.Render(failed), width))
+		// A setup script's error goes on to its last output, which says why.
+		for _, line := range wrapAndTruncate(terminalSafeText(task.CreationError), width, 4) {
+			lines = append(lines, errorStyle.Render(line))
 		}
 	}
+	lines = append(lines, packDetailParts("", m.detailSummaryParts(*row, agentSession), detailSummaryGap, width)...)
 
-	if strings.TrimSpace(task.Prompt) != "" {
-		builder.WriteString("\n")
-		builder.WriteString("   " + headerLabelStyle.Render("INITIAL PROMPT") + "\n")
-		for _, line := range wrapAndTruncate(task.Prompt, totalWidth-6, 3) {
-			builder.WriteString("   " + primaryStyle.Render(line) + "\n")
-		}
+	pullRequestLines := pullRequestDetailLines(row.pullRequests, width)
+	if len(row.pullRequests) > 0 && row.unshippedWork.Any() {
+		pullRequestLines = append(pullRequestLines, unshippedWorkDetailLines(row.unshippedWork, width)...)
+	}
+	lines = appendDetailSection(lines, "PULL REQUESTS", pullRequestLines)
+	lines = appendDetailSection(lines, "LINKED TASKS", m.taskLinkDetailLines(task, width))
+
+	var promptLines []string
+	for _, line := range wrapAndTruncate(task.Prompt, width, 3) {
+		promptLines = append(promptLines, primaryStyle.Render(line))
+	}
+	lines = appendDetailSection(lines, "PROMPT", promptLines)
+
+	if tokenLines := taskTokenUsageDetailLines(taskTokens(*row), width); len(tokenLines) > 0 {
+		lines = append(append(lines, ""), tokenLines...)
 	}
 
-	// With an agent sub-row selected, the activity is that agent's own.
-	activity, assistantProvider := row.activity, task.Provider
+	// With an agent sub-row selected, the exchange is that agent's own. A task
+	// row's mixes its agents', so it names a provider only when they share one.
+	activity, assistantProvider := row.activity, core.Provider("")
+	if providers := taskProviderNames(*row); len(providers) == 1 && providers[0] != "-" {
+		assistantProvider = core.Provider(providers[0])
+	}
 	if agentSession != nil {
 		activity, assistantProvider = agentActivity(row.activity, agentSession.ID), agentSession.Provider
 	}
@@ -737,53 +685,113 @@ func (m model) selectedTaskDetailView() string {
 	if lastUserPrompt == "" && agentSession != nil {
 		lastUserPrompt = terminalSafeText(agentSession.LatestPrompt)
 	}
-	if lastUserPrompt != "" || len(assistantItems) > 0 {
-		builder.WriteString("\n")
-		builder.WriteString("   " + headerLabelStyle.Render("ACTIVITY") + "\n")
+	lines = appendDetailSection(
+		lines,
+		"LATEST",
+		latestDetailLines(string(assistantProvider), lastUserPrompt, assistantItems, width),
+	)
 
-		leftWidth := totalWidth * 35 / 100
-		if leftWidth < 24 {
-			leftWidth = 24
-		}
-		rightWidth := totalWidth - leftWidth - 9
-		if rightWidth < 24 {
-			rightWidth = 24
-			leftWidth = totalWidth - rightWidth - 9
-		}
-
-		leftLines := []string{mutedStyle.Render("last user prompt")}
-		if lastUserPrompt != "" {
-			for _, line := range wrapAndTruncate(lastUserPrompt, leftWidth, 5) {
-				leftLines = append(leftLines, primaryStyle.Render(line))
-			}
-		} else {
-			leftLines = append(leftLines, dimStyle.Render("No prompt yet."))
-		}
-
-		rightLines := []string{providerStyle(string(assistantProvider)).Render("assistant")}
-		if len(assistantItems) == 0 {
-			rightLines = append(rightLines, dimStyle.Render("No assistant activity yet."))
-		} else {
-			for idx, item := range assistantItems {
-				textStyle := dimStyle
-				if idx == 0 {
-					textStyle = primaryStyle
-				}
-				for _, line := range wrapAndTruncate(item, rightWidth, 3) {
-					rightLines = append(rightLines, textStyle.Render(line))
-				}
-				if idx < len(assistantItems)-1 {
-					rightLines = append(rightLines, "")
-				}
-			}
-		}
-
-		for _, line := range zipColumns(leftLines, rightLines, leftWidth) {
-			builder.WriteString(line + "\n")
+	lines = trimBlankEdgeLines(lines)
+	for i, line := range lines {
+		if line != "" {
+			lines[i] = detailGutter + line
 		}
 	}
+	return strings.Join(lines, "\n")
+}
 
-	return strings.TrimRight(builder.String(), "\n")
+// detailSummaryParts are the parts of the detail panel's summary line: the
+// model and reasoning level, context and compactions of the agent described,
+// and on an agent sub-row where its pane runs.
+func (m model) detailSummaryParts(row taskRow, agentSession *core.LiveAgentSession) []string {
+	var parts []string
+	if text := m.modelDetailText(row, agentSession); text != "" {
+		parts = append(parts, text)
+	}
+	contextUsage, compactions := taskRowContext(row), taskRowCompactions(row)
+	if agentSession != nil {
+		contextUsage, compactions = agentContext(row, agentSession.ID), agentCompactions(row, agentSession.ID)
+	}
+	if contextUsage != nil {
+		parts = append(
+			parts,
+			mutedStyle.Render("context")+" "+contextStyle(contextUsage).Render(contextDetailText(*contextUsage)),
+		)
+	}
+	if compactions.Total > 0 {
+		parts = append(
+			parts,
+			mutedStyle.Render("compacted")+" "+primaryStyle.Render(compactionsDetailText(compactions)),
+		)
+	}
+	if agentSession != nil {
+		if pane := agentPaneText(*agentSession); pane != "" {
+			parts = append(parts, mutedStyle.Render(pane))
+		}
+	}
+	return parts
+}
+
+// appendDetailSection appends a detail panel section, a blank line and its
+// header over its lines, or nothing when it has no lines, as an empty
+// header says nothing.
+func appendDetailSection(lines []string, header string, sectionLines []string) []string {
+	if len(sectionLines) == 0 {
+		return lines
+	}
+	return append(append(lines, "", detailHeaderStyle.Render(header)), sectionLines...)
+}
+
+// packDetailParts lays parts out on lines of width columns with sep between
+// the parts on a line: the first line after lead, the rest indented as far.
+// A part too wide for what is left of a line moves to the next one whole,
+// and one too wide even for a line of its own is truncated.
+func packDetailParts(lead string, parts []string, sep string, width int) []string {
+	indent := strings.Repeat(" ", lipgloss.Width(lead))
+	var lines []string
+	for _, part := range parts {
+		if last := len(lines) - 1; last >= 0 && lipgloss.Width(lines[last]+sep+part) <= width {
+			lines[last] += sep + part
+			continue
+		}
+		prefix := indent
+		if len(lines) == 0 {
+			prefix = lead
+		}
+		lines = append(lines, fitDetailLine(prefix+part, width))
+	}
+	return lines
+}
+
+// latestDetailLines is the latest exchange with an agent, within width
+// columns: the last user prompt after a muted "you", then the assistant's
+// newest items after its provider's name, each value wrapping under its own
+// start. The newest item reads brightest. An entry without text is left out.
+func latestDetailLines(provider string, lastUserPrompt string, assistantItems []string, width int) []string {
+	assistant := emptyFallback(provider, "assistant")
+	labelWidth := max(len(latestUserLabel), len(assistant)) + len(detailLabelGap)
+	valueWidth := width - labelWidth
+	indent := strings.Repeat(" ", labelWidth)
+
+	var lines []string
+	label := padRightVisible(userLabelStyle.Render(latestUserLabel), labelWidth)
+	for _, line := range wrapAndTruncate(lastUserPrompt, valueWidth, 3) {
+		lines = append(lines, label+primaryStyle.Render(line))
+		label = indent
+	}
+
+	label = padRightVisible(providerStyle(assistant).Render(assistant), labelWidth)
+	for idx, item := range assistantItems {
+		textStyle := dimStyle
+		if idx == 0 {
+			textStyle = primaryStyle
+		}
+		for _, line := range wrapAndTruncate(item, valueWidth, 3) {
+			lines = append(lines, label+textStyle.Render(line))
+			label = indent
+		}
+	}
+	return lines
 }
 
 func taskActivityPreview(events []core.TaskActivityEvent) (string, []string) {
@@ -963,12 +971,12 @@ const setupDetailIndent = "       "
 const minSetupModelWidth = 5
 
 // setupLaunchDefaultLine renders a provider's Launch default under its row
-// on the provider setup screen, labeled as the detail panel's model line, or
-// the Launch defaults' state while they are missing and the user has not
-// edited it. The selected row's line ends with its model list's state while
-// the list is loading or unavailable. Within width only the model is cut, as
-// the reasoning level is what gets saved, and the state goes first when the
-// model would have no room.
+// on the provider setup screen, after a model label, or the Launch defaults'
+// state while they are missing and the user has not edited it. The selected
+// row's line ends with its model list's state while the list is loading or
+// unavailable. Within width only the model is cut, as the reasoning level is
+// what gets saved, and the state goes first when the model would have no
+// room.
 func (m model) setupLaunchDefaultLine(provider core.Provider, selected bool, width int) string {
 	choice := m.setupLaunchChoice(provider)
 	value := m.launchModelText(provider, choice.Model)
@@ -1220,65 +1228,28 @@ func (m model) removeAgentConfirmationView(agent core.LiveAgentSession) string {
 	return builder.String()
 }
 
-// taskStatusParts is how a status reads: the one-cell symbol task and agent
-// rows show for it, the label the detail panel adds, and their style. Each
-// state has its own symbol, so a row reads without its label.
-func taskStatusParts(update *core.TaskStatusUpdate) (string, string, lipgloss.Style) {
+// taskStatusSymbol is the one-cell symbol task and agent rows show for a
+// status, and its style. Each state has its own symbol, so a row reads
+// without a label.
+func taskStatusSymbol(update *core.TaskStatusUpdate) (string, lipgloss.Style) {
 	if update == nil {
-		return iconStatusNone, "no status", dimStyle
+		return iconStatusNone, dimStyle
 	}
 
 	switch update.Phase {
 	case core.TaskStatusPhaseStarting:
-		return iconStatusStarting, "starting", warningStyle
+		return iconStatusStarting, warningStyle
 	case core.TaskStatusPhaseWorking:
-		if indicatesCommandActivity(update.RawEventName) {
-			return iconStatusActive, "working · command", healthyStyle
-		}
-		return iconStatusActive, "working", healthyStyle
+		return iconStatusActive, healthyStyle
 	case core.TaskStatusPhaseWorkingInBackground:
-		return iconStatusProgress, "working in background", healthyStyle
+		return iconStatusProgress, healthyStyle
 	case core.TaskStatusPhaseWaitingForInput:
-		return iconStatusNeedsInput, "needs input", warningStyle
+		return iconStatusNeedsInput, warningStyle
 	case core.TaskStatusPhaseStopped:
-		return iconStatusIdle, "stopped", dimStyle
+		return iconStatusIdle, dimStyle
 	default:
-		return iconStatusIdle, "idle", dimStyle
+		return iconStatusIdle, dimStyle
 	}
-}
-
-// taskStatusDetailText is the status as the detail panel states it: its
-// symbol and label, with background work broken down by kind.
-func taskStatusDetailText(update *core.TaskStatusUpdate) (string, lipgloss.Style) {
-	symbol, label, style := taskStatusParts(update)
-	text := symbol + " " + label
-	if update != nil && update.Phase == core.TaskStatusPhaseWorkingInBackground {
-		if parts := backgroundWorkParts(update.BackgroundWork); len(parts) > 0 {
-			text += " · " + strings.Join(parts, ", ")
-		}
-	}
-	return text, style
-}
-
-func backgroundWorkParts(work core.TaskBackgroundWork) []string {
-	kinds := []struct {
-		noun  string
-		count int
-	}{
-		{"subagent", work.Subagents},
-		{"monitor", work.Monitors},
-		{"workflow", work.Workflows},
-		{"shell", work.Shells},
-		{"bg task", work.Other},
-	}
-
-	var parts []string
-	for _, kind := range kinds {
-		if kind.count > 0 {
-			parts = append(parts, countNoun(kind.count, kind.noun))
-		}
-	}
-	return parts
 }
 
 func countNoun(count int, noun string) string {
@@ -1289,24 +1260,22 @@ func countNoun(count int, noun string) string {
 }
 
 // pullRequestDetailLines lists a task's pull requests, oldest first, in the
-// detail panel's workspace column, within width columns: one a line, the
-// first after the pr label and the rest lined up under it. Each line has the
-// pull request's state symbol, number and state in its state's color, then
-// its head branch, muted. Past maxPullRequestDetailLines pull requests, the
-// first line counts the earlier ones, muted, and the newest follow.
+// detail panel's pull requests section, within width columns, one a line.
+// Each line has the pull request's state symbol, number and state in its
+// state's color, then its head branch, muted. Past maxPullRequestDetailLines
+// pull requests, the first line counts the earlier ones, muted, and the
+// newest follow.
 func pullRequestDetailLines(pullRequests []core.PullRequest, width int) []string {
 	if len(pullRequests) == 0 {
 		return nil
 	}
 
-	label := mutedStyle.Render("pr") + "     "
 	var lines []string
 	shown := pullRequests
 	if len(pullRequests) > maxPullRequestDetailLines {
 		shown = pullRequests[len(pullRequests)-maxPullRequestDetailLines+1:]
 		earlier := strconv.Itoa(len(pullRequests)-len(shown)) + " earlier"
-		lines = append(lines, fitDetailLine(label+mutedStyle.Render(earlier), width))
-		label = detailValueIndent
+		lines = append(lines, fitDetailLine(mutedStyle.Render(earlier), width))
 	}
 
 	numberWidth, stateWidth := 0, 0
@@ -1318,9 +1287,8 @@ func pullRequestDetailLines(pullRequests []core.PullRequest, width int) []string
 		icon, style := prStateIconStyle(pullRequest.State)
 		text := icon + " " + padRightVisible(pullRequestNumber(pullRequest), numberWidth) + " " +
 			padRightVisible(string(pullRequest.State), stateWidth)
-		line := label + style.Render(text) + nameGap + mutedStyle.Render(pullRequest.HeadBranch)
+		line := style.Render(text) + nameGap + mutedStyle.Render(pullRequest.HeadBranch)
 		lines = append(lines, fitDetailLine(line, width))
-		label = detailValueIndent
 	}
 	return lines
 }
@@ -1346,7 +1314,7 @@ func unshippedWorkDetailLines(work core.UnshippedWork, width int) []string {
 	const where = "not in a pull request"
 
 	prefix := unshippedWorkMarker + " "
-	room := width - len(detailValueIndent) - len(prefix)
+	room := width - len(prefix)
 	wrapped := []string{what + " " + where}
 	if width > 0 && lipgloss.Width(wrapped[0]) > room {
 		wrapped = append(wrapAndTruncate(what, room, maxUnshippedWorkDetailLines-1), where)
@@ -1356,7 +1324,7 @@ func unshippedWorkDetailLines(work core.UnshippedWork, width int) []string {
 		if index > 0 {
 			prefix = strings.Repeat(" ", len(prefix))
 		}
-		lines = append(lines, fitDetailLine(detailValueIndent+unshippedWorkStyle.Render(prefix+line), width))
+		lines = append(lines, fitDetailLine(unshippedWorkStyle.Render(prefix+line), width))
 	}
 	return lines
 }
@@ -1369,7 +1337,10 @@ func taskTokens(row taskRow) *core.TaskTokenUsage {
 	return row.usage.Tokens
 }
 
-func taskTokenUsageDetailLines(usage *core.TaskTokenUsage) []string {
+// taskTokenUsageDetailLines is the detail panel's token usage: its fields
+// after a muted tokens label, wrapping whole within width columns onto lines
+// lined up under the first field.
+func taskTokenUsageDetailLines(usage *core.TaskTokenUsage, width int) []string {
 	if usage == nil || usage.TotalTokens <= 0 {
 		return nil
 	}
@@ -1380,7 +1351,7 @@ func taskTokenUsageDetailLines(usage *core.TaskTokenUsage) []string {
 	}
 
 	fields := []string{
-		tokenUsageField("total", usage.TotalTokens),
+		mutedStyle.Render("total ") + primaryStyle.Bold(true).Render(formatTokenCount(usage.TotalTokens)),
 	}
 	fields = appendPositiveTokenUsageField(fields, "input", usage.InputTokens)
 	fields = appendPositiveTokenUsageField(fields, "output", usage.OutputTokens)
@@ -1389,10 +1360,7 @@ func taskTokenUsageDetailLines(usage *core.TaskTokenUsage) []string {
 	fields = appendPositiveTokenUsageField(fields, "reasoning", usage.ReasoningOutputTokens)
 	fields = append(fields, mutedStyle.Render(strconv.Itoa(usage.SessionCount)+" "+sessionLabel))
 
-	return []string{
-		headerLabelStyle.Render("TOKENS"),
-		strings.Join(fields, "   "),
-	}
+	return packDetailParts(mutedStyle.Render("tokens")+detailLabelGap, fields, mutedStyle.Render(" · "), width)
 }
 
 func appendPositiveTokenUsageField(fields []string, label string, tokens int) []string {
@@ -1428,15 +1396,6 @@ func prStateIconStyle(state core.PRState) (string, lipgloss.Style) {
 		return iconFailed, errorStyle
 	default:
 		return iconPRNone, mutedStyle
-	}
-}
-
-func indicatesCommandActivity(rawEventName string) bool {
-	switch rawEventName {
-	case "PreToolUse", "PostToolUse":
-		return true
-	default:
-		return false
 	}
 }
 
@@ -1515,23 +1474,6 @@ func footerKeybindsWithin(width int, binds ...[2]string) string {
 		line = append(line, bind)
 	}
 	return strings.Join(append(lines, footerKeybinds(line...)), "\n")
-}
-
-// zipColumns lays two line columns side by side: a three-space indent, the
-// left column padded to leftWidth, a three-space gutter, then the right.
-func zipColumns(left []string, right []string, leftWidth int) []string {
-	lines := make([]string, 0, max(len(left), len(right)))
-	for i := range max(len(left), len(right)) {
-		leftLine, rightLine := "", ""
-		if i < len(left) {
-			leftLine = left[i]
-		}
-		if i < len(right) {
-			rightLine = right[i]
-		}
-		lines = append(lines, "   "+padRightVisible(leftLine, leftWidth)+"   "+rightLine)
-	}
-	return lines
 }
 
 // Status-dot lines: a colored dot followed by a styled label, the shared

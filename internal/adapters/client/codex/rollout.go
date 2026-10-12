@@ -103,7 +103,17 @@ func lastTurnContext(path string) (codexTurnContext, bool) {
 
 func parseTurnContext(line []byte) (codexTurnContext, bool) {
 	var envelope codexTranscriptEnvelope
-	if err := jsonUnmarshalTranscriptLine(line, &envelope); err != nil || envelope.Type != "turn_context" {
+	if err := jsonUnmarshalTranscriptLine(line, &envelope); err != nil {
+		return codexTurnContext{}, false
+	}
+	return envelopeTurnContext(envelope)
+}
+
+// envelopeTurnContext returns the model and reasoning effort of a rollout
+// record that is the turn_context of a default-mode turn, as lastTurnContext
+// reads them.
+func envelopeTurnContext(envelope codexTranscriptEnvelope) (codexTurnContext, bool) {
+	if envelope.Type != "turn_context" {
 		return codexTurnContext{}, false
 	}
 	var payload codexTurnContextPayload

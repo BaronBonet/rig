@@ -492,7 +492,8 @@ func (u TaskTokenUsage) IsZero() bool {
 
 // TaskUsage is what a task's agents have used: the token usage summed across
 // the task's Provider sessions, how many times each live Agent session's
-// context was compacted, and how full each one's context window is.
+// context was compacted, how full each one's context window is, and the model
+// each one runs on.
 type TaskUsage struct {
 	// Tokens is nil when no transcript reports token usage.
 	Tokens *TaskTokenUsage `json:"tokens,omitempty"`
@@ -502,6 +503,20 @@ type TaskUsage struct {
 	// AgentContext holds, by Agent session ID, the context usage of each open
 	// Agent session whose current Provider session records it.
 	AgentContext map[string]ContextUsage `json:"agent_context,omitempty"`
+	// AgentModels holds, by Agent session ID, the model and reasoning level
+	// each open Agent session runs on, as its current Provider session
+	// records them.
+	AgentModels map[string]AgentModel `json:"agent_models,omitempty"`
+}
+
+// AgentModel is the model and reasoning level an agent runs on: those of its
+// conversation's latest turn, which follow a /model switch, or before its
+// first turn the model its hooks reported.
+type AgentModel struct {
+	// Model is the provider's own ID for the model, such as claude-opus-5-5.
+	Model string `json:"model"`
+	// ReasoningLevel is empty when the conversation does not record it.
+	ReasoningLevel string `json:"reasoning_level,omitempty"`
 }
 
 // ContextUsage is how full a conversation's context window is.
@@ -526,11 +541,17 @@ type Compactions struct {
 }
 
 // ConversationUsage is what one conversation's transcript records about its
-// root agent's context: how many times it was compacted, and how full it is.
+// root agent: how many times its context was compacted, how full it is, and
+// the model it runs on.
 type ConversationUsage struct {
 	Compactions Compactions
 	// Context is nil when the transcript does not record it yet.
 	Context *ContextUsage
+	// Model and ReasoningLevel are the latest turn's, so they follow a /model
+	// switch. Before the first turn Model is the one the conversation's hooks
+	// reported, and either is empty when nothing records it.
+	Model          string
+	ReasoningLevel string
 }
 
 // Provider identifies the supported interactive runtime backing a task.
@@ -628,7 +649,11 @@ type ProviderDetection struct {
 // runtime. Rig keeps no list of models or reasoning levels of its own.
 type ProviderModel struct {
 	// ID is the value the provider CLI's model flag takes.
-	ID          string `json:"id"`
+	ID string `json:"id"`
+	// ResolvedID is the model ID that ID stands for when ID is an alias, as
+	// the provider's transcripts and hooks name the model, or empty when the
+	// provider does not say.
+	ResolvedID  string `json:"resolved_id,omitempty"`
 	DisplayName string `json:"display_name"`
 	// ReasoningLevels are the reasoning levels the model accepts, in provider
 	// order. Empty means the model takes no reasoning level.
