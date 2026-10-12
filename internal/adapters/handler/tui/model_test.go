@@ -784,6 +784,19 @@ func rowTask() *core.Task {
 	}
 }
 
+func TestFormatElapsed_ShowsTheTwoLargestUnits(t *testing.T) {
+	for duration, want := range map[time.Duration]string{
+		-time.Minute:                    "0m",
+		35 * time.Minute:                "35m",
+		7*time.Hour + 5*time.Minute:     "7h 05m",
+		23*time.Hour + 59*time.Minute:   "23h 59m",
+		24 * time.Hour:                  "1d 00h",
+		3175*time.Hour + 35*time.Minute: "132d 07h",
+	} {
+		require.Equal(t, want, formatElapsed(duration), duration)
+	}
+}
+
 func TestRenderRow_StartsWithASymbolForEachStatus(t *testing.T) {
 	cases := []struct {
 		name   string
@@ -811,7 +824,8 @@ func TestRenderRow_StartsWithASymbolForEachStatus(t *testing.T) {
 	seen := map[string]string{}
 	for _, tc := range cases {
 		for _, selected := range []int{0, 1} {
-			line := rowContent(model{selected: selected}.renderRow(0, taskRow{task: rowTask(), status: tc.status}, 100))
+			row := taskRow{task: rowTask(), status: tc.status}
+			line := rowContent(model{selected: selected}.renderRow(0, row, taskRowLayoutFor(100)))
 			require.True(t, strings.HasPrefix(line, tc.symbol+" first task"), "%s: %q", tc.name, line)
 			require.NotContains(t, line, tc.label, tc.name)
 		}
@@ -829,8 +843,8 @@ func TestRenderRow_WorkingStatusSpins(t *testing.T) {
 			status: &core.TaskStatusUpdate{Phase: core.TaskStatusPhaseWorking, RawEventName: rawEvent},
 		}
 
-		first := rowContent(model{spinnerFrame: 0}.renderRow(0, row, 100))
-		second := rowContent(model{spinnerFrame: 1}.renderRow(0, row, 100))
+		first := rowContent(model{spinnerFrame: 0}.renderRow(0, row, taskRowLayoutFor(100)))
+		second := rowContent(model{spinnerFrame: 1}.renderRow(0, row, taskRowLayoutFor(100)))
 
 		require.True(t, strings.HasPrefix(first, spinnerFrames[0]+" first task"), first)
 		require.True(t, strings.HasPrefix(second, spinnerFrames[1]+" first task"), second)
@@ -843,7 +857,7 @@ func TestRenderRow_FailedCreationShowsTheFailedSymbol(t *testing.T) {
 	task.CreationStatus = core.TaskCreationStatusFailed
 	task.CreationStep = core.TaskCreateProgressStartingSession
 
-	line := rowContent(model{}.renderRow(0, taskRow{task: task}, 100))
+	line := rowContent(model{}.renderRow(0, taskRow{task: task}, taskRowLayoutFor(100)))
 
 	require.True(t, strings.HasPrefix(line, iconFailed+" first task"), line)
 }
@@ -859,13 +873,13 @@ func TestRenderRow_PullRequestFollowsTheNameAsSymbolAndNumber(t *testing.T) {
 		line := rowContent(model{}.renderRow(0, taskRow{
 			task:         rowTask(),
 			pullRequests: []core.PullRequest{{State: state, Number: 42}},
-		}, 100))
+		}, taskRowLayoutFor(100)))
 
 		require.Contains(t, line, "first task  "+marker, line)
 		require.NotContains(t, line, string(state), line)
 	}
 
-	withoutPR := rowContent(model{}.renderRow(0, taskRow{task: rowTask()}, 100))
+	withoutPR := rowContent(model{}.renderRow(0, taskRow{task: rowTask()}, taskRowLayoutFor(100)))
 	require.NotContains(t, withoutPR, "#")
 	require.NotContains(t, withoutPR, iconPRNone)
 }
@@ -888,7 +902,7 @@ func TestRenderRow_ColumnsFollowTheNameInOrder(t *testing.T) {
 	for _, selected := range []int{0, 1} {
 		row := compactedRow()
 		row.pullRequests = []core.PullRequest{{State: core.PRStateOpen, Number: 42}}
-		line := model{selected: selected}.renderRow(0, row, 120)
+		line := model{selected: selected}.renderRow(0, row, taskRowLayoutFor(120))
 
 		require.Less(t, lipgloss.Width(line), 120)
 		view := rowContent(line)
@@ -904,11 +918,11 @@ func TestRenderRow_ColumnsFollowTheNameInOrder(t *testing.T) {
 
 func TestRenderRow_RightColumnsStayAligned(t *testing.T) {
 	m := model{selected: 2}
-	bare := stripANSI(m.renderRow(0, taskRow{task: rowTask()}, 120))
+	bare := stripANSI(m.renderRow(0, taskRow{task: rowTask()}, taskRowLayoutFor(120)))
 	fullRow := compactedRow()
 	fullRow.pullRequests = []core.PullRequest{{State: core.PRStateMerged, Number: 12345}}
 	fullRow.usage.AgentCompactions["agent-1"] = core.Compactions{Total: 999}
-	full := stripANSI(m.renderRow(1, fullRow, 120))
+	full := stripANSI(m.renderRow(1, fullRow, taskRowLayoutFor(120)))
 
 	for _, column := range []string{"codex", "15m"} {
 		require.Equal(
@@ -928,7 +942,7 @@ func TestRenderRow_LongNameKeepsItsPullRequest(t *testing.T) {
 	line := model{}.renderRow(0, taskRow{
 		task:         task,
 		pullRequests: []core.PullRequest{{State: core.PRStateOpen, Number: 42}},
-	}, 100)
+	}, taskRowLayoutFor(100))
 
 	require.Less(t, lipgloss.Width(line), 100)
 	view := rowContent(line)
@@ -940,42 +954,42 @@ func TestRenderRow_LongNameKeepsItsPullRequest(t *testing.T) {
 func TestRenderRow_ShowsCompactionsOnlyForAnAgentThatCompacted(t *testing.T) {
 	// Its context column, blank while the agent's context is unknown, comes
 	// between the provider and the marker.
-	compacted := rowContent(model{}.renderRow(0, compactedRow(), 100))
+	compacted := rowContent(model{}.renderRow(0, compactedRow(), taskRowLayoutFor(100)))
 	require.Contains(t, compacted, "codex  "+strings.Repeat(" ", colWidthContext)+iconCompacted+"2")
 
 	neverCompacted := compactedRow()
 	neverCompacted.usage = &core.TaskUsage{AgentCompactions: map[string]core.Compactions{"other-agent": {Total: 4}}}
-	require.NotContains(t, rowContent(model{}.renderRow(0, neverCompacted, 100)), iconCompacted)
+	require.NotContains(t, rowContent(model{}.renderRow(0, neverCompacted, taskRowLayoutFor(100))), iconCompacted)
 
 	beforeUsageLoads := compactedRow()
 	beforeUsageLoads.usage = nil
-	require.NotContains(t, rowContent(model{}.renderRow(0, beforeUsageLoads, 100)), iconCompacted)
+	require.NotContains(t, rowContent(model{}.renderRow(0, beforeUsageLoads, taskRowLayoutFor(100))), iconCompacted)
 
 	noLiveAgent := compactedRow()
 	noLiveAgent.status = nil
-	require.NotContains(t, rowContent(model{}.renderRow(0, noLiveAgent, 100)), iconCompacted)
+	require.NotContains(t, rowContent(model{}.renderRow(0, noLiveAgent, taskRowLayoutFor(100))), iconCompacted)
 }
 
 func TestRenderRow_NarrowTerminalsDropContextThenCompactionsThenProvider(t *testing.T) {
 	row := contextRow()
 	row.pullRequests = []core.PullRequest{{State: core.PRStateOpen, Number: 42}}
 
-	wide := rowContent(model{}.renderRow(0, row, 100))
+	wide := rowContent(model{}.renderRow(0, row, taskRowLayoutFor(100)))
 	require.Contains(t, wide, "codex")
 	require.Contains(t, wide, "41%")
 	require.Contains(t, wide, iconCompacted+"2")
 
-	noContext := rowContent(model{}.renderRow(0, row, 68))
+	noContext := rowContent(model{}.renderRow(0, row, taskRowLayoutFor(68)))
 	require.Contains(t, noContext, "codex")
 	require.NotContains(t, noContext, "%")
 	require.Contains(t, noContext, iconCompacted+"2")
 
-	medium := rowContent(model{}.renderRow(0, row, 62))
+	medium := rowContent(model{}.renderRow(0, row, taskRowLayoutFor(62)))
 	require.Contains(t, medium, "codex")
 	require.NotContains(t, medium, "%")
 	require.NotContains(t, medium, iconCompacted)
 
-	narrow := rowContent(model{}.renderRow(0, row, 54))
+	narrow := rowContent(model{}.renderRow(0, row, taskRowLayoutFor(54)))
 	require.NotContains(t, narrow, "codex")
 	require.NotContains(t, narrow, "%")
 	require.NotContains(t, narrow, iconCompacted)
@@ -986,7 +1000,7 @@ func TestRenderRow_NarrowTerminalsDropContextThenCompactionsThenProvider(t *test
 		require.True(t, !layout.context || layout.compactions, "width %d", width)
 		require.True(t, !layout.compactions || layout.provider, "width %d", width)
 
-		line := model{}.renderRow(0, row, width)
+		line := model{}.renderRow(0, row, taskRowLayoutFor(width))
 		require.NotContains(t, line, "\n", "width %d", width)
 		require.Less(t, lipgloss.Width(line), width, "width %d: %q", width, stripANSI(line))
 		view := rowContent(line)
@@ -1047,12 +1061,13 @@ func TestRenderContextCell_RightAlignsThePercentInItsColumn(t *testing.T) {
 func TestRenderRow_ShowsItsOnlyAgentsContextBesideItsCompactions(t *testing.T) {
 	// The percentage sits between the provider and the compaction marker, a
 	// space clear of each.
-	line := rowContent(model{}.renderRow(0, contextRow(), 100))
+	line := rowContent(model{}.renderRow(0, contextRow(), taskRowLayoutFor(100)))
 	require.Contains(t, line, "codex    41% "+iconCompacted+"2")
 
 	full := contextRow()
 	full.usage.AgentContext["agent-1"] = core.ContextUsage{Tokens: 300_000, Window: 258_400}
-	require.Contains(t, rowContent(model{}.renderRow(0, full, 100)), "codex   100% "+iconCompacted+"2")
+	layout := taskRowLayoutFor(100)
+	require.Contains(t, rowContent(model{}.renderRow(0, full, layout)), "codex   100% "+iconCompacted+"2")
 
 	// Without a window or a context, the column is blank.
 	unknownWindow := contextRow()
@@ -1060,7 +1075,7 @@ func TestRenderRow_ShowsItsOnlyAgentsContextBesideItsCompactions(t *testing.T) {
 	noContext := contextRow()
 	noContext.usage.AgentContext = map[string]core.ContextUsage{"other-agent": {Tokens: 1, Window: 2}}
 	for _, row := range []taskRow{unknownWindow, noContext, compactedRow()} {
-		line := rowContent(model{}.renderRow(0, row, 100))
+		line := rowContent(model{}.renderRow(0, row, taskRowLayoutFor(100)))
 		require.NotContains(t, line, "%")
 		require.Contains(t, line, "codex  "+strings.Repeat(" ", colWidthContext)+iconCompacted+"2")
 	}
@@ -1070,13 +1085,45 @@ func TestRenderRow_ShowsItsOnlyAgentsContextBesideItsCompactions(t *testing.T) {
 	uncompacted.usage.AgentCompactions = nil
 	require.Equal(
 		t,
-		statusColumn(t, rowContent(model{}.renderRow(0, contextRow(), 100)), "41%"),
-		statusColumn(t, rowContent(model{}.renderRow(0, uncompacted, 100)), "41%"),
+		statusColumn(t, rowContent(model{}.renderRow(0, contextRow(), taskRowLayoutFor(100))), "41%"),
+		statusColumn(t, rowContent(model{}.renderRow(0, uncompacted, taskRowLayoutFor(100))), "41%"),
 	)
 
 	// Like the compaction marker, it is muted until its task is selected.
-	require.Contains(t, model{selected: 0}.renderRow(0, contextRow(), 100), primaryStyle.Render("41%"))
-	require.Contains(t, model{selected: 1}.renderRow(0, contextRow(), 100), mutedStyle.Render("41%"))
+	require.Contains(t, model{selected: 0}.renderRow(0, contextRow(), layout), primaryStyle.Render("41%"))
+	require.Contains(t, model{selected: 1}.renderRow(0, contextRow(), layout), mutedStyle.Render("41%"))
+}
+
+// The cursor's line shows its pull requests and provider at full color and
+// in bold, as it brightens its name; other lines darken them.
+func TestRenderRow_PullRequestsAndProviderStandOutOnTheCursorsLine(t *testing.T) {
+	row := taskRow{task: rowTask(), pullRequests: []core.PullRequest{{State: core.PRStateOpen, Number: 42}}}
+	layout := taskRowLayoutFor(100)
+	marker := iconStatusActive + "#42"
+	provider := padRightVisible("codex", colWidthAgent)
+
+	selected := model{selected: 0}.renderRow(0, row, layout)
+	require.Contains(t, selected, healthyStyle.Bold(true).Render(marker))
+	require.Contains(t, selected, codexStyle.Bold(true).Render(provider))
+
+	other := model{selected: 1}.renderRow(0, row, layout)
+	darker := func(style lipgloss.Style) lipgloss.Style {
+		return style.Foreground(lipgloss.Darken(style.GetForeground(), offCursorDarken))
+	}
+	require.Contains(t, other, darker(healthyStyle).Render(marker))
+	require.Contains(t, other, darker(codexStyle).Render(provider))
+
+	subRowProvider := padRightVisible("codex", subRowProviderWidth)
+	require.Contains(
+		t,
+		model{}.renderAgentSubRow(codexAgent(), agentRowUsage{}, true, true, layout),
+		codexStyle.Bold(true).Render(subRowProvider),
+	)
+	require.Contains(
+		t,
+		model{}.renderAgentSubRow(codexAgent(), agentRowUsage{}, true, false, layout),
+		darker(codexStyle).Render(subRowProvider),
+	)
 }
 
 func TestRenderRow_NeedsInputNameStandsOut(t *testing.T) {
@@ -1084,11 +1131,12 @@ func TestRenderRow_NeedsInputNameStandsOut(t *testing.T) {
 	needsInput := m.renderRow(0, taskRow{
 		task:   rowTask(),
 		status: &core.TaskStatusUpdate{Phase: core.TaskStatusPhaseWaitingForInput},
-	}, 100)
+	}, taskRowLayoutFor(100))
+
 	stopped := m.renderRow(0, taskRow{
 		task:   rowTask(),
 		status: &core.TaskStatusUpdate{Phase: core.TaskStatusPhaseStopped},
-	}, 100)
+	}, taskRowLayoutFor(100))
 
 	require.Contains(t, needsInput, primaryStyle.Render("first task"))
 	require.Contains(t, stopped, dimStyle.Render("first task"))
@@ -2556,7 +2604,8 @@ func TestModel_ConfirmCleanupDeletesTaskAndRemovesRow(t *testing.T) {
 	require.Equal(t, opNone, pending.pending)
 	require.Equal(t, modeBrowse, pending.mode)
 	require.True(t, pending.deleting["task-2"])
-	require.Contains(t, rowContent(pending.renderRow(1, pending.rows[1], 100)), iconRemoving+" second task")
+	row := rowContent(pending.renderRow(1, pending.rows[1], taskRowLayoutFor(100)))
+	require.Contains(t, row, iconRemoving+" second task")
 
 	taskDeleted, ok := runCmd(t, cmd).(taskDeletedMsg)
 	require.True(t, ok)

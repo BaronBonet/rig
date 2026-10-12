@@ -11,6 +11,7 @@ import (
 
 	"charm.land/bubbles/v2/textarea"
 	tea "charm.land/bubbletea/v2"
+	"charm.land/lipgloss/v2"
 )
 
 type taskRow struct {
@@ -873,6 +874,10 @@ func (m model) View() tea.View {
 	default:
 		body = m.listView()
 	}
+	if margin := (m.width - m.totalWidth()) / 2; margin > 0 {
+		indent := strings.Repeat(" ", margin)
+		body = indent + strings.ReplaceAll(body, "\n", "\n"+indent)
+	}
 
 	view := tea.NewView(body)
 	view.AltScreen = true
@@ -1422,11 +1427,24 @@ func (m model) selectedPR() *core.RepoPullRequest {
 	return &m.draft.prs[m.draft.prSelected]
 }
 
+// maxContentWidth caps how wide rig draws on a wide terminal. View centers
+// the narrower content.
+const maxContentWidth = 120
+
+// totalWidth is the terminal's width, up to maxContentWidth. On a wider
+// terminal it is only as wide as the widest task row and the list header
+// need, so a row's columns sit just after the longest name and end under the
+// header's keys.
 func (m model) totalWidth() int {
-	if m.width >= 40 {
+	switch {
+	case m.width < 40:
+		return 72
+	case m.width <= maxContentWidth:
 		return m.width
 	}
-	return 72
+	header := lipgloss.Width(m.renderHeaderLabel()) + len(nameGap) + lipgloss.Width(m.listKeybindText())
+	rows := m.widestNameArea() + taskRowFixedWidth
+	return min(maxContentWidth, max(header, rows))
 }
 
 func (m model) totalHeight() int {

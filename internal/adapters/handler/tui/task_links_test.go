@@ -93,7 +93,7 @@ func TestModel_ChildTaskRowCarriesTheLinkMarker(t *testing.T) {
 	// cursor is on backend-api, the first row, not on backend-docs, the second.
 	require.Equal(t, 0, m.selected)
 	require.Equal(t, "backend-docs", m.rows[1].task.ID)
-	require.Contains(t, m.renderRow(1, m.rows[1], 100), " "+mutedStyle.Render(iconChildTask)+" ")
+	require.Contains(t, m.renderRow(1, m.rows[1], taskRowLayoutFor(100)), " "+mutedStyle.Render(iconChildTask)+" ")
 }
 
 func TestModel_SelectedChildTaskBrightensItsLinkMarker(t *testing.T) {
@@ -137,8 +137,8 @@ func TestRenderRow_LinkMarkerKeepsTheRightColumnsAligned(t *testing.T) {
 	// columns, the child's name gives up the marker's width, so its columns on
 	// the right start where the unlinked row's do.
 	for _, width := range []int{120, 62, 54, 40} {
-		childLine := stripANSI(m.renderRow(1, child, width))
-		unlinkedLine := stripANSI(m.renderRow(2, unlinked, width))
+		childLine := stripANSI(m.renderRow(1, child, taskRowLayoutFor(width)))
+		unlinkedLine := stripANSI(m.renderRow(2, unlinked, taskRowLayoutFor(width)))
 
 		require.Contains(t, childLine, iconChildTask, "width %d", width)
 		require.Less(t, lipgloss.Width(childLine), width, "width %d: %q", width, childLine)
@@ -173,15 +173,15 @@ func TestRenderRow_ChildRowIsNeverWiderThanOtherRows(t *testing.T) {
 	for width := 1; width <= 140; width++ {
 		require.Equal(
 			t,
-			lipgloss.Width(m.renderRow(2, unlinked, width)),
-			lipgloss.Width(m.renderRow(1, child, width)),
-			"width %d: %q", width, stripANSI(m.renderRow(1, child, width)),
+			lipgloss.Width(m.renderRow(2, unlinked, taskRowLayoutFor(width))),
+			lipgloss.Width(m.renderRow(1, child, taskRowLayoutFor(width))),
+			"width %d: %q", width, stripANSI(m.renderRow(1, child, taskRowLayoutFor(width))),
 		)
 	}
 
 	// A name area too narrow to keep a cell of the name beside the marker
 	// leaves the marker out.
-	narrow := rowContent(m.renderRow(1, child, 22))
+	narrow := rowContent(m.renderRow(1, child, taskRowLayoutFor(22)))
 	require.NotContains(t, narrow, iconChildTask)
 	require.Contains(t, narrow, "#12345")
 }

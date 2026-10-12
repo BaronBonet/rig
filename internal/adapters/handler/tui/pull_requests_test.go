@@ -104,11 +104,11 @@ func TestPullRequestsRowText_ColorsEachSymbolByItsState(t *testing.T) {
 
 	require.Equal(
 		t,
-		prMergedStyle.Render(
+		cursorLineStyle(prMergedStyle, false).Render(
 			iconDone,
-		)+warningStyle.Render(
+		)+cursorLineStyle(warningStyle, false).Render(
 			iconStatusProgress,
-		)+healthyStyle.Render(
+		)+cursorLineStyle(healthyStyle, false).Render(
 			iconStatusActive+"#127",
 		),
 		pullRequestsRowText(pullRequestsMarker{pullRequests: pullRequests}, 100),
@@ -118,7 +118,7 @@ func TestPullRequestsRowText_ColorsEachSymbolByItsState(t *testing.T) {
 func TestRenderRow_ShowsEveryPullRequestAfterTheName(t *testing.T) {
 	row := taskRow{task: rowTask(), pullRequests: billingPullRequests()}
 
-	line := rowContent(model{}.renderRow(0, row, 100))
+	line := rowContent(model{}.renderRow(0, row, taskRowLayoutFor(100)))
 
 	require.Contains(t, line, "first task  "+iconDone+iconDone+iconStatusActive+"#127  ")
 	require.NotContains(t, line, "#120")
@@ -130,7 +130,7 @@ func TestRenderRow_LongNameKeepsAllItsPullRequests(t *testing.T) {
 	row.task.DisplayName = strings.Repeat("very long task name ", 10)
 
 	for _, width := range []int{40, 54, 62, 100, 140} {
-		line := model{}.renderRow(0, row, width)
+		line := model{}.renderRow(0, row, taskRowLayoutFor(width))
 
 		require.Less(t, lipgloss.Width(line), width, "width %d", width)
 		require.Contains(t, rowContent(line), "…  "+iconDone+iconDone+iconStatusActive+"#127", "width %d", width)
@@ -212,7 +212,7 @@ func TestRenderRow_ManyPullRequestsNeverWidenTheRow(t *testing.T) {
 	row := taskRow{task: rowTask(), pullRequests: manyPullRequests(30)}
 
 	for width := 30; width <= 140; width++ {
-		line := model{}.renderRow(0, row, width)
+		line := model{}.renderRow(0, row, taskRowLayoutFor(width))
 
 		require.Less(t, lipgloss.Width(line), width, "width %d: %q", width, stripANSI(line))
 		view := rowContent(line)
@@ -225,8 +225,12 @@ func TestRenderRow_ManyPullRequestsNeverWidenTheRow(t *testing.T) {
 	// earlier pull requests give way before the name shrinks below eight
 	// cells.
 	allFour := "…" + strings.Repeat(iconDone, 4) + iconStatusActive + "#1234"
-	require.Contains(t, rowContent(model{}.renderRow(0, row, 40)), "first task  "+allFour)
-	require.Contains(t, rowContent(model{}.renderRow(0, row, 34)), "first t…  …"+iconDone+iconStatusActive+"#1234")
+	require.Contains(t, rowContent(model{}.renderRow(0, row, taskRowLayoutFor(40))), "first task  "+allFour)
+	require.Contains(
+		t,
+		rowContent(model{}.renderRow(0, row, taskRowLayoutFor(34))),
+		"first t…  …"+iconDone+iconStatusActive+"#1234",
+	)
 }
 
 func TestPullRequestDetailLines_ListsEveryPullRequest(t *testing.T) {

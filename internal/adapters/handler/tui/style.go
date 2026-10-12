@@ -111,6 +111,19 @@ var (
 			Padding(0, 1)
 )
 
+// offCursorDarken is how much a provider or pull request color darkens off
+// the cursor's line, as names and times dim there.
+const offCursorDarken = 0.35
+
+// cursorLineStyle sets style in bold on the cursor's line, and darkens its
+// color elsewhere, so the cursor's line stands out while keeping its colors.
+func cursorLineStyle(style lipgloss.Style, onCursor bool) lipgloss.Style {
+	if onCursor {
+		return style.Bold(true)
+	}
+	return style.Foreground(lipgloss.Darken(style.GetForeground(), offCursorDarken))
+}
+
 func providerStyle(provider string) lipgloss.Style {
 	if strings.HasPrefix(strings.TrimSpace(provider), "claude") {
 		return claudeStyle

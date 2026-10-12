@@ -24,17 +24,17 @@ func TestRenderRow_MarksUnshippedWorkAfterTheCurrentPullRequest(t *testing.T) {
 	for name, work := range cases {
 		row := taskRow{task: rowTask(), pullRequests: billingPullRequests(), unshippedWork: work}
 
-		line := rowContent(model{}.renderRow(0, row, 100))
+		line := rowContent(model{}.renderRow(0, row, taskRowLayoutFor(100)))
 
 		require.Contains(t, line, "first task  "+billingMarker+"+  ", name)
 	}
 
 	none := taskRow{task: rowTask(), pullRequests: billingPullRequests()}
-	require.NotContains(t, rowContent(model{}.renderRow(0, none, 100)), "+")
+	require.NotContains(t, rowContent(model{}.renderRow(0, none, taskRowLayoutFor(100))), "+")
 	// Unshipped work is only found for a task with pull requests, and a row
 	// marks it only with them.
 	withoutPullRequests := taskRow{task: rowTask(), unshippedWork: core.UnshippedWork{Commits: 3}}
-	require.NotContains(t, rowContent(model{}.renderRow(0, withoutPullRequests, 100)), "+")
+	require.NotContains(t, rowContent(model{}.renderRow(0, withoutPullRequests, taskRowLayoutFor(100))), "+")
 }
 
 // The + is in plain text color: Rig's colors mean the task needs the user, or
@@ -42,10 +42,11 @@ func TestRenderRow_MarksUnshippedWorkAfterTheCurrentPullRequest(t *testing.T) {
 func TestPullRequestsRowText_MarksUnshippedWorkInPlainTextColor(t *testing.T) {
 	marker := pullRequestsRowText(pullRequestsMarker{pullRequests: billingPullRequests(), unshipped: true}, 100)
 
+	merged := cursorLineStyle(prMergedStyle, false).Render(iconDone)
 	require.Equal(
 		t,
-		prMergedStyle.Render(iconDone)+prMergedStyle.Render(iconDone)+
-			healthyStyle.Render(iconStatusActive+"#127")+primaryStyle.Render("+"),
+		merged+merged+cursorLineStyle(healthyStyle, false).Render(iconStatusActive+"#127")+
+			cursorLineStyle(primaryStyle, false).Render("+"),
 		marker,
 	)
 }
@@ -73,7 +74,7 @@ func TestRenderRow_UnshippedWorkNeverWidensTheRow(t *testing.T) {
 	}
 
 	for width := 30; width <= 140; width++ {
-		line := model{}.renderRow(0, row, width)
+		line := model{}.renderRow(0, row, taskRowLayoutFor(width))
 
 		require.Less(t, lipgloss.Width(line), width, "width %d: %q", width, stripANSI(line))
 		view := rowContent(line)
@@ -82,7 +83,7 @@ func TestRenderRow_UnshippedWorkNeverWidensTheRow(t *testing.T) {
 	}
 	require.Contains(
 		t,
-		rowContent(model{}.renderRow(0, row, 34)),
+		rowContent(model{}.renderRow(0, row, taskRowLayoutFor(34))),
 		"first t…  …"+iconStatusActive+"#1234+",
 	)
 }

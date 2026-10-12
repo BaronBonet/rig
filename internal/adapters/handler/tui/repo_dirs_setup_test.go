@@ -2,6 +2,7 @@ package tui
 
 import (
 	"errors"
+	"strings"
 	"testing"
 
 	tea "charm.land/bubbletea/v2"
@@ -278,9 +279,11 @@ func TestModel_RepoDirsStepExplainsTheDirectoriesAndShowsItsKeys(t *testing.T) {
 	got.width = 200
 
 	view := stripANSI(got.View().Content)
+	// The explanation wraps within maxContentWidth.
+	flat := strings.Join(strings.Fields(view), " ")
 
 	require.Contains(t, view, "Repo directories")
-	require.Contains(t, view, "Optional. Rig lists the git repositories directly inside these directories, "+
+	require.Contains(t, flat, "Optional. Rig lists the git repositories directly inside these directories, "+
 		"so agents can find a repository by name. Worktrees are skipped. One path per line, absolute or "+
 		"starting with ~/.")
 	require.Contains(t, view, "┃ /work")
