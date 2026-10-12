@@ -33,6 +33,8 @@ const (
 	iconFailed           = "×"
 	iconPRNone           = "—"
 	iconCompacted        = "↻"
+	// iconRemoving marks a task or agent row whose removal is under way.
+	iconRemoving = "⊖"
 	// iconChildTask marks the row of a child task, one created from another
 	// task in the list.
 	iconChildTask = "↳"

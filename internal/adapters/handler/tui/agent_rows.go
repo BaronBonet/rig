@@ -148,6 +148,9 @@ func (m model) renderAgentSubRow(
 
 	status := agentSessionStatusUpdate(session)
 	symbol, symbolStyle := m.statusSymbol(status)
+	if m.removingAgents[session.ID] {
+		symbol, symbolStyle = iconRemoving, mutedStyle
+	}
 	provider := emptyFallback(string(session.Provider), "-")
 	providerCell := padRightVisible(provider, subRowProviderWidth)
 

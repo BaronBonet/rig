@@ -2624,26 +2624,65 @@ func TestModel_ConfirmCleanupDeletesTaskAndRemovesRow(t *testing.T) {
 	next, cmd := m.Update(tea.KeyPressMsg{Text: "y"})
 	require.NotNil(t, cmd)
 
+	// The delete runs in the background: the list is back at once, with the
+	// row marked as going.
 	pending, ok := next.(model)
 	require.True(t, ok)
-	require.Equal(t, opDeleting, pending.pending)
-	require.Equal(t, modeCleanupConfirm, pending.mode)
+	require.Equal(t, opNone, pending.pending)
+	require.Equal(t, modeBrowse, pending.mode)
+	require.True(t, pending.deleting["task-2"])
+	require.Contains(t, rowContent(pending.renderRow(1, pending.rows[1], 100)), iconRemoving+" second task")
 
-	initialMsgs := runBatchCmd(t, cmd)
-	taskDeleted := requireMsgType[taskDeletedMsg](t, initialMsgs)
-	requireMsgType[shimmerTickMsg](t, initialMsgs)
+	taskDeleted, ok := runCmd(t, cmd).(taskDeletedMsg)
+	require.True(t, ok)
 
 	next, follow := pending.Update(taskDeleted)
 	require.Nil(t, follow)
 
 	got, ok := next.(model)
 	require.True(t, ok)
-	require.Equal(t, opNone, got.pending)
 	require.Equal(t, modeBrowse, got.mode)
+	require.Empty(t, got.deleting)
 	require.Len(t, got.rows, 1)
 	require.Equal(t, "task-1", got.rows[0].task.ID)
 	require.Equal(t, 0, got.selected)
 	require.Equal(t, []string{"task-2"}, frontend.deleteTaskIDs)
+}
+
+func TestModel_ListStaysUsableWhileATaskIsDeleted(t *testing.T) {
+	frontend := newFrontendHarness()
+	frontend.listTasks = []*core.Task{
+		{ID: "task-1", DisplayName: "first task", Provider: core.ProviderCodex},
+		{ID: "task-2", DisplayName: "second task", Provider: core.ProviderCodex},
+		{ID: "task-3", DisplayName: "third task", Provider: core.ProviderCodex},
+	}
+
+	m := newLoadedModel(frontend)
+	m = pressKey(t, m, tea.KeyPressMsg{Text: "x"})
+	next, cmd := m.Update(tea.KeyPressMsg{Text: "y"})
+	taskDeleted, ok := runCmd(t, cmd).(taskDeletedMsg)
+	require.True(t, ok)
+	m = asModel(t, next)
+	require.Contains(t, stripANSI(m.View().Content), iconRemoving+" cleaning up")
+
+	// The task being deleted takes no action.
+	m = pressKey(t, m, tea.KeyPressMsg{Text: "x"})
+	require.Equal(t, modeBrowse, m.mode)
+	next, cmd = m.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
+	require.Nil(t, cmd)
+	require.False(t, asModel(t, next).opening)
+
+	// The cursor moves on and a new task's prompt opens while it goes; its
+	// reply leaves both as they are.
+	m = pressKey(t, m, tea.KeyPressMsg{Code: 'j', Text: "j"})
+	m = pressKey(t, m, tea.KeyPressMsg{Text: "n"})
+	require.Equal(t, modePromptInput, m.mode)
+
+	next, _ = m.Update(taskDeleted)
+	got := asModel(t, next)
+	require.Equal(t, modePromptInput, got.mode)
+	require.Len(t, got.rows, 2)
+	require.Equal(t, "task-2", got.rows[got.selected].task.ID)
 }
 
 func TestModel_CleanupFailurePreservesRowsAndShowsError(t *testing.T) {
@@ -2661,17 +2700,16 @@ func TestModel_CleanupFailurePreservesRowsAndShowsError(t *testing.T) {
 
 	pending, ok := next.(model)
 	require.True(t, ok)
-	require.Equal(t, opDeleting, pending.pending)
+	require.True(t, pending.deleting["task-1"])
 
-	initialMsgs := runBatchCmd(t, cmd)
-	taskDeleted := requireMsgType[taskDeletedMsg](t, initialMsgs)
-	requireMsgType[shimmerTickMsg](t, initialMsgs)
+	taskDeleted, ok := runCmd(t, cmd).(taskDeletedMsg)
+	require.True(t, ok)
 
 	next, _ = pending.Update(taskDeleted)
 
 	got, ok := next.(model)
 	require.True(t, ok)
-	require.Equal(t, opNone, got.pending)
+	require.Empty(t, got.deleting)
 	require.Equal(t, modeBrowse, got.mode)
 	require.Len(t, got.rows, 1)
 	require.ErrorContains(t, got.err, "cleanup failed")

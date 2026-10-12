@@ -279,7 +279,7 @@ Common TUI keys:
 | `enter` | Jump to the selected agent's pane: on a task row, the agent that most needs you, or the task's tmux session when no agent runs |
 | `r` | Refresh task data |
 | `R` | Retry a failed task creation |
-| `x` | Clean up the selected task's tmux session and worktree, or on an agent sub-row, close only that agent's pane |
+| `x` | Clean up the selected task's tmux session and worktree, or on an agent sub-row, close only that agent's pane. It runs in the background: the row shows `⊖` until it finishes |
 | `q` | Quit |
 
 Check environment health:

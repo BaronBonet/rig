@@ -126,7 +126,10 @@ func removeAgentSessionCmd(
 	agentSessionID string,
 ) tea.Cmd {
 	return func() tea.Msg {
-		return agentSessionRemovedMsg{err: frontend.RemoveAgentSession(ctx, taskID, agentSessionID)}
+		return agentSessionRemovedMsg{
+			err:     frontend.RemoveAgentSession(ctx, taskID, agentSessionID),
+			agentID: agentSessionID,
+		}
 	}
 }
 

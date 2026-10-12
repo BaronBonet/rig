@@ -279,21 +279,26 @@ func TestModel_CleanupOnAnAgentSubRowRemovesOnlyThatAgent(t *testing.T) {
 	next, cmd := confirm.Update(tea.KeyPressMsg{Text: "y"})
 	require.NotNil(t, cmd)
 	removing := asModel(t, next)
-	require.Equal(t, opRemovingAgent, removing.pending)
-	require.Contains(t, stripANSI(removing.View().Content), "Removing agent...")
-	msgs := runBatchCmd(t, cmd)
-	removed := requireMsgType[agentSessionRemovedMsg](t, msgs)
-	requireMsgType[shimmerTickMsg](t, msgs)
+	require.Equal(t, modeBrowse, removing.mode)
+	require.Nil(t, removing.cleanup.task)
+	view = stripANSI(removing.View().Content)
+	require.Contains(t, view, iconRemoving+" codex")
+	require.Contains(t, view, iconRemoving+" removing")
+	removed, ok := runCmd(t, cmd).(agentSessionRemovedMsg)
+	require.True(t, ok)
 	require.Equal(t, []string{"task-1/agent-codex"}, frontend.removedAgents)
 	require.Empty(t, frontend.deleteTaskIDs)
 
+	// The agent being removed takes no action.
+	require.Equal(t, modeBrowse, pressKey(t, removing, tea.KeyPressMsg{Text: "x"}).mode)
+
+	// The reply can come before the status update without the agent, so the
+	// sub-row stays marked until it goes.
 	next, _ = removing.Update(removed)
 	got := asModel(t, next)
-	require.Equal(t, opNone, got.pending)
-	require.Equal(t, modeBrowse, got.mode)
 	require.NoError(t, got.err)
 	require.Len(t, got.rows, 2)
-	require.Nil(t, got.cleanup.task)
+	require.Contains(t, stripANSI(got.View().Content), iconRemoving+" codex")
 
 	// The task's status update without the agent drops its sub-row and moves
 	// the cursor to the task row.
@@ -318,7 +323,8 @@ func TestModel_CleanupKeepsTheAgentItOpenedOn(t *testing.T) {
 	require.Contains(t, stripANSI(confirm.View().Content), "remove agent")
 
 	_, cmd := confirm.Update(tea.KeyPressMsg{Text: "y"})
-	requireMsgType[agentSessionRemovedMsg](t, runBatchCmd(t, cmd))
+	_, ok := runCmd(t, cmd).(agentSessionRemovedMsg)
+	require.True(t, ok)
 	require.Equal(t, []string{"task-1/agent-claude"}, frontend.removedAgents)
 	require.Empty(t, frontend.deleteTaskIDs)
 }
@@ -334,8 +340,9 @@ func TestModel_CleanupOnATaskRowWithAgentsDeletesTheTask(t *testing.T) {
 	require.Contains(t, stripANSI(confirm.View().Content), "The tmux session and worktree will be deleted.")
 
 	next, cmd := confirm.Update(tea.KeyPressMsg{Text: "y"})
-	requireMsgType[taskDeletedMsg](t, runBatchCmd(t, cmd))
-	require.Equal(t, opDeleting, asModel(t, next).pending)
+	_, ok := runCmd(t, cmd).(taskDeletedMsg)
+	require.True(t, ok)
+	require.True(t, asModel(t, next).deleting["task-1"])
 	require.Equal(t, []string{"task-1"}, frontend.deleteTaskIDs)
 	require.Empty(t, frontend.removedAgents)
 }
@@ -349,11 +356,12 @@ func TestModel_AgentRemovalFailureShowsErrorAndKeepsTheAgent(t *testing.T) {
 	confirm := pressKey(t, m, tea.KeyPressMsg{Text: "x"})
 
 	next, cmd := confirm.Update(tea.KeyPressMsg{Text: "y"})
-	removed := requireMsgType[agentSessionRemovedMsg](t, runBatchCmd(t, cmd))
+	removed, ok := runCmd(t, cmd).(agentSessionRemovedMsg)
+	require.True(t, ok)
 	next, _ = asModel(t, next).Update(removed)
 	got := asModel(t, next)
 
-	require.Equal(t, opNone, got.pending)
+	require.Empty(t, got.removingAgents)
 	require.Equal(t, modeBrowse, got.mode)
 	require.ErrorContains(t, got.err, "tmux offline")
 	require.Equal(t, "agent-claude", got.selectedAgent)

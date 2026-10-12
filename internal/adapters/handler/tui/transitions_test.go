@@ -60,14 +60,6 @@ func TestCanEnterMatrix(t *testing.T) {
 				modeBrowse: true,
 			},
 		},
-		{
-			name:     "delete pending blocks the same set",
-			pending:  opDeleting,
-			hasSetup: true,
-			allowed: map[modelMode]bool{
-				modeBrowse: true,
-			},
-		},
 	}
 
 	for _, tc := range cases {
