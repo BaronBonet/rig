@@ -213,8 +213,10 @@ the providers to its sub-rows. A task with one agent looks as it always has.
 Pressing `enter` on a task takes you straight to the pane of the agent the task
 shows, in whichever window it runs, so the agent that most needs you is one key
 away. Move onto a sub-row with `j`/`k` and `enter` takes you to that agent
-instead, while the detail panel describes it; task actions such as `x` and `R`
-still act on its task. Inside tmux, Rig switches your client to the pane;
+instead, while the detail panel describes it. `x` on a sub-row removes only
+that agent: once you confirm, Rig closes its pane, which stops the agent, and
+keeps the task, its worktree and its other agents. Other task actions, such as
+`R`, still act on its task. Inside tmux, Rig switches your client to the pane;
 outside, it selects the pane before attaching. With no agent running, if its
 pane has just closed, or if your terminal runs inside another tmux server than
 the agent, `enter` attaches to the task's tmux session as before.
@@ -276,7 +278,7 @@ Common TUI keys:
 | `enter` | Jump to the selected agent's pane: on a task row, the agent that most needs you, or the task's tmux session when no agent runs |
 | `r` | Refresh task data |
 | `R` | Retry a failed task creation |
-| `x` | Clean up the selected task's tmux session and worktree |
+| `x` | Clean up the selected task's tmux session and worktree, or on an agent sub-row, close only that agent's pane |
 | `q` | Quit |
 
 Check environment health:

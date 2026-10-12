@@ -12,6 +12,7 @@ type taskOperation string
 const (
 	taskOperationDelete        taskOperation = "delete"
 	taskOperationReconnect     taskOperation = "reconnect"
+	taskOperationRemoveAgent   taskOperation = "remove agent"
 	taskOperationRetryCreation taskOperation = "retry creation"
 )
 
@@ -21,6 +22,8 @@ func (o taskOperation) progressLabel() string {
 		return "deleting the task"
 	case taskOperationReconnect:
 		return "reconnecting its session"
+	case taskOperationRemoveAgent:
+		return "removing an agent"
 	case taskOperationRetryCreation:
 		return "retrying task creation"
 	default:

@@ -361,6 +361,16 @@ func (s *service) deleteTask(ctx context.Context, taskID string) error {
 	return nil
 }
 
+func (s *service) RemoveAgentSession(ctx context.Context, taskID string, agentSessionID string) error {
+	return s.operations.Run(ctx, taskID, taskOperationRemoveAgent, false, func(ctx context.Context) error {
+		task, err := taskByID(ctx, s.tasks, taskID)
+		if err != nil {
+			return err
+		}
+		return s.observation.removeAgentSession(ctx, task, strings.TrimSpace(agentSessionID))
+	})
+}
+
 func (s *service) ReconnectTaskSession(ctx context.Context, taskID string) error {
 	return s.operations.Run(ctx, taskID, taskOperationReconnect, true, func(ctx context.Context) error {
 		return s.reconnectTaskSession(ctx, taskID)

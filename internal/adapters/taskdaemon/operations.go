@@ -34,6 +34,11 @@ type taskIDRequest struct {
 	TaskID string `json:"task_id"`
 }
 
+type removeAgentSessionRequest struct {
+	TaskID         string `json:"task_id"`
+	AgentSessionID string `json:"agent_session_id"`
+}
+
 type taskActivityRequest struct {
 	TaskID string `json:"task_id"`
 	Limit  int    `json:"limit,omitempty"`
@@ -247,6 +252,22 @@ var opDeleteTask = unaryOp[taskIDRequest, emptyResponse]{
 	},
 }
 
+var opRemoveAgentSession = unaryOp[removeAgentSessionRequest, emptyResponse]{
+	command:  "remove_agent_session",
+	envelope: "agent_session_removed",
+	call: func(ctx context.Context, svc core.TaskService, req removeAgentSessionRequest) (emptyResponse, error) {
+		taskID, err := requiredTaskID("remove_agent_session", req.TaskID)
+		if err != nil {
+			return emptyResponse{}, err
+		}
+		agentSessionID := strings.TrimSpace(req.AgentSessionID)
+		if agentSessionID == "" {
+			return emptyResponse{}, errors.New("remove_agent_session agent_session_id required")
+		}
+		return emptyResponse{}, svc.RemoveAgentSession(ctx, taskID, agentSessionID)
+	},
+}
+
 var opListTasks = unaryOp[emptyResponse, []*core.Task]{
 	command:  "list_tasks",
 	envelope: "tasks_list",
@@ -319,6 +340,7 @@ var socketUnaryHandlers = map[string]unaryHandler{
 	opListRepos.command:            serveUnary(opListRepos),
 	opSuggestRepoDir.command:       serveUnary(opSuggestRepoDir),
 	opDeleteTask.command:           serveUnary(opDeleteTask),
+	opRemoveAgentSession.command:   serveUnary(opRemoveAgentSession),
 	opListTasks.command:            serveUnary(opListTasks),
 	opTaskAtPath.command:           serveUnary(opTaskAtPath),
 	opLatestTaskStatus.command:     serveUnary(opLatestTaskStatus),

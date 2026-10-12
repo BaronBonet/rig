@@ -248,6 +248,9 @@ Use `rig` for the CLI command and Rig for the product or system.
 - Rig never starts new agents in a Task: the user splits a pane in the Task's
   Session and starts one there. Rig launches agents only at Task creation and
   on Reconnect, and each counts as starting until its first hook event.
+- Removing an Agent session closes its pane, which stops its agent, and ends
+  it at once. Its Task, the Task workspace and the Task's other Agent sessions
+  stay. One without a pane, which Reconnect would restore, only ends.
 - Every ready Task workspace registers hook forwarding for all Configured
   providers, so any Configured provider launched there is observable as an
   Agent session.

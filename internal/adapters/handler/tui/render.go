@@ -839,7 +839,12 @@ func (m model) listKeybindText() string {
 		row.task.CreationStatus == core.TaskCreationStatusFailed {
 		binds = append(binds, [2]string{"R", "retry"})
 	}
-	binds = append(binds, [2]string{"space", "details"}, [2]string{"x", "clean"}, [2]string{"q", "quit"})
+	// On an agent sub-row, x removes only that agent.
+	cleanup := "clean"
+	if m.selectedAgentSession() != nil {
+		cleanup = "remove"
+	}
+	binds = append(binds, [2]string{"space", "details"}, [2]string{"x", cleanup}, [2]string{"q", "quit"})
 
 	return keybindBar("   ", binds...)
 }
@@ -1129,17 +1134,53 @@ func taskCreateProgressLabel(step core.TaskCreateProgressStep) string {
 }
 
 func (m model) confirmationView() string {
+	if m.cleanup.agent != nil {
+		return m.removeAgentConfirmationView(*m.cleanup.agent)
+	}
+
 	var builder strings.Builder
 	builder.WriteString(m.screenHeader(errorStyle.Render("cleanup")))
 
-	if row := m.selectedRow(); row != nil && row.task != nil {
-		builder.WriteString(primaryStyle.Render(emptyFallback(row.task.DisplayName, row.task.ID)) + "\n\n")
+	if task := m.cleanup.task; task != nil {
+		builder.WriteString(primaryStyle.Render(emptyFallback(task.DisplayName, task.ID)) + "\n\n")
 	}
 
 	builder.WriteString(dimStyle.Render("The tmux session and worktree will be deleted.") + "\n")
 	builder.WriteString(dimStyle.Render("The branch will be kept.") + "\n\n")
 	if m.pending == opDeleting {
 		builder.WriteString(stepActiveLine("Cleaning up task...", m.shimmerTick) + "\n\n")
+	}
+	builder.WriteString(footerKeybinds(
+		[2]string{"y", "confirm"},
+		[2]string{"n", "cancel"},
+	))
+
+	return builder.String()
+}
+
+// removeAgentConfirmationView asks before removing one agent from its task: it
+// names the task and the agent as its sub-row does, and says what goes and
+// what stays.
+func (m model) removeAgentConfirmationView(agent core.LiveAgentSession) string {
+	var builder strings.Builder
+	builder.WriteString(m.screenHeader(errorStyle.Render("remove agent")))
+
+	if task := m.cleanup.task; task != nil {
+		builder.WriteString(primaryStyle.Render(emptyFallback(task.DisplayName, task.ID)) + "\n")
+	}
+	provider := emptyFallback(string(agent.Provider), "-")
+	lead := subRowIndent + "└ " + provider + "  "
+	text, _ := agentSubRowText(agent)
+	text = truncateStr(text, max(0, m.totalWidth()-lipgloss.Width(lead)))
+	builder.WriteString(
+		dimStyle.Render(subRowIndent+"└ ") + providerStyle(provider).Render(provider) + "  " +
+			primaryStyle.Render(text) + "\n\n",
+	)
+
+	builder.WriteString(dimStyle.Render("The agent's tmux pane will be closed, which stops the agent.") + "\n")
+	builder.WriteString(dimStyle.Render("The task, its worktree and its other agents will be kept.") + "\n\n")
+	if m.pending == opRemovingAgent {
+		builder.WriteString(stepActiveLine("Removing agent...", m.shimmerTick) + "\n\n")
 	}
 	builder.WriteString(footerKeybinds(
 		[2]string{"y", "confirm"},

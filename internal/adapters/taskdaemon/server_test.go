@@ -56,6 +56,9 @@ type fakeTaskService struct {
 
 	deleted     []string
 	reconnected []string
+	// removedAgents are the task and agent session IDs RemoveAgentSession
+	// received, each as "task/agent".
+	removedAgents []string
 
 	errByOp map[string]error
 }
@@ -188,6 +191,13 @@ func (f *fakeTaskService) DeleteTask(_ context.Context, taskID string) error {
 	defer f.mu.Unlock()
 	f.deleted = append(f.deleted, taskID)
 	return f.errByOp["delete_task"]
+}
+
+func (f *fakeTaskService) RemoveAgentSession(_ context.Context, taskID string, agentSessionID string) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.removedAgents = append(f.removedAgents, taskID+"/"+agentSessionID)
+	return f.errByOp["remove_agent_session"]
 }
 
 func (f *fakeTaskService) ReconnectTaskSession(_ context.Context, taskID string) error {
@@ -580,6 +590,28 @@ func TestUnaryOperationsRoundTrip(t *testing.T) {
 
 	t.Run("delete task requires task id", func(t *testing.T) {
 		require.ErrorContains(t, client.DeleteTask(ctx, ""), "task_id required")
+	})
+
+	t.Run("remove agent session", func(t *testing.T) {
+		require.NoError(t, client.RemoveAgentSession(ctx, " task-1 ", " agent-2 "))
+		svc.mu.Lock()
+		defer svc.mu.Unlock()
+		require.Equal(t, []string{"task-1/agent-2"}, svc.removedAgents)
+	})
+
+	t.Run("remove agent session requires task and agent session ids", func(t *testing.T) {
+		require.ErrorContains(t, client.RemoveAgentSession(ctx, "", "agent-2"), "task_id required")
+		require.ErrorContains(t, client.RemoveAgentSession(ctx, "task-1", " "), "agent_session_id required")
+	})
+
+	t.Run("remove agent session errors surface as client errors", func(t *testing.T) {
+		svc.mu.Lock()
+		svc.errByOp["remove_agent_session"] = errors.New("close agent pane: tmux offline")
+		svc.mu.Unlock()
+		require.ErrorContains(t, client.RemoveAgentSession(ctx, "task-1", "agent-3"), "tmux offline")
+		svc.mu.Lock()
+		delete(svc.errByOp, "remove_agent_session")
+		svc.mu.Unlock()
 	})
 
 	t.Run("service errors surface as client errors", func(t *testing.T) {
