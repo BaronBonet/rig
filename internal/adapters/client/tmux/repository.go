@@ -150,12 +150,12 @@ func (r *repository) SplitAgentPane(
 		if pane.ID == "" {
 			return core.TmuxPaneRef{}, err
 		}
-		return core.TmuxPaneRef{}, r.closeAgentPane(ctx, pane.ID, window, err)
+		return core.TmuxPaneRef{}, r.closeUnlaunchedAgentPane(ctx, pane.ID, window, err)
 	}
 	r.evenOutAgentPanes(ctx, pane.ID)
 
 	if err := r.sendKeys(ctx, pane.ID, launch.Command); err != nil {
-		return core.TmuxPaneRef{}, r.closeAgentPane(ctx, pane.ID, window, err)
+		return core.TmuxPaneRef{}, r.closeUnlaunchedAgentPane(ctx, pane.ID, window, err)
 	}
 	return pane, nil
 }
@@ -187,10 +187,10 @@ func (r *repository) evenOutAgentPanes(ctx context.Context, target string) {
 	_, _ = r.runner.Run(ctx, "", "tmux", "select-layout", "-t", target, "even-horizontal")
 }
 
-// closeAgentPane closes a pane SplitAgentPane opened but could not launch in,
+// closeUnlaunchedAgentPane closes a pane SplitAgentPane opened but could not launch in,
 // so no stray shell is left, and evens out the panes left in its window. It
 // runs even when the caller's context is done.
-func (r *repository) closeAgentPane(ctx context.Context, paneID string, window string, cause error) error {
+func (r *repository) closeUnlaunchedAgentPane(ctx context.Context, paneID string, window string, cause error) error {
 	ctx = context.WithoutCancel(ctx)
 	_, closeErr := r.runner.Run(ctx, "", "tmux", "kill-pane", "-t", paneID)
 	if closeErr == nil {
@@ -605,6 +605,35 @@ func (r *repository) DeleteTaskSession(ctx context.Context, task *core.Task) err
 		return nil
 	}
 
+	return err
+}
+
+// CloseAgentPane kills an agent's pane once it has checked that this client's
+// tmux server is the pane's, as pane IDs restart on every server. Like closing
+// a pane by hand, it leaves the layout of the panes left in its window to
+// tmux, which hands the closed pane's space to a neighbour.
+func (r *repository) CloseAgentPane(ctx context.Context, pane core.TmuxPaneRef) error {
+	paneID := strings.TrimSpace(pane.ID)
+	if paneID == "" {
+		return nil
+	}
+
+	result, err := r.runner.Run(ctx, "", "tmux", "display-message", "-p", "-t", paneID, "#{socket_path}\t#{pid}")
+	if isMissingPaneError(err, result) || isNoTmuxServerError(err, result) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	socketPath, serverPID, _ := strings.Cut(strings.TrimRight(result.Stdout, "\r\n"), "\t")
+	if !pane.Server.IsZero() && tmuxServer(socketPath, serverPID) != pane.Server {
+		return nil
+	}
+
+	result, err = r.runner.Run(ctx, "", "tmux", "kill-pane", "-t", paneID)
+	if isMissingPaneError(err, result) {
+		return nil
+	}
 	return err
 }
 

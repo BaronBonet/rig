@@ -184,6 +184,10 @@ type sessionClientState struct {
 	locatePaneByPID        map[int]string
 	locateChainByPID       map[int][]string
 	locatedPIDs            []int
+	// CloseAgentPane records each pane it closes in closedPanes and takes the
+	// pane off the server, unless closePaneErr fails it.
+	closePaneErr error
+	closedPanes  []TmuxPaneRef
 }
 
 // agentPaneCall is one pane SplitAgentPane was asked to split in.
@@ -668,6 +672,25 @@ func configureTmuxSessionMock(client *MockTmuxSessionClient, state *sessionClien
 				return state.deleteErr
 			}
 			state.deletedTask = cloneTask(task)
+			return nil
+		},
+	).Maybe()
+	client.EXPECT().CloseAgentPane(mock.Anything, mock.Anything).RunAndReturn(
+		func(_ context.Context, pane TmuxPaneRef) error {
+			state.mu.Lock()
+			defer state.mu.Unlock()
+			if state.closePaneErr != nil {
+				return state.closePaneErr
+			}
+			state.closedPanes = append(state.closedPanes, pane)
+			state.locatePanes = slices.DeleteFunc(state.locatePanes, func(open TmuxPane) bool {
+				return open.ID == pane.ID
+			})
+			for taskID, panes := range state.locateTaskSessionPanes {
+				state.locateTaskSessionPanes[taskID] = slices.DeleteFunc(panes, func(open string) bool {
+					return open == pane.ID
+				})
+			}
 			return nil
 		},
 	).Maybe()

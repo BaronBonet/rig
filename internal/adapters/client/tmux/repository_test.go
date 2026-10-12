@@ -503,8 +503,8 @@ func attachTestRepository(t *testing.T, insideTmux bool) (*repository, *subproce
 
 // expectClientServer expects the check of which tmux server the client talks
 // to, reporting server.
-func expectClientServer(runner *subprocess.MockRunner, server core.TmuxServer) {
-	expectTmuxRun(runner, subprocess.Result{Stdout: fmt.Sprintf("%s\t%d\n", server.SocketPath, server.PID)}, nil,
+func expectClientServer(runner *subprocess.MockRunner, server core.TmuxServer) *mock.Call {
+	return expectTmuxRun(runner, subprocess.Result{Stdout: fmt.Sprintf("%s\t%d\n", server.SocketPath, server.PID)}, nil,
 		"display-message", "-p", "-t", "%7", "#{socket_path}\t#{pid}")
 }
 
@@ -1489,6 +1489,93 @@ func TestParsePaneRef(t *testing.T) {
 			require.Equal(t, tc.pane, pane)
 		})
 	}
+}
+
+func TestRepositoryCloseAgentPane_KillsThePaneOnItsServer(t *testing.T) {
+	runner := subprocess.NewMockRunner(t)
+	repo := New(runner).(*repository)
+	mock.InOrder(
+		expectClientServer(runner, attachTestPane.Server),
+		expectTmuxRun(runner, subprocess.Result{}, nil, "kill-pane", "-t", "%7"),
+	)
+
+	require.NoError(t, repo.CloseAgentPane(context.Background(), attachTestPane))
+}
+
+func TestRepositoryCloseAgentPane_LeavesAPaneIDOfAnotherServerAlone(t *testing.T) {
+	runner := subprocess.NewMockRunner(t)
+	repo := New(runner).(*repository)
+	// The client talks to another server, whose %7 is another pane.
+	expectClientServer(runner, core.TmuxServer{SocketPath: "/private/tmp/tmux-501/other", PID: 9001})
+
+	require.NoError(t, repo.CloseAgentPane(context.Background(), attachTestPane))
+}
+
+func TestRepositoryCloseAgentPane_KillsAPaneWithNoRecordedServerOnTheClientsServer(t *testing.T) {
+	runner := subprocess.NewMockRunner(t)
+	repo := New(runner).(*repository)
+	mock.InOrder(
+		expectClientServer(runner, attachTestPane.Server),
+		expectTmuxRun(runner, subprocess.Result{}, nil, "kill-pane", "-t", "%7"),
+	)
+
+	require.NoError(t, repo.CloseAgentPane(context.Background(), core.TmuxPaneRef{ID: "%7"}))
+}
+
+func TestRepositoryCloseAgentPane_LeavesAPaneThatHasClosedAlone(t *testing.T) {
+	cases := append([]struct {
+		name   string
+		stderr string
+	}{{name: "missing pane", stderr: "can't find pane: %7"}}, noTmuxServerStderr...)
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			runner := subprocess.NewMockRunner(t)
+			repo := New(runner).(*repository)
+			expectTmuxFailure(runner, tc.stderr, "display-message", "-p", "-t", "%7", "#{socket_path}\t#{pid}")
+
+			require.NoError(t, repo.CloseAgentPane(context.Background(), attachTestPane))
+		})
+	}
+
+	t.Run("closed before the kill", func(t *testing.T) {
+		runner := subprocess.NewMockRunner(t)
+		repo := New(runner).(*repository)
+		mock.InOrder(
+			expectClientServer(runner, attachTestPane.Server),
+			expectTmuxFailure(runner, "can't find pane: %7", "kill-pane", "-t", "%7"),
+		)
+
+		require.NoError(t, repo.CloseAgentPane(context.Background(), attachTestPane))
+	})
+}
+
+func TestRepositoryCloseAgentPane_ReturnsOtherTmuxFailures(t *testing.T) {
+	t.Run("server check", func(t *testing.T) {
+		runner := subprocess.NewMockRunner(t)
+		repo := New(runner).(*repository)
+		expectTmuxFailure(runner, tmuxPermissionDeniedStderr,
+			"display-message", "-p", "-t", "%7", "#{socket_path}\t#{pid}")
+
+		require.ErrorContains(t, repo.CloseAgentPane(context.Background(), attachTestPane), "exit status 1")
+	})
+
+	t.Run("kill", func(t *testing.T) {
+		runner := subprocess.NewMockRunner(t)
+		repo := New(runner).(*repository)
+		mock.InOrder(
+			expectClientServer(runner, attachTestPane.Server),
+			expectTmuxFailure(runner, "server exited unexpectedly", "kill-pane", "-t", "%7"),
+		)
+
+		require.ErrorContains(t, repo.CloseAgentPane(context.Background(), attachTestPane), "exit status 1")
+	})
+}
+
+func TestRepositoryCloseAgentPane_DoesNothingWithoutAPane(t *testing.T) {
+	runner := subprocess.NewMockRunner(t)
+	repo := New(runner).(*repository)
+
+	require.NoError(t, repo.CloseAgentPane(context.Background(), core.TmuxPaneRef{Server: attachTestPane.Server}))
 }
 
 func TestRepositoryDeleteTaskSession_KillsSession(t *testing.T) {

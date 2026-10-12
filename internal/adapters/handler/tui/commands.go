@@ -119,6 +119,17 @@ func deleteTaskCmd(ctx context.Context, frontend core.TaskFrontend, taskID strin
 	}
 }
 
+func removeAgentSessionCmd(
+	ctx context.Context,
+	frontend core.TaskFrontend,
+	taskID string,
+	agentSessionID string,
+) tea.Cmd {
+	return func() tea.Msg {
+		return agentSessionRemovedMsg{err: frontend.RemoveAgentSession(ctx, taskID, agentSessionID)}
+	}
+}
+
 func getProviderSetupCmd(ctx context.Context, frontend core.TaskFrontend) tea.Cmd {
 	return func() tea.Msg {
 		setup, err := frontend.GetProviderSetup(ctx)

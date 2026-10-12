@@ -297,6 +297,11 @@ type TaskService interface {
 	// DeleteTask deletes the task and its local runtime resources while keeping
 	// the Git branch.
 	DeleteTask(ctx context.Context, taskID string) error
+	// RemoveAgentSession closes the tmux pane of one of a task's open agent
+	// sessions, which stops its agent, and ends the agent session. The task,
+	// its workspace and its other agent sessions stay. An agent session that
+	// is no longer open has nothing left to remove.
+	RemoveAgentSession(ctx context.Context, taskID string, agentSessionID string) error
 	// ReconnectTaskSession recreates a task's missing Session and restores its
 	// open agent sessions there, each resuming its current Provider session
 	// with its own provider, and launches the task's launch provider fresh
@@ -647,6 +652,11 @@ type TmuxSessionClient interface {
 	LocateProcessPane(ctx context.Context, task *Task, pid int) (TmuxSnapshot, ProcessPane, error)
 	// DeleteTaskSession tears down the task session during task deletion.
 	DeleteTaskSession(ctx context.Context, task *Task) error
+	// CloseAgentPane closes an agent's pane, which stops the agent running in
+	// it. A pane that has closed already, or whose server is not the one this
+	// client reaches, where its ID may name another pane, is left alone. A
+	// pane with no recorded server is taken to be on this client's server.
+	CloseAgentPane(ctx context.Context, pane TmuxPaneRef) error
 }
 
 // TaskWorkspaceManager applies repo-local setup and provider bootstrap files

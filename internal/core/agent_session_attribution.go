@@ -223,6 +223,38 @@ func (o *taskObservation) endAgentSession(ctx context.Context, read AgentSession
 	return nil
 }
 
+// removeAgentSession closes the pane of one of a task's open agent sessions,
+// which stops its agent, and ends the agent session at once rather than at
+// the next status cycle. An agent session without a pane, such as one
+// Reconnect would restore, only ends. Hook events from the closing pane wait
+// for agentSessionMu, so they find the agent session ended.
+func (o *taskObservation) removeAgentSession(ctx context.Context, task *Task, agentSessionID string) error {
+	o.agentSessionMu.Lock()
+	defer o.agentSessionMu.Unlock()
+	changes := agentSessionChanges{}
+	defer o.publishAgentSessionChanges(ctx, changes)
+
+	open, err := o.tasks.ListOpenAgentSessions(ctx, task.ID)
+	if err != nil {
+		return fmt.Errorf("list open agent sessions: %w", err)
+	}
+	index := slices.IndexFunc(open, func(session AgentSession) bool { return session.ID == agentSessionID })
+	if index < 0 {
+		return nil
+	}
+	session := open[index]
+	if session.TmuxPane != "" {
+		if err := o.tmuxSession.CloseAgentPane(ctx, session.paneRef()); err != nil {
+			return fmt.Errorf("close agent pane: %w", err)
+		}
+	}
+	if err := o.tasks.EndAgentSession(ctx, session.ID, o.now().UTC()); err != nil {
+		return fmt.Errorf("end agent session: %w", err)
+	}
+	changes[task.ID] = true
+	return nil
+}
+
 // agentSessionStillAsRead reports whether a stored open agent session is
 // still as a status cycle read it: in the same pane, launched at the same
 // time, on the same conversation, with the same pane trust and status.

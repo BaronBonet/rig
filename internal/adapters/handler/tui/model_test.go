@@ -2618,7 +2618,8 @@ func TestModel_ConfirmCleanupDeletesTaskAndRemovesRow(t *testing.T) {
 
 	m := newLoadedModel(frontend)
 	m.selected = 1
-	m.mode = modeCleanupConfirm
+	m = pressKey(t, m, tea.KeyPressMsg{Text: "x"})
+	require.Equal(t, modeCleanupConfirm, m.mode)
 
 	next, cmd := m.Update(tea.KeyPressMsg{Text: "y"})
 	require.NotNil(t, cmd)
@@ -2653,7 +2654,7 @@ func TestModel_CleanupFailurePreservesRowsAndShowsError(t *testing.T) {
 	frontend.deleteTaskErr = errors.New("cleanup failed")
 
 	m := newLoadedModel(frontend)
-	m.mode = modeCleanupConfirm
+	m = pressKey(t, m, tea.KeyPressMsg{Text: "x"})
 
 	next, cmd := m.Update(tea.KeyPressMsg{Text: "y"})
 	require.NotNil(t, cmd)
@@ -2763,34 +2764,38 @@ func stripANSI(s string) string {
 type frontendHarness struct {
 	mock *core.MockTaskFrontend
 
-	listTasks                   []*core.Task
-	listTasksContext            context.Context
-	listTasksErr                error
-	listTasksCalls              int
-	listRepoPullRequests        []core.RepoPullRequest
-	listRepoPullRequestsErr     error
-	listRepoPullRequestsCwd     string
-	taskPullRequests            map[string]core.TaskPullRequests
-	taskPullRequestsErr         map[string]error
-	taskPullRequestsCalls       []string
-	attachedTask                *core.Task
-	attachedPanes               []*core.TmuxPaneRef
-	attachTaskSessionErr        error
-	attachTaskSessionCalls      int
-	attachTaskSessionFn         func(context.Context, *core.Task, *core.TmuxPaneRef) error
-	reconnectTaskSessionErr     error
-	reconnectTaskSessionFn      func(context.Context, string) error
-	reconnectTaskSessionCalls   int
-	createInput                 core.CreateTaskInput
-	createTaskEvents            []core.TaskCreateEvent
-	createTaskStreamErr         error
-	createTaskStreamCalls       int
-	retryTaskID                 string
-	retryTaskEvents             []core.TaskCreateEvent
-	retryTaskStreamErr          error
-	retryTaskStreamCalls        int
-	deleteTaskErr               error
-	deleteTaskIDs               []string
+	listTasks                 []*core.Task
+	listTasksContext          context.Context
+	listTasksErr              error
+	listTasksCalls            int
+	listRepoPullRequests      []core.RepoPullRequest
+	listRepoPullRequestsErr   error
+	listRepoPullRequestsCwd   string
+	taskPullRequests          map[string]core.TaskPullRequests
+	taskPullRequestsErr       map[string]error
+	taskPullRequestsCalls     []string
+	attachedTask              *core.Task
+	attachedPanes             []*core.TmuxPaneRef
+	attachTaskSessionErr      error
+	attachTaskSessionCalls    int
+	attachTaskSessionFn       func(context.Context, *core.Task, *core.TmuxPaneRef) error
+	reconnectTaskSessionErr   error
+	reconnectTaskSessionFn    func(context.Context, string) error
+	reconnectTaskSessionCalls int
+	createInput               core.CreateTaskInput
+	createTaskEvents          []core.TaskCreateEvent
+	createTaskStreamErr       error
+	createTaskStreamCalls     int
+	retryTaskID               string
+	retryTaskEvents           []core.TaskCreateEvent
+	retryTaskStreamErr        error
+	retryTaskStreamCalls      int
+	deleteTaskErr             error
+	deleteTaskIDs             []string
+	removeAgentErr            error
+	// removedAgents are the agent sessions RemoveAgentSession received, each
+	// as "task/agent".
+	removedAgents               []string
 	latestTaskStatus            map[string]*core.TaskStatusUpdate
 	latestTaskStatusErr         map[string]error
 	latestTaskStatusCalls       []string
@@ -2988,6 +2993,12 @@ func newFrontendHarness() *frontendHarness {
 		func(_ context.Context, taskID string) error {
 			frontend.deleteTaskIDs = append(frontend.deleteTaskIDs, taskID)
 			return frontend.deleteTaskErr
+		},
+	).Maybe()
+	frontend.mock.EXPECT().RemoveAgentSession(mock.Anything, mock.Anything, mock.Anything).RunAndReturn(
+		func(_ context.Context, taskID string, agentSessionID string) error {
+			frontend.removedAgents = append(frontend.removedAgents, taskID+"/"+agentSessionID)
+			return frontend.removeAgentErr
 		},
 	).Maybe()
 	frontend.mock.EXPECT().ListTasks(mock.Anything).RunAndReturn(

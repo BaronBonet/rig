@@ -96,6 +96,16 @@ func (f *frontend) DeleteTask(ctx context.Context, taskID string) error {
 	return err
 }
 
+func (f *frontend) RemoveAgentSession(ctx context.Context, taskID string, agentSessionID string) error {
+	_, err := callUnary(
+		ctx,
+		f,
+		opRemoveAgentSession,
+		removeAgentSessionRequest{TaskID: taskID, AgentSessionID: agentSessionID},
+	)
+	return err
+}
+
 func (f *frontend) ListTasks(ctx context.Context) ([]*core.Task, error) {
 	return callUnary(ctx, f, opListTasks, emptyResponse{})
 }

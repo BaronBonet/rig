@@ -129,6 +129,9 @@ func (m model) handleBack() (tea.Model, tea.Cmd) {
 		// abandoned create-flow leftovers go with it.
 		m.create = createFlowState{}
 		return m, nil
+	case modeCleanupConfirm:
+		m.cleanup = cleanupTarget{}
+		return m, nil
 	case modePRPicker:
 		// Same family: the draft survives, minus the picker's validation error.
 		m.draft.err = nil
