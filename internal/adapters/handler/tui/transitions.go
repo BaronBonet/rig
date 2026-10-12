@@ -14,8 +14,8 @@ func canEnter(to modelMode, pending pendingOp, setupOnly bool, hasSetup bool) bo
 		return to == modeProviderSetup || (to == modeRepoDirsSetup && hasSetup)
 	}
 	if pending != opNone {
-		// One operation at a time: while a create or a delete is in flight,
-		// only the browse list (where its progress renders) is reachable.
+		// One create at a time: while it is in flight, only the browse list
+		// (where its progress renders) is reachable.
 		return to == modeBrowse
 	}
 	switch to {

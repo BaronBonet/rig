@@ -41,14 +41,12 @@ const defaultBuildVersion = "dev"
 
 // pendingOp is the single in-flight task lifecycle mutation. Session opening
 // is tracked separately because attaching to an existing session may overlap
-// creation of another task.
+// creation of another task, and so are removals, which run in the background.
 type pendingOp int
 
 const (
 	opNone pendingOp = iota
 	opCreating
-	opDeleting
-	opRemovingAgent
 )
 
 const taskActivityPreviewLimit = 6
@@ -108,6 +106,11 @@ type model struct {
 	// cleanup is what the cleanup confirmation acts on, fixed when it opens
 	// so that a status update or reload since cannot change it.
 	cleanup cleanupTarget
+	// deleting and removingAgents are the tasks, and the agent sessions, a
+	// confirmed cleanup is removing in the background. Their rows show it and
+	// take no action until the removal replies.
+	deleting       map[string]bool
+	removingAgents map[string]bool
 
 	// Per-mode state, cleared by transition() when the mode family changes.
 	draft        taskDraft
@@ -272,7 +275,8 @@ type taskDeletedMsg struct {
 }
 
 type agentSessionRemovedMsg struct {
-	err error
+	err     error
+	agentID string
 }
 
 type repoPullRequestsLoadedMsg struct {
@@ -356,6 +360,8 @@ func newModel(frontend core.TaskFrontend, launchCwd string, buildVersion string)
 		statusSubscribed: make(map[string]bool),
 		statusCancels:    make(map[string]context.CancelFunc),
 		providerModels:   make(map[core.Provider]providerModelsState),
+		deleting:         make(map[string]bool),
+		removingAgents:   make(map[string]bool),
 	}
 }
 
@@ -520,6 +526,9 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.loading = true
 			return m, loadTasksCmd(m.statusContext, m.frontend)
 		case "R":
+			if m.selectedRemoving() {
+				return m, nil
+			}
 			return m.retrySelectedTaskCreation()
 		case "g", "home":
 			m.selected = 0
@@ -538,7 +547,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.detailsHidden = !m.detailsHidden
 		case "x":
 			row := m.selectedRow()
-			if row == nil || row.task == nil {
+			if row == nil || row.task == nil || m.selectedRemoving() {
 				return m, nil
 			}
 			target := cleanupTarget{task: row.task}
@@ -551,7 +560,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 			return m, nil
 		case "enter":
-			if len(m.rows) == 0 || m.opening || (m.pending != opNone && m.pending != opCreating) {
+			if len(m.rows) == 0 || m.opening || m.selectedRemoving() {
 				return m, nil
 			}
 			row := m.selectedRow()
@@ -777,26 +786,34 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.err = nil
 		return m, nil
 	case taskDeletedMsg:
-		m.endOp()
-		m.transition(modeBrowse)
-		m.cleanup = cleanupTarget{}
+		// The user may have moved on since confirming, so the reply leaves
+		// the mode and the cursor's task as they are.
+		delete(m.deleting, msg.taskID)
 		if msg.err != nil {
 			m.err = msg.err
 			return m, nil
 		}
 
-		m.err = nil
+		selectedTaskID, selectedAgent := "", m.selectedAgent
+		if row := m.selectedRow(); row != nil {
+			selectedTaskID = taskID(row.task)
+		}
 		m.removeTaskRow(msg.taskID)
 		m.cancelTaskStatusTracking(msg.taskID)
 		m.clampSelection()
+		if m.selectTask(selectedTaskID) {
+			m.selectedAgent = selectedAgent
+			m.clampAgentSelection()
+		}
 		return m, nil
 	case agentSessionRemovedMsg:
-		// The task's status update drops the agent's sub-row and moves the
-		// cursor off it.
-		m.endOp()
-		m.transition(modeBrowse)
-		m.cleanup = cleanupTarget{}
-		m.err = msg.err
+		// Once removed, the agent stays marked: the task's status update,
+		// which may come after this reply, drops its sub-row. Agent session
+		// IDs are never reused.
+		if msg.err != nil {
+			delete(m.removingAgents, msg.agentID)
+			m.err = msg.err
+		}
 		return m, nil
 	case activityRefreshTickMsg:
 		cmds := []tea.Cmd{activityRefreshTickCmd()}
@@ -1132,35 +1149,43 @@ func (m *model) ensurePromptInputInitialized() {
 }
 
 func (m model) updateCleanupConfirm(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
-	if m.pending != opNone {
-		return m, nil
-	}
-
 	switch msg.String() {
 	case "q", "n", "esc":
 		return m.handleBack()
 	case "y":
+		// The removal runs in the background: the list is back at once, and
+		// the row shows the removal until it replies.
 		target := m.cleanup
+		m.cleanup = cleanupTarget{}
+		m.transition(modeBrowse)
 		if target.task == nil {
-			m.transition(modeBrowse)
 			return m, nil
 		}
 		m.err = nil
+		id := taskID(target.task)
 		if target.agent != nil {
-			m.beginOp(opRemovingAgent)
-			return m, tea.Batch(
-				removeAgentSessionCmd(m.statusContext, m.frontend, taskID(target.task), target.agent.ID),
-				shimmerTickCmd(),
-			)
+			m.removingAgents[target.agent.ID] = true
+			return m, removeAgentSessionCmd(m.statusContext, m.frontend, id, target.agent.ID)
 		}
-		m.beginOp(opDeleting)
-		return m, tea.Batch(
-			deleteTaskCmd(m.statusContext, m.frontend, taskID(target.task)),
-			shimmerTickCmd(),
-		)
+		m.deleting[id] = true
+		return m, deleteTaskCmd(m.statusContext, m.frontend, id)
 	default:
 		return m, nil
 	}
+}
+
+// selectedRemoving reports whether the selected task, or the agent of the
+// selected sub-row, is being removed.
+func (m model) selectedRemoving() bool {
+	row := m.selectedRow()
+	if row == nil {
+		return false
+	}
+	if m.deleting[taskID(row.task)] {
+		return true
+	}
+	session := m.selectedAgentSession()
+	return session != nil && m.removingAgents[session.ID]
 }
 
 func (m *model) taskStatusTrackingCmds(taskID string) []tea.Cmd {
