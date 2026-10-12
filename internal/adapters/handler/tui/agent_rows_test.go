@@ -216,7 +216,9 @@ func TestModel_TaskRowStaysHighlightedWhileOneOfItsAgentsIsSelected(t *testing.T
 	for i := range m.rows {
 		m.rows[i].task.CreatedAt = time.Now().Add(-15 * time.Minute)
 	}
-	taskLine := func(m model, index int) string { return m.renderRow(index, m.rows[index], m.totalWidth()) }
+	taskLine := func(m model, index int) string {
+		return m.renderRow(index, m.rows[index], taskRowLayoutFor(m.totalWidth()))
+	}
 
 	// On the task row itself, its name and time stand out.
 	selectedRow := taskLine(m, 0)
@@ -386,7 +388,7 @@ func TestModel_ProviderCellNamesTheTasksOnlyAgent(t *testing.T) {
 	m := agentsTaskModel(frontend)
 	// The task has no elapsed time or tokens, so its provider ends the row.
 	provider := func(m model) string {
-		line := stripANSI(m.renderRow(0, m.rows[0], m.totalWidth()))
+		line := stripANSI(m.renderRow(0, m.rows[0], taskRowLayoutFor(m.totalWidth())))
 		_, after, found := strings.Cut(line, "first task")
 		require.True(t, found, line)
 		return strings.TrimSpace(after)
@@ -834,8 +836,9 @@ func TestModel_AgentSubRowsShowTheirContextInTheTaskRowsColumn(t *testing.T) {
 	// Like its compaction marker, a sub-row's percentage stands out on the
 	// selected line.
 	usage := agentRowUsage{context: &core.ContextUsage{Tokens: 24_500, Window: 258_400}}
-	require.Contains(t, m.renderAgentSubRow(codexAgent(), usage, true, false, 96), mutedStyle.Render("9%"))
-	require.Contains(t, m.renderAgentSubRow(codexAgent(), usage, true, true, 96), primaryStyle.Render("9%"))
+	layout := taskRowLayoutFor(96)
+	require.Contains(t, m.renderAgentSubRow(codexAgent(), usage, true, false, layout), mutedStyle.Render("9%"))
+	require.Contains(t, m.renderAgentSubRow(codexAgent(), usage, true, true, layout), primaryStyle.Render("9%"))
 }
 
 func TestModel_AgentSubRowWithoutAKnownWindowLeavesItsContextBlank(t *testing.T) {
@@ -995,18 +998,19 @@ func TestModel_AgentSubRowShowsItsCompactionsInTheTaskRowsColumn(t *testing.T) {
 	)
 
 	// Like the task row's time, the marker stands out on the selected line.
+	layout := taskRowLayoutFor(96)
 	require.Contains(
 		t,
-		m.renderAgentSubRow(codexAgent(), agentRowUsage{compactions: core.Compactions{Total: 3}}, true, false, 96),
+		m.renderAgentSubRow(codexAgent(), agentRowUsage{compactions: core.Compactions{Total: 3}}, true, false, layout),
 		mutedStyle.Render(iconCompacted+"3"),
 	)
 	require.Contains(
 		t,
-		m.renderAgentSubRow(codexAgent(), agentRowUsage{compactions: core.Compactions{Total: 3}}, true, true, 96),
+		m.renderAgentSubRow(codexAgent(), agentRowUsage{compactions: core.Compactions{Total: 3}}, true, true, layout),
 		primaryStyle.Render(iconCompacted+"3"),
 	)
-	require.Contains(t, model{selected: 0}.renderRow(0, compactedRow(), 96), primaryStyle.Render(iconCompacted+"2"))
-	require.Contains(t, model{selected: 1}.renderRow(0, compactedRow(), 96), mutedStyle.Render(iconCompacted+"2"))
+	require.Contains(t, model{selected: 0}.renderRow(0, compactedRow(), layout), primaryStyle.Render(iconCompacted+"2"))
+	require.Contains(t, model{selected: 1}.renderRow(0, compactedRow(), layout), mutedStyle.Render(iconCompacted+"2"))
 }
 
 func TestRenderCompactionsCell_FitsLargeCountsInItsColumn(t *testing.T) {
@@ -1032,6 +1036,57 @@ func TestModel_CompactionMarkersFitEveryWidth(t *testing.T) {
 			t,
 			statusColumn(t, viewLineContaining(t, m, "second task"), iconCompacted),
 			statusColumn(t, viewLineContaining(t, m, "└"), iconCompacted),
+			"width %d", width,
+		)
+	}
+}
+
+// On a terminal wider than maxContentWidth, the view is only as wide as its
+// header and rows need, centered, with the columns on the right just after
+// the longest name.
+func TestModel_WideTerminalFitsTheViewToItsRows(t *testing.T) {
+	m := agentsTaskModel(newFrontendHarness())
+	m.width = 200
+	m.detailsHidden = true
+	m.rows[0].task.DisplayName = "first task with a name longer than the header is wide"
+
+	width := m.totalWidth()
+	require.Less(t, width, maxContentWidth)
+	margin := strings.Repeat(" ", (m.width-width)/2)
+	lines := strings.Split(stripANSI(m.View().Content), "\n")
+	require.Equal(t, len(margin)+width, lipgloss.Width(lines[0]), "the header spans the view: %q", lines[0])
+	for _, line := range lines {
+		if line == "" {
+			continue
+		}
+		require.True(t, strings.HasPrefix(line, margin), "%q", line)
+		require.LessOrEqual(t, lipgloss.Width(line), len(margin)+width, "%q", line)
+	}
+	long := viewLineContaining(t, m, "first task")
+	require.Contains(t, long, "first task with a name longer than the header is wide  codex")
+	require.Equal(t, statusColumn(t, long, "codex"), statusColumn(t, viewLineContaining(t, m, "second task"), "codex"))
+
+	m.rows[1].task.DisplayName = strings.Repeat("x", 150)
+	require.Equal(t, maxContentWidth, m.totalWidth())
+}
+
+// Pull requests markers share a column, which starts after the longest name.
+func TestModel_PullRequestsMarkersLineUpAfterTheLongestName(t *testing.T) {
+	for _, width := range []int{96, 200} {
+		m := agentsTaskModel(newFrontendHarness())
+		m.width = width
+		m.detailsHidden = true
+		m.rows[0].task.DisplayName = "first task with a longer name"
+		m.rows[0].pullRequests = []core.PullRequest{{State: core.PRStateOpen, Number: 571}}
+		m.rows[0].unshippedWork = core.UnshippedWork{Commits: 1}
+		m.rows[1].pullRequests = []core.PullRequest{{State: core.PRStateMerged, Number: 879}}
+
+		long := viewLineContaining(t, m, "first task")
+		require.Contains(t, long, "first task with a longer name  "+iconStatusActive+"#571+", "width %d", width)
+		require.Equal(
+			t,
+			statusColumn(t, long, "#"),
+			statusColumn(t, viewLineContaining(t, m, "second task"), "#"),
 			"width %d", width,
 		)
 	}

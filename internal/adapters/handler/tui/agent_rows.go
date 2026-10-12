@@ -137,7 +137,7 @@ func (m model) renderAgentSubRow(
 	usage agentRowUsage,
 	last bool,
 	selected bool,
-	totalWidth int,
+	layout taskRowLayout,
 ) string {
 	branch := "├"
 	if last {
@@ -155,7 +155,6 @@ func (m model) renderAgentSubRow(
 	// The text ends where the task row's name area does, clear of its columns
 	// on the right. Too narrow a terminal leaves no room for text rather than
 	// overflowing.
-	layout := taskRowLayoutFor(totalWidth)
 	textWidth := max(0, statusSymbolWidth+layout.nameArea-subRowLead)
 	text, placeholder := agentSubRowText(session)
 	text = truncateStr(text, textWidth-len(nameGap))
@@ -174,7 +173,7 @@ func (m model) renderAgentSubRow(
 
 	line := dimStyle.Render(subRowIndent+branch+" ") +
 		symbolStyle.Render(symbol) + " " +
-		providerStyle(provider).Render(providerCell) +
+		cursorLineStyle(providerStyle(provider), selected).Render(providerCell) +
 		textStyle.Render(text)
 	// The context and compaction markers line up with the task rows' context
 	// and compactions columns, after their provider column, which a sub-row
@@ -400,9 +399,9 @@ func compactionsDetailText(compactions core.Compactions) string {
 }
 
 // renderProviderCell renders a task row's provider cell, padded to the agent
-// column.
-func renderProviderCell(name string) string {
-	return providerStyle(name).Render(padRightVisible(name, colWidthAgent))
+// column, set for the cursor's line or not; see cursorLineStyle.
+func renderProviderCell(name string, onCursor bool) string {
+	return cursorLineStyle(providerStyle(name), onCursor).Render(padRightVisible(name, colWidthAgent))
 }
 
 // fitDetailLine truncates a detail panel line to width columns, when the

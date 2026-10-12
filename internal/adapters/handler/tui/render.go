@@ -43,6 +43,9 @@ const (
 	// the row drops its context column, then its compactions column, then its
 	// provider column.
 	minTaskNameArea = 40
+	// taskRowFixedWidth is a task row's width outside its name area.
+	taskRowFixedWidth = rowGutterWidth + statusSymbolWidth +
+		colWidthAgent + colWidthContext + colWidthCompactions + colWidthElapsed
 	// maxEarlierPullRequestSymbols is how many of a task's earlier pull
 	// requests its row's marker shows before the current one. Older ones
 	// collapse into one leading hiddenPullRequestsMarker.
@@ -263,6 +266,8 @@ func (m model) visibleTaskList(totalWidth int, budget int) taskListViewport {
 }
 
 func (m model) taskListBlocks(totalWidth int) []taskListBlock {
+	layout := taskRowLayoutFor(totalWidth)
+	layout.names, _ = m.taskListColumns()
 	blocks := make([]taskListBlock, 0, len(m.rows))
 	previousRepoKey := ""
 	for index, row := range m.rows {
@@ -276,7 +281,7 @@ func (m model) taskListBlocks(totalWidth int) []taskListBlock {
 			previousRepoKey = repoKey
 		}
 
-		rowLine := m.renderRow(index, row, totalWidth)
+		rowLine := m.renderRow(index, row, layout)
 		if rowLine == "" {
 			continue
 		}
@@ -300,7 +305,7 @@ func (m model) taskListBlocks(totalWidth int) []taskListBlock {
 				context:     agentContext(row, session.ID),
 				compactions: agentCompactions(row, session.ID),
 			}
-			lines = append(lines, m.renderAgentSubRow(session, usage, i == len(subRows)-1, selected, totalWidth))
+			lines = append(lines, m.renderAgentSubRow(session, usage, i == len(subRows)-1, selected, layout))
 		}
 		// A blank line sets a task with agent sub-rows apart from the tasks
 		// next to it.
@@ -408,29 +413,26 @@ func (m model) renderRepoHeader(task *core.Task, totalWidth int) string {
 // renderRow renders a task row on one line: its status symbol, a child
 // task's link marker, its name and pull requests, then its agent's provider,
 // context and compactions and its elapsed time on the right.
-func (m model) renderRow(index int, row taskRow, totalWidth int) string {
+func (m model) renderRow(index int, row taskRow, layout taskRowLayout) string {
 	if row.task == nil {
 		return ""
 	}
 
 	symbol, symbolStyle := m.taskRowSymbol(row)
-
-	name := row.task.DisplayName
-	if strings.TrimSpace(name) == "" {
-		name = row.task.ID
-	}
+	name := taskRowName(row.task)
 
 	// A task that needs input stands out from the dimmed rest. The selected
 	// task stands out further, also while the cursor is on one of its agent
-	// sub-rows; the selection border and bold name mark the cursor's line.
-	// Its terse markers, a child task's link marker and its agent's context
-	// and compactions, stay muted until it is selected.
+	// sub-rows; the selection border, its bold name and its pull requests and
+	// provider at full color mark the cursor's line. Its terse markers, a child task's link
+	// marker and its agent's context and compactions, stay muted until it is
+	// selected.
 	nameStyle, markerStyle, timeStyle, rowStyle := dimStyle, mutedStyle, dimStyle, normalRowStyle
 	if needsInput(row.status) {
 		nameStyle = primaryStyle
 	}
+	onTaskRow := index == m.selected && m.selectedAgentSession() == nil
 	if index == m.selected {
-		onTaskRow := m.selectedAgentSession() == nil
 		nameStyle = lipgloss.NewStyle().Foreground(colorAccent).Bold(onTaskRow)
 		markerStyle, timeStyle = primaryStyle, primaryStyle
 		if onTaskRow {
@@ -443,14 +445,17 @@ func (m model) renderRow(index int, row taskRow, totalWidth int) string {
 		link = markerStyle.Render(iconChildTask)
 	}
 
-	layout := taskRowLayoutFor(totalWidth)
-	marker := pullRequestsMarker{pullRequests: row.pullRequests, unshipped: row.unshippedWork.Any()}
-	line := symbolStyle.Render(symbol) + " " + renderNameAndPR(link, name, nameStyle, marker, layout.nameArea)
+	marker := pullRequestsMarker{
+		pullRequests: row.pullRequests,
+		unshipped:    row.unshippedWork.Any(),
+		onCursor:     onTaskRow,
+	}
+	line := symbolStyle.Render(symbol) + " " + renderNameAndPR(link, name, nameStyle, marker, layout)
 	if layout.provider {
 		// A task with agent sub-rows leaves its providers to them.
 		providerCell := strings.Repeat(" ", colWidthAgent)
 		if agentSubRows(row) == nil {
-			providerCell = renderProviderCell(taskProviderNames(row)[0])
+			providerCell = renderProviderCell(taskProviderNames(row)[0], onTaskRow)
 		}
 		line += providerCell
 	}
@@ -469,7 +474,10 @@ func (m model) renderRow(index int, row taskRow, totalWidth int) string {
 // taskRowLayout is which columns a task row has room for, and how wide its
 // name area is.
 type taskRowLayout struct {
-	nameArea    int
+	nameArea int
+	// names is the task list's name column, the widest of its rows' link
+	// markers and names, after which each row's pull requests marker starts.
+	names       int
 	provider    bool
 	context     bool
 	compactions bool
@@ -480,10 +488,8 @@ type taskRowLayout struct {
 // column last, so the name area keeps minTaskNameArea columns for as long as
 // it can.
 func taskRowLayoutFor(totalWidth int) taskRowLayout {
-	fixedWidth := rowGutterWidth + statusSymbolWidth +
-		colWidthAgent + colWidthContext + colWidthCompactions + colWidthElapsed
 	layout := taskRowLayout{
-		nameArea:    totalWidth - fixedWidth,
+		nameArea:    totalWidth - taskRowFixedWidth,
 		provider:    true,
 		context:     true,
 		compactions: true,
@@ -504,16 +510,65 @@ func taskRowLayoutFor(totalWidth int) taskRowLayout {
 	return layout
 }
 
+// taskListColumns is how wide the task list's name column is, the widest of
+// its rows' link markers and names, and its pull requests column, the widest
+// of their whole pull requests markers.
+func (m model) taskListColumns() (names int, pullRequests int) {
+	for _, row := range m.rows {
+		if row.task == nil {
+			continue
+		}
+		name := lipgloss.Width(taskRowName(row.task))
+		if m.parentTask(row.task) != nil {
+			name += linkMarkerWidth
+		}
+		names = max(names, name)
+		marker := pullRequestsMarker{pullRequests: row.pullRequests, unshipped: row.unshippedWork.Any()}
+		pullRequests = max(pullRequests, lipgloss.Width(pullRequestsRowText(marker, math.MaxInt)))
+	}
+	return names, pullRequests
+}
+
+// widestNameArea is the name area that fits the task list's name and pull
+// requests columns and every agent sub-row's text, each with the gap after
+// it.
+func (m model) widestNameArea() int {
+	names, pullRequests := m.taskListColumns()
+	widest := names + len(nameGap)
+	if pullRequests > 0 {
+		widest += pullRequests + len(nameGap)
+	}
+	for _, row := range m.rows {
+		for _, session := range agentSubRows(row) {
+			text, _ := agentSubRowText(session)
+			widest = max(widest, subRowLead-statusSymbolWidth+lipgloss.Width(text)+len(nameGap))
+		}
+	}
+	return widest
+}
+
+// taskRowName is the name a task row shows: its display name, or its ID when
+// it has none.
+func taskRowName(task *core.Task) string {
+	if strings.TrimSpace(task.DisplayName) == "" {
+		return task.ID
+	}
+	return task.DisplayName
+}
+
 // pullRequestsMarker is what a task row's pull requests marker shows: the
 // task's pull requests, oldest first, and whether it has unshipped work.
 type pullRequestsMarker struct {
 	pullRequests []core.PullRequest
 	unshipped    bool
+	// onCursor sets the marker for the cursor's line; see cursorLineStyle.
+	onCursor bool
 }
 
 // renderNameAndPR fills a task row's name area: a child task's link marker,
-// when it is given one, the name, then its pull requests' marker. The marker
-// leaves out earlier pull requests rather than squeeze the name below
+// when it is given one, the name, then its pull requests' marker, which starts
+// after the layout's name column where it fits, so the markers line up. The
+// marker leaves out earlier pull requests rather than squeeze the name below
 // minNameBesideMarker cells, and below that a long name is truncated so the
 // markers and a gap after them still fit. The link marker takes its width
 // from the name, so the columns on the right stay in line with the other rows,
@@ -523,8 +578,9 @@ func renderNameAndPR(
 	name string,
 	nameStyle lipgloss.Style,
 	pullRequests pullRequestsMarker,
-	width int,
+	layout taskRowLayout,
 ) string {
+	width := layout.nameArea
 	markerRoom := width - 2*len(nameGap) - min(lipgloss.Width(name), minNameBesideMarker)
 	if link != "" {
 		markerRoom -= linkMarkerWidth
@@ -542,7 +598,8 @@ func renderNameAndPR(
 	}
 	text += nameStyle.Render(truncateStr(name, width-reserved))
 	if marker != "" {
-		text += nameGap + marker
+		nameColumn := min(layout.names, width-2*len(nameGap)-lipgloss.Width(marker))
+		text = padRightVisible(text, nameColumn) + nameGap + marker
 	}
 	return padRightVisible(text, width)
 }
@@ -569,12 +626,12 @@ func pullRequestsRowText(marker pullRequestsMarker, room int) string {
 			continue
 		}
 		icon, style := prStateIconStyle(pullRequest.State)
-		earlier = append(earlier, style.Render(icon))
+		earlier = append(earlier, cursorLineStyle(style, marker.onCursor).Render(icon))
 	}
 	icon, style := prStateIconStyle(pullRequests[current].State)
-	currentText := style.Render(icon + pullRequestNumber(pullRequests[current]))
+	currentText := cursorLineStyle(style, marker.onCursor).Render(icon + pullRequestNumber(pullRequests[current]))
 	if marker.unshipped {
-		currentText += unshippedWorkStyle.Render(unshippedWorkMarker)
+		currentText += cursorLineStyle(unshippedWorkStyle, marker.onCursor).Render(unshippedWorkMarker)
 	}
 
 	for shown := min(len(earlier), maxEarlierPullRequestSymbols); ; shown-- {
@@ -1406,14 +1463,16 @@ func taskElapsed(task *core.Task) string {
 	return formatElapsed(time.Since(task.CreatedAt))
 }
 
+// formatElapsed shows a duration's two largest units, from days to minutes,
+// with the second zero-padded so that, right-aligned, the units line up.
 func formatElapsed(duration time.Duration) string {
-	if duration < 0 {
-		duration = 0
-	}
-	hours := int(duration.Hours())
-	minutes := int(duration.Minutes()) % 60
-	if hours > 0 {
-		return fmt.Sprintf("%dh %dm", hours, minutes)
+	minutes := max(int(duration.Minutes()), 0)
+	hours, days := minutes/60, minutes/(24*60)
+	switch {
+	case days > 0:
+		return fmt.Sprintf("%dd %02dh", days, hours%24)
+	case hours > 0:
+		return fmt.Sprintf("%dh %02dm", hours, minutes%60)
 	}
 	return fmt.Sprintf("%dm", minutes)
 }
