@@ -379,39 +379,106 @@ func (m model) modelListStateText(provider core.Provider) string {
 	}
 }
 
-// launchChoiceDetailLines renders the detail panel's model line for a task:
-// its Launch model, then its Launch reasoning level when it has one, which
-// continues under the model when the line is too wide.
-func (m model) launchChoiceDetailLines(task *core.Task, width int) []string {
-	line := mutedStyle.Render(launchModelLabel) + launchModelLabelGap +
-		m.launchModelText(task.Provider, strings.TrimSpace(task.Model))
-	level := terminalSafeText(task.ReasoningLevel)
-	if level == "" {
-		return []string{fitDetailLine(line, width)}
+// modelDetailText is how the detail panel's summary names the model and
+// reasoning level of the agent it describes: on a sub-row that agent's, and
+// on a task row its agent's while it has exactly one live agent session, as
+// with its context. Until that agent's model is known, and while the task has
+// no live agent session, a task row names the task's Launch choice instead,
+// but only a choice that was made: the CLI's default says nothing. It is
+// empty when there is nothing to name.
+func (m model) modelDetailText(row taskRow, agentSession *core.LiveAgentSession) string {
+	described, provider := agentSession, row.task.Provider
+	if described == nil && row.status != nil {
+		if len(row.status.AgentSessions) > 1 {
+			// Each agent's sub-row names its own.
+			return ""
+		}
+		if len(row.status.AgentSessions) == 1 {
+			described = &row.status.AgentSessions[0]
+		}
 	}
-
-	full := line + mutedStyle.Render(" · ") + primaryStyle.Render(level)
-	if width <= 0 || lipgloss.Width(full) <= width {
-		return []string{full}
+	if described != nil {
+		provider = described.Provider
+		if running, ok := agentModel(row, described.ID); ok {
+			models := m.providerModels[provider].models
+			id, level := listedModelID(models, running.Model), running.ReasoningLevel
+			// An agent's level is unknown until its first request, but one
+			// running the task's Launch model was launched with its level.
+			if launchModel, launchLevel := row.task.LaunchChoiceFor(provider); level == "" && launchModel != "" &&
+				listedModelID(models, launchModel) == id {
+				level = launchLevel
+			}
+			return m.modelLevelText(provider, id, level)
+		}
+		if agentSession != nil {
+			return ""
+		}
 	}
-	indent := strings.Repeat(" ", len(launchModelLabel+launchModelLabelGap))
-	return []string{fitDetailLine(line, width), fitDetailLine(indent+primaryStyle.Render(level), width)}
+	model, level := row.task.LaunchChoiceFor(provider)
+	if model == "" && level == "" {
+		return ""
+	}
+	return m.modelLevelText(provider, model, level)
 }
 
-// launchModelLabel and launchModelLabelGap lead a line that shows a Launch
-// model: the detail panel's, and each on the provider setup screen.
+// modelLevelText names a model as launchModelText does, but in its
+// provider's color, then its reasoning level when it has one.
+func (m model) modelLevelText(provider core.Provider, id string, level string) string {
+	text := launchChoiceValue("")
+	if name := m.modelName(provider, id); name != "" {
+		text = providerStyle(string(provider)).Render(name)
+	}
+	if level = terminalSafeText(level); level != "" {
+		text += mutedStyle.Render(" · ") + primaryStyle.Render(level)
+	}
+	return text
+}
+
+// listedModelID is the ID of the listed model that a model an agent runs on
+// is, or that model's own ID when the list has none. Transcripts and hooks
+// name a model by its full ID, which a listed model can stand for under an
+// alias, as Claude's opus does, and Claude's hooks add a suffix, such as
+// [1m], that the list leaves out.
+func listedModelID(models []core.ProviderModel, id string) string {
+	if _, ok := findProviderModel(models, id); ok {
+		return id
+	}
+	base := withoutModelSuffix(id)
+	for _, listed := range models {
+		if strings.EqualFold(withoutModelSuffix(listed.ID), base) ||
+			(listed.ResolvedID != "" && strings.EqualFold(withoutModelSuffix(listed.ResolvedID), base)) {
+			return listed.ID
+		}
+	}
+	return id
+}
+
+// withoutModelSuffix is a model ID without a suffix such as [1m].
+func withoutModelSuffix(id string) string {
+	base, _, _ := strings.Cut(id, "[")
+	return base
+}
+
+// launchModelLabel and launchModelLabelGap lead each line on the provider
+// setup screen that shows a Launch model.
 const launchModelLabel, launchModelLabelGap = "model", "  "
 
 // launchModelText is how a Launch model reads: by the display name its
 // provider's model list gives it, else by its ID, and a dim "default" for no
 // model.
 func (m model) launchModelText(provider core.Provider, id string) string {
+	return launchChoiceValue(m.modelName(provider, id))
+}
+
+// modelName is a model's display name in its provider's model list, else its
+// ID.
+func (m model) modelName(provider core.Provider, id string) string {
 	if listed, ok := findProviderModel(m.providerModels[provider].models, id); ok {
 		if name := terminalSafeText(listed.DisplayName); name != "" {
-			return primaryStyle.Render(name)
+			return name
 		}
 	}
-	return launchChoiceValue(id)
+	return terminalSafeText(id)
 }
 
 // launchChoiceValue renders a Launch choice value, or a dim "default" for

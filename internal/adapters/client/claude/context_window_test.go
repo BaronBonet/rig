@@ -252,7 +252,10 @@ func TestReadConversationUsage_ReadsNoWindowWithoutACache(t *testing.T) {
 	}})
 
 	require.NoError(t, err)
-	require.Equal(t, core.ConversationUsage{Context: &core.ContextUsage{Tokens: 20003}}, usage)
+	require.Equal(t, core.ConversationUsage{
+		Context: &core.ContextUsage{Tokens: 20003},
+		Model:   "claude-opus-5-5",
+	}, usage)
 }
 
 func TestContextWindowCache_NeverProbesAnEmptyModel(t *testing.T) {
@@ -446,12 +449,15 @@ func TestReadConversationUsage_SetsTheWindowClaudeReportsForTheModel(t *testing.
 
 	usage, err := repo.ReadConversationUsage(t.Context(), conversation)
 	require.NoError(t, err)
-	require.Equal(t, core.ConversationUsage{}, usage)
+	require.Equal(t, core.ConversationUsage{Model: "claude-opus-5-5"}, usage)
 	require.Equal(t, "claude-opus-5-5", receiveWithin(t, probed))
 	require.True(t, session.closed)
 
 	appendTranscript(t, transcript, claudeAssistantEntry(false, "claude-opus-5-5", 3, 12000, 8000)+"\n")
 	usage, err = repo.ReadConversationUsage(t.Context(), conversation)
 	require.NoError(t, err)
-	require.Equal(t, core.ConversationUsage{Context: &core.ContextUsage{Tokens: 20003, Window: 1000000}}, usage)
+	require.Equal(t, core.ConversationUsage{
+		Context: &core.ContextUsage{Tokens: 20003, Window: 1000000},
+		Model:   "claude-opus-5-5",
+	}, usage)
 }

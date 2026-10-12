@@ -5,6 +5,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -599,6 +600,61 @@ func TestRepositoryReadConversationUsage_KeepsTheContextThroughAZeroTokenCount(t
 
 	require.NoError(t, err)
 	require.Equal(t, core.ConversationUsage{Context: &core.ContextUsage{Tokens: 31000, Window: 258400}}, usage)
+}
+
+// The model and reasoning level are the latest default-mode turn's: a /model
+// change shows once the next turn starts, picked up on the next read, and a
+// plan-mode turn's own reasoning level is skipped.
+func TestRepositoryReadConversationUsage_ReadsTheLatestTurnsModel(t *testing.T) {
+	repo := &repository{}
+	lines := slices.Collect(strings.Lines(string(readRolloutFixture(t))))
+	rootPath := filepath.Join(t.TempDir(), "rollout.jsonl")
+	require.NoError(t, os.WriteFile(rootPath, []byte(strings.Join(lines[:5], "")), 0o600))
+	conversation := codexBackgroundSessions(rootPath)
+
+	usage, err := repo.ReadConversationUsage(t.Context(), conversation)
+	require.NoError(t, err)
+	require.Equal(t, "gpt-6-luna", usage.Model)
+	require.Equal(t, "low", usage.ReasoningLevel)
+
+	appendTranscript(t, rootPath, strings.Join(lines[5:], ""))
+	usage, err = repo.ReadConversationUsage(t.Context(), conversation)
+	require.NoError(t, err)
+	require.Equal(t, "gpt-6-astra", usage.Model)
+	require.Equal(t, "medium", usage.ReasoningLevel)
+}
+
+// A rollout rewritten shorter is read afresh, so a turn it no longer has does
+// not name the model.
+func TestRepositoryReadConversationUsage_ForgetsTheTurnsOfARewrittenRollout(t *testing.T) {
+	repo := &repository{}
+	lines := slices.Collect(strings.Lines(string(readRolloutFixture(t))))
+	rootPath := filepath.Join(t.TempDir(), "rollout.jsonl")
+	require.NoError(t, os.WriteFile(rootPath, []byte(strings.Join(lines[:5], "")), 0o600))
+	conversation := codexBackgroundSessions(rootPath)
+
+	usage, err := repo.ReadConversationUsage(t.Context(), conversation)
+	require.NoError(t, err)
+	require.Equal(t, "gpt-6-luna", usage.Model)
+
+	require.NoError(t, os.WriteFile(rootPath, []byte(lines[0]), 0o600))
+	usage, err = repo.ReadConversationUsage(t.Context(), conversation)
+	require.NoError(t, err)
+	require.Empty(t, usage.Model)
+	require.Empty(t, usage.ReasoningLevel)
+}
+
+// Before the first turn, the model is the one the root agent's hooks
+// reported, and the reasoning level is unknown.
+func TestRepositoryReadConversationUsage_ReadsTheHookModelBeforeTheFirstTurn(t *testing.T) {
+	repo := &repository{}
+	conversation := codexBackgroundSessions(writeCodexRootTranscript(t))
+	conversation[0].Model = "gpt-6-luna"
+
+	usage, err := repo.ReadConversationUsage(t.Context(), conversation)
+
+	require.NoError(t, err)
+	require.Equal(t, core.ConversationUsage{Model: "gpt-6-luna"}, usage)
 }
 
 func TestRepositoryReadConversationUsage_ReturnsNoneWithoutARootRollout(t *testing.T) {

@@ -141,7 +141,7 @@ func (o *taskObservation) GetTaskActivity(
 }
 
 // GetTaskUsage reads a task's token usage, and its open agent sessions'
-// compactions and context usage, from their transcripts.
+// compactions, context usage and models, from their transcripts.
 func (o *taskObservation) GetTaskUsage(ctx context.Context, taskID string) (*TaskUsage, error) {
 	taskID = strings.TrimSpace(taskID)
 	sessions, err := o.tasks.ListTaskProviderSessions(ctx, taskID)
@@ -157,11 +157,16 @@ func (o *taskObservation) GetTaskUsage(ctx context.Context, taskID string) (*Tas
 	if err != nil {
 		return nil, err
 	}
-	if tokens == nil && len(agents.compactions) == 0 && len(agents.context) == 0 {
+	if tokens == nil && len(agents.compactions) == 0 && len(agents.context) == 0 && len(agents.models) == 0 {
 		return nil, nil
 	}
 
-	return &TaskUsage{Tokens: tokens, AgentCompactions: agents.compactions, AgentContext: agents.context}, nil
+	return &TaskUsage{
+		Tokens:           tokens,
+		AgentCompactions: agents.compactions,
+		AgentContext:     agents.context,
+		AgentModels:      agents.models,
+	}, nil
 }
 
 // taskTokenUsage sums the token usage of the latest transcript of each of a
@@ -211,13 +216,14 @@ func (o *taskObservation) taskTokenUsage(ctx context.Context, sessions []TaskPro
 type agentUsage struct {
 	compactions map[string]Compactions
 	context     map[string]ContextUsage
+	models      map[string]AgentModel
 }
 
-// agentConversationUsage reads the compactions and context usage of each open
-// agent session's current Provider session, leaving out an agent session's
-// compactions when it has none and its context usage when its transcript does
-// not record it. /clear starts a new Provider session, so it starts both
-// over. An agent whose transcript cannot be read is left out too, as its
+// agentConversationUsage reads the compactions, context usage and model of
+// each open agent session's current Provider session, leaving out an agent
+// session's compactions when it has none, and its context usage and model
+// when nothing records them. /clear starts a new Provider session, so it
+// starts them over. An agent whose transcript cannot be read is left out too, as its
 // markers are not worth failing the task's token usage over.
 func (o *taskObservation) agentConversationUsage(
 	ctx context.Context,
@@ -254,6 +260,12 @@ func (o *taskObservation) agentConversationUsage(
 				agents.context = make(map[string]ContextUsage)
 			}
 			agents.context[session.ID] = *usage.Context
+		}
+		if usage.Model != "" {
+			if agents.models == nil {
+				agents.models = make(map[string]AgentModel)
+			}
+			agents.models[session.ID] = AgentModel{Model: usage.Model, ReasoningLevel: usage.ReasoningLevel}
 		}
 	}
 	return agents, nil

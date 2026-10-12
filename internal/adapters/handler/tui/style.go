@@ -94,6 +94,17 @@ var (
 				Foreground(lipgloss.Color("#8b8fa3")).
 				Bold(true)
 
+	// userLabelStyle marks what the user said apart from what an agent said,
+	// which carries its provider's color.
+	userLabelStyle = lipgloss.NewStyle().
+			Foreground(colorAccent)
+
+	// detailHeaderStyle heads the detail panel's sections in the accent color,
+	// so the eye finds them among the lines under them.
+	detailHeaderStyle = lipgloss.NewStyle().
+				Foreground(colorAccent).
+				Bold(true)
+
 	promptBoxStyle = lipgloss.NewStyle().
 			Border(lipgloss.RoundedBorder()).
 			BorderForeground(colorAccent).

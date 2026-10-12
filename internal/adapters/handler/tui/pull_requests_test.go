@@ -229,13 +229,13 @@ func TestRenderRow_ManyPullRequestsNeverWidenTheRow(t *testing.T) {
 	require.Contains(t, rowContent(model{}.renderRow(0, row, 34)), "first t…  …"+iconDone+iconStatusActive+"#1234")
 }
 
-func TestPullRequestDetailLines_ListsEveryPullRequestUnderThePRLabel(t *testing.T) {
+func TestPullRequestDetailLines_ListsEveryPullRequest(t *testing.T) {
 	lines := pullRequestDetailLines(billingPullRequests(), 60)
 
 	require.Equal(t, []string{
-		"pr     " + iconDone + " #120 merged  feat/billing-export",
-		"       " + iconDone + " #123 merged  feat/billing-export",
-		"       " + iconStatusActive + " #127 open    feat/billing-export-2",
+		iconDone + " #120 merged  feat/billing-export",
+		iconDone + " #123 merged  feat/billing-export",
+		iconStatusActive + " #127 open    feat/billing-export-2",
 	}, stripLines(lines))
 	require.Empty(t, pullRequestDetailLines(nil, 60))
 }
@@ -247,31 +247,31 @@ func TestPullRequestDetailLines_LinesUpNumbersOfEveryWidth(t *testing.T) {
 	}, 60)
 
 	require.Equal(t, []string{
-		"pr     " + iconFailed + " #99  closed  feat/a",
-		"       " + iconStatusProgress + " #100 draft   feat/b",
+		iconFailed + " #99  closed  feat/a",
+		iconStatusProgress + " #100 draft   feat/b",
 	}, stripLines(lines))
 }
 
 func TestPullRequestDetailLines_ShowFiveAtMost(t *testing.T) {
 	five := pullRequestDetailLines(manyPullRequests(4), 60)
 	require.Equal(t, []string{
-		"pr     " + iconDone + " #1    merged  feat/part-1",
-		"       " + iconDone + " #2    merged  feat/part-2",
-		"       " + iconDone + " #3    merged  feat/part-3",
-		"       " + iconDone + " #4    merged  feat/part-4",
-		"       " + iconStatusActive + " #1234 open    feat/now",
+		iconDone + " #1    merged  feat/part-1",
+		iconDone + " #2    merged  feat/part-2",
+		iconDone + " #3    merged  feat/part-3",
+		iconDone + " #4    merged  feat/part-4",
+		iconStatusActive + " #1234 open    feat/now",
 	}, stripLines(five))
 
 	// Past five, the earlier ones are counted and the newest four listed.
 	lines := pullRequestDetailLines(manyPullRequests(6), 60)
 	require.Equal(t, []string{
-		"pr     3 earlier",
-		"       " + iconDone + " #4    merged  feat/part-4",
-		"       " + iconDone + " #5    merged  feat/part-5",
-		"       " + iconDone + " #6    merged  feat/part-6",
-		"       " + iconStatusActive + " #1234 open    feat/now",
+		"3 earlier",
+		iconDone + " #4    merged  feat/part-4",
+		iconDone + " #5    merged  feat/part-5",
+		iconDone + " #6    merged  feat/part-6",
+		iconStatusActive + " #1234 open    feat/now",
 	}, stripLines(lines))
-	require.Equal(t, mutedStyle.Render("pr")+"     "+mutedStyle.Render("3 earlier"), lines[0])
+	require.Equal(t, mutedStyle.Render("3 earlier"), lines[0])
 }
 
 func TestPullRequestDetailLines_FitTheColumn(t *testing.T) {
@@ -283,20 +283,21 @@ func TestPullRequestDetailLines_FitTheColumn(t *testing.T) {
 	require.True(t, strings.HasSuffix(stripANSI(lines[0]), "…"), stripANSI(lines[0]))
 }
 
-func TestModel_DetailPanelListsThePullRequestsInTheWorkspaceColumn(t *testing.T) {
+func TestModel_DetailPanelListsThePullRequestsInTheirSection(t *testing.T) {
 	frontend := newFrontendHarness()
 	m := agentsTaskModel(frontend)
 	m.rows[0].task.BranchName = "feat/billing-export-2"
 	m.rows[0].pullRequests = billingPullRequests()
 
 	require.Equal(t, []string{
-		"WORKSPACE",
-		"branch feat/billing-export-2",
-		"repo   repo",
-		"pr     " + iconDone + " #120 merged  feat/billing-export",
-		"       " + iconDone + " #123 merged  feat/billing-export",
-		"       " + iconStatusActive + " #127 open    feat/billing-export-2",
-	}, workspaceColumn(t, m))
+		iconDone + " #120 merged  feat/billing-export",
+		iconDone + " #123 merged  feat/billing-export",
+		iconStatusActive + " #127 open    feat/billing-export-2",
+	}, detailSection(m, "PULL REQUESTS"))
+
+	// A task without pull requests has no such section.
+	m.rows[0].pullRequests = nil
+	require.Nil(t, detailSection(m, "PULL REQUESTS"))
 }
 
 func TestModel_PullRequestsRefreshOnATimer(t *testing.T) {

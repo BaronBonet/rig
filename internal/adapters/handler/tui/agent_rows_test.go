@@ -283,7 +283,6 @@ func TestModel_CleanupOnAnAgentSubRowRemovesOnlyThatAgent(t *testing.T) {
 	require.Nil(t, removing.cleanup.task)
 	view = stripANSI(removing.View().Content)
 	require.Contains(t, view, iconRemoving+" codex")
-	require.Contains(t, view, iconRemoving+" removing")
 	removed, ok := runCmd(t, cmd).(agentSessionRemovedMsg)
 	require.True(t, ok)
 	require.Equal(t, []string{"task-1/agent-codex"}, frontend.removedAgents)
@@ -470,22 +469,13 @@ func TestModel_DetailViewDescribesTheSelectedAgentSession(t *testing.T) {
 	}
 	m = withAgentSessions(t, m, "task-1", codexAgent(), background)
 
-	// On the task row, the detail panel describes the task, with the
-	// providers its row lists.
-	view := stripANSI(m.View().Content)
-	require.Contains(t, view, "state  ● working")
-	require.Contains(t, view, "provider  claude+codex")
-	require.NotContains(t, view, "pane   window")
+	// On the task row, the detail panel describes the task, not an agent.
+	require.NotContains(t, stripANSI(m.selectedTaskDetailView()), "pane")
 
 	m = pressKey(t, m, tea.KeyPressMsg{Code: 'j', Text: "j"})
 	m = pressKey(t, m, tea.KeyPressMsg{Code: 'j', Text: "j"})
 	require.Equal(t, "agent-claude", m.selectedAgent)
-
-	view = stripANSI(m.View().Content)
-	require.Contains(t, view, "state  ◐ working in background")
-	require.Contains(t, view, "       2 subagents, 1 shell")
-	require.Contains(t, view, "provider  claude\n")
-	require.Contains(t, view, "pane   window 0 (task) · pane 0")
+	require.Equal(t, "window 0 (task) · pane 0", detailLines(m)[0])
 }
 
 func TestModel_CursorStaysOnItsAgentWhileSubRowsChange(t *testing.T) {
@@ -658,40 +648,19 @@ func TestModel_DetailViewFitsTheSelectedAgentInEightyColumns(t *testing.T) {
 	// The panel's lines fit the terminal, truncated where even a part is too
 	// wide. The keybind header already overflows 72 columns.
 	for _, width := range []int{72, 80} {
-		view := selectBusy(width).View().Content
-		panel := view[strings.Index(view, "WORKSPACE"):]
-		for _, line := range strings.Split(panel, "\n") {
+		m := selectBusy(width)
+		for _, line := range strings.Split(m.selectedTaskDetailView(), "\n") {
 			require.LessOrEqual(t, lipgloss.Width(line), width, "width %d: %q", width, stripANSI(line))
 		}
+		require.Equal(t, "window 3 (claude) · pane 1", detailLines(m)[0], "width %d", width)
 	}
-
-	// At 80 columns each part of a value too wide for one line continues,
-	// whole, under it.
-	m := selectBusy(80)
-	view := stripANSI(m.View().Content)
-	require.Contains(t, view, "state  ◐ working in background\n")
-	require.Contains(t, view, "pane   window 3 (claude)\n")
-	require.Equal(
-		t,
-		statusColumn(t, viewLineContaining(t, m, "state  "), "◐ working"),
-		statusColumn(t, viewLineContaining(t, m, "2 subagents"), "2 subagents, 1 shell"),
-	)
-	require.Equal(
-		t,
-		statusColumn(t, viewLineContaining(t, m, "pane   "), "window 3 (claude)"),
-		statusColumn(t, viewLineContaining(t, m, "pane 1"), "pane 1"),
-	)
 }
 
-func TestModel_DetailProviderMatchesTheTaskRowsProviderCell(t *testing.T) {
-	m := agentsTaskModel(newFrontendHarness())
-	require.Contains(t, stripANSI(m.View().Content), "provider  codex")
-
-	// A Codex task whose only agent is Claude says Claude in both places.
-	m = withAgentSessions(t, m, "task-1", claudeAgent())
+func TestModel_TaskRowsProviderCellNamesItsOnlyAgentsProvider(t *testing.T) {
+	// A Codex task whose only agent is Claude says Claude.
+	m := withAgentSessions(t, agentsTaskModel(newFrontendHarness()), "task-1", claudeAgent())
 	// The task has no elapsed time or tokens, so its provider ends its row.
 	require.True(t, strings.HasSuffix(strings.TrimSpace(viewLineContaining(t, m, "first task")), " claude"))
-	require.Contains(t, stripANSI(m.View().Content), "provider  claude")
 }
 
 func TestModel_PageDownAtTheEndNeverMovesTheCursorUp(t *testing.T) {
@@ -779,13 +748,8 @@ func TestModel_AgentSubRowShowsAToolCallLikeItsTask(t *testing.T) {
 	running.Status = core.AgentSessionStatus{Phase: core.TaskStatusPhaseWorking, RawEventName: "PreToolUse"}
 	m = withAgentSessions(t, m, "task-1", claudeAgent(), running)
 
-	// The sub-row spins like any working row, and the detail panel names the
-	// tool call.
+	// The sub-row spins like any working row.
 	require.Contains(t, viewLineContaining(t, m, "review the retry change"), "└ "+spinnerFrames[0]+" codex")
-	m = pressKey(t, m, tea.KeyPressMsg{Code: 'j', Text: "j"})
-	m = pressKey(t, m, tea.KeyPressMsg{Code: 'j', Text: "j"})
-	require.Equal(t, "agent-codex", m.selectedAgent)
-	require.Contains(t, stripANSI(m.View().Content), "state  ● working · command")
 }
 
 func TestModel_AgentTextNeverReachesTheTerminalRaw(t *testing.T) {
@@ -932,11 +896,14 @@ func TestModel_ContextMarkersFitEveryWidth(t *testing.T) {
 	}
 }
 
-// detailContext is the detail panel's context field, without its label.
+// detailContext is the context part of the detail panel's summary, without
+// its label.
 func detailContext(t *testing.T, m model) string {
 	t.Helper()
-	_, value, _ := strings.Cut(viewLineContaining(t, m, "context  "), "context  ")
-	return strings.TrimRight(value, " ")
+	_, value, found := strings.Cut(detailLines(m)[0], "context ")
+	require.True(t, found, "no context in %q", detailLines(m)[0])
+	value, _, _ = strings.Cut(value, detailSummaryGap)
+	return value
 }
 
 func TestModel_DetailViewShowsTheAgentsContext(t *testing.T) {
@@ -954,7 +921,7 @@ func TestModel_DetailViewShowsTheAgentsContext(t *testing.T) {
 	require.Equal(t, "9% · 24.5k of 258.4k", detailContext(t, m))
 	// The context comes before the compactions.
 	view := stripANSI(m.View().Content)
-	require.Less(t, strings.Index(view, "context  "), strings.Index(view, "compacted  2×"))
+	require.Less(t, strings.Index(view, "context "), strings.Index(view, "compacted 2×"))
 
 	// A task with one agent shows that agent's context.
 	m = pressKey(t, m, tea.KeyPressMsg{Code: 'j', Text: "j"})
@@ -1082,19 +1049,19 @@ func TestModel_DetailViewShowsTheAgentsCompactions(t *testing.T) {
 
 	m = pressKey(t, m, tea.KeyPressMsg{Code: 'j', Text: "j"})
 	require.Equal(t, "agent-claude", m.selectedAgent)
-	require.Contains(t, stripANSI(m.View().Content), "compacted  3× (2 auto, 1 manual)")
+	require.Contains(t, stripANSI(m.View().Content), "compacted 3× (2 auto, 1 manual)")
 
 	// Codex does not record what triggered a compaction.
 	m = pressKey(t, m, tea.KeyPressMsg{Code: 'j', Text: "j"})
 	require.Equal(t, "agent-codex", m.selectedAgent)
 	view := stripANSI(m.View().Content)
-	require.Contains(t, view, "compacted  2×")
+	require.Contains(t, view, "compacted 2×")
 	require.NotContains(t, view, "2× (")
 
 	// A task with one agent shows that agent's compactions.
 	m = pressKey(t, m, tea.KeyPressMsg{Code: 'j', Text: "j"})
 	require.Equal(t, 1, m.selected)
-	require.Contains(t, stripANSI(m.View().Content), "compacted  1× (manual)")
+	require.Contains(t, stripANSI(m.View().Content), "compacted 1× (manual)")
 }
 
 func TestCompactionsDetailText(t *testing.T) {
