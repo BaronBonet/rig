@@ -3,6 +3,7 @@ package taskdaemon
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"net"
 	"testing"
 	"time"
@@ -221,4 +222,49 @@ func TestFrontend_AttachTaskSessionLandsOnTheGivenPane(t *testing.T) {
 	client := &frontend{sessions: sessions}
 
 	require.NoError(t, client.AttachTaskSession(context.Background(), task, pane))
+}
+
+func TestFrontend_AttachRepoSessionAttachesToTheRepoSessionWithoutACheckout(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	git := core.NewMockGitWorktreeClient(t)
+	git.EXPECT().DetectRepo(ctx, "/src/rig_task").Return(core.RepoContext{Root: "/src/rig", Name: "rig"}, nil)
+	sessions := core.NewMockTmuxSessionClient(t)
+	sessions.EXPECT().RepoSession(ctx, "/src/rig", "rig").Return("RIG", nil)
+	sessions.EXPECT().AttachSession(ctx, "RIG").Return(nil)
+	client := &frontend{sessions: sessions, git: git}
+
+	require.NoError(t, client.AttachRepoSession(ctx, "/src/rig_task"))
+}
+
+func TestFrontend_AttachRepoSessionChecksOutTheDefaultBranchAndCreatesAMissingSession(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	git := core.NewMockGitWorktreeClient(t)
+	git.EXPECT().DetectRepo(ctx, "/src/rig").Return(core.RepoContext{Root: "/src/rig", Name: "rig"}, nil)
+	git.EXPECT().CheckoutDefaultBranch(ctx, "/src/rig").Return(nil)
+	sessions := core.NewMockTmuxSessionClient(t)
+	sessions.EXPECT().RepoSession(ctx, "/src/rig", "rig").Return("", nil)
+	sessions.EXPECT().CreateRepoSession(ctx, "/src/rig", "rig").Return("RIG", nil)
+	sessions.EXPECT().AttachSession(ctx, "RIG").Return(nil)
+	client := &frontend{sessions: sessions, git: git}
+
+	require.NoError(t, client.AttachRepoSession(ctx, "/src/rig"))
+}
+
+func TestFrontend_AttachRepoSessionCreatesNoSessionWhenTheCheckoutFails(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	checkoutErr := errors.New("your local changes would be overwritten by checkout")
+	git := core.NewMockGitWorktreeClient(t)
+	git.EXPECT().DetectRepo(ctx, "/src/rig").Return(core.RepoContext{Root: "/src/rig", Name: "rig"}, nil)
+	git.EXPECT().CheckoutDefaultBranch(ctx, "/src/rig").Return(checkoutErr)
+	sessions := core.NewMockTmuxSessionClient(t)
+	sessions.EXPECT().RepoSession(ctx, "/src/rig", "rig").Return("", nil)
+	client := &frontend{sessions: sessions, git: git}
+
+	require.ErrorIs(t, client.AttachRepoSession(ctx, "/src/rig"), checkoutErr)
 }

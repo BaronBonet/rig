@@ -814,3 +814,28 @@ func TestRepositoryUnshippedWork_NeverFetchesWhatAPartialCloneLacks(t *testing.T
 	// Git traces each command it runs, a lazy fetch's included.
 	require.NotContains(t, string(traced), " fetch ")
 }
+
+func TestRepositoryCheckoutDefaultBranch_ChecksOutTheBranchOriginHeadNames(t *testing.T) {
+	runner := subprocess.NewMockRunner(t)
+	runner.EXPECT().
+		Run(mock.Anything, "/tmp/repo", "git", "symbolic-ref", "--short", "refs/remotes/origin/HEAD").
+		Return(subprocess.Result{Stdout: "origin/develop\n"}, nil).
+		Once()
+	runner.EXPECT().
+		Run(mock.Anything, "/tmp/repo", "git", "checkout", "develop").
+		Return(subprocess.Result{}, nil).
+		Once()
+
+	require.NoError(t, New(runner).CheckoutDefaultBranch(context.Background(), "/tmp/repo"))
+}
+
+func TestRepositoryCheckoutDefaultBranch_ChecksOutMainWithoutOriginHead(t *testing.T) {
+	runner := subprocess.NewMockRunner(t)
+	runner.EXPECT().
+		Run(mock.Anything, "/tmp/repo", "git", "symbolic-ref", "--short", "refs/remotes/origin/HEAD").
+		Return(subprocess.Result{}, errors.New("exit status 128")).
+		Once()
+	runner.EXPECT().Run(mock.Anything, "/tmp/repo", "git", "checkout", "main").Return(subprocess.Result{}, nil).Once()
+
+	require.NoError(t, New(runner).CheckoutDefaultBranch(context.Background(), "/tmp/repo"))
+}

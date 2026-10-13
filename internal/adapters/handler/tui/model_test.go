@@ -74,7 +74,7 @@ func TestModel_ViewRendersTaskMetadata(t *testing.T) {
 
 	view := stripANSI(got.View().Content)
 	require.Contains(t, view, "RIG dev")
-	require.Contains(t, view, "n new   r refresh   space details   x clean   q quit")
+	require.Contains(t, view, "n new   m main   r refresh   space details   x clean   q quit")
 	require.Contains(t, view, "first task")
 	require.Contains(t, view, "repo-a")
 	require.Contains(t, view, "codex")
@@ -2471,7 +2471,7 @@ func TestModel_PRPickerEnterCreatesTaskFromSelectedPR(t *testing.T) {
 	require.Equal(t, modeBrowse, pending.mode)
 	require.Equal(t, opCreating, pending.pending)
 	view := stripANSI(pending.View().Content)
-	require.Contains(t, view, "n new   r refresh   space details   x clean   q quit")
+	require.Contains(t, view, "n new   m main   r refresh   space details   x clean   q quit")
 	require.Contains(t, view, "Creating task from pull request")
 	require.NotContains(t, view, "Suggesting name")
 	require.Less(t, strings.Index(view, "existing task"), strings.Index(view, "Creating task from pull request"))
@@ -2545,7 +2545,7 @@ func TestModel_PRPickerCreateFailureReturnsToBrowseWithProgressAndError(t *testi
 	require.ErrorContains(t, got.create.err, "create failed")
 
 	view = stripANSI(got.View().Content)
-	require.Contains(t, view, "n new   r refresh   space details   x clean   q quit")
+	require.Contains(t, view, "n new   m main   r refresh   space details   x clean   q quit")
 	require.Contains(t, view, "Creating task from pull request")
 	require.NotContains(t, view, "Creating worktree")
 	require.Contains(t, view, "create failed")
@@ -3092,4 +3092,21 @@ func newFrontendHarness() *frontendHarness {
 		},
 	).Maybe()
 	return frontend
+}
+
+func TestModel_KeyMOpensTheSelectedTasksRepoSession(t *testing.T) {
+	frontend := newFrontendHarness()
+	frontend.listTasks = []*core.Task{
+		{ID: "task-1", DisplayName: "first task", RepoRoot: "/src/rig", Provider: core.ProviderCodex},
+		{ID: "task-2", DisplayName: "second task", RepoRoot: "/src/fws-facade", Provider: core.ProviderCodex},
+	}
+	frontend.mock.EXPECT().AttachRepoSession(mock.Anything, "/src/fws-facade").Return(nil).Once()
+
+	m := newLoadedModel(frontend)
+	m.selected = 1
+
+	_, cmd := m.Update(tea.KeyPressMsg{Code: 'm', Text: "m"})
+	msg, ok := runCmd(t, cmd).(taskOpenedMsg)
+	require.True(t, ok)
+	require.NoError(t, msg.err)
 }

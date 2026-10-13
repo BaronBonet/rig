@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 
+	"github.com/BaronBonet/rig/internal/adapters/client/git"
 	"github.com/BaronBonet/rig/internal/adapters/client/tmux"
 	"github.com/BaronBonet/rig/internal/core"
 	"github.com/BaronBonet/rig/internal/pkg/subprocess"
@@ -20,6 +21,7 @@ func New(cfg Config) core.TaskDaemon {
 		frontend: &frontend{
 			socketPath: cfg.SocketPath,
 			sessions:   tmux.New(subprocess.ExecRunner{}),
+			git:        git.New(subprocess.ExecRunner{}),
 		},
 	}
 }

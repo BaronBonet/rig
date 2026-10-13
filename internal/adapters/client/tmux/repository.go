@@ -227,8 +227,14 @@ func (r *repository) AttachTaskSession(ctx context.Context, task *core.Task, pan
 		}
 	}
 
+	return r.AttachSession(ctx, task.TmuxSession)
+}
+
+// AttachSession switches the client to the session inside tmux, and attaches
+// to it outside.
+func (r *repository) AttachSession(ctx context.Context, session string) error {
 	command := "attach-session"
-	if insideTmux {
+	if r.getenv != nil && strings.TrimSpace(r.getenv("TMUX")) != "" {
 		command = "switch-client"
 	}
 
@@ -238,12 +244,62 @@ func (r *repository) AttachTaskSession(ctx context.Context, task *core.Task, pan
 		"tmux",
 		command,
 		"-t",
-		exactSessionTarget(task.TmuxSession),
+		exactSessionTarget(session),
 	)
 	if isMissingSessionError(err, result) {
 		return core.ErrTaskSessionNotFound
 	}
 	return err
+}
+
+// RepoSession finds the repository's main session among every session's first
+// pane, which list-panes -a lists first for each session.
+func (r *repository) RepoSession(ctx context.Context, repoRoot string, repoName string) (string, error) {
+	result, err := r.runner.Run(ctx, "", "tmux", "list-panes", "-a", "-F", "#{session_name}\t#{pane_current_path}")
+	if isNoTmuxServerError(err, result) {
+		return "", nil
+	}
+	if err != nil {
+		return "", err
+	}
+
+	byPath := ""
+	seen := map[string]bool{}
+	for line := range strings.Lines(result.Stdout) {
+		session, path, _ := strings.Cut(strings.TrimRight(line, "\r\n"), "\t")
+		if seen[session] {
+			continue
+		}
+		seen[session] = true
+		if strings.EqualFold(session, normalizedSessionName(repoName)) {
+			return session, nil
+		}
+		if byPath == "" && path == repoRoot {
+			byPath = session
+		}
+	}
+	return byPath, nil
+}
+
+func (r *repository) CreateRepoSession(ctx context.Context, repoRoot string, repoName string) (string, error) {
+	result, err := r.runner.Run(
+		ctx,
+		"",
+		"tmux",
+		"new-session",
+		"-d",
+		"-P",
+		"-F",
+		"#{session_name}",
+		"-s",
+		strings.ToUpper(normalizedSessionName(repoName)),
+		"-c",
+		repoRoot,
+	)
+	if err != nil {
+		return "", err
+	}
+	return strings.TrimSpace(result.Stdout), nil
 }
 
 // attachPane lands the client on an agent's pane. Pane IDs restart on every

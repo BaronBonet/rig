@@ -1633,3 +1633,59 @@ func expectTmuxRunWithStdin(
 ) *mock.Call {
 	return runner.On("RunWithStdin", mock.Anything, opts).Return(result, err).Once()
 }
+
+func TestRepositoryRepoSession_PrefersTheRepoNameOverAFirstPaneInTheCheckout(t *testing.T) {
+	runner := subprocess.NewMockRunner(t)
+	expectTmuxRun(runner, subprocess.Result{Stdout: "FACADE\t/src/fws-facade\n" +
+		"FACADE\t/src/rig\n" +
+		"RIG\t/src/rig_other-task\n" +
+		"rig_task\t/src/rig_task\n"}, nil,
+		"list-panes", "-a", "-F", "#{session_name}\t#{pane_current_path}")
+
+	session, err := New(runner).RepoSession(context.Background(), "/src/rig", "rig")
+
+	require.NoError(t, err)
+	require.Equal(t, "RIG", session)
+}
+
+func TestRepositoryRepoSession_FindsTheSessionWhoseFirstPaneSitsInTheCheckout(t *testing.T) {
+	runner := subprocess.NewMockRunner(t)
+	listing := "AAA\t/src/other\nAAA\t/src/fws-facade\nFACADE\t/src/fws-facade\nFACADE\t/src/rig\n"
+	expectTmuxRun(runner, subprocess.Result{Stdout: listing}, nil,
+		"list-panes", "-a", "-F", "#{session_name}\t#{pane_current_path}")
+	expectTmuxRun(runner, subprocess.Result{Stdout: listing}, nil,
+		"list-panes", "-a", "-F", "#{session_name}\t#{pane_current_path}")
+	repo := New(runner)
+
+	session, err := repo.RepoSession(context.Background(), "/src/fws-facade", "fws-facade")
+	require.NoError(t, err)
+	require.Equal(t, "FACADE", session)
+
+	// Only a session's first pane counts.
+	session, err = repo.RepoSession(context.Background(), "/src/rig", "rig")
+	require.NoError(t, err)
+	require.Empty(t, session)
+}
+
+func TestRepositoryRepoSession_FindsNoneWithoutATmuxServer(t *testing.T) {
+	runner := subprocess.NewMockRunner(t)
+	expectTmuxRun(runner, subprocess.Result{Stderr: "no server running on /tmp/tmux-501/default"},
+		errors.New("exit status 1"),
+		"list-panes", "-a", "-F", "#{session_name}\t#{pane_current_path}")
+
+	session, err := New(runner).RepoSession(context.Background(), "/src/rig", "rig")
+
+	require.NoError(t, err)
+	require.Empty(t, session)
+}
+
+func TestRepositoryCreateRepoSession_NamesItAfterTheRepoInCapitals(t *testing.T) {
+	runner := subprocess.NewMockRunner(t)
+	expectTmuxRun(runner, subprocess.Result{Stdout: "FWS-FACADE\n"}, nil,
+		"new-session", "-d", "-P", "-F", "#{session_name}", "-s", "FWS-FACADE", "-c", "/src/fws-facade")
+
+	session, err := New(runner).CreateRepoSession(context.Background(), "/src/fws-facade", "fws-facade")
+
+	require.NoError(t, err)
+	require.Equal(t, "FWS-FACADE", session)
+}

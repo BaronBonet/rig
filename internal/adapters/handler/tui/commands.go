@@ -89,6 +89,14 @@ func openTaskSessionCmd(
 	}
 }
 
+// openRepoSessionCmd attaches to the main session of the repository at
+// repoRoot, creating it when it has none.
+func openRepoSessionCmd(ctx context.Context, frontend core.TaskFrontend, repoRoot string) tea.Cmd {
+	return func() tea.Msg {
+		return taskOpenedMsg{err: frontend.AttachRepoSession(ctx, repoRoot)}
+	}
+}
+
 func createTaskStreamCmd(ctx context.Context, frontend core.TaskFrontend, input core.CreateTaskInput) tea.Cmd {
 	return func() tea.Msg {
 		events, err := frontend.CreateTaskStream(ctx, input)

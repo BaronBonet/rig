@@ -151,12 +151,13 @@ type TaskCreateEvent struct {
 }
 
 // TaskFrontend is the frontend-facing task application port used by the TUI.
-// It is TaskService plus the one operation that must run in the foreground
+// It is TaskService plus the operations that must run in the foreground
 // process. In the active runtime, `rig` gets a composed implementation from
 // the taskdaemon adapter:
 //   - the TaskService methods are backed by daemon RPC over the local socket
-//   - AttachTaskSession is local-only because it attaches this foreground
-//     terminal to tmux and cannot be truthfully served by the background daemon
+//   - AttachTaskSession and AttachRepoSession are local-only because they
+//     attach this foreground terminal to tmux and cannot be truthfully served
+//     by the background daemon
 //
 // The TUI only knows about this port; it does not know about sockets, daemon
 // startup, tmux client mechanics, or in-process service wiring.
@@ -167,6 +168,12 @@ type TaskFrontend interface {
 	// intentionally client-local behavior, not part of the daemon socket
 	// protocol.
 	AttachTaskSession(ctx context.Context, task *Task, pane *TmuxPaneRef) error
+	// AttachRepoSession attaches the current terminal to the main session of
+	// the repository dir is in, which holds its primary checkout rather than a
+	// task's worktree. When it has none, the checkout is switched to the
+	// default branch and the session is created there. Like
+	// AttachTaskSession, it is client-local.
+	AttachRepoSession(ctx context.Context, dir string) error
 }
 
 // TaskDaemonHookRoute describes one provider hook endpoint the local task
@@ -593,6 +600,9 @@ type GitWorktreeClient interface {
 	// paths: symlinks resolved, and in the letter case on disk. It returns an
 	// error wrapping fs.ErrNotExist when dir does not exist.
 	ListRepoCheckouts(ctx context.Context, dir string) ([]string, error)
+	// CheckoutDefaultBranch checks out, in the checkout at repoRoot, the
+	// branch origin's HEAD names, or main when origin has not recorded one.
+	CheckoutDefaultBranch(ctx context.Context, repoRoot string) error
 }
 
 // PullRequestClient lists repository pull requests through an external
@@ -636,6 +646,16 @@ type TmuxSessionClient interface {
 	// that no longer exists, or a pane ID the client's tmux server gives to
 	// another pane, falls back to the task session.
 	AttachTaskSession(ctx context.Context, task *Task, pane *TmuxPaneRef) error
+	// RepoSession returns the name of the repository's main session: a session
+	// named repoName in any letter case or, failing that, one whose first pane
+	// sits in repoRoot. It returns "" when there is none.
+	RepoSession(ctx context.Context, repoRoot string, repoName string) (string, error)
+	// CreateRepoSession creates the repository's main session in repoRoot,
+	// named repoName in capitals, and returns its name.
+	CreateRepoSession(ctx context.Context, repoRoot string, repoName string) (string, error)
+	// AttachSession attaches to the named session. It returns
+	// ErrTaskSessionNotFound when the session does not exist.
+	AttachSession(ctx context.Context, session string) error
 	// InspectTaskSession returns the current tmux-side runtime state for the
 	// task session. Missing sessions are reported as Exists=false.
 	InspectTaskSession(ctx context.Context, task *Task) (TaskSessionRuntimeState, error)
