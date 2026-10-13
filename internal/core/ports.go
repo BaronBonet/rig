@@ -138,10 +138,15 @@ const (
 
 type TaskCreateProgressEvent struct {
 	Step TaskCreateProgressStep `json:"step"`
+	// Task is the task once it exists: on every step after suggesting its
+	// name, and on every step of a retry.
+	Task *Task `json:"task,omitempty"`
 }
 
+// TaskCreateProgressReporter hears of each creation step as it starts, with
+// the task once it exists, or nil before.
 type TaskCreateProgressReporter interface {
-	ReportTaskCreateProgress(step TaskCreateProgressStep)
+	ReportTaskCreateProgress(step TaskCreateProgressStep, task *Task)
 }
 
 type TaskCreateEvent struct {

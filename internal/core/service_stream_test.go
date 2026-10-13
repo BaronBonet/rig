@@ -35,7 +35,16 @@ func TestTaskServiceCreateTaskStream_StreamsProgressThenTerminalTask(t *testing.
 		require.NotNil(t, event.Progress, "only the last event may be terminal")
 		require.Nil(t, event.Task)
 		steps = append(steps, event.Progress.Step)
+		// Only the step before the task exists goes without it.
+		if event.Progress.Step == TaskCreateProgressSuggestingName {
+			require.Nil(t, event.Progress.Task)
+			continue
+		}
+		require.NotNil(t, event.Progress.Task)
+		require.Equal(t, terminal.Task.ID, event.Progress.Task.ID)
+		require.Equal(t, "billing retry flow", event.Progress.Task.DisplayName)
 	}
+	require.Equal(t, TaskCreateProgressSuggestingName, steps[0])
 	require.Contains(t, steps, TaskCreateProgressCreatingWorktree)
 	require.Contains(t, steps, TaskCreateProgressStartingSession)
 }

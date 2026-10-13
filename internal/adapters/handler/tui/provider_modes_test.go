@@ -239,7 +239,6 @@ func TestModel_PStartsNoAgent(t *testing.T) {
 
 			require.Nil(t, cmd)
 			require.Equal(t, modeBrowse, got.mode)
-			require.Equal(t, opNone, got.pending)
 			require.Equal(t, model.View().Content, got.View().Content)
 			require.Zero(t, frontend.attachTaskSessionCalls)
 		})

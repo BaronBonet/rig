@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"path/filepath"
 	"strings"
+	"sync"
 	"time"
 	"unicode"
 
@@ -26,6 +27,8 @@ type taskCreation struct {
 	repos      *knownRepos
 	launcher   *sessionLauncher
 	operations *taskOperationCoordinator
+	// saveMu serializes saving new tasks; see saveNewTask.
+	saveMu sync.Mutex
 }
 
 func newTaskCreation(
@@ -197,31 +200,28 @@ func (c *taskCreation) createTaskFromPrompt(
 	input CreateTaskInput,
 	reporter TaskCreateProgressReporter,
 ) (*Task, error) {
-	reportTaskCreateProgress(reporter, TaskCreateProgressSuggestingName)
+	reportTaskCreateProgress(reporter, TaskCreateProgressSuggestingName, nil)
 	suggestion, err := suggestTaskName(ctx, providerClient, repoCtx.Root, input.Prompt)
 	if err != nil {
 		return nil, err
 	}
 
-	existingTasks, err := c.tasks.ListTasks(ctx)
+	task, err := c.saveNewTask(ctx, func(existingTasks []*Task) (*Task, error) {
+		taskSlug := uniqueTaskSlug(repoCtx.Root, suggestion.Name, existingTasks)
+		task := newPromptTaskRecord(
+			repoCtx,
+			provider,
+			suggestion.Name,
+			taskSlug,
+			suggestion.BranchType,
+		)
+		task.Prompt = input.Prompt
+		task.Model = input.Model
+		task.ReasoningLevel = input.ReasoningLevel
+		task.ParentTaskID = parentTaskID(input, existingTasks)
+		return task, nil
+	})
 	if err != nil {
-		return nil, err
-	}
-
-	taskSlug := uniqueTaskSlug(repoCtx.Root, suggestion.Name, existingTasks)
-	task := newPromptTaskRecord(
-		repoCtx,
-		provider,
-		suggestion.Name,
-		taskSlug,
-		suggestion.BranchType,
-	)
-	task.Prompt = input.Prompt
-	task.Model = input.Model
-	task.ReasoningLevel = input.ReasoningLevel
-	task.ParentTaskID = parentTaskID(input, existingTasks)
-
-	if err := c.tasks.CreateTask(ctx, task); err != nil {
 		return nil, err
 	}
 
@@ -251,34 +251,33 @@ func (c *taskCreation) createTaskFromPullRequest(
 		return nil, fmt.Errorf("pull request source is required")
 	}
 
-	existingTasks, err := c.tasks.ListTasks(ctx)
-	if err != nil {
-		return nil, err
-	}
-	if existingTaskForBranch(existingTasks, repoCtx.Root, pr.BranchName) != nil {
-		return nil, fmt.Errorf("PR already has workspace")
-	}
+	task, err := c.saveNewTask(ctx, func(existingTasks []*Task) (*Task, error) {
+		if existingTaskForBranch(existingTasks, repoCtx.Root, pr.BranchName) != nil {
+			return nil, fmt.Errorf("PR already has workspace")
+		}
 
-	inUseByWorktree, err := c.gitWorktree.IsBranchUsedByWorktree(ctx, repoCtx.Root, pr.BranchName)
-	if err != nil {
-		return nil, err
-	}
-	if inUseByWorktree {
-		return nil, fmt.Errorf("PR already has workspace")
-	}
+		inUseByWorktree, err := c.gitWorktree.IsBranchUsedByWorktree(ctx, repoCtx.Root, pr.BranchName)
+		if err != nil {
+			return nil, err
+		}
+		if inUseByWorktree {
+			return nil, fmt.Errorf("PR already has workspace")
+		}
 
-	taskSlug := uniqueTaskSlug(repoCtx.Root, pr.BranchName, existingTasks)
-	task := newPullRequestTaskRecord(
-		repoCtx,
-		provider,
-		prDisplayName(*pr),
-		taskSlug,
-		pr.BranchName,
-	)
-	task.Model = input.Model
-	task.ReasoningLevel = input.ReasoningLevel
-	task.ParentTaskID = parentTaskID(input, existingTasks)
-	if err := c.tasks.CreateTask(ctx, task); err != nil {
+		taskSlug := uniqueTaskSlug(repoCtx.Root, pr.BranchName, existingTasks)
+		task := newPullRequestTaskRecord(
+			repoCtx,
+			provider,
+			prDisplayName(*pr),
+			taskSlug,
+			pr.BranchName,
+		)
+		task.Model = input.Model
+		task.ReasoningLevel = input.ReasoningLevel
+		task.ParentTaskID = parentTaskID(input, existingTasks)
+		return task, nil
+	})
+	if err != nil {
 		return nil, err
 	}
 
@@ -292,6 +291,31 @@ func (c *taskCreation) createTaskFromPullRequest(
 	)
 	if err := c.runSteps(ctx, task, reporter, steps, taskCreationStepPersistenceReadyOnly); err != nil {
 		return task, err
+	}
+	return task, nil
+}
+
+// saveNewTask saves the task newTask makes from the tasks saved so far. It
+// lets one creation at a time list, pick and save, as creations run at once
+// and two picking from the same list could take the same slug, and so the
+// same branch, worktree and session.
+func (c *taskCreation) saveNewTask(
+	ctx context.Context,
+	newTask func(existingTasks []*Task) (*Task, error),
+) (*Task, error) {
+	c.saveMu.Lock()
+	defer c.saveMu.Unlock()
+
+	existingTasks, err := c.tasks.ListTasks(ctx)
+	if err != nil {
+		return nil, err
+	}
+	task, err := newTask(existingTasks)
+	if err != nil {
+		return nil, err
+	}
+	if err := c.tasks.CreateTask(ctx, task); err != nil {
+		return nil, err
 	}
 	return task, nil
 }
@@ -370,7 +394,7 @@ func (c *taskCreation) runSteps(
 	stepPersistence taskCreationStepPersistence,
 ) error {
 	for _, action := range steps {
-		reportTaskCreateProgress(reporter, action.step)
+		reportTaskCreateProgress(reporter, action.step, task)
 		if stepPersistence == taskCreationStepPersistenceEachStep {
 			if err := c.markStep(ctx, task, action.step); err != nil {
 				return err
@@ -384,12 +408,12 @@ func (c *taskCreation) runSteps(
 	return c.markReady(ctx, task)
 }
 
-func reportTaskCreateProgress(reporter TaskCreateProgressReporter, step TaskCreateProgressStep) {
+func reportTaskCreateProgress(reporter TaskCreateProgressReporter, step TaskCreateProgressStep, task *Task) {
 	if reporter == nil {
 		return
 	}
 
-	reporter.ReportTaskCreateProgress(step)
+	reporter.ReportTaskCreateProgress(step, task)
 }
 
 // taskCreateChanReporter bridges the workflow's progress reporter onto a
@@ -399,10 +423,17 @@ type taskCreateChanReporter struct {
 	events chan<- TaskCreateEvent
 }
 
-func (r taskCreateChanReporter) ReportTaskCreateProgress(step TaskCreateProgressStep) {
+func (r taskCreateChanReporter) ReportTaskCreateProgress(step TaskCreateProgressStep, task *Task) {
+	progress := &TaskCreateProgressEvent{Step: step}
+	if task != nil {
+		// A copy, as the creation goes on changing its task while the event is
+		// sent.
+		snapshot := *task
+		progress.Task = &snapshot
+	}
 	select {
 	case <-r.ctx.Done():
-	case r.events <- TaskCreateEvent{Progress: &TaskCreateProgressEvent{Step: step}}:
+	case r.events <- TaskCreateEvent{Progress: progress}:
 	}
 }
 

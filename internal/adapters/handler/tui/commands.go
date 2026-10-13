@@ -97,23 +97,28 @@ func openRepoSessionCmd(ctx context.Context, frontend core.TaskFrontend, repoRoo
 	}
 }
 
-func createTaskStreamCmd(ctx context.Context, frontend core.TaskFrontend, input core.CreateTaskInput) tea.Cmd {
+func createTaskStreamCmd(
+	ctx context.Context,
+	frontend core.TaskFrontend,
+	creation int,
+	input core.CreateTaskInput,
+) tea.Cmd {
 	return func() tea.Msg {
 		events, err := frontend.CreateTaskStream(ctx, input)
 		if err != nil {
-			return taskCreateStreamStartFailedMsg{err: err}
+			return taskCreateStreamStartFailedMsg{creation: creation, err: err}
 		}
-		return waitForTaskCreateEventCmd(events)()
+		return waitForTaskCreateEventCmd(creation, events)()
 	}
 }
 
-func retryTaskCreationStreamCmd(ctx context.Context, frontend core.TaskFrontend, taskID string) tea.Cmd {
+func retryTaskCreationStreamCmd(ctx context.Context, frontend core.TaskFrontend, creation int, taskID string) tea.Cmd {
 	return func() tea.Msg {
 		events, err := frontend.RetryTaskCreationStream(ctx, taskID)
 		if err != nil {
-			return taskCreateStreamStartFailedMsg{err: err}
+			return taskCreateStreamStartFailedMsg{creation: creation, err: err}
 		}
-		return waitForTaskCreateEventCmd(events)()
+		return waitForTaskCreateEventCmd(creation, events)()
 	}
 }
 
@@ -322,20 +327,21 @@ func subscribeTaskStatusCmd(ctx context.Context, frontend core.TaskFrontend, tas
 	}
 }
 
-func waitForTaskCreateEventCmd(events <-chan core.TaskCreateEvent) tea.Cmd {
+func waitForTaskCreateEventCmd(creation int, events <-chan core.TaskCreateEvent) tea.Cmd {
 	return func() tea.Msg {
 		if events == nil {
-			return taskCreateStreamClosedMsg{}
+			return taskCreateStreamClosedMsg{creation: creation}
 		}
 
 		event, ok := <-events
 		if !ok {
-			return taskCreateStreamClosedMsg{}
+			return taskCreateStreamClosedMsg{creation: creation}
 		}
 
 		return taskCreateEventMsg{
-			events: events,
-			event:  event,
+			events:   events,
+			event:    event,
+			creation: creation,
 		}
 	}
 }
