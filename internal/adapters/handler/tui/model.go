@@ -5,6 +5,8 @@ import (
 	"errors"
 	"fmt"
 	"path/filepath"
+	"slices"
+	"strconv"
 	"strings"
 
 	"github.com/BaronBonet/rig/internal/core"
@@ -24,6 +26,16 @@ type taskRow struct {
 	// loaded.
 	pullRequests  []core.PullRequest
 	unshippedWork core.UnshippedWork
+	// creating is the creation of the row's task while it runs in the
+	// background: the row shows its step and takes no action until it replies.
+	creating *rowCreation
+}
+
+// rowCreation is a task creation under way. Its id tells it apart, as its
+// task has no ID until it is named.
+type rowCreation struct {
+	id   int
+	step core.TaskCreateProgressStep
 }
 
 type modelMode int
@@ -39,16 +51,6 @@ const (
 )
 
 const defaultBuildVersion = "dev"
-
-// pendingOp is the single in-flight task lifecycle mutation. Session opening
-// is tracked separately because attaching to an existing session may overlap
-// creation of another task, and so are removals, which run in the background.
-type pendingOp int
-
-const (
-	opNone pendingOp = iota
-	opCreating
-)
 
 const taskActivityPreviewLimit = 6
 
@@ -73,7 +75,6 @@ type model struct {
 	height        int
 	shimmerTick   int
 	mode          modelMode
-	pending       pendingOp
 	opening       bool
 	launchCwd     string
 	buildVersion  string
@@ -121,8 +122,9 @@ type model struct {
 	// latest one fills the step. It outlives the step's state.
 	repoDirsLoad int
 
-	// In-flight creation progress; outlives the draft and renders in browse.
-	create createFlowState
+	// creationSeq numbers task creations, which run in the background, so
+	// their replies find their rows.
+	creationSeq int
 }
 
 // cleanupTarget is what x on the task list removes: a whole task, or, from an
@@ -151,15 +153,6 @@ type taskDraft struct {
 	// late Launch default no longer replaces it.
 	choice        core.LaunchChoice
 	choiceTouched bool
-}
-
-// createFlowState is the progress of an in-flight or just-failed task
-// creation, rendered in the browse list after the draft is submitted.
-type createFlowState struct {
-	active core.TaskCreateProgressStep
-	done   []core.TaskCreateProgressStep
-	fromPR bool
-	err    error
 }
 
 // setupFormState is the provider setup screen's working state.
@@ -250,25 +243,24 @@ type taskStatusSubscriptionClosedMsg struct {
 	taskID string
 }
 
-type taskCreatedMsg struct {
-	task *core.Task
-	err  error
-}
-
 type taskOpenedMsg struct {
 	err error
 }
 
 type taskCreateStreamStartFailedMsg struct {
-	err error
+	err      error
+	creation int
 }
 
 type taskCreateEventMsg struct {
-	events <-chan core.TaskCreateEvent
-	event  core.TaskCreateEvent
+	events   <-chan core.TaskCreateEvent
+	event    core.TaskCreateEvent
+	creation int
 }
 
-type taskCreateStreamClosedMsg struct{}
+type taskCreateStreamClosedMsg struct {
+	creation int
+}
 
 type taskDeletedMsg struct {
 	err    error
@@ -429,18 +421,6 @@ func (m model) quit() (tea.Model, tea.Cmd) {
 	return m, tea.Quit
 }
 
-// beginOp marks a task operation in flight and restarts the shimmer.
-func (m *model) beginOp(op pendingOp) {
-	m.pending = op
-	m.shimmerTick = 0
-}
-
-// endOp clears the in-flight operation and stops the shimmer.
-func (m *model) endOp() {
-	m.pending = opNone
-	m.shimmerTick = 0
-}
-
 // startSpinner starts the spinner's tick once a task or agent works, unless
 // it already turns. The tick stops itself when nothing works.
 func (m *model) startSpinner() tea.Cmd {
@@ -452,10 +432,10 @@ func (m *model) startSpinner() tea.Cmd {
 }
 
 // anyWorking reports whether a task, or an agent shown as one of its
-// sub-rows, is working.
+// sub-rows, is working, or a task is being created.
 func (m model) anyWorking() bool {
 	for _, row := range m.rows {
-		if row.status != nil && row.status.Phase == core.TaskStatusPhaseWorking {
+		if row.creating != nil || row.status != nil && row.status.Phase == core.TaskStatusPhaseWorking {
 			return true
 		}
 		for _, session := range agentSubRows(row) {
@@ -480,9 +460,6 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m.updatePromptPaste(msg)
 	case tea.KeyPressMsg:
 		if isForceQuitKey(msg) {
-			return m.quit()
-		}
-		if m.pending == opCreating && isQuitKey(msg) {
 			return m.quit()
 		}
 
@@ -514,9 +491,6 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		case "esc":
 			return m.handleBack()
 		case "a", "n":
-			if m.pending != opNone {
-				return m, nil
-			}
 			if m.providerSetup == nil {
 				return m.enterProviderSetupMode()
 			}
@@ -527,7 +501,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.loading = true
 			return m, loadTasksCmd(m.statusContext, m.frontend)
 		case "R":
-			if m.selectedRemoving() {
+			if m.selectedBusy() || m.opening {
 				return m, nil
 			}
 			return m.retrySelectedTaskCreation()
@@ -553,7 +527,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, nil
 		case "x":
 			row := m.selectedRow()
-			if row == nil || row.task == nil || m.selectedRemoving() {
+			if row == nil || row.task == nil || m.selectedBusy() {
 				return m, nil
 			}
 			target := cleanupTarget{task: row.task}
@@ -566,7 +540,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 			return m, nil
 		case "enter":
-			if len(m.rows) == 0 || m.opening || m.selectedRemoving() {
+			if len(m.rows) == 0 || m.opening || m.selectedBusy() {
 				return m, nil
 			}
 			row := m.selectedRow()
@@ -583,13 +557,9 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				leadPane := lead.Pane
 				pane = &leadPane
 			}
-			cmds := []tea.Cmd{openTaskSessionCmd(m.statusContext, m.frontend, row.task, pane)}
-			if m.pending == opNone {
-				m.shimmerTick = 0
-				cmds = append(cmds, shimmerTickCmd())
-			}
 			m.opening = true
-			return m, tea.Batch(cmds...)
+			m.shimmerTick = 0
+			return m, tea.Batch(openTaskSessionCmd(m.statusContext, m.frontend, row.task, pane), shimmerTickCmd())
 		}
 		m.clampSelection()
 		return m, nil
@@ -602,17 +572,14 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 
-		selectedTaskID := ""
-		if row := m.selectedRow(); row != nil {
-			selectedTaskID = taskID(row.task)
-		}
+		selectedKey := m.selectedRowKey()
 		selectedAgent := m.selectedAgent
-		nextRows := rowsFromTasks(msg.tasks)
+		nextRows := withCreationRows(rowsFromTasks(msg.tasks), m.rows)
 		preserveLoadedRowState(nextRows, m.rows)
 		m.reconcileTaskStatusTracking(nextRows)
 		m.rows = nextRows
 		m.clampSelection()
-		if m.selectTask(selectedTaskID) {
+		if m.selectRow(selectedKey) {
 			// The reload keeps each task's status, so the cursor stays on the
 			// same agent sub-row while that agent still runs.
 			m.selectedAgent = selectedAgent
@@ -729,62 +696,25 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.draft.prs = append([]core.RepoPullRequest(nil), msg.prs...)
 		m.clampPRSelection()
 		return m, nil
-	case taskCreatedMsg:
-		m.endOp()
-		defaultsCmd := m.launchDefaultsAfterCreateCmd()
-		if msg.err != nil {
-			m.create.err = msg.err
-			return m, defaultsCmd
-		}
-
-		m.transition(modeBrowse)
-		m.create = createFlowState{}
-		index := m.upsertTaskRow(msg.task)
-		if index >= 0 {
-			m.selected = index
-		}
-		m.clampSelection()
-		cmds := []tea.Cmd{loadTasksCmd(m.statusContext, m.frontend), defaultsCmd}
-		cmds = append(cmds, m.taskStatusTrackingCmds(taskID(msg.task))...)
-		return m, tea.Batch(cmds...)
 	case taskCreateStreamStartFailedMsg:
-		m.endOp()
-		m.create.err = msg.err
-		return m, m.launchDefaultsAfterCreateCmd()
+		return m.finishCreation(msg.creation, nil, msg.err)
 	case taskCreateEventMsg:
 		switch {
 		case msg.event.Progress != nil:
-			m.advanceCreateProgress(msg.event.Progress.Step)
-			return m, waitForTaskCreateEventCmd(msg.events)
-		case msg.event.Err != nil:
-			m.endOp()
-			m.create.err = msg.event.Err
-			if msg.event.Task != nil {
-				if index := m.upsertTaskRow(msg.event.Task); index >= 0 {
-					m.selected = index
-				}
-				m.clampSelection()
-			}
-			return m, m.launchDefaultsAfterCreateCmd()
-		case msg.event.Task != nil:
-			return m.Update(taskCreatedMsg{task: msg.event.Task})
+			m.advanceCreation(msg.creation, *msg.event.Progress)
+			return m, waitForTaskCreateEventCmd(msg.creation, msg.events)
+		case msg.event.Err != nil, msg.event.Task != nil:
+			return m.finishCreation(msg.creation, msg.event.Task, msg.event.Err)
 		default:
-			return m, waitForTaskCreateEventCmd(msg.events)
+			return m, waitForTaskCreateEventCmd(msg.creation, msg.events)
 		}
 	case taskCreateStreamClosedMsg:
-		if m.pending != opCreating {
-			return m, nil
-		}
-		m.endOp()
-		if m.create.err == nil {
-			m.create.err = errors.New("create task stream closed unexpectedly")
-		}
-		return m, m.launchDefaultsAfterCreateCmd()
+		// A stream that ends with its terminal event is not waited on again,
+		// so this one ended without it.
+		return m.finishCreation(msg.creation, nil, errors.New("create task stream closed unexpectedly"))
 	case taskOpenedMsg:
 		m.opening = false
-		if m.pending == opNone {
-			m.shimmerTick = 0
-		}
+		m.shimmerTick = 0
 		if msg.err != nil {
 			m.err = msg.err
 			return m, nil
@@ -800,14 +730,11 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 
-		selectedTaskID, selectedAgent := "", m.selectedAgent
-		if row := m.selectedRow(); row != nil {
-			selectedTaskID = taskID(row.task)
-		}
+		selectedKey, selectedAgent := m.selectedRowKey(), m.selectedAgent
 		m.removeTaskRow(msg.taskID)
 		m.cancelTaskStatusTracking(msg.taskID)
 		m.clampSelection()
-		if m.selectTask(selectedTaskID) {
+		if m.selectRow(selectedKey) {
 			m.selectedAgent = selectedAgent
 			m.clampAgentSelection()
 		}
@@ -840,7 +767,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		return m, tea.Batch(cmds...)
 	case shimmerTickMsg:
-		if m.pending == opNone && !m.opening {
+		if !m.opening {
 			return m, nil
 		}
 		m.shimmerTick++
@@ -945,12 +872,12 @@ func (m model) submitPrompt() (model, tea.Cmd) {
 	provider := m.effectiveCreateProvider()
 	choice := m.draftLaunchChoice()
 	m.transition(modeBrowse)
-	m.beginOp(opCreating)
-	m.create = createFlowState{}
 	m.rememberLaunchDefault(provider, choice)
+	id := m.addCreationRow(cwd, core.Task{Provider: provider, Prompt: prompt})
+	spinnerCmd := m.startSpinner()
 
 	return m, tea.Batch(
-		createTaskStreamCmd(m.statusContext, m.frontend, core.CreateTaskInput{
+		createTaskStreamCmd(m.statusContext, m.frontend, id, core.CreateTaskInput{
 			Cwd:            cwd,
 			Prompt:         prompt,
 			Provider:       provider,
@@ -959,34 +886,30 @@ func (m model) submitPrompt() (model, tea.Cmd) {
 			// The draft's choice becomes the provider's Launch default.
 			RememberLaunchChoice: true,
 		}),
-		shimmerTickCmd(),
+		spinnerCmd,
 	)
 }
 
+// retrySelectedTaskCreation retries the selected task's failed creation in
+// the background, on its row, as a new creation does.
 func (m model) retrySelectedTaskCreation() (model, tea.Cmd) {
-	if m.pending != opNone {
-		return m, nil
-	}
 	row := m.selectedRow()
 	if row == nil || row.task == nil || row.task.CreationStatus != core.TaskCreationStatusFailed {
 		return m, nil
 	}
 
-	m.transition(modeBrowse)
-	m.beginOp(opCreating)
-	m.create = createFlowState{active: row.task.CreationStep}
+	m.creationSeq++
+	row.creating = &rowCreation{id: m.creationSeq, step: row.task.CreationStep}
 	m.err = nil
+	spinnerCmd := m.startSpinner()
 
 	return m, tea.Batch(
-		retryTaskCreationStreamCmd(m.statusContext, m.frontend, row.task.ID),
-		shimmerTickCmd(),
+		retryTaskCreationStreamCmd(m.statusContext, m.frontend, m.creationSeq, row.task.ID),
+		spinnerCmd,
 	)
 }
 
 func (m model) updatePromptInput(msg tea.Msg) (tea.Model, tea.Cmd) {
-	if m.pending != opNone {
-		return m, nil
-	}
 	m.ensurePromptInputInitialized()
 	if m.draft.input.Value() != m.draft.prompt {
 		m.draft.input.SetValue(m.draft.prompt)
@@ -1056,17 +979,13 @@ func (m model) updatePromptInput(msg tea.Msg) (tea.Model, tea.Cmd) {
 }
 
 func (m model) updatePromptPaste(msg tea.PasteMsg) (tea.Model, tea.Cmd) {
-	if m.mode != modePromptInput || m.pending != opNone {
+	if m.mode != modePromptInput {
 		return m, nil
 	}
 	return m.updatePromptInput(msg)
 }
 
 func (m model) updatePRPicker(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
-	if m.pending != opNone {
-		return m, nil
-	}
-
 	switch msg.String() {
 	case "esc", "q":
 		return m.handleBack()
@@ -1098,12 +1017,12 @@ func (m model) updatePRPicker(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		provider := m.effectiveCreateProvider()
 		choice := m.draftLaunchChoice()
 		m.transition(modeBrowse)
-		m.beginOp(opCreating)
-		m.create = createFlowState{fromPR: true}
 		m.rememberLaunchDefault(provider, choice)
+		id := m.addCreationRow(repoRoot, core.Task{Provider: provider})
+		spinnerCmd := m.startSpinner()
 
 		return m, tea.Batch(
-			createTaskStreamCmd(m.statusContext, m.frontend, core.CreateTaskInput{
+			createTaskStreamCmd(m.statusContext, m.frontend, id, core.CreateTaskInput{
 				Cwd:                  repoRoot,
 				Provider:             provider,
 				Model:                choice.Model,
@@ -1113,7 +1032,7 @@ func (m model) updatePRPicker(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 					PullRequest: &selected,
 				},
 			}),
-			shimmerTickCmd(),
+			spinnerCmd,
 		)
 	case "tab":
 		m.cycleDraftProvider()
@@ -1137,8 +1056,6 @@ func (m model) enterPromptInputMode(initialValue string) (tea.Model, tea.Cmd) {
 	input.SetValue(initialValue)
 	m.draft = taskDraft{prompt: initialValue, input: input}
 	m.startDraftLaunchChoice()
-	m.create.err = nil
-	m.create.fromPR = false
 	cmds := append([]tea.Cmd{m.draft.input.Focus()}, m.retryLaunchChoiceCmds()...)
 	return m, tea.Batch(cmds...)
 }
@@ -1184,14 +1101,15 @@ func (m model) updateCleanupConfirm(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	}
 }
 
-// selectedRemoving reports whether the selected task, or the agent of the
-// selected sub-row, is being removed.
-func (m model) selectedRemoving() bool {
+// selectedBusy reports whether the selected task is being created or removed,
+// or the agent of the selected sub-row is being removed, so the row takes no
+// action.
+func (m model) selectedBusy() bool {
 	row := m.selectedRow()
 	if row == nil {
 		return false
 	}
-	if m.deleting[taskID(row.task)] {
+	if row.creating != nil || m.deleting[taskID(row.task)] {
 		return true
 	}
 	session := m.selectedAgentSession()
@@ -1289,14 +1207,14 @@ func (m *model) clampPRSelection() {
 	m.draft.prSelected = clampIndex(m.draft.prSelected, len(m.draft.prs))
 }
 
-func (m *model) selectTask(targetTaskID string) bool {
-	targetTaskID = strings.TrimSpace(targetTaskID)
-	if targetTaskID == "" {
+// selectRow moves the cursor to the row with the given rowKey.
+func (m *model) selectRow(key string) bool {
+	if key == "" {
 		return false
 	}
 
 	for index, row := range m.rows {
-		if taskID(row.task) != targetTaskID {
+		if rowKey(row) != key {
 			continue
 		}
 		m.selected = index
@@ -1304,6 +1222,22 @@ func (m *model) selectTask(targetTaskID string) bool {
 	}
 
 	return false
+}
+
+// rowKey tells rows apart across list changes: a creation's row by its
+// creation, as its task may have no ID yet, and any other by its task's ID.
+func rowKey(row taskRow) string {
+	if row.creating != nil {
+		return "creating:" + strconv.Itoa(row.creating.id)
+	}
+	return taskID(row.task)
+}
+
+func (m model) selectedRowKey() string {
+	if row := m.selectedRow(); row != nil {
+		return rowKey(*row)
+	}
+	return ""
 }
 
 func (m *model) taskRowByID(taskID string) *taskRow {
@@ -1340,38 +1274,137 @@ func (m *model) setTaskUsage(taskID string, usage *core.TaskUsage) {
 	}
 }
 
-func (m *model) upsertTaskRow(task *core.Task) int {
-	id := taskID(task)
-	if id == "" {
-		return -1
-	}
-
-	for i := range m.rows {
-		if taskID(m.rows[i].task) != id {
-			continue
-		}
-		m.rows[i].task = task
-		return i
-	}
-
-	m.rows = append(m.rows, taskRow{task: task})
-	m.rows = groupRowsByRepo(m.rows)
-	for i := range m.rows {
-		if taskID(m.rows[i].task) == id {
-			return i
-		}
-	}
-	return -1
+// addCreationRow numbers a new creation and adds the row it shows until its
+// task is named, in the group of its repository as far as the list knows it,
+// with the cursor on it.
+func (m *model) addCreationRow(cwd string, task core.Task) int {
+	m.creationSeq++
+	task.RepoRoot, task.RepoName = m.creationRepo(cwd)
+	row := taskRow{task: &task, creating: &rowCreation{id: m.creationSeq}}
+	m.rows = groupRowsByRepo(append(m.rows, row))
+	m.selectRow(rowKey(row))
+	m.selectedAgent = ""
+	return m.creationSeq
 }
 
-func (m *model) advanceCreateProgress(step core.TaskCreateProgressStep) {
-	if step == "" {
+// creationRepo is the repository root and name a creation from cwd goes
+// under: those of the listed task whose repository or worktree holds cwd, or
+// else cwd itself. Its row moves to its task's repository once named.
+func (m model) creationRepo(cwd string) (string, string) {
+	for _, row := range m.rows {
+		if task := row.task; task != nil && (pathWithin(cwd, task.RepoRoot) || pathWithin(cwd, task.WorktreePath)) {
+			return task.RepoRoot, task.RepoName
+		}
+	}
+	return cwd, filepath.Base(cwd)
+}
+
+func pathWithin(path string, dir string) bool {
+	return dir != "" && (path == dir || strings.HasPrefix(path, dir+string(filepath.Separator)))
+}
+
+// creationRow returns the index of the row creation id shows, or -1.
+func (m model) creationRow(id int) int {
+	return slices.IndexFunc(m.rows, func(row taskRow) bool {
+		return row.creating != nil && row.creating.id == id
+	})
+}
+
+// advanceCreation shows a creation's step on its row, and its task once the
+// step carries it.
+func (m *model) advanceCreation(id int, progress core.TaskCreateProgressEvent) {
+	index := m.creationRow(id)
+	if index < 0 {
 		return
 	}
-	if m.create.active != "" && m.create.active != step && !containsCreateStep(m.create.done, m.create.active) {
-		m.create.done = append(m.create.done, m.create.active)
+	m.rows[index].creating.step = progress.Step
+	if progress.Task != nil {
+		m.setCreationTask(index, progress.Task)
 	}
-	m.create.active = step
+}
+
+// setCreationTask gives the creation row at index its task. A row a reload
+// already gave the task takes the creation over, and the creation's own row
+// goes, so the task shows once. It returns the index of the row with the task.
+func (m *model) setCreationTask(index int, task *core.Task) int {
+	selectedKey := m.selectedRowKey()
+	creating := m.rows[index].creating
+	listed := slices.IndexFunc(m.rows, func(row taskRow) bool {
+		return row.creating != creating && taskID(row.task) != "" && taskID(row.task) == taskID(task)
+	})
+	if listed < 0 {
+		m.rows[index].task = task
+		m.rows = groupRowsByRepo(m.rows)
+	} else {
+		m.rows[listed].task, m.rows[listed].creating = task, creating
+		if selectedKey == taskID(task) {
+			selectedKey = rowKey(m.rows[listed])
+		}
+		m.rows = slices.Delete(m.rows, index, index+1)
+	}
+	m.selectRow(selectedKey)
+	m.clampSelection()
+	return slices.IndexFunc(m.rows, func(row taskRow) bool { return row.creating == creating })
+}
+
+// finishCreation ends a creation as it replies: its row keeps its task,
+// ready or failed, or goes when it has none. The user may have moved on, so
+// it leaves the mode as it is and the cursor on the same row.
+func (m model) finishCreation(id int, task *core.Task, err error) (tea.Model, tea.Cmd) {
+	index := m.creationRow(id)
+	if index < 0 {
+		return m, nil
+	}
+	if err != nil {
+		m.err = err
+	}
+	// A reply without a task, as from a refused retry or a dropped stream,
+	// leaves a named row its task.
+	if taskID(task) == "" && taskID(m.rows[index].task) != "" {
+		task = m.rows[index].task
+	}
+
+	selectedKey := m.selectedRowKey()
+	creationKey := rowKey(m.rows[index])
+	if taskID(task) == "" {
+		m.rows = slices.Delete(m.rows, index, index+1)
+	} else {
+		index = m.setCreationTask(index, task)
+		m.rows[index].creating = nil
+		if selectedKey == creationKey {
+			selectedKey = taskID(task)
+		}
+	}
+	m.selectRow(selectedKey)
+	m.clampSelection()
+
+	cmds := []tea.Cmd{loadTasksCmd(m.statusContext, m.frontend)}
+	// Creations share the refetch, so the last to end makes it, once every
+	// Launch choice submitted is saved or refused.
+	if !slices.ContainsFunc(m.rows, func(row taskRow) bool { return row.creating != nil }) {
+		cmds = append(cmds, m.launchDefaultsAfterCreateCmd())
+	}
+	cmds = append(cmds, m.taskStatusTrackingCmds(taskID(task))...)
+	return m, tea.Batch(cmds...)
+}
+
+// withCreationRows carries each creation under way over to reloaded rows:
+// onto its task's row, or as its own row while the reload does not list its
+// task yet.
+func withCreationRows(nextRows []taskRow, currentRows []taskRow) []taskRow {
+	for _, row := range currentRows {
+		if row.creating == nil {
+			continue
+		}
+		id := taskID(row.task)
+		listed := slices.IndexFunc(nextRows, func(next taskRow) bool { return id != "" && taskID(next.task) == id })
+		if listed >= 0 {
+			nextRows[listed].creating = row.creating
+			continue
+		}
+		nextRows = append(nextRows, row)
+	}
+	return groupRowsByRepo(nextRows)
 }
 
 func (m *model) removeTaskRow(targetTaskID string) {
@@ -1467,15 +1500,6 @@ func (m model) selectedRow() *taskRow {
 		return &m.rows[len(m.rows)-1]
 	}
 	return &m.rows[m.selected]
-}
-
-func containsCreateStep(steps []core.TaskCreateProgressStep, target core.TaskCreateProgressStep) bool {
-	for _, step := range steps {
-		if step == target {
-			return true
-		}
-	}
-	return false
 }
 
 func groupRowsByRepo(rows []taskRow) []taskRow {

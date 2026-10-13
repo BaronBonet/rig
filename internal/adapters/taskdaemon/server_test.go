@@ -86,7 +86,12 @@ func (f *fakeTaskService) taskCreateResult() (<-chan core.TaskCreateEvent, error
 
 	events := make(chan core.TaskCreateEvent, len(steps)+1)
 	for _, step := range steps {
-		events <- core.TaskCreateEvent{Progress: &core.TaskCreateProgressEvent{Step: step}}
+		progress := &core.TaskCreateProgressEvent{Step: step}
+		// As in core, the task exists once its name is suggested.
+		if step != core.TaskCreateProgressSuggestingName {
+			progress.Task = task
+		}
+		events <- core.TaskCreateEvent{Progress: progress}
 	}
 	if err != nil {
 		events <- core.TaskCreateEvent{Err: err, Task: task}
@@ -695,9 +700,14 @@ func TestCreateTaskStreamRoundTrip(t *testing.T) {
 		for event := range events {
 			got = append(got, event)
 		}
+		// A progress event's task rides along without ending the stream.
 		require.Len(t, got, 3)
 		require.Equal(t, core.TaskCreateProgressSuggestingName, got[0].Progress.Step)
+		require.Nil(t, got[0].Progress.Task)
 		require.Equal(t, core.TaskCreateProgressCreatingWorktree, got[1].Progress.Step)
+		require.Nil(t, got[1].Task)
+		require.NotNil(t, got[1].Progress.Task)
+		require.Equal(t, "add retries", got[1].Progress.Task.DisplayName)
 		require.NotNil(t, got[2].Task)
 		require.Equal(t, "task-1", got[2].Task.ID)
 	})
@@ -1146,4 +1156,68 @@ func httptestNewRequest(t *testing.T, method string, target string, payload map[
 	req, err := http.NewRequestWithContext(t.Context(), method, target, bytes.NewReader(body))
 	require.NoError(t, err)
 	return req
+}
+
+// outlivingCreateService's creation sends its events into a buffer, as core's
+// does: its first step, then, once resumed, its next step, which the daemon
+// cannot pass on to a frontend that is gone. It gives a cancelled context time
+// to show, then ends and reports whether its context was cancelled.
+type outlivingCreateService struct {
+	*fakeTaskService
+
+	resume chan struct{}
+	done   chan error
+}
+
+func (s *outlivingCreateService) CreateTaskStream(
+	ctx context.Context,
+	_ core.CreateTaskInput,
+) (<-chan core.TaskCreateEvent, error) {
+	progress := core.TaskCreateEvent{
+		Progress: &core.TaskCreateProgressEvent{Step: core.TaskCreateProgressCreatingWorktree},
+	}
+	events := make(chan core.TaskCreateEvent, 8)
+	go func() {
+		defer close(events)
+		events <- progress
+		<-s.resume
+		events <- progress
+		select {
+		case <-ctx.Done():
+		case <-time.After(100 * time.Millisecond):
+		}
+		events <- core.TaskCreateEvent{Task: &core.Task{ID: "task-1"}}
+		s.done <- ctx.Err()
+	}()
+	return events, nil
+}
+
+// A creation runs to its end after the frontend that started it goes away,
+// as when the user quits rig while a task is being created.
+func TestCreateTaskStreamOutlivesItsFrontend(t *testing.T) {
+	t.Parallel()
+
+	svc := &outlivingCreateService{
+		fakeTaskService: newFakeTaskService(),
+		resume:          make(chan struct{}),
+		done:            make(chan error, 1),
+	}
+	client := startTestFrontend(t, svc)
+
+	conn, err := (&net.Dialer{}).DialContext(context.Background(), "unix", client.socketPath)
+	require.NoError(t, err)
+	payload, err := json.Marshal(core.CreateTaskInput{Cwd: "/tmp/repo", Prompt: "add retries"})
+	require.NoError(t, err)
+	require.NoError(t, json.NewEncoder(conn).Encode(socketRequest{Command: socketCommandCreateTask, Payload: payload}))
+	var first socketEnvelope
+	require.NoError(t, json.NewDecoder(conn).Decode(&first))
+	require.NoError(t, conn.Close())
+	close(svc.resume)
+
+	select {
+	case err := <-svc.done:
+		require.NoError(t, err)
+	case <-time.After(5 * time.Second):
+		t.Fatal("the creation stalled once its frontend went away")
+	}
 }

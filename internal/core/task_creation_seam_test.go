@@ -2,7 +2,10 @@ package core
 
 import (
 	"context"
+	"slices"
+	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
@@ -77,9 +80,12 @@ func TestTaskCreationSeam_RetryRunsOnlyRemainingSteps(t *testing.T) {
 
 			var reported []TaskCreateProgressStep
 			reporter := NewMockTaskCreateProgressReporter(t)
-			reporter.EXPECT().ReportTaskCreateProgress(mock.Anything).Run(func(step TaskCreateProgressStep) {
-				reported = append(reported, step)
-			}).Return()
+			reporter.EXPECT().
+				ReportTaskCreateProgress(mock.Anything, mock.Anything).
+				Run(func(step TaskCreateProgressStep, _ *Task) {
+					reported = append(reported, step)
+				}).
+				Return()
 
 			task, err := h.creation.RetryTaskCreationWithProgress(t.Context(), "task-1", reporter)
 
@@ -257,4 +263,45 @@ func TestServiceRefreshTaskWorkspaceHooks_BootstrapsConfiguredProvidersIntoReady
 	require.Equal(t, ".claude/settings.local.json", h.workspace.bootstrapSpec.Files[0].Path)
 	require.Equal(t, "/tmp/repo_a", h.workspace.worktreePath,
 		"only ready tasks get their workspaces re-bootstrapped")
+}
+
+// Two creations whose names come back at once still get different slugs: the
+// second lists the tasks only once the first is saved.
+func TestTaskCreationSeam_SavesNewTasksOneAtATime(t *testing.T) {
+	var saved []*Task
+	var creates atomic.Int32
+	firstSaving, releaseFirst := make(chan struct{}), make(chan struct{})
+	repo := NewMockTaskRepository(t)
+	repo.EXPECT().ListTasks(mock.Anything).RunAndReturn(func(context.Context) ([]*Task, error) {
+		return slices.Clone(saved), nil
+	})
+	repo.EXPECT().CreateTask(mock.Anything, mock.Anything).RunAndReturn(func(_ context.Context, task *Task) error {
+		if creates.Add(1) == 1 {
+			close(firstSaving)
+			<-releaseFirst
+		}
+		saved = append(saved, task)
+		return nil
+	})
+	creation := &taskCreation{tasks: repo}
+	newTask := func(existingTasks []*Task) (*Task, error) {
+		return &Task{RepoRoot: "/tmp/repo", Slug: uniqueTaskSlug("/tmp/repo", "retry loop", existingTasks)}, nil
+	}
+	done := make(chan error, 2)
+	save := func() {
+		_, err := creation.saveNewTask(t.Context(), newTask)
+		done <- err
+	}
+
+	go save()
+	<-firstSaving
+	go save()
+	// Unserialized, the second creation lists the tasks now, without the first.
+	time.Sleep(50 * time.Millisecond)
+	close(releaseFirst)
+
+	require.NoError(t, <-done)
+	require.NoError(t, <-done)
+	require.Len(t, saved, 2)
+	require.NotEqual(t, saved[0].Slug, saved[1].Slug)
 }

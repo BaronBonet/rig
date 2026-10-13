@@ -5,18 +5,13 @@ import (
 )
 
 // canEnter is the mode-transition guard: whether the TUI may enter the given
-// mode with an operation possibly pending, in setup-only mode, and with or
-// without a valid provider setup. Pure so the full matrix is testable.
-func canEnter(to modelMode, pending pendingOp, setupOnly bool, hasSetup bool) bool {
+// mode in setup-only mode, and with or without a valid provider setup. Pure
+// so the full matrix is testable.
+func canEnter(to modelMode, setupOnly bool, hasSetup bool) bool {
 	if setupOnly {
 		// rig setup locks the TUI to the setup steps; the only way out is
 		// quitting. The repo directories step follows a valid provider setup.
 		return to == modeProviderSetup || (to == modeRepoDirsSetup && hasSetup)
-	}
-	if pending != opNone {
-		// One create at a time: while it is in flight, only the browse list
-		// (where its progress renders) is reachable.
-		return to == modeBrowse
 	}
 	switch to {
 	case modeBrowse, modeProviderSetup:
@@ -90,7 +85,7 @@ func familyOf(mode modelMode) modeFamily {
 // refuses transitions the guard forbids and discards the departing family's
 // state when the mode family changes.
 func (m *model) transition(to modelMode) bool {
-	if !canEnter(to, m.pending, m.setupOnly, m.providerSetup != nil) {
+	if !canEnter(to, m.setupOnly, m.providerSetup != nil) {
 		return false
 	}
 	if from := familyOf(m.mode); from != familyOf(to) {
@@ -124,11 +119,6 @@ func (m model) handleBack() (tea.Model, tea.Cmd) {
 	}
 
 	switch from {
-	case modePromptInput:
-		// Leaving the draft family discards the draft (transition above); the
-		// abandoned create-flow leftovers go with it.
-		m.create = createFlowState{}
-		return m, nil
 	case modeCleanupConfirm:
 		m.cleanup = cleanupTarget{}
 		return m, nil

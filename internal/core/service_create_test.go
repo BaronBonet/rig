@@ -313,9 +313,12 @@ func TestTaskServiceRetryTaskCreationWithProgress_ResumesPreparingWorkspaceFailu
 
 	var steps []TaskCreateProgressStep
 	reporter := NewMockTaskCreateProgressReporter(t)
-	reporter.EXPECT().ReportTaskCreateProgress(mock.Anything).Run(func(step TaskCreateProgressStep) {
-		steps = append(steps, step)
-	}).Return()
+	reporter.EXPECT().
+		ReportTaskCreateProgress(mock.Anything, mock.Anything).
+		Run(func(step TaskCreateProgressStep, _ *Task) {
+			steps = append(steps, step)
+		}).
+		Return()
 
 	task, err := svc.service.RetryTaskCreationWithProgress(t.Context(), "task-1", reporter)
 
@@ -472,9 +475,12 @@ func TestTaskServiceCreateTask_FromPullRequestEmitsProgressStepsInOrder(t *testi
 
 	var steps []TaskCreateProgressStep
 	reporter := NewMockTaskCreateProgressReporter(t)
-	reporter.EXPECT().ReportTaskCreateProgress(mock.Anything).Run(func(step TaskCreateProgressStep) {
-		steps = append(steps, step)
-	}).Return()
+	reporter.EXPECT().
+		ReportTaskCreateProgress(mock.Anything, mock.Anything).
+		Run(func(step TaskCreateProgressStep, _ *Task) {
+			steps = append(steps, step)
+		}).
+		Return()
 
 	task, err := svc.service.CreateTaskWithProgress(t.Context(), CreateTaskInput{
 		Cwd:      "/tmp/repo",
@@ -580,9 +586,12 @@ func TestTaskServiceCreateTaskWithProgress_EmitsProgressStepsInOrder(t *testing.
 
 	var steps []TaskCreateProgressStep
 	reporter := NewMockTaskCreateProgressReporter(t)
-	reporter.EXPECT().ReportTaskCreateProgress(mock.Anything).Run(func(step TaskCreateProgressStep) {
-		steps = append(steps, step)
-	}).Return()
+	reporter.EXPECT().
+		ReportTaskCreateProgress(mock.Anything, mock.Anything).
+		Run(func(step TaskCreateProgressStep, _ *Task) {
+			steps = append(steps, step)
+		}).
+		Return()
 
 	task, err := svc.service.CreateTaskWithProgress(t.Context(), CreateTaskInput{
 		Cwd:      "/tmp/repo",

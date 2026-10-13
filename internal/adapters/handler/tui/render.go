@@ -419,7 +419,7 @@ func (m model) renderRow(index int, row taskRow, layout taskRowLayout) string {
 	}
 
 	symbol, symbolStyle := m.taskRowSymbol(row)
-	name := taskRowName(row.task)
+	name := taskRowText(row)
 
 	// A task that needs input stands out from the dimmed rest. The selected
 	// task stands out further, also while the cursor is on one of its agent
@@ -539,12 +539,26 @@ func (m model) widestNameArea() int {
 		widest += pullRequests + len(nameGap)
 	}
 	for _, row := range m.rows {
+		// A creation's row adds its step to its name.
+		if row.creating != nil {
+			widest = max(widest, lipgloss.Width(taskRowText(row))+len(nameGap))
+		}
 		for _, session := range agentSubRows(row) {
 			text, _ := agentSubRowText(session)
 			widest = max(widest, subRowLead-statusSymbolWidth+lipgloss.Width(text)+len(nameGap))
 		}
 	}
 	return widest
+}
+
+// taskRowText is what a task row shows in its name column: its name, then,
+// while it is being created, its step, alone until the task is named.
+func taskRowText(row taskRow) string {
+	name := taskRowName(row.task)
+	if row.creating == nil {
+		return name
+	}
+	return strings.TrimSpace(name + "  " + lowerFirst(taskCreateProgressLabel(row.creating.step)))
 }
 
 // taskRowName is the name a task row shows: its display name, or its ID when
@@ -657,10 +671,14 @@ func currentPullRequest(pullRequests []core.PullRequest) int {
 	return len(pullRequests) - 1
 }
 
-// taskRowSymbol is the symbol a task's row leads with: the removing symbol
-// while it is being deleted, the failed symbol when its creation failed, and
-// its status symbol otherwise.
+// taskRowSymbol is the symbol a task's row leads with: a muted spinner frame
+// while it is being created, the removing symbol while it is being deleted,
+// the failed symbol when its creation failed, and its status symbol
+// otherwise.
 func (m model) taskRowSymbol(row taskRow) (string, lipgloss.Style) {
+	if row.creating != nil {
+		return spinnerFrames[m.spinnerFrame%len(spinnerFrames)], mutedStyle
+	}
 	if m.deleting[taskID(row.task)] {
 		return iconRemoving, mutedStyle
 	}
@@ -702,7 +720,10 @@ func (m model) selectedTaskDetailView() string {
 	agentSession := m.selectedAgentSession()
 
 	var lines []string
-	if task.CreationStatus == core.TaskCreationStatusFailed {
+	if row.creating != nil {
+		creating := taskCreateProgressLabel(row.creating.step)
+		lines = append(lines, fitDetailLine(mutedStyle.Render(creating), width))
+	} else if task.CreationStatus == core.TaskCreationStatusFailed {
 		failed := "Failed while " + lowerFirst(taskCreateProgressLabel(task.CreationStep))
 		lines = append(lines, fitDetailLine(errorStyle.Render(failed), width))
 		// A setup script's error goes on to its last output, which says why.
@@ -904,10 +925,6 @@ func (m model) promptInputView() string {
 	}
 	builder.WriteString(m.renderTextBox(input))
 
-	if progress := m.renderCreateProgress(); progress != "" {
-		builder.WriteString("\n\n" + progress)
-	}
-
 	builder.WriteString("\n\n")
 	builder.WriteString(footerKeybinds(
 		[2]string{"enter", "submit"},
@@ -936,7 +953,7 @@ func (m model) renderTextBox(input textarea.Model) string {
 
 func (m model) listKeybindText() string {
 	binds := [][2]string{{"n", "new"}, {"m", "main"}, {"r", "refresh"}}
-	if row := m.selectedRow(); row != nil && row.task != nil &&
+	if row := m.selectedRow(); row != nil && row.task != nil && row.creating == nil &&
 		row.task.CreationStatus == core.TaskCreationStatusFailed {
 		binds = append(binds, [2]string{"R", "retry"})
 	}
@@ -1160,63 +1177,13 @@ func (m model) prPickerView() string {
 	return builder.String()
 }
 
-func (m model) renderCreateProgress() string {
-	if m.create.fromPR {
-		if m.pending != opCreating && m.create.err == nil {
-			return ""
-		}
-		label := "Creating task from pull request"
-		switch {
-		case m.pending == opCreating:
-			return stepActiveLine(label, m.shimmerTick)
-		case m.create.err != nil:
-			return stepFailedLine(label)
-		default:
-			return ""
-		}
-	}
-
-	if m.pending != opCreating && len(m.create.done) == 0 && m.create.active == "" {
+// listCreateStatusView is the status line under the task list while a
+// session reconnects.
+func (m model) listCreateStatusView() string {
+	if !m.opening {
 		return ""
 	}
-
-	steps := []core.TaskCreateProgressStep{
-		core.TaskCreateProgressSuggestingName,
-		core.TaskCreateProgressCreatingWorktree,
-		core.TaskCreateProgressPreparingWorkspace,
-		core.TaskCreateProgressStartingSession,
-	}
-
-	var lines []string
-	for _, step := range steps {
-		label := taskCreateProgressLabel(step)
-		switch {
-		case containsCreateStep(m.create.done, step):
-			lines = append(lines, stepDoneLine(label))
-		case step == m.create.active && m.pending == opCreating:
-			lines = append(lines, stepActiveLine(label, m.shimmerTick))
-		case step == m.create.active && m.create.err != nil:
-			lines = append(lines, stepFailedLine(label))
-		default:
-			lines = append(lines, stepPendingLine(label))
-		}
-	}
-
-	return strings.Join(lines, "\n")
-}
-
-func (m model) listCreateStatusView() string {
-	var lines []string
-	if m.opening {
-		lines = append(lines, stepActiveLine("Reconnecting session...", m.shimmerTick))
-	}
-	if m.create.err != nil {
-		lines = append(lines, errorStyle.Render("Error: "+m.create.err.Error()))
-	}
-	if progress := m.renderCreateProgress(); progress != "" {
-		lines = append(lines, progress)
-	}
-	return strings.Join(lines, "\n\n")
+	return stepActiveLine("Reconnecting session...", m.shimmerTick)
 }
 
 func taskCreateProgressLabel(step core.TaskCreateProgressStep) string {
@@ -1535,22 +1502,10 @@ func footerKeybindsWithin(width int, binds ...[2]string) string {
 	return strings.Join(append(lines, footerKeybinds(line...)), "\n")
 }
 
-// Status-dot lines: a colored dot followed by a styled label, the shared
-// shape for progress steps and long-running-operation status rows.
-func stepDoneLine(label string) string {
-	return healthyStyle.Render(iconStatusActive) + " " + primaryStyle.Render(label)
-}
-
+// stepActiveLine is a long-running operation's status line: a colored dot
+// followed by its shimmering label.
 func stepActiveLine(label string, tick int) string {
 	return warningStyle.Render(iconStatusActive) + " " + renderShimmer(label, tick)
-}
-
-func stepFailedLine(label string) string {
-	return errorStyle.Render(iconStatusActive) + " " + errorStyle.Render(label)
-}
-
-func stepPendingLine(label string) string {
-	return dimStyle.Render(iconStatusIdle + " " + label)
 }
 
 func (m model) renderHeaderLabel() string {

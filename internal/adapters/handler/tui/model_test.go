@@ -217,12 +217,13 @@ func TestModel_ViewSplitsTaskOverviewByRepo(t *testing.T) {
 	require.NotContains(t, view, "/tmp/repo-b")
 }
 
-func TestModel_ViewKeepsCreateStatusVisibleWhenRowsExceedHeight(t *testing.T) {
+func TestModel_ViewKeepsCreationRowVisibleWhenRowsExceedHeight(t *testing.T) {
 	frontend := newFrontendHarness()
 	for i := range 20 {
 		suffix := strconv.Itoa(i)
 		frontend.listTasks = append(frontend.listTasks, &core.Task{
 			ID:          "task-" + suffix,
+			RepoRoot:    "/tmp/repo",
 			RepoName:    "repo",
 			DisplayName: "task " + suffix,
 			Provider:    core.ProviderCodex,
@@ -232,25 +233,21 @@ func TestModel_ViewKeepsCreateStatusVisibleWhenRowsExceedHeight(t *testing.T) {
 	m := newLoadedModel(frontend)
 	m.width = 96
 	m.height = 14
-	m.pending = opCreating
-	m.create.active = core.TaskCreateProgressStartingSession
-	m.create.done = []core.TaskCreateProgressStep{
-		core.TaskCreateProgressSuggestingName,
-		core.TaskCreateProgressCreatingWorktree,
-		core.TaskCreateProgressPreparingWorkspace,
-	}
+	id := m.addCreationRow("/tmp/repo", core.Task{Provider: core.ProviderCodex})
+	m.advanceCreation(id, core.TaskCreateProgressEvent{Step: core.TaskCreateProgressStartingSession})
 
 	view := stripANSI(m.View().Content)
-	require.Contains(t, view, "Starting session")
+	require.Contains(t, view, "starting session")
 	require.LessOrEqual(t, len(strings.Split(view, "\n")), m.height)
 }
 
-func TestModel_ViewClearsCreateStatusAfterCreatedTaskIsSelected(t *testing.T) {
+func TestModel_ViewClearsCreationStepOnceTheTaskIsCreated(t *testing.T) {
 	frontend := newFrontendHarness()
 	for i := range 20 {
 		suffix := strconv.Itoa(i)
 		frontend.listTasks = append(frontend.listTasks, &core.Task{
 			ID:          "task-" + suffix,
+			RepoRoot:    "/tmp/repo",
 			RepoName:    "repo",
 			DisplayName: "task " + suffix,
 			Provider:    core.ProviderCodex,
@@ -260,32 +257,27 @@ func TestModel_ViewClearsCreateStatusAfterCreatedTaskIsSelected(t *testing.T) {
 	m := newLoadedModel(frontend)
 	m.width = 96
 	m.height = 16
-	m.pending = opCreating
-	m.create.active = core.TaskCreateProgressStartingSession
-	m.create.done = []core.TaskCreateProgressStep{
-		core.TaskCreateProgressSuggestingName,
-		core.TaskCreateProgressCreatingWorktree,
-		core.TaskCreateProgressPreparingWorkspace,
-	}
+	id := m.addCreationRow("/tmp/repo", core.Task{Provider: core.ProviderCodex})
+	m.advanceCreation(id, core.TaskCreateProgressEvent{Step: core.TaskCreateProgressStartingSession})
 
-	next, _ := m.Update(taskCreatedMsg{
-		task: &core.Task{
+	next, _ := m.Update(taskCreateEventMsg{creation: id, event: core.TaskCreateEvent{
+		Task: &core.Task{
 			ID:          "task-new",
+			RepoRoot:    "/tmp/repo",
 			RepoName:    "repo",
 			DisplayName: "new selected task",
 			Provider:    core.ProviderCodex,
 		},
-	})
+	}})
 
 	got, ok := next.(model)
 	require.True(t, ok)
 
+	require.Equal(t, "task-new", got.selectedRow().task.ID)
+	require.Nil(t, got.selectedRow().creating)
 	view := stripANSI(got.View().Content)
 	require.Contains(t, view, "new selected task")
-	require.NotContains(t, view, "Suggesting name")
-	require.NotContains(t, view, "Creating worktree")
-	require.NotContains(t, view, "Preparing workspace")
-	require.NotContains(t, view, "Starting session")
+	require.NotContains(t, view, "starting session")
 	require.LessOrEqual(t, len(strings.Split(view, "\n")), got.height)
 }
 
@@ -1671,7 +1663,6 @@ func TestModel_EnterReconnectsWhenSessionIsMissing(t *testing.T) {
 
 	pending, ok := next.(model)
 	require.True(t, ok)
-	require.Equal(t, opNone, pending.pending)
 	require.True(t, pending.opening)
 	require.Contains(t, stripANSI(pending.View().Content), "Reconnecting session")
 
@@ -1682,7 +1673,6 @@ func TestModel_EnterReconnectsWhenSessionIsMissing(t *testing.T) {
 	got, ok := next.(model)
 	require.True(t, ok)
 	require.NoError(t, got.err)
-	require.Equal(t, opNone, got.pending)
 	require.False(t, got.opening)
 	require.Equal(t, 2, frontend.attachTaskSessionCalls)
 	require.Equal(t, 1, frontend.reconnectTaskSessionCalls)
@@ -1759,26 +1749,24 @@ func TestModel_EnterOpensExistingTaskWhileCreationIsPending(t *testing.T) {
 		ID: "task-1", DisplayName: "existing task", TmuxSession: "repo_task_1", Provider: core.ProviderCodex,
 	}}
 	m := newLoadedModel(frontend)
-	m.beginOp(opCreating)
-	m.create.active = core.TaskCreateProgressPreparingWorkspace
+	m.addCreationRow("/tmp/other-repo", core.Task{})
+	require.True(t, m.selectRow("task-1"))
 
 	next, cmd := m.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
 	require.NotNil(t, cmd)
 
 	opening, ok := next.(model)
 	require.True(t, ok)
-	require.Equal(t, opCreating, opening.pending)
 	require.True(t, opening.opening)
 
-	msg, ok := runCmd(t, cmd).(taskOpenedMsg)
-	require.True(t, ok)
+	msg := requireMsgType[taskOpenedMsg](t, runBatchCmd(t, cmd))
 	next, follow := opening.Update(msg)
 	require.Nil(t, follow)
 
 	got, ok := next.(model)
 	require.True(t, ok)
 	require.NoError(t, got.err)
-	require.Equal(t, opCreating, got.pending)
+	require.NotNil(t, got.rows[got.creationRow(1)].creating)
 	require.False(t, got.opening)
 	require.Equal(t, 1, frontend.attachTaskSessionCalls)
 }
@@ -1826,11 +1814,13 @@ func TestModel_CreateTaskFromPromptAppendsTaskAndStartsStatusTracking(t *testing
 	require.True(t, ok)
 	require.Equal(t, modeBrowse, submitted.mode)
 	require.Empty(t, submitted.draft.prompt)
-	require.Equal(t, opCreating, submitted.pending)
+	// The new task's row shows at once, with the cursor on it.
+	require.Len(t, submitted.rows, 3)
+	require.NotNil(t, submitted.selectedRow().creating)
 
 	initialMsgs := runBatchCmd(t, cmd)
 	createEvent := requireMsgType[taskCreateEventMsg](t, initialMsgs)
-	requireMsgType[shimmerTickMsg](t, initialMsgs)
+	requireMsgType[spinnerTickMsg](t, initialMsgs)
 	require.NotNil(t, createEvent.event.Progress)
 	require.Equal(t, core.TaskCreateProgressSuggestingName, createEvent.event.Progress.Step)
 
@@ -1839,10 +1829,9 @@ func TestModel_CreateTaskFromPromptAppendsTaskAndStartsStatusTracking(t *testing
 
 	got, ok := next.(model)
 	require.True(t, ok)
-	require.Equal(t, opCreating, got.pending)
 	require.Equal(t, modeBrowse, got.mode)
-	require.Equal(t, core.TaskCreateProgressSuggestingName, got.create.active)
-	require.Contains(t, stripANSI(got.View().Content), "Suggesting name")
+	require.Equal(t, core.TaskCreateProgressSuggestingName, got.selectedRow().creating.step)
+	require.Contains(t, stripANSI(got.View().Content), "suggesting name")
 	require.NotContains(t, stripANSI(got.View().Content), "Enter task prompt.")
 
 	taskCreated := runCmd(t, follow)
@@ -1854,8 +1843,8 @@ func TestModel_CreateTaskFromPromptAppendsTaskAndStartsStatusTracking(t *testing
 	require.Len(t, got.rows, 3)
 	require.Equal(t, modeBrowse, got.mode)
 	require.Empty(t, got.draft.prompt)
-	require.Equal(t, opNone, got.pending)
 	require.Equal(t, "task-3", got.rows[len(got.rows)-1].task.ID)
+	require.Nil(t, got.rows[len(got.rows)-1].creating)
 	require.Equal(t, "fix the retry loop", frontend.createInput.Prompt)
 	require.Equal(t, core.ProviderCodex, frontend.createInput.Provider)
 	require.Empty(t, frontend.createInput.Source.PullRequest)
@@ -2010,7 +1999,7 @@ func TestModel_EnterWithBlankPromptDoesNothing(t *testing.T) {
 	require.True(t, ok)
 	require.Equal(t, modePromptInput, got.mode)
 	require.Equal(t, "   ", got.draft.prompt)
-	require.Equal(t, opNone, got.pending)
+	require.Len(t, got.rows, len(m.rows))
 	require.Zero(t, frontend.createTaskStreamCalls)
 }
 
@@ -2053,11 +2042,11 @@ func TestModel_CreateTaskFailureDiscardsDraftAndPreservesListView(t *testing.T) 
 	pending, ok := next.(model)
 	require.True(t, ok)
 	require.Equal(t, modeBrowse, pending.mode)
-	require.Equal(t, opCreating, pending.pending)
+	require.Len(t, pending.rows, 3)
 
 	initialMsgs := runBatchCmd(t, cmd)
 	progressMsg := requireMsgType[taskCreateEventMsg](t, initialMsgs)
-	requireMsgType[shimmerTickMsg](t, initialMsgs)
+	requireMsgType[spinnerTickMsg](t, initialMsgs)
 	require.NotNil(t, progressMsg.event.Progress)
 
 	next, follow := pending.Update(progressMsg)
@@ -2065,30 +2054,31 @@ func TestModel_CreateTaskFailureDiscardsDraftAndPreservesListView(t *testing.T) 
 
 	withProgress, ok := next.(model)
 	require.True(t, ok)
-	require.Equal(t, core.TaskCreateProgressCreatingWorktree, withProgress.create.active)
-	require.Contains(t, stripANSI(withProgress.View().Content), "Creating worktree")
+	require.Equal(t, core.TaskCreateProgressCreatingWorktree, withProgress.selectedRow().creating.step)
+	require.Contains(t, stripANSI(withProgress.View().Content), "creating worktree")
 
 	createFailed := runCmd(t, follow)
 	next, follow = withProgress.Update(createFailed)
-	// Its end only fetches the Launch defaults the daemon holds.
-	requireMsgType[launchDefaultsLoadedMsg](t, []tea.Msg{runCmd(t, follow)})
+	// Its end reloads the tasks and fetches the Launch defaults the daemon
+	// holds.
+	followMsgs := runBatchCmd(t, follow)
+	requireMsgType[launchDefaultsLoadedMsg](t, followMsgs)
+	requireMsgType[tasksLoadedMsg](t, followMsgs)
 
+	// Failing before it had a task, the creation leaves no row.
 	got, ok := next.(model)
 	require.True(t, ok)
 	require.Equal(t, modeBrowse, got.mode)
 	require.Empty(t, got.draft.prompt)
-	require.Equal(t, opNone, got.pending)
-	require.ErrorContains(t, got.create.err, "create failed")
-	require.NoError(t, got.err)
+	require.ErrorContains(t, got.err, "create failed")
 	require.Len(t, got.rows, 2)
 	require.Empty(t, frontend.latestTaskStatusCalls)
 	require.Empty(t, frontend.subscribeTaskStatusCalls)
-	require.Equal(t, core.TaskCreateProgressCreatingWorktree, got.create.active)
 
 	view := stripANSI(got.View().Content)
 	require.Contains(t, view, "RIG")
 	require.Contains(t, view, "first task")
-	require.Contains(t, view, "Creating worktree")
+	require.NotContains(t, view, "creating worktree")
 	require.Contains(t, view, "create failed")
 	require.NotContains(t, view, "Loading tasks...")
 	require.NotContains(t, view, "Enter task prompt.")
@@ -2133,17 +2123,19 @@ func TestModel_CreateTaskFailureWithTaskSnapshotEnablesRetry(t *testing.T) {
 	require.True(t, ok)
 	createFailed := runCmd(t, follow)
 	next, follow = withProgress.Update(createFailed)
-	// Its end only fetches the Launch defaults the daemon holds.
-	requireMsgType[launchDefaultsLoadedMsg](t, []tea.Msg{runCmd(t, follow)})
+	requireMsgType[launchDefaultsLoadedMsg](t, runBatchCmd(t, follow))
 
+	// The row keeps the failed task, under its repository, with the cursor.
 	got, ok := next.(model)
 	require.True(t, ok)
-	require.Equal(t, opNone, got.pending)
-	require.ErrorContains(t, got.create.err, "database not setup")
+	require.ErrorContains(t, got.err, "database not setup")
 	require.Len(t, got.rows, 3)
 	require.NotNil(t, got.selectedRow())
 	require.Equal(t, "task-3", got.selectedRow().task.ID)
+	require.Nil(t, got.selectedRow().creating)
 	require.Equal(t, core.TaskCreationStatusFailed, got.selectedRow().task.CreationStatus)
+	symbol, _ := got.taskRowSymbol(*got.selectedRow())
+	require.Equal(t, iconFailed, symbol)
 
 	view := stripANSI(got.View().Content)
 	require.Contains(t, view, "live sync for embeddings")
@@ -2155,8 +2147,9 @@ func TestModel_CreateTaskFailureWithTaskSnapshotEnablesRetry(t *testing.T) {
 
 	retrying, ok := next.(model)
 	require.True(t, ok)
-	require.Equal(t, opCreating, retrying.pending)
-	runBatchCmd(t, retryCmd)
+	require.NotNil(t, retrying.selectedRow().creating)
+	require.NotContains(t, stripANSI(retrying.View().Content), "R retry")
+	dataMsgs(t, retryCmd)
 	require.Equal(t, "task-3", frontend.retryTaskID)
 	require.Equal(t, 1, frontend.retryTaskStreamCalls)
 }
@@ -2192,13 +2185,14 @@ func TestModel_RetryFailedTaskCreationStreamsProgress(t *testing.T) {
 
 	pending, ok := next.(model)
 	require.True(t, ok)
-	require.Equal(t, opCreating, pending.pending)
+	require.NotNil(t, pending.rows[0].creating)
+	require.Equal(t, core.TaskCreateProgressPreparingWorkspace, pending.rows[0].creating.step)
 
 	initialMsgs := runBatchCmd(t, cmd)
 	require.Equal(t, "task-1", frontend.retryTaskID)
 	require.Equal(t, 1, frontend.retryTaskStreamCalls)
 	progressMsg := requireMsgType[taskCreateEventMsg](t, initialMsgs)
-	requireMsgType[shimmerTickMsg](t, initialMsgs)
+	requireMsgType[spinnerTickMsg](t, initialMsgs)
 	require.NotNil(t, progressMsg.event.Progress)
 	require.Equal(t, core.TaskCreateProgressPreparingWorkspace, progressMsg.event.Progress.Step)
 
@@ -2206,13 +2200,13 @@ func TestModel_RetryFailedTaskCreationStreamsProgress(t *testing.T) {
 	require.NotNil(t, follow)
 	withProgress, ok := next.(model)
 	require.True(t, ok)
-	require.Equal(t, core.TaskCreateProgressPreparingWorkspace, withProgress.create.active)
+	require.Contains(t, stripANSI(withProgress.View().Content), "first task  preparing workspace")
 
 	taskRetried := runCmd(t, follow)
 	next, _ = withProgress.Update(taskRetried)
 	got, ok := next.(model)
 	require.True(t, ok)
-	require.Equal(t, opNone, got.pending)
+	require.Nil(t, got.rows[0].creating)
 	require.Equal(t, core.TaskCreationStatusReady, got.rows[0].task.CreationStatus)
 }
 
@@ -2236,24 +2230,23 @@ func TestModel_CreateTaskFromPromptReturnsToBrowseImmediatelyAndKeepsOverviewUsa
 	submitted, ok := next.(model)
 	require.True(t, ok)
 	require.Equal(t, modeBrowse, submitted.mode)
-	require.Equal(t, opCreating, submitted.pending)
-	require.Equal(t, 0, submitted.selected)
+	require.Len(t, submitted.rows, 3)
+	require.Equal(t, 2, submitted.selected)
 
-	next, navCmd := submitted.Update(tea.KeyPressMsg{Text: "j"})
+	next, navCmd := submitted.Update(tea.KeyPressMsg{Text: "k"})
 	require.Nil(t, navCmd)
 
 	navigated, ok := next.(model)
 	require.True(t, ok)
 	require.Equal(t, 1, navigated.selected)
-	require.Equal(t, opCreating, navigated.pending)
+	require.NotNil(t, navigated.rows[2].creating)
 
-	next, promptCmd := navigated.Update(tea.KeyPressMsg{Text: "n"})
-	require.Nil(t, promptCmd)
-
-	stillPending, ok := next.(model)
+	// Another task can be written while the first one creates.
+	next, _ = navigated.Update(tea.KeyPressMsg{Text: "n"})
+	composing, ok := next.(model)
 	require.True(t, ok)
-	require.Equal(t, modeBrowse, stillPending.mode)
-	require.Equal(t, opCreating, stillPending.pending)
+	require.Equal(t, modePromptInput, composing.mode)
+	require.NotNil(t, composing.rows[2].creating)
 }
 
 func TestPromptInputView_RendersPromptTextBox(t *testing.T) {
@@ -2272,9 +2265,7 @@ func TestPromptInputView_RendersPromptTextBox(t *testing.T) {
 func TestModel_PendingCreateStillAllowsQuitKeys(t *testing.T) {
 	frontend := newFrontendHarness()
 	m := newLoadedModel(frontend)
-	m.mode = modePromptInput
-	m.draft.prompt = "fix the retry loop"
-	m.pending = opCreating
+	m.addCreationRow("/tmp/repo", core.Task{})
 
 	for _, msg := range []tea.KeyPressMsg{
 		{Text: "q"},
@@ -2283,9 +2274,8 @@ func TestModel_PendingCreateStillAllowsQuitKeys(t *testing.T) {
 		next, cmd := m.Update(msg)
 		require.NotNil(t, cmd)
 
-		got, ok := next.(model)
+		_, ok := next.(model)
 		require.True(t, ok)
-		require.Equal(t, opCreating, got.pending)
 
 		quitMsg := runCmd(t, cmd)
 		_, ok = quitMsg.(tea.QuitMsg)
@@ -2293,10 +2283,10 @@ func TestModel_PendingCreateStillAllowsQuitKeys(t *testing.T) {
 	}
 }
 
-func TestModel_ShimmerTickAdvancesAndReschedulesWhilePending(t *testing.T) {
+func TestModel_ShimmerTickAdvancesAndReschedulesWhileOpening(t *testing.T) {
 	frontend := newFrontendHarness()
 	m := newLoadedModel(frontend)
-	m.pending = opCreating
+	m.opening = true
 
 	next, cmd := m.Update(shimmerTickMsg{})
 	require.NotNil(t, cmd)
@@ -2310,19 +2300,46 @@ func TestModel_ShimmerTickAdvancesAndReschedulesWhilePending(t *testing.T) {
 	require.True(t, ok)
 }
 
-func TestModel_CleanupRefusedWhileOperationPending(t *testing.T) {
+// A row whose task is being created takes no action until the creation
+// replies, while the other rows go on taking theirs.
+func TestModel_CreatingRowIgnoresEnterCleanupAndRetry(t *testing.T) {
 	frontend := newFrontendHarness()
-	frontend.listTasks = []*core.Task{{ID: "task-1", DisplayName: "Task one"}}
+	frontend.listTasks = []*core.Task{{
+		ID: "task-1", DisplayName: "Task one", RepoRoot: "/tmp/repo", RepoName: "repo",
+		CreationStatus: core.TaskCreationStatusFailed, CreationStep: core.TaskCreateProgressPreparingWorkspace,
+	}}
 	m := newLoadedModel(frontend)
-	m.pending = opCreating
+	m.addCreationRow("/tmp/repo", core.Task{})
+	m.retrySelectedTaskCreation()
 
-	next, cmd := m.Update(tea.KeyPressMsg{Text: "x"})
+	for name, model := range map[string]model{
+		"new task row":       m,
+		"retried task's row": func() model { m := m; m.selectRow("creating:2"); return m }(),
+	} {
+		for _, key := range []tea.KeyPressMsg{{Code: tea.KeyEnter}, {Text: "x"}, {Text: "R"}} {
+			next, cmd := model.Update(key)
+			got := asModel(t, next)
+			require.Nil(t, cmd, "%s: %s", name, key.String())
+			require.Equal(t, modeBrowse, got.mode, "%s: %s", name, key.String())
+			require.False(t, got.opening, "%s: %s", name, key.String())
+		}
+	}
+	require.Zero(t, frontend.attachTaskSessionCalls)
+	require.Zero(t, frontend.retryTaskStreamCalls)
+}
 
-	require.Nil(t, cmd)
-	got, ok := next.(model)
-	require.True(t, ok)
-	require.Equal(t, modeBrowse, got.mode)
-	require.Equal(t, opCreating, got.pending)
+func TestModel_CleanupStillOpensOnAnotherRowWhileATaskCreates(t *testing.T) {
+	frontend := newFrontendHarness()
+	frontend.listTasks = []*core.Task{{ID: "task-1", DisplayName: "Task one", RepoRoot: "/tmp/repo"}}
+	m := newLoadedModel(frontend)
+	m.addCreationRow("/tmp/repo", core.Task{})
+	require.True(t, m.selectRow("task-1"))
+
+	next, _ := m.Update(tea.KeyPressMsg{Text: "x"})
+
+	got := asModel(t, next)
+	require.Equal(t, modeCleanupConfirm, got.mode)
+	require.Equal(t, "task-1", got.cleanup.task.ID)
 }
 
 func TestModel_EscCancelsPromptMode(t *testing.T) {
@@ -2339,8 +2356,6 @@ func TestModel_EscCancelsPromptMode(t *testing.T) {
 	require.True(t, ok)
 	require.Equal(t, modeBrowse, got.mode)
 	require.Empty(t, got.draft.prompt)
-	require.Equal(t, opNone, got.pending)
-	require.NoError(t, got.create.err)
 	require.Zero(t, frontend.createTaskStreamCalls)
 }
 
@@ -2469,16 +2484,16 @@ func TestModel_PRPickerEnterCreatesTaskFromSelectedPR(t *testing.T) {
 	pending, ok := next.(model)
 	require.True(t, ok)
 	require.Equal(t, modeBrowse, pending.mode)
-	require.Equal(t, opCreating, pending.pending)
+	require.NotNil(t, pending.selectedRow().creating)
 	view := stripANSI(pending.View().Content)
 	require.Contains(t, view, "n new   m main   r refresh   space details   x clean   q quit")
-	require.Contains(t, view, "Creating task from pull request")
-	require.NotContains(t, view, "Suggesting name")
-	require.Less(t, strings.Index(view, "existing task"), strings.Index(view, "Creating task from pull request"))
+	require.Contains(t, view, "creating task")
+	require.NotContains(t, view, "suggesting name")
+	require.Less(t, strings.Index(view, "existing task"), strings.Index(view, "creating task"))
 
 	msgs := runBatchCmd(t, cmd)
 	createMsg := requireMsgType[taskCreateEventMsg](t, msgs)
-	requireMsgType[shimmerTickMsg](t, msgs)
+	requireMsgType[spinnerTickMsg](t, msgs)
 	require.NotNil(t, createMsg.event.Task)
 	require.Equal(t, "/tmp/repo", frontend.createInput.Cwd)
 	require.Equal(t, core.ProviderCodex, frontend.createInput.Provider)
@@ -2512,14 +2527,13 @@ func TestModel_PRPickerCreateFailureReturnsToBrowseWithProgressAndError(t *testi
 	pending, ok := next.(model)
 	require.True(t, ok)
 	require.Equal(t, modeBrowse, pending.mode)
-	require.Equal(t, opCreating, pending.pending)
 	view := stripANSI(pending.View().Content)
-	require.Contains(t, view, "Creating task from pull request")
-	require.NotContains(t, view, "Suggesting name")
+	require.Contains(t, view, "creating task")
+	require.NotContains(t, view, "suggesting name")
 
 	initialMsgs := runBatchCmd(t, cmd)
 	progressMsg := requireMsgType[taskCreateEventMsg](t, initialMsgs)
-	requireMsgType[shimmerTickMsg](t, initialMsgs)
+	requireMsgType[spinnerTickMsg](t, initialMsgs)
 	require.NotNil(t, progressMsg.event.Progress)
 
 	next, follow := pending.Update(progressMsg)
@@ -2528,26 +2542,22 @@ func TestModel_PRPickerCreateFailureReturnsToBrowseWithProgressAndError(t *testi
 	withProgress, ok := next.(model)
 	require.True(t, ok)
 	require.Equal(t, modeBrowse, withProgress.mode)
-	require.Equal(t, core.TaskCreateProgressCreatingWorktree, withProgress.create.active)
 	view = stripANSI(withProgress.View().Content)
-	require.Contains(t, view, "Creating task from pull request")
-	require.NotContains(t, view, "Creating worktree")
+	require.Contains(t, view, "creating worktree")
 
 	createFailed := runCmd(t, follow)
 	next, follow = withProgress.Update(createFailed)
-	// Its end only fetches the Launch defaults the daemon holds.
-	requireMsgType[launchDefaultsLoadedMsg](t, []tea.Msg{runCmd(t, follow)})
+	requireMsgType[launchDefaultsLoadedMsg](t, runBatchCmd(t, follow))
 
 	got, ok := next.(model)
 	require.True(t, ok)
 	require.Equal(t, modeBrowse, got.mode)
-	require.Equal(t, opNone, got.pending)
-	require.ErrorContains(t, got.create.err, "create failed")
+	require.ErrorContains(t, got.err, "create failed")
+	require.Len(t, got.rows, 1)
 
 	view = stripANSI(got.View().Content)
 	require.Contains(t, view, "n new   m main   r refresh   space details   x clean   q quit")
-	require.Contains(t, view, "Creating task from pull request")
-	require.NotContains(t, view, "Creating worktree")
+	require.NotContains(t, view, "creating worktree")
 	require.Contains(t, view, "create failed")
 }
 
@@ -2601,7 +2611,6 @@ func TestModel_ConfirmCleanupDeletesTaskAndRemovesRow(t *testing.T) {
 	// row marked as going.
 	pending, ok := next.(model)
 	require.True(t, ok)
-	require.Equal(t, opNone, pending.pending)
 	require.Equal(t, modeBrowse, pending.mode)
 	require.True(t, pending.deleting["task-2"])
 	row := rowContent(pending.renderRow(1, pending.rows[1], taskRowLayoutFor(100)))

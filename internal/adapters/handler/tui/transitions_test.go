@@ -17,7 +17,6 @@ func TestCanEnterMatrix(t *testing.T) {
 
 	cases := []struct {
 		name      string
-		pending   pendingOp
 		setupOnly bool
 		hasSetup  bool
 		allowed   map[modelMode]bool
@@ -52,20 +51,12 @@ func TestCanEnterMatrix(t *testing.T) {
 				modeProviderSetup: true,
 			},
 		},
-		{
-			name:     "operation pending: only browse, one op at a time",
-			pending:  opCreating,
-			hasSetup: true,
-			allowed: map[modelMode]bool{
-				modeBrowse: true,
-			},
-		},
 	}
 
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			for _, to := range allModes {
-				got := canEnter(to, tc.pending, tc.setupOnly, tc.hasSetup)
+				got := canEnter(to, tc.setupOnly, tc.hasSetup)
 				require.Equalf(t, tc.allowed[to], got, "canEnter(%v)", to)
 			}
 		})

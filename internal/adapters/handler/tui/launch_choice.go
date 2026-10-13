@@ -46,9 +46,10 @@ type launchDefaultsState struct {
 	fetches int
 	applied int
 	staleAt int
-	// refetchAfterCreate is set while a task creation that remembered a
-	// Launch choice runs. The daemon saves the choice only once creation
-	// passes its first checks, so its end fetches what the daemon holds.
+	// refetchAfterCreate is set while task creations that remembered a
+	// Launch choice run. The daemon saves a choice only once its creation
+	// passes its first checks, so the end of the last fetches what the
+	// daemon holds.
 	refetchAfterCreate bool
 }
 
@@ -128,8 +129,8 @@ func (m *model) fetchLaunchDefaults() tea.Cmd {
 	return getLaunchDefaultsCmd(m.statusContext, m.frontend, m.launchDefaults.fetches)
 }
 
-// launchDefaultsAfterCreateCmd refetches the Launch defaults once a task
-// creation that remembered a Launch choice ends, so they match what the
+// launchDefaultsAfterCreateCmd refetches the Launch defaults once the task
+// creations that remembered a Launch choice end, so they match what the
 // daemon saved, which is nothing when creation failed its first checks.
 func (m *model) launchDefaultsAfterCreateCmd() tea.Cmd {
 	if !m.launchDefaults.refetchAfterCreate {

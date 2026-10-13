@@ -167,7 +167,9 @@ func submit(t *testing.T, m model, frontend *frontendHarness) (model, core.Creat
 	before := frontend.createTaskStreamCalls
 	m = press(t, m, enter)
 	require.Equal(t, before+1, frontend.createTaskStreamCalls)
-	require.Equal(t, opNone, m.pending)
+	for _, row := range m.rows {
+		require.Nil(t, row.creating)
+	}
 	// Each task the TUI creates saves its choice as the provider's default.
 	require.True(t, frontend.createInput.RememberLaunchChoice)
 	return m, frontend.createInput
@@ -761,6 +763,28 @@ func TestModel_TheLaunchDefaultsFetchAfterCreationApplies(t *testing.T) {
 			)
 		})
 	}
+}
+
+// Creations share the refetch after creation, so only the last of those
+// running at once to end makes it.
+func TestModel_TheLastCreationToEndRefetchesTheLaunchDefaults(t *testing.T) {
+	frontend := launchChoiceFrontend(map[core.Provider]core.LaunchChoice{
+		core.ProviderCodex: {Model: "gpt-6-mini", ReasoningLevel: "minimal"},
+	})
+	m := openComposer(t, loadedLaunchChoiceModel(t, frontend))
+	next, cmd := m.Update(enter)
+	first := dataMsgs(t, cmd)
+	require.Len(t, first, 1)
+	m = openComposer(t, asModel(t, next))
+	next, cmd = m.Update(enter)
+	second := dataMsgs(t, cmd)
+	require.Len(t, second, 1)
+	m = asModel(t, next)
+
+	m, refetched := endCreation(t, m, first[0])
+	require.Empty(t, refetched)
+	_, refetched = endCreation(t, m, second[0])
+	require.Len(t, refetched, 1)
 }
 
 func TestModel_ChoiceBlockAlignsItsColumns(t *testing.T) {
