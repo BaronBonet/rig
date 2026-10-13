@@ -691,6 +691,29 @@ func TestTaskStatusService_HandleHookEventIgnoresAnAgentBelowTheWorktreeRoot(t *
 	require.Empty(t, svc.taskRepo.savedProviderSessions)
 }
 
+// Claude's Bash tool keeps a cd, so every hook after it reports a cwd below
+// the root. The agent is still the task's and its turn end must apply.
+func TestTaskStatusService_HandleHookEventFollowsAnAgentThatMovedBelowTheWorktreeRoot(t *testing.T) {
+	svc := newAgentSessionHarness(t)
+	svc.sessionClient.locatePaneByPID = map[int]string{101: "%1", 202: "%9"}
+
+	svc.handleAgentHook(t, agentHook(ProviderClaude, HookEventPreToolUse, "sess-a", 101, "%1", 0),
+		TaskStatusPhaseWorking)
+	stop := agentHook(ProviderClaude, HookEventStop, "sess-a", 101, "%1", 1)
+	stop.Cwd = "/tmp/repo-task/web"
+	svc.handleAgentHook(t, stop, TaskStatusPhaseWaitingForInput)
+
+	sessions := svc.agentSessionsWithoutIDs()
+	require.Len(t, sessions, 1)
+	require.Equal(t, agentStatus(TaskStatusPhaseWaitingForInput, HookEventStop, 1), sessions[0].Status)
+
+	// An agent started below the root in another pane is still not the task's.
+	other := agentHook(ProviderClaude, HookEventSessionStart, "sess-b", 202, "%9", 2)
+	other.Cwd = "/tmp/repo-task/web"
+	require.ErrorIs(t, svc.service.HandleHookEvent(t.Context(), other), ErrUnmanagedHookEvent)
+	require.Len(t, svc.agentSessionsWithoutIDs(), 1)
+}
+
 func TestTaskServiceHandleHookEvent_RecordsMultipleProviderSessionsForTask(t *testing.T) {
 	svc := newTestTaskService(t)
 	svc.taskRepo.listTasks = []*Task{{

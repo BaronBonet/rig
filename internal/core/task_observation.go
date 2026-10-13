@@ -308,7 +308,7 @@ func (o *taskObservation) HandleHookEvent(ctx context.Context, input HookEventIn
 
 	input.TaskID = strings.TrimSpace(input.TaskID)
 	if input.TaskID == "" {
-		resolvedTaskID, err := o.resolveTaskIDFromCwd(ctx, input.Cwd)
+		resolvedTaskID, err := o.resolveTaskIDFromCwd(ctx, input)
 		if err != nil {
 			return err
 		}
@@ -335,8 +335,8 @@ func (o *taskObservation) HandleHookEvent(ctx context.Context, input HookEventIn
 	return o.recordAgentSession(ctx, task, input, update, taskActivityEventFromHookInput(input))
 }
 
-func (o *taskObservation) resolveTaskIDFromCwd(ctx context.Context, cwd string) (string, error) {
-	cwd = strings.TrimSpace(cwd)
+func (o *taskObservation) resolveTaskIDFromCwd(ctx context.Context, input HookEventInput) (string, error) {
+	cwd := strings.TrimSpace(input.Cwd)
 	if cwd == "" {
 		return "", ErrUnmanagedHookEvent
 	}
@@ -354,7 +354,21 @@ func (o *taskObservation) resolveTaskIDFromCwd(ctx context.Context, cwd string) 
 		}
 	}
 
-	return "", ErrUnmanagedHookEvent
+	// An agent started at the root stays the task's after its cwd moves
+	// below it, as a cd in Claude's Bash tool moves it: the task's open agent
+	// session in the hook's pane vouches for it.
+	task := taskAtPath(tasks, cwd)
+	if task == nil || input.TmuxPane == "" {
+		return "", ErrUnmanagedHookEvent
+	}
+	session, err := o.tasks.OpenAgentSessionOnPane(ctx, input.TmuxServer, input.TmuxPane)
+	if err != nil {
+		return "", fmt.Errorf("find agent session on hook pane: %w", err)
+	}
+	if session == nil || session.TaskID != task.ID || session.Provider != input.Provider {
+		return "", ErrUnmanagedHookEvent
+	}
+	return task.ID, nil
 }
 
 func (o *taskObservation) recoveredTaskActivity(
