@@ -1,7 +1,8 @@
 // Package cli is the command-line handler: the non-interactive rig commands
 // that people, scripts and agents run beside the TUI. Like the TUI it is a
 // client of the core.TaskFrontend port and knows nothing of what serves it.
-// It never attaches a terminal to a task's Session.
+// It never attaches a terminal to a task's Session, only, with rig repo main,
+// to a repository's main session.
 //
 // Every command prints its result to stdout, as JSON with --json, and any
 // progress to stderr, and fails with an error that the caller reports and
@@ -55,8 +56,8 @@ func NewTaskCommand(deps Dependencies) *cobra.Command {
 // process's own.
 func NewRepoCommand(deps Dependencies) *cobra.Command {
 	deps = deps.withDefaultStreams()
-	return newCommandGroup(deps, "repo", "List the repositories rig can create tasks in by name",
-		newRepoListCommand(deps))
+	return newCommandGroup(deps, "repo", "Work with the repositories rig knows",
+		newRepoListCommand(deps), newRepoMainCommand(deps))
 }
 
 // newCommandGroup returns a command group of commands that prints to deps'

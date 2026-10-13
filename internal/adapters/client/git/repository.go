@@ -383,6 +383,16 @@ func (r *repository) ListRepoCheckouts(_ context.Context, dir string) ([]string,
 	return slices.Compact(roots), nil
 }
 
+func (r *repository) CheckoutDefaultBranch(ctx context.Context, repoRoot string) error {
+	branch := "main"
+	result, err := r.runner.Run(ctx, repoRoot, "git", "symbolic-ref", "--short", "refs/remotes/origin/HEAD")
+	if err == nil {
+		branch = strings.TrimPrefix(strings.TrimSpace(result.Stdout), "origin/")
+	}
+	_, err = r.runner.Run(ctx, repoRoot, "git", "checkout", branch)
+	return err
+}
+
 // physicalPath returns path as git reports a repository's root: with its
 // symlinks resolved and each component spelled the way the filesystem lists
 // it, since a case-insensitive filesystem, as macOS's usually is, finds a

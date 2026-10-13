@@ -13,9 +13,10 @@ import (
 
 // frontend is the daemon-backed core.TaskFrontend client. Every TaskService
 // method is one callUnary against its descriptor in operations.go; the two
-// stream methods and the client-local AttachTaskSession are bespoke.
+// stream methods and the client-local attach methods are bespoke.
 type frontend struct {
 	sessions   core.TmuxSessionClient
+	git        core.GitWorktreeClient
 	socketPath string
 }
 
@@ -25,6 +26,31 @@ func (f *frontend) AttachTaskSession(ctx context.Context, task *core.Task, pane 
 	}
 
 	return f.sessions.AttachTaskSession(ctx, task, pane)
+}
+
+func (f *frontend) AttachRepoSession(ctx context.Context, dir string) error {
+	if f.sessions == nil || f.git == nil {
+		return fmt.Errorf("repo session clients not configured")
+	}
+
+	repo, err := f.git.DetectRepo(ctx, dir)
+	if err != nil {
+		return err
+	}
+	session, err := f.sessions.RepoSession(ctx, repo.Root, repo.Name)
+	if err != nil {
+		return err
+	}
+	if session == "" {
+		// The checkout comes first, so the new session's shell starts on it.
+		if err := f.git.CheckoutDefaultBranch(ctx, repo.Root); err != nil {
+			return err
+		}
+		if session, err = f.sessions.CreateRepoSession(ctx, repo.Root, repo.Name); err != nil {
+			return err
+		}
+	}
+	return f.sessions.AttachSession(ctx, session)
 }
 
 func (f *frontend) GetTaskActivity(ctx context.Context, taskID string, limit int) ([]core.TaskActivityEvent, error) {

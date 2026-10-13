@@ -935,7 +935,7 @@ func (m model) renderTextBox(input textarea.Model) string {
 }
 
 func (m model) listKeybindText() string {
-	binds := [][2]string{{"n", "new"}, {"r", "refresh"}}
+	binds := [][2]string{{"n", "new"}, {"m", "main"}, {"r", "refresh"}}
 	if row := m.selectedRow(); row != nil && row.task != nil &&
 		row.task.CreationStatus == core.TaskCreationStatusFailed {
 		binds = append(binds, [2]string{"R", "retry"})

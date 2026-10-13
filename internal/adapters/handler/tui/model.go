@@ -546,6 +546,11 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.moveCursor(-1)
 		case " ", "space":
 			m.detailsHidden = !m.detailsHidden
+		case "m":
+			if row := m.selectedRow(); row != nil && row.task != nil {
+				return m, openRepoSessionCmd(m.statusContext, m.frontend, row.task.RepoRoot)
+			}
+			return m, nil
 		case "x":
 			row := m.selectedRow()
 			if row == nil || row.task == nil || m.selectedRemoving() {

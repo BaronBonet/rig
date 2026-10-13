@@ -106,3 +106,10 @@ func TestRepoCommand_RejectsAnUnknownSubcommand(t *testing.T) {
 	require.EqualError(t, err, `unknown command "lsit" for "repo"`)
 	require.Zero(t, h.frontendCalls)
 }
+
+func TestRepoMain_AttachesToTheMainSessionOfTheWorkingDirectorysRepository(t *testing.T) {
+	h := newCLIHarness(t)
+	h.frontend.EXPECT().AttachRepoSession(mock.Anything, "/work/backend").Return(nil).Once()
+
+	require.NoError(t, h.runRepo(t.Context(), "main"))
+}
