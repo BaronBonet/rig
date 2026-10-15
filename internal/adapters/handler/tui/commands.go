@@ -48,6 +48,13 @@ func loadTasksCmd(ctx context.Context, frontend core.TaskFrontend) tea.Cmd {
 	}
 }
 
+func listReposCmd(ctx context.Context, frontend core.TaskFrontend) tea.Cmd {
+	return func() tea.Msg {
+		repos, err := frontend.ListRepos(ctx)
+		return reposLoadedMsg{repos: repos, err: err}
+	}
+}
+
 func listRepoPullRequestsCmd(
 	ctx context.Context,
 	frontend core.TaskFrontend,

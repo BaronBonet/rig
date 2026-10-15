@@ -35,8 +35,8 @@ func backTarget(mode modelMode, hasSetup bool, setupOnly bool) backDest {
 	switch mode {
 	case modePromptInput:
 		return backDest{to: modeBrowse}
-	case modePRPicker:
-		// Back to the prompt: both modes edit the same task draft.
+	case modePRPicker, modeRepoPicker:
+		// Back to the prompt: these modes edit the same task draft.
 		return backDest{to: modePromptInput}
 	case modeCleanupConfirm:
 		return backDest{to: modeBrowse}
@@ -60,8 +60,8 @@ func backTarget(mode modelMode, hasSetup bool, setupOnly bool) backDest {
 	}
 }
 
-// modeFamily groups modes that share per-mode state: the prompt input and PR
-// picker are two views over the same task draft.
+// modeFamily groups modes that share per-mode state: the prompt input and its
+// PR and repo pickers are views over the same task draft.
 type modeFamily int
 
 const (
@@ -72,7 +72,7 @@ const (
 
 func familyOf(mode modelMode) modeFamily {
 	switch mode {
-	case modePromptInput, modePRPicker:
+	case modePromptInput, modePRPicker, modeRepoPicker:
 		return familyDraft
 	case modeProviderSetup, modeRepoDirsSetup:
 		return familySetup
@@ -122,7 +122,7 @@ func (m model) handleBack() (tea.Model, tea.Cmd) {
 	case modeCleanupConfirm:
 		m.cleanup = cleanupTarget{}
 		return m, nil
-	case modePRPicker:
+	case modePRPicker, modeRepoPicker:
 		// Same family: the draft survives, minus the picker's validation error.
 		m.draft.err = nil
 		return m, m.draft.input.Focus()
