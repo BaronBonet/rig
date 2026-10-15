@@ -266,7 +266,10 @@ Create a task with `n`, enter a prompt, and press `enter`. While composing,
 press `tab` to cycle through your configured providers (a no-op when only one
 is configured); the selected provider owns the task name suggestion, branch
 type, and session. Use `ctrl+p` from the prompt view to create from a GitHub
-pull request instead — PR-backed tasks use the selected provider too.
+pull request instead — PR-backed tasks use the selected provider too. The prompt
+view's header names the repo the task is created in: the one rig was started
+in, until you pick another with `ctrl+n` from a list ordered by most recently
+worked on.
 
 Common TUI keys:
 
@@ -274,6 +277,7 @@ Common TUI keys:
 |-----|--------|
 | `n` | Create a task from a prompt |
 | `tab` | Cycle configured providers while composing a task |
+| `ctrl+n` | Pick the repo to create a task in while composing it |
 | `ctrl+p` | Pick a GitHub pull request while creating a task |
 | `j` / `k` | Move between tasks and their agent sub-rows |
 | `enter` | Jump to the selected agent's pane: on a task row, the agent that most needs you, or the task's tmux session when no agent runs |

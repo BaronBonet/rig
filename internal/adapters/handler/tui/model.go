@@ -8,6 +8,7 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/BaronBonet/rig/internal/core"
 
@@ -44,6 +45,8 @@ const (
 	modeBrowse modelMode = iota
 	modePromptInput
 	modePRPicker
+	// modeRepoPicker picks the repository the draft creates its task in.
+	modeRepoPicker
 	modeCleanupConfirm
 	modeProviderSetup
 	// modeRepoDirsSetup is the optional setup step after provider setup.
@@ -144,9 +147,17 @@ type taskDraft struct {
 	provider   core.Provider // "" means use the configured default
 	prs        []core.RepoPullRequest
 	prSelected int
-	repoRoot   string
-	repoName   string
-	err        error // validation error shown inside the draft views
+	// repoRoot and repoName are the repository the draft creates its task
+	// in, once picked; until then it is the current repo scope.
+	repoRoot string
+	repoName string
+	err      error // validation error shown inside the draft views
+
+	// repos are the known repositories the repo picker offers, most recently
+	// worked on first, once reposLoaded.
+	repos        []core.KnownRepo
+	reposLoaded  bool
+	repoSelected int
 
 	// choice is the draft's Launch choice. It starts from the provider's
 	// Launch default; choiceTouched records that the user cycled it, so a
@@ -270,6 +281,11 @@ type taskDeletedMsg struct {
 type agentSessionRemovedMsg struct {
 	err     error
 	agentID string
+}
+
+type reposLoadedMsg struct {
+	repos []core.KnownRepo
+	err   error
 }
 
 type repoPullRequestsLoadedMsg struct {
@@ -468,6 +484,9 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		if m.mode == modePRPicker {
 			return m.updatePRPicker(msg)
+		}
+		if m.mode == modeRepoPicker {
+			return m.updateRepoPicker(msg)
 		}
 		if m.mode == modeCleanupConfirm {
 			return m.updateCleanupConfirm(msg)
@@ -685,14 +704,26 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case launchDefaultsLoadedMsg:
 		m.setLaunchDefaults(msg)
 		return m, nil
+	case reposLoadedMsg:
+		// A reply for a picker since closed is stale.
+		if m.mode != modeRepoPicker {
+			return m, nil
+		}
+		m.draft.err = msg.err
+		m.draft.repos = m.reposByLastWork(msg.repos)
+		m.draft.reposLoaded = msg.err == nil
+		m.draft.repoSelected = 0
+		return m, nil
 	case repoPullRequestsLoadedMsg:
+		// A reply for a repo other than the draft's, picked since, is stale.
+		if msg.repoRoot != m.draft.repoRoot {
+			return m, nil
+		}
 		m.draft.err = msg.err
 		if msg.err != nil {
 			m.draft.prs = nil
 			return m, nil
 		}
-		m.draft.repoRoot = msg.repoRoot
-		m.draft.repoName = msg.repoName
 		m.draft.prs = append([]core.RepoPullRequest(nil), msg.prs...)
 		m.clampPRSelection()
 		return m, nil
@@ -797,6 +828,8 @@ func (m model) View() tea.View {
 		body = m.promptInputView()
 	case modePRPicker:
 		body = m.prPickerView()
+	case modeRepoPicker:
+		body = m.repoPickerView()
 	case modeCleanupConfirm:
 		body = m.confirmationView()
 	case modeProviderSetup:
@@ -868,7 +901,7 @@ func (m model) submitPrompt() (model, tea.Cmd) {
 	}
 
 	// Capture the draft's inputs before the transition discards it.
-	cwd := m.currentCreateCwd()
+	cwd, _, _ := m.currentRepoScope()
 	provider := m.effectiveCreateProvider()
 	choice := m.draftLaunchChoice()
 	m.transition(modeBrowse)
@@ -933,6 +966,15 @@ func (m model) updatePromptInput(msg tea.Msg) (tea.Model, tea.Cmd) {
 		case "ctrl+r":
 			m.cycleDraftLaunchChoice(model.nextLaunchReasoningLevel)
 			return m, nil
+		case "ctrl+n":
+			if !m.transition(modeRepoPicker) {
+				return m, nil
+			}
+			m.draft.repos = nil
+			m.draft.reposLoaded = false
+			m.draft.err = nil
+			m.draft.input.Blur()
+			return m, listReposCmd(m.statusContext, m.frontend)
 		case "ctrl+p":
 			repoRoot, repoName, ok := m.currentRepoScope()
 			if !ok {
@@ -976,6 +1018,59 @@ func (m model) updatePromptInput(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, tea.Batch(focusCmd, cmd)
 	}
 	return m, cmd
+}
+
+func (m model) updateRepoPicker(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
+	last := len(m.draft.repos) - 1
+	switch msg.String() {
+	case "esc", "q":
+		return m.handleBack()
+	case "g", "home":
+		m.draft.repoSelected = 0
+	case "G", "end":
+		m.draft.repoSelected = max(last, 0)
+	case "j", "down":
+		m.draft.repoSelected = min(m.draft.repoSelected+1, max(last, 0))
+	case "k", "up":
+		m.draft.repoSelected = max(m.draft.repoSelected-1, 0)
+	case "enter":
+		if m.draft.repoSelected > last {
+			return m, nil
+		}
+		repo := m.draft.repos[m.draft.repoSelected]
+		m.draft.repoRoot, m.draft.repoName = repo.Root, repo.Name
+		return m.handleBack()
+	}
+	return m, nil
+}
+
+// reposByLastWork orders repos by when their tasks were last worked on, most
+// recent first. Repos without tasks keep their order, after the others.
+func (m model) reposByLastWork(repos []core.KnownRepo) []core.KnownRepo {
+	lastWork := make(map[string]time.Time)
+	for _, row := range m.rows {
+		if row.task == nil {
+			continue
+		}
+		root := filepath.Clean(strings.TrimSpace(row.task.RepoRoot))
+		worked := latestTime(row.task.CreatedAt, row.task.UpdatedAt)
+		if row.status != nil {
+			worked = latestTime(worked, row.status.ObservedAt)
+		}
+		lastWork[root] = latestTime(lastWork[root], worked)
+	}
+	sorted := slices.Clone(repos)
+	slices.SortStableFunc(sorted, func(a, b core.KnownRepo) int {
+		return lastWork[filepath.Clean(b.Root)].Compare(lastWork[filepath.Clean(a.Root)])
+	})
+	return sorted
+}
+
+func latestTime(a, b time.Time) time.Time {
+	if b.After(a) {
+		return b
+	}
+	return a
 }
 
 func (m model) updatePromptPaste(msg tea.PasteMsg) (tea.Model, tea.Cmd) {
@@ -1425,22 +1520,17 @@ func taskID(task *core.Task) string {
 	return strings.TrimSpace(task.ID)
 }
 
-func (m model) currentCreateCwd() string {
-	if launchCwd := strings.TrimSpace(m.launchCwd); launchCwd != "" {
-		return launchCwd
-	}
-
-	if row := m.selectedRow(); row != nil && row.task != nil {
-		return strings.TrimSpace(row.task.RepoRoot)
-	}
-
-	return ""
-}
-
+// currentRepoScope is the repository a new task is created in: the one picked
+// for the draft, else where rig was launched, else the selected task's.
 func (m model) currentRepoScope() (string, string, bool) {
+	if m.draft.repoRoot != "" {
+		return m.draft.repoRoot, m.draft.repoName, true
+	}
 	launchCwd := strings.TrimSpace(m.launchCwd)
 	if launchCwd != "" {
-		return launchCwd, filepath.Base(launchCwd), true
+		// Launched in a task's worktree, the new task goes to that task's repo.
+		_, repoName := m.creationRepo(launchCwd)
+		return launchCwd, repoName, true
 	}
 
 	if row := m.selectedRow(); row != nil && row.task != nil {

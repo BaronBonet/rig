@@ -912,10 +912,15 @@ func taskActivityPreview(events []core.TaskActivityEvent) (string, []string) {
 }
 
 func (m model) promptInputView() string {
+	where := dimStyle.Render("no repo")
+	if _, repoName, ok := m.currentRepoScope(); ok {
+		where = primaryStyle.Render(repoName)
+	}
 	var builder strings.Builder
 	builder.WriteString(m.screenHeader(mutedStyle.Render("new task")))
 	builder.WriteString(errorBlock(m.draft.err))
-	builder.WriteString(dimStyle.Render("Enter task prompt.") + "\n\n")
+	builder.WriteString(mutedStyle.Render("Creating in ") + where + "  " +
+		keybindBar("", [2]string{"ctrl+n", "change repo"}) + "\n\n")
 	builder.WriteString(m.launchChoiceView(m.totalWidth()) + "\n\n")
 
 	m.ensurePromptInputInitialized()
@@ -1174,6 +1179,55 @@ func (m model) prPickerView() string {
 		[2]string{"esc", "back"},
 	))
 
+	return builder.String()
+}
+
+func (m model) repoPickerView() string {
+	var builder strings.Builder
+	builder.WriteString(m.screenHeader(mutedStyle.Render("pick repo")))
+	builder.WriteString(errorBlock(m.draft.err))
+
+	switch {
+	case !m.draft.reposLoaded && m.draft.err == nil:
+		builder.WriteString(renderShimmer("Loading repos...", m.shimmerTick) + "\n\n")
+	case m.draft.reposLoaded && len(m.draft.repos) == 0:
+		builder.WriteString(dimStyle.Render("No repos found.") + "\n\n")
+	}
+
+	nameWidth := 0
+	for _, repo := range m.draft.repos {
+		nameWidth = max(nameWidth, lipgloss.Width(repo.Name))
+	}
+	// Repos that outgrow the screen scroll around the cursor, with the task
+	// list's scrollbar. The 2 is the blank line and the footer below them.
+	repos := m.draft.repos
+	budget := len(repos)
+	if m.height > 0 {
+		budget = max(m.height-strings.Count(builder.String(), "\n")-2, 1)
+	}
+	start := min(max(m.draft.repoSelected-budget/2, 0), max(len(repos)-budget, 0))
+	end := min(start+budget, len(repos))
+
+	totalWidth := m.totalWidth()
+	lines := make([]string, 0, end-start)
+	for i := start; i < end; i++ {
+		line := padRightVisible(primaryStyle.Render(repos[i].Name), nameWidth) + "  " +
+			mutedStyle.Render(truncateStr(repos[i].Root, totalWidth-nameWidth-8))
+		if i == m.draft.repoSelected {
+			lines = append(lines, selectedRowStyle.Render(line))
+		} else {
+			lines = append(lines, normalRowStyle.Render(line))
+		}
+	}
+	for _, line := range withTaskListScrollbar(lines, totalWidth, start, end-1, len(repos)) {
+		builder.WriteString(line + "\n")
+	}
+
+	builder.WriteString("\n")
+	builder.WriteString(footerKeybinds(
+		[2]string{"enter", "select"},
+		[2]string{"esc", "back"},
+	))
 	return builder.String()
 }
 

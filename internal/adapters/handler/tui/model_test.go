@@ -1832,7 +1832,7 @@ func TestModel_CreateTaskFromPromptAppendsTaskAndStartsStatusTracking(t *testing
 	require.Equal(t, modeBrowse, got.mode)
 	require.Equal(t, core.TaskCreateProgressSuggestingName, got.selectedRow().creating.step)
 	require.Contains(t, stripANSI(got.View().Content), "suggesting name")
-	require.NotContains(t, stripANSI(got.View().Content), "Enter task prompt.")
+	require.NotContains(t, stripANSI(got.View().Content), "Creating in ")
 
 	taskCreated := runCmd(t, follow)
 	next, follow = got.Update(taskCreated)
@@ -2081,7 +2081,7 @@ func TestModel_CreateTaskFailureDiscardsDraftAndPreservesListView(t *testing.T) 
 	require.NotContains(t, view, "creating worktree")
 	require.Contains(t, view, "create failed")
 	require.NotContains(t, view, "Loading tasks...")
-	require.NotContains(t, view, "Enter task prompt.")
+	require.NotContains(t, view, "Creating in ")
 }
 
 func TestModel_CreateTaskFailureWithTaskSnapshotEnablesRetry(t *testing.T) {
