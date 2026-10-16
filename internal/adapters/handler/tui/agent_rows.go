@@ -164,7 +164,7 @@ func (m model) renderAgentSubRow(
 	if placeholder {
 		textStyle = mutedStyle
 	}
-	if needsInput(status) {
+	if session.Unseen {
 		textStyle = primaryStyle
 	}
 	if selected {

@@ -497,10 +497,11 @@ func (o *taskStatusObserver) observeTaskStatus(
 			providerCommand = providerClient.TaskSessionCommandName()
 		}
 
+		onServer := pane != nil && (session.TmuxServer.IsZero() || session.TmuxServer == snapshot.Server)
 		// The location is kept for an agent session this cycle ends too: a hook
 		// may have changed it since, so it stays open and the rebased view
 		// still shows where it runs.
-		if pane != nil && (session.TmuxServer.IsZero() || session.TmuxServer == snapshot.Server) {
+		if onServer {
 			liveView.locations[session.ID] = paneLocation{
 				pane: session.paneRef(),
 				location: TmuxPaneLocation{
@@ -547,6 +548,11 @@ func (o *taskStatusObserver) observeTaskStatus(
 			recovered := recoverAgentSessionStatus(ctx, providerClient, session, history, pane, providerCommand)
 			if recovered != nil {
 				liveView.recovered[session.ID] = *recovered
+			}
+		}
+		if onServer && pane.Visible && unseen(liveView.status(session), session.SeenAt) {
+			if seenAt, ok := o.observation.markAgentSessionSeen(ctx, session); ok {
+				session.SeenAt = seenAt
 			}
 		}
 		open = append(open, session)

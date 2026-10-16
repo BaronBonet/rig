@@ -725,10 +725,21 @@ func TestRepositoryInspectTaskSession_FindsASessionWhoseNameHasADot(t *testing.T
 	require.True(t, state.Exists)
 }
 
-// inventoryLine renders one paneInventoryFormat line on the test tmux server.
+// inventoryLine renders one paneInventoryFormat line on the test tmux server,
+// for a pane in a session no client is attached to.
 func inventoryLine(session, windowIndex, window, paneIndex, paneID, command, panePID string) string {
 	return strings.Join([]string{
 		"/private/tmp/tmux-501/default", "4722", session, windowIndex, window, paneIndex, paneID, command, panePID,
+		"0", "1", "0", "1",
+	}, "\t") + "\n"
+}
+
+// screenLine renders one paneInventoryFormat line for pane paneID of session
+// with the given attached client count and window and pane flags.
+func screenLine(session, paneID, attached, windowActive, windowZoomed, paneActive string) string {
+	return strings.Join([]string{
+		"/private/tmp/tmux-501/default", "4722", session, "1", "task", "0", paneID, "codex", "100",
+		attached, windowActive, windowZoomed, paneActive,
 	}, "\t") + "\n"
 }
 
@@ -856,6 +867,59 @@ func TestRepositoryInspectTaskSessions_ListsPaneLinkedIntoSeveralSessionsOnce(t 
 	require.Equal(t, map[string][]string{"task-1": {"%1"}}, snapshot.TaskSessionPanes)
 }
 
+func TestRepositoryInspectTaskSessions_ReportsWhetherAnAttachedClientShowsAPane(t *testing.T) {
+	cases := []struct {
+		name    string
+		output  string
+		visible bool
+	}{
+		{
+			name:    "active pane of the active window",
+			output:  screenLine("repo_one", "%1", "1", "1", "0", "1"),
+			visible: true,
+		},
+		{
+			name:    "inactive pane of an unzoomed window",
+			output:  screenLine("repo_one", "%1", "2", "1", "0", "0"),
+			visible: true,
+		},
+		{name: "session without a client", output: screenLine("repo_one", "%1", "0", "1", "0", "1")},
+		{name: "window behind the session's active one", output: screenLine("repo_one", "%1", "1", "0", "0", "1")},
+		{name: "zoomed pane", output: screenLine("repo_one", "%1", "1", "1", "1", "1"), visible: true},
+		{name: "pane hidden behind a zoomed one", output: screenLine("repo_one", "%1", "1", "1", "1", "0")},
+		{
+			name: "pane linked into a session that shows it",
+			output: screenLine("repo_one", "%1", "0", "1", "0", "1") +
+				screenLine("repo_one-view", "%1", "1", "1", "0", "1"),
+			visible: true,
+		},
+		{
+			name: "pane listed first under another session that shows it",
+			output: screenLine("repo_one-view", "%1", "1", "1", "0", "1") +
+				screenLine("repo_one", "%1", "0", "1", "0", "1"),
+			visible: true,
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			runner := subprocess.NewMockRunner(t)
+			repo := New(runner).(*repository)
+			expectPaneInventory(runner, subprocess.Result{Stdout: tc.output}, nil)
+			runner.On("Run", mock.Anything, "", "ps", "-axo", processInventoryColumns).
+				Return(subprocess.Result{}, nil).Once()
+
+			snapshot, err := repo.InspectTaskSessions(context.Background(), []*core.Task{
+				{ID: "task-1", TmuxSession: "repo_one"},
+			})
+
+			require.NoError(t, err)
+			require.Len(t, snapshot.Panes, 1)
+			require.Equal(t, "repo_one", snapshot.Panes[0].Session)
+			require.Equal(t, tc.visible, snapshot.Panes[0].Visible)
+		})
+	}
+}
+
 func TestRepositoryInspectTaskSessions_AcceptsWindowsWithEmptyNames(t *testing.T) {
 	runner := subprocess.NewMockRunner(t)
 	repo := New(runner).(*repository)
@@ -889,7 +953,7 @@ func TestRepositoryInspectTaskSessions_LeavesServerUnknownWithoutSocketPath(t *t
 
 	// tmux before 3.2 has no socket_path format and expands it to nothing.
 	expectPaneInventory(runner, subprocess.Result{
-		Stdout: "\t4722\trepo_one\t1\ttask\t0\t%1\tcodex\t100\n",
+		Stdout: "\t4722\trepo_one\t1\ttask\t0\t%1\tcodex\t100\t0\t1\t0\t1\n",
 	}, nil)
 	runner.On("Run", mock.Anything, "", "ps", "-axo", processInventoryColumns).
 		Return(subprocess.Result{}, nil).Once()

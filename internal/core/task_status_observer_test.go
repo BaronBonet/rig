@@ -529,6 +529,195 @@ func TestTaskStatusObserver_ConfirmedDeletionClosesStreamsAndReleasesInterest(t 
 	}
 }
 
+func TestTaskStatusObserver_ATurnEndStaysUnseenWhileItsPaneIsOffScreen(t *testing.T) {
+	svc := newTestTaskService(t)
+	svc.observation.recoveryPollInterval = time.Hour
+	seedObservedTask(t, svc, "task-1")
+	svc.observedTaskHook(
+		t,
+		"task-1",
+		HookEventStop,
+		TaskStatusPhaseWaitingForInput,
+		observedTaskObservedAt.Add(time.Minute),
+	)
+
+	ctx, cancel := context.WithCancel(t.Context())
+	defer cancel()
+	stream, err := svc.service.SubscribeTaskStatus(ctx, "task-1")
+	require.NoError(t, err)
+	update := receiveTaskStatus(t, stream)
+
+	require.True(t, update.Unseen)
+	require.True(t, update.AgentSessions[0].Unseen)
+	svc.taskRepo.mu.Lock()
+	defer svc.taskRepo.mu.Unlock()
+	require.Zero(t, svc.taskRepo.seenWrites)
+}
+
+func TestTaskStatusObserver_AnOnScreenPaneMarksItsTurnEndSeenOnce(t *testing.T) {
+	svc := newTestTaskService(t)
+	svc.observation.recoveryPollInterval = 5 * time.Millisecond
+	seedObservedTask(t, svc, "task-1")
+	stopAt := observedTaskObservedAt.Add(time.Minute)
+	svc.observedTaskHook(t, "task-1", HookEventStop, TaskStatusPhaseWaitingForInput, stopAt)
+
+	ctx, cancel := context.WithCancel(t.Context())
+	defer cancel()
+	stream, err := svc.service.SubscribeTaskStatus(ctx, "task-1")
+	require.NoError(t, err)
+	require.True(t, receiveTaskStatus(t, stream).Unseen)
+
+	svc.showPane("task-1", true)
+	update := receiveTaskStatus(t, stream)
+	require.False(t, update.Unseen)
+	require.False(t, update.AgentSessions[0].Unseen)
+	require.Equal(t, TaskStatusPhaseWaitingForInput, update.Phase)
+	select {
+	case later := <-stream:
+		t.Fatalf("received a status from a later cycle: %+v", later)
+	case <-time.After(25 * time.Millisecond):
+	}
+
+	svc.taskRepo.mu.Lock()
+	defer svc.taskRepo.mu.Unlock()
+	require.Equal(t, 1, svc.taskRepo.seenWrites)
+	stored := svc.taskRepo.agentSessions[0]
+	require.True(t, stored.SeenAt.After(stopAt))
+	require.Equal(t, stopAt, stored.Status.ObservedAt)
+}
+
+// Claude waking up when its background subagent finishes ends a new turn,
+// which is unseen even though the agent's previous turn end was seen.
+func TestTaskStatusObserver_ANewTurnEndAfterBeingSeenIsUnseen(t *testing.T) {
+	svc := newTestTaskService(t)
+	svc.observation.recoveryPollInterval = time.Hour
+	svc.observation.now = func() time.Time { return observedTaskObservedAt.Add(2 * time.Minute) }
+	seedObservedTask(t, svc, "task-1")
+	svc.observedTaskHook(
+		t,
+		"task-1",
+		HookEventStop,
+		TaskStatusPhaseWaitingForInput,
+		observedTaskObservedAt.Add(time.Minute),
+	)
+	svc.showPane("task-1", true)
+
+	ctx, cancel := context.WithCancel(t.Context())
+	defer cancel()
+	stream, err := svc.service.SubscribeTaskStatus(ctx, "task-1")
+	require.NoError(t, err)
+	require.False(t, receiveTaskStatus(t, stream).Unseen)
+
+	svc.observedTaskHook(
+		t,
+		"task-1",
+		HookEventStop,
+		TaskStatusPhaseWaitingForInput,
+		observedTaskObservedAt.Add(3*time.Minute),
+	)
+	update := receiveTaskStatus(t, stream)
+	require.True(t, update.Unseen)
+	require.True(t, update.AgentSessions[0].Unseen)
+}
+
+func TestTaskStatusObserver_AnUnseenAgentThatDoesNotLeadMakesTheTaskUnseen(t *testing.T) {
+	svc := newTestTaskService(t)
+	svc.observation.recoveryPollInterval = time.Hour
+	seedObservedTask(t, svc, "task-1")
+	svc.observedTaskHook(
+		t,
+		"task-1",
+		HookEventStop,
+		TaskStatusPhaseWaitingForInput,
+		observedTaskObservedAt.Add(time.Minute),
+	)
+	// The side agent's later turn end leads the task, and its pane is on
+	// screen; the first agent's pane is not.
+	side := seedObservedAgent(t, svc, "task-1", "session-side", AgentSessionStatus{
+		ObservedAt:   observedTaskObservedAt.Add(2 * time.Minute),
+		RawEventName: HookEventStop,
+		Phase:        TaskStatusPhaseWaitingForInput,
+	})
+	svc.sessionClient.mu.Lock()
+	svc.sessionClient.locatePanes[1].Visible = true
+	svc.sessionClient.mu.Unlock()
+
+	ctx, cancel := context.WithCancel(t.Context())
+	defer cancel()
+	stream, err := svc.service.SubscribeTaskStatus(ctx, "task-1")
+	require.NoError(t, err)
+	update := receiveTaskStatus(t, stream)
+
+	require.Equal(t, side.ID, update.LeadAgentSessionID)
+	require.True(t, update.Unseen)
+	unseen := map[string]bool{}
+	for _, session := range update.AgentSessions {
+		unseen[session.ID] = session.Unseen
+	}
+	require.Equal(t, map[string]bool{"agent-session-task-1": true, side.ID: false}, unseen)
+}
+
+// A cycle read the agent's first turn end, then a hook recorded a second one
+// while the cycle inspected tmux. The cycle must neither overwrite the new
+// status nor mark it seen: only the next cycle has seen its pane since.
+func TestTaskStatusObserver_MarkingSeenLeavesATurnEndAHookRecordedMeanwhile(t *testing.T) {
+	svc := newTestTaskService(t)
+	svc.observation.recoveryPollInterval = time.Hour
+	seedObservedTask(t, svc, "task-1")
+	svc.observedTaskHook(
+		t,
+		"task-1",
+		HookEventStop,
+		TaskStatusPhaseWaitingForInput,
+		observedTaskObservedAt.Add(time.Minute),
+	)
+	svc.showPane("task-1", true)
+	inspectStarted := make(chan struct{}, 1)
+	inspectRelease := make(chan struct{})
+	svc.sessionClient.mu.Lock()
+	svc.sessionClient.batchInspectStarted = inspectStarted
+	svc.sessionClient.batchInspectRelease = inspectRelease
+	svc.sessionClient.mu.Unlock()
+
+	ctx, cancel := context.WithCancel(t.Context())
+	defer cancel()
+	stream, err := svc.service.SubscribeTaskStatus(ctx, "task-1")
+	require.NoError(t, err)
+	select {
+	case <-inspectStarted:
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for the tmux snapshot")
+	}
+
+	secondStopAt := observedTaskObservedAt.Add(3 * time.Minute)
+	svc.observedTaskHook(t, "task-1", HookEventStop, TaskStatusPhaseWaitingForInput, secondStopAt)
+	require.True(t, receiveTaskStatus(t, stream).Unseen)
+	close(inspectRelease)
+
+	// The cycle's view is rebased onto the second turn end, with the pane's
+	// location the cycle found.
+	update := receiveTaskStatus(t, stream)
+	require.NotNil(t, update.AgentSessions[0].Location)
+	require.True(t, update.Unseen)
+	svc.taskRepo.mu.Lock()
+	defer svc.taskRepo.mu.Unlock()
+	require.Zero(t, svc.taskRepo.seenWrites)
+	require.Equal(t, secondStopAt, svc.taskRepo.agentSessions[0].Status.ObservedAt)
+}
+
+// showPane makes the tmux snapshot report the pane of a seeded task's first
+// agent as on screen in an attached client, or not.
+func (h *testTaskServiceHarness) showPane(taskID string, visible bool) {
+	h.sessionClient.mu.Lock()
+	defer h.sessionClient.mu.Unlock()
+	pane := h.sessionClient.locateTaskSessionPanes[taskID][0]
+	for i := range h.sessionClient.locatePanes {
+		if h.sessionClient.locatePanes[i].ID == pane {
+			h.sessionClient.locatePanes[i].Visible = visible
+		}
+	}
+}
+
 // seedObservedTask records a Codex task whose agent runs in a pane of the
 // task's Session and was last seen working, with the conversation history
 // status recovery reads.

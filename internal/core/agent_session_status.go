@@ -238,6 +238,15 @@ func (v agentSessionLiveView) isLost(session AgentSession) bool {
 	return ok && pane == session.paneRef()
 }
 
+// status returns the agent session's status: the one the cycle recovered,
+// while that applies, or else its hook-driven one.
+func (v agentSessionLiveView) status(session AgentSession) AgentSessionStatus {
+	if recovered, ok := v.recovered[session.ID]; ok && recovered.appliesTo(session) {
+		return recovered.status
+	}
+	return session.Status
+}
+
 // location returns where the agent session's pane sat at the cycle, if the
 // cycle saw the pane it is in now.
 func (v agentSessionLiveView) location(session AgentSession) (TmuxPaneLocation, bool) {
@@ -286,9 +295,7 @@ func taskStatusView(taskID string, evidence agentSessionEvidence, liveView agent
 		if liveView.isLost(session) {
 			continue
 		}
-		if recovered, ok := liveView.recovered[session.ID]; ok && recovered.appliesTo(session) {
-			session.Status = recovered.status
-		}
+		session.Status = liveView.status(session)
 		live = append(live, session)
 	}
 	update := rollUpTaskStatus(taskID, live, evidence.latest)
@@ -302,6 +309,7 @@ func taskStatusView(taskID string, evidence agentSessionEvidence, liveView agent
 			entry.Location = &location
 		}
 		update.AgentSessions = append(update.AgentSessions, entry)
+		update.Unseen = update.Unseen || entry.Unseen
 	}
 	return update
 }
@@ -317,11 +325,18 @@ func liveAgentSession(session AgentSession, latestPrompt string) LiveAgentSessio
 		Pane:         session.paneRef(),
 		Status:       rolledUpAgentSessionStatus(session),
 		LatestPrompt: latestPrompt,
+		Unseen:       unseen(session.Status, session.SeenAt),
 	}
 	if !session.unnamed() {
 		live.Name = session.Name
 	}
 	return live
+}
+
+// unseen reports whether an agent session with status needs input since
+// seenAt, when Rig last saw its pane on screen.
+func unseen(status AgentSessionStatus, seenAt time.Time) bool {
+	return status.Phase == TaskStatusPhaseWaitingForInput && seenAt.Before(status.ObservedAt)
 }
 
 // conversationHistory returns the Provider session history of an agent

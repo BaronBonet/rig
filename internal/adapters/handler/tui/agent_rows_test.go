@@ -461,6 +461,21 @@ func TestTaskListBlocks_SetsTasksWithSubRowsApart(t *testing.T) {
 	}
 }
 
+func TestRenderAgentSubRow_FollowsItsOwnAgentsSeenState(t *testing.T) {
+	layout := taskRowLayoutFor(100)
+	text, _ := agentSubRowText(claudeAgent())
+	unseen := claudeAgent()
+	unseen.Unseen = true
+
+	unseenRow := model{}.renderAgentSubRow(unseen, agentRowUsage{}, true, false, layout)
+	seenRow := model{}.renderAgentSubRow(claudeAgent(), agentRowUsage{}, true, false, layout)
+
+	require.Contains(t, unseenRow, primaryStyle.Render(text))
+	require.Contains(t, seenRow, dimStyle.Render(text))
+	require.Contains(t, stripANSI(unseenRow), iconStatusNeedsInput)
+	require.Contains(t, stripANSI(seenRow), iconStatusNeedsInput)
+}
+
 func TestModel_DetailViewDescribesTheSelectedAgentSession(t *testing.T) {
 	frontend := newFrontendHarness()
 	m := agentsTaskModel(frontend)

@@ -306,7 +306,7 @@ From left to right, a row shows:
 - its pull requests;
 - muted, on the right: the provider, how full the agent's context window is, how many times it has compacted, and how long ago the task was created.
 
-A task with several agents shows an indented sub-row for each agent. Each sub-row has its own status symbol, provider, context and compactions. Rows that need you are highlighted. The detail panel under the list describes the selected row in words.
+A task with several agents shows an indented sub-row for each agent. Each sub-row has its own status symbol, provider, context and compactions. A row is highlighted while an agent needs you and you haven't looked at its pane since: once a tmux client has shown the pane, the row dims and keeps its `◆` or `◐`. Rig notices this only while the TUI is open. The detail panel under the list describes the selected row in words.
 
 | Status | Meaning |
 |--------|---------|

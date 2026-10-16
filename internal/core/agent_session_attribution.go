@@ -223,6 +223,27 @@ func (o *taskObservation) endAgentSession(ctx context.Context, read AgentSession
 	return nil
 }
 
+// markAgentSessionSeen records that a status cycle saw the agent session's
+// pane on screen, and returns when, unless the agent session changed since
+// the cycle read it: its new status waits for the next cycle to be seen.
+func (o *taskObservation) markAgentSessionSeen(ctx context.Context, read AgentSession) (time.Time, bool) {
+	o.agentSessionMu.Lock()
+	defer o.agentSessionMu.Unlock()
+	open, err := o.tasks.ListOpenAgentSessions(ctx, read.TaskID)
+	if err != nil {
+		return time.Time{}, false
+	}
+	index := slices.IndexFunc(open, func(session AgentSession) bool { return session.ID == read.ID })
+	if index < 0 || !agentSessionStillAsRead(open[index], read) {
+		return time.Time{}, false
+	}
+	seenAt := o.now().UTC()
+	if err := o.tasks.MarkAgentSessionSeen(ctx, read.ID, seenAt); err != nil {
+		return time.Time{}, false
+	}
+	return seenAt, true
+}
+
 // removeAgentSession closes the pane of one of a task's open agent sessions,
 // which stops its agent, and ends the agent session at once rather than at
 // the next status cycle. An agent session without a pane, such as one

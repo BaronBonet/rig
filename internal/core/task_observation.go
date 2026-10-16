@@ -482,6 +482,7 @@ func taskStatusUpdatesEqual(left *TaskStatusUpdate, right *TaskStatusUpdate) boo
 		left.Provider == right.Provider &&
 		left.Phase == right.Phase &&
 		left.BackgroundWork == right.BackgroundWork &&
+		left.Unseen == right.Unseen &&
 		left.LeadAgentSessionID == right.LeadAgentSessionID &&
 		slices.EqualFunc(left.AgentSessions, right.AgentSessions, liveAgentSessionsEqual)
 }
@@ -495,7 +496,8 @@ func liveAgentSessionsEqual(left LiveAgentSession, right LiveAgentSession) bool 
 		sameLocation &&
 		agentSessionStatusesEqual(left.Status, right.Status) &&
 		left.LatestPrompt == right.LatestPrompt &&
-		left.Name == right.Name
+		left.Name == right.Name &&
+		left.Unseen == right.Unseen
 }
 
 func taskSessionCommandsMatch(activeCommand, expectedCommand string) bool {

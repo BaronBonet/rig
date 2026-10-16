@@ -91,6 +91,8 @@ type taskRepositoryState struct {
 	agentSessions []AgentSession
 	// createAgentSessionErr fails every agent session creation.
 	createAgentSessionErr error
+	// seenWrites counts MarkAgentSessionSeen calls.
+	seenWrites int
 	// agentSessionReads counts reads of each task's open agent sessions.
 	agentSessionReads map[string]int
 	// taskBranches are the branches recorded for each task.
@@ -1205,6 +1207,19 @@ func configureAgentSessionRepositoryMock(repo *MockTaskRepository, state *taskRe
 			for i, existing := range state.agentSessions {
 				if existing.ID == agentSessionID && existing.IsOpen() {
 					state.agentSessions[i].EndedAt = endedAt
+				}
+			}
+			return nil
+		},
+	).Maybe()
+	repo.EXPECT().MarkAgentSessionSeen(mock.Anything, mock.Anything, mock.Anything).RunAndReturn(
+		func(_ context.Context, agentSessionID string, seenAt time.Time) error {
+			state.mu.Lock()
+			defer state.mu.Unlock()
+			state.seenWrites++
+			for i, existing := range state.agentSessions {
+				if existing.ID == agentSessionID {
+					state.agentSessions[i].SeenAt = seenAt
 				}
 			}
 			return nil

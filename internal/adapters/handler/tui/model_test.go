@@ -1148,20 +1148,33 @@ func TestRenderRow_PullRequestsAndProviderStandOutOnTheCursorsLine(t *testing.T)
 	)
 }
 
-func TestRenderRow_NeedsInputNameStandsOut(t *testing.T) {
+// A task stands out while one of its agents needs input that has not been on
+// screen, also when that agent does not lead the task, and dims once seen,
+// keeping its symbol.
+func TestRenderRow_UnseenNameStandsOut(t *testing.T) {
 	m := model{selected: 1}
-	needsInput := m.renderRow(0, taskRow{
+	unseenSide := claudeAgent()
+	unseenSide.ID = "agent-claude-2"
+	unseenSide.Unseen = true
+	unseen := m.renderRow(0, taskRow{
+		task: rowTask(),
+		status: &core.TaskStatusUpdate{
+			Phase:              core.TaskStatusPhaseWaitingForInput,
+			Unseen:             true,
+			LeadAgentSessionID: "agent-claude",
+			AgentSessions:      []core.LiveAgentSession{claudeAgent(), unseenSide},
+		},
+	}, taskRowLayoutFor(100))
+
+	seen := m.renderRow(0, taskRow{
 		task:   rowTask(),
 		status: &core.TaskStatusUpdate{Phase: core.TaskStatusPhaseWaitingForInput},
 	}, taskRowLayoutFor(100))
 
-	stopped := m.renderRow(0, taskRow{
-		task:   rowTask(),
-		status: &core.TaskStatusUpdate{Phase: core.TaskStatusPhaseStopped},
-	}, taskRowLayoutFor(100))
-
-	require.Contains(t, needsInput, primaryStyle.Render("first task"))
-	require.Contains(t, stopped, dimStyle.Render("first task"))
+	require.Contains(t, unseen, primaryStyle.Render("first task"))
+	require.Contains(t, seen, dimStyle.Render("first task"))
+	require.True(t, strings.HasPrefix(rowContent(unseen), iconStatusNeedsInput+" first task"))
+	require.True(t, strings.HasPrefix(rowContent(seen), iconStatusNeedsInput+" first task"))
 }
 
 func TestTaskListBlocks_PacksTasksWithoutSubRows(t *testing.T) {

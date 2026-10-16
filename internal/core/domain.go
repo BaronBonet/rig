@@ -203,6 +203,8 @@ type TaskStatusUpdate struct {
 	Provider       Provider           `json:"provider"`
 	Phase          TaskStatusPhase    `json:"phase"`
 	BackgroundWork TaskBackgroundWork `json:"background_work"`
+	// Unseen reports whether any live agent session is unseen.
+	Unseen bool `json:"unseen,omitempty"`
 	// LeadAgentSessionID is the live agent session the task's status comes
 	// from: its most urgent one. It is empty while none is live.
 	LeadAgentSessionID string `json:"lead_agent_session_id,omitempty"`
@@ -244,6 +246,9 @@ type LiveAgentSession struct {
 	// Name is the short name of the agent's current conversation, or empty
 	// while that has none.
 	Name string `json:"name,omitempty"`
+	// Unseen reports whether the agent needs input since Rig last saw its pane
+	// on screen.
+	Unseen bool `json:"unseen,omitempty"`
 }
 
 // TmuxPaneRef identifies one tmux pane: its server and its pane ID, such as
@@ -303,6 +308,9 @@ type TmuxPane struct {
 	// PID is the pane's root process, or zero when tmux did not report it.
 	PID                             int
 	ChildProcessEvidenceUnavailable bool
+	// Visible reports whether an attached tmux client shows the pane: its
+	// window is its session's active one and no other pane is zoomed.
+	Visible bool
 }
 
 // PaneProcess is one direct child of a tmux pane's root process. StartedAt
@@ -350,6 +358,9 @@ type AgentSession struct {
 	StartedAt time.Time
 	// EndedAt is zero while the agent session is open.
 	EndedAt time.Time
+	// SeenAt is when Rig last saw the agent's pane on screen, or zero if it
+	// never has.
+	SeenAt time.Time
 	// LaunchedAt is when Rig launched the agent in its current pane. The first
 	// hook event traced to that pane clears it, as the agent then runs, and it
 	// is zero for an agent session a hook event opened. While it is set, a

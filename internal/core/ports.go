@@ -467,6 +467,9 @@ type TaskRepository interface {
 	UpdateAgentSession(ctx context.Context, session AgentSession) error
 	// EndAgentSession marks an open agent session as ended.
 	EndAgentSession(ctx context.Context, agentSessionID string, endedAt time.Time) error
+	// MarkAgentSessionSeen records when Rig saw an agent session's pane on
+	// screen, changing nothing else about it.
+	MarkAgentSessionSeen(ctx context.Context, agentSessionID string, seenAt time.Time) error
 	// ListTaskBranches returns the branches recorded as a task's, sorted.
 	ListTaskBranches(ctx context.Context, taskID string) ([]string, error)
 	// RecordTaskBranches records branches as a task's, keeping the ones

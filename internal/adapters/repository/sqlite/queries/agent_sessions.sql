@@ -45,7 +45,8 @@ select
   background_other,
   launched_at,
   name,
-  named_provider_session_id
+  named_provider_session_id,
+  seen_at
 from agent_sessions
 where tmux_socket_path = ? and tmux_server_pid = ? and tmux_pane = ? and tmux_pane != '' and ended_at = '';
 
@@ -71,7 +72,8 @@ select
   background_other,
   launched_at,
   name,
-  named_provider_session_id
+  named_provider_session_id,
+  seen_at
 from agent_sessions
 where task_id = ? and ended_at = '';
 
@@ -99,6 +101,10 @@ where id = ? and ended_at = '';
 update agent_sessions set ended_at = ?
 where id = ? and ended_at = '';
 
+-- name: MarkAgentSessionSeen :exec
+update agent_sessions set seen_at = ?
+where id = ?;
+
 -- Times are RFC 3339 text without trailing zeros, so text order is not time
 -- order within one second; julianday compares them as times.
 -- name: LatestAgentSession :one
@@ -123,7 +129,8 @@ select
   background_other,
   launched_at,
   name,
-  named_provider_session_id
+  named_provider_session_id,
+  seen_at
 from agent_sessions
 where task_id = ?
 order by julianday(started_at) desc, id desc

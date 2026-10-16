@@ -457,6 +457,7 @@ func TestTaskStatusService_LatestReturnsTheAgentsMostRecentHookStatus(t *testing
 		Phase:        TaskStatusPhaseWaitingForInput,
 		RawEventName: HookEventStop,
 		ObservedAt:   agentTestStart.Add(time.Minute),
+		Unseen:       true,
 	}, taskLevelStatus(*update))
 }
 
@@ -546,6 +547,7 @@ func TestTaskStatusService_LatestRecoversStatusFromTheAgentsOwnConversation(t *t
 		Phase:        TaskStatusPhaseWaitingForInput,
 		RawEventName: "TranscriptTaskComplete",
 		ObservedAt:   time.Date(2026, time.April, 19, 11, 4, 0, 0, time.UTC),
+		Unseen:       true,
 	}, taskLevelStatus(*update))
 	require.Equal(t, &working, svc.providerRepo.statusRecoveryCurrent)
 	require.Equal(t, []TaskProviderSession{ownConversation}, svc.providerRepo.statusRecoverySessions)
@@ -595,6 +597,7 @@ func TestTaskStatusService_LatestKeepsTheHookStatusWhenProviderHasNoRecoveredSta
 			Phase:        status.Phase,
 			RawEventName: status.RawEventName,
 			ObservedAt:   status.ObservedAt,
+			Unseen:       status.Phase == TaskStatusPhaseWaitingForInput,
 		}, taskLevelStatus(*update))
 		require.Equal(t, &status, svc.providerRepo.statusRecoveryCurrent)
 	}
