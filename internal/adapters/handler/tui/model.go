@@ -220,6 +220,9 @@ type launchDefaultEdit struct {
 type tasksLoadedMsg struct {
 	err   error
 	tasks []*core.Task
+	// background marks a periodic reload, which fails quietly and fetches
+	// details only for tasks new to the list.
+	background bool
 }
 
 type taskPullRequestsLoadedMsg struct {
@@ -352,6 +355,8 @@ type activityRefreshTickMsg struct{}
 
 type pullRequestRefreshTickMsg struct{}
 
+type taskListRefreshTickMsg struct{}
+
 func newModel(frontend core.TaskFrontend, launchCwd string, buildVersion string) model {
 	statusContext, cancelStatus := context.WithCancel(context.Background())
 
@@ -384,6 +389,7 @@ func (m model) Init() tea.Cmd {
 		loadTasksCmd(m.statusContext, m.frontend),
 		activityRefreshTickCmd(),
 		pullRequestRefreshTickCmd(),
+		taskListRefreshTickCmd(),
 	)
 }
 
@@ -595,6 +601,10 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.clampSelection()
 		return m, nil
 	case tasksLoadedMsg:
+		// A failed periodic reload stays quiet; the next one retries.
+		if msg.err != nil && msg.background {
+			return m, nil
+		}
 		m.loading = false
 		// Only surface a failure; a successful background reload must not
 		// clear an unacknowledged error shown to the user.
@@ -603,8 +613,18 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 
+		var known map[string]bool
+		if msg.background {
+			known = make(map[string]bool, len(m.rows))
+			for _, row := range m.rows {
+				known[taskID(row.task)] = true
+			}
+		}
 		selectedKey := m.selectedRowKey()
 		selectedAgent := m.selectedAgent
+		// shortcut: a periodic reload sent just before a local delete lands can
+		// show the deleted task again until the next reload, 2s later; add a
+		// load generation if that flicker shows up.
 		nextRows := withCreationRows(rowsFromTasks(msg.tasks), m.rows)
 		preserveLoadedRowState(nextRows, m.rows)
 		m.reconcileTaskStatusTracking(nextRows)
@@ -616,7 +636,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.selectedAgent = selectedAgent
 			m.clampAgentSelection()
 		}
-		return m, tea.Batch(m.afterTasksLoadedCmds()...)
+		return m, tea.Batch(m.afterTasksLoadedCmds(known)...)
 	case taskPullRequestsLoadedMsg:
 		// A refresh that fails keeps the pull requests and unshipped work
 		// loaded before.
@@ -801,6 +821,8 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			)
 		}
 		return m, tea.Batch(cmds...)
+	case taskListRefreshTickMsg:
+		return m, tea.Batch(taskListRefreshTickCmd(), refreshTasksCmd(m.statusContext, m.frontend))
 	case pullRequestRefreshTickMsg:
 		cmds := []tea.Cmd{pullRequestRefreshTickCmd()}
 		for _, row := range m.rows {
@@ -875,9 +897,9 @@ func rowsFromTasks(tasks []*core.Task) []taskRow {
 	return groupRowsByRepo(rows)
 }
 
-// preserveLoadedRowState carries each task's status, pull requests and
-// unshipped work over to its reloaded row, so they show until their next
-// update arrives.
+// preserveLoadedRowState carries each task's status, pull requests, unshipped
+// work, activity and usage over to its reloaded row, so they show until their
+// next update arrives.
 func preserveLoadedRowState(nextRows []taskRow, currentRows []taskRow) {
 	current := make(map[string]taskRow, len(currentRows))
 	for _, row := range currentRows {
@@ -891,15 +913,20 @@ func preserveLoadedRowState(nextRows []taskRow, currentRows []taskRow) {
 		nextRows[index].status = previous.status
 		nextRows[index].pullRequests = previous.pullRequests
 		nextRows[index].unshippedWork = previous.unshippedWork
+		nextRows[index].activity = previous.activity
+		nextRows[index].usage = previous.usage
 	}
 }
 
-func (m *model) afterTasksLoadedCmds() []tea.Cmd {
+// afterTasksLoadedCmds tracks each listed task's status and fetches its
+// details, skipping the details of known tasks, which their own refreshes
+// keep current.
+func (m *model) afterTasksLoadedCmds(known map[string]bool) []tea.Cmd {
 	cmds := make([]tea.Cmd, 0, len(m.rows)*4)
 	for _, row := range m.rows {
 		taskID := taskID(row.task)
 		cmds = append(cmds, m.taskStatusTrackingCmds(taskID)...)
-		if taskID != "" {
+		if taskID != "" && !known[taskID] {
 			cmds = append(cmds, taskActivityCmd(m.statusContext, m.frontend, taskID, taskActivityFetchLimit))
 			cmds = append(cmds, taskUsageCmd(m.statusContext, m.frontend, taskID))
 			cmds = append(cmds, taskPullRequestsCmd(m.statusContext, m.frontend, taskID))
