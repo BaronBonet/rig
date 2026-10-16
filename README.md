@@ -64,6 +64,10 @@ curl -fsSL https://raw.githubusercontent.com/BaronBonet/rig/main/scripts/install
 The installer places `rig` in `~/.local/bin` and adds it to your `PATH`
 automatically for zsh and bash.
 
+To update later, run `rig update`. It re-runs the installer into the directory
+the current `rig` lives in; the next `rig` run restarts a daemon still on the
+old version.
+
 On macOS, if the system blocks the binary on first run, clear the quarantine flag
 once:
 

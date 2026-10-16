@@ -114,6 +114,23 @@ func TestRootCommandRoutesDoctor(t *testing.T) {
 	require.Equal(t, []string{"doctor"}, calls)
 }
 
+func TestRootCommandRoutesUpdate(t *testing.T) {
+	t.Parallel()
+
+	var calls []string
+	cmd := newRootCommand(commandRuntime{
+		version: "test-version",
+		runUpdate: func() error {
+			calls = append(calls, "update")
+			return nil
+		},
+	})
+	cmd.SetArgs([]string{"update"})
+
+	require.NoError(t, cmd.Execute())
+	require.Equal(t, []string{"update"}, calls)
+}
+
 func TestRootCommandRoutesDaemonCommands(t *testing.T) {
 	t.Parallel()
 
