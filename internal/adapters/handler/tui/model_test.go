@@ -1182,6 +1182,27 @@ func TestTaskListBlocks_PacksTasksWithoutSubRows(t *testing.T) {
 	require.Contains(t, lines[5], "third task")
 }
 
+func TestRowsFromTasks_NestsChildTasksUnderTheirParent(t *testing.T) {
+	rows := rowsFromTasks([]*core.Task{
+		{ID: "parent", RepoName: "repo-a"},
+		{ID: "other", RepoName: "repo-a"},
+		{ID: "child-1", RepoName: "repo-a", ParentTaskID: "parent"},
+		{ID: "grandchild", RepoName: "repo-a", ParentTaskID: "child-1"},
+		{ID: "other-child", RepoName: "repo-a", ParentTaskID: "other"},
+		{ID: "child-2", RepoName: "repo-a", ParentTaskID: "parent"},
+		{ID: "cross-repo-child", RepoName: "repo-b", ParentTaskID: "parent"},
+		{ID: "orphan", RepoName: "repo-a", ParentTaskID: "deleted"},
+	})
+
+	ids := make([]string, 0, len(rows))
+	for _, row := range rows {
+		ids = append(ids, row.task.ID)
+	}
+	require.Equal(t, []string{
+		"parent", "child-1", "grandchild", "child-2", "other", "other-child", "orphan", "cross-repo-child",
+	}, ids)
+}
+
 func TestModel_SpinnerTurnsOnlyWhileSomethingWorks(t *testing.T) {
 	frontend := newFrontendHarness()
 	frontend.listTasks = []*core.Task{

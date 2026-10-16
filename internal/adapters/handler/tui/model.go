@@ -1651,9 +1651,49 @@ func groupRowsByRepo(rows []taskRow) []taskRow {
 
 	grouped := make([]taskRow, 0, len(rows))
 	for _, key := range order {
-		grouped = append(grouped, groups[key]...)
+		grouped = append(grouped, nestChildRows(groups[key])...)
 	}
 	return grouped
+}
+
+// nestChildRows moves each child task's row below its parent's row, after the
+// parent's earlier children, and keeps the rows' order otherwise. A child
+// whose parent is not among rows, such as one in another repo, keeps its place.
+func nestChildRows(rows []taskRow) []taskRow {
+	present := make(map[string]bool, len(rows))
+	for _, row := range rows {
+		if row.task != nil && row.task.ID != "" {
+			present[row.task.ID] = true
+		}
+	}
+	children := make(map[string][]taskRow)
+	roots := make([]taskRow, 0, len(rows))
+	for _, row := range rows {
+		if row.task != nil && present[row.task.ParentTaskID] {
+			children[row.task.ParentTaskID] = append(children[row.task.ParentTaskID], row)
+			continue
+		}
+		roots = append(roots, row)
+	}
+
+	nested := make([]taskRow, 0, len(rows))
+	var appendWithChildren func(row taskRow)
+	appendWithChildren = func(row taskRow) {
+		nested = append(nested, row)
+		if row.task != nil && row.task.ID != "" {
+			for _, child := range children[row.task.ID] {
+				appendWithChildren(child)
+			}
+		}
+	}
+	for _, row := range roots {
+		appendWithChildren(row)
+	}
+	// A parent link cycle leaves its tasks without a root; never drop rows.
+	if len(nested) != len(rows) {
+		return rows
+	}
+	return nested
 }
 
 func repoGroupKey(task *core.Task) string {
