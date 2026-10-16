@@ -100,6 +100,7 @@ func TestAgentSessionStatus_TheTaskNeedsInputWhileAnotherAgentKeepsWorking(t *te
 		Phase:        TaskStatusPhaseWaitingForInput,
 		RawEventName: HookEventStop,
 		ObservedAt:   agentTestStart.Add(time.Minute),
+		Unseen:       true,
 	}, taskLevelStatus(*svc.latestTaskStatus(t)))
 	sessions := svc.agentSessionsWithoutIDs()
 	require.Len(t, sessions, 2)

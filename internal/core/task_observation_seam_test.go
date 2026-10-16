@@ -340,6 +340,113 @@ func TestRollUpTaskStatus_DecisionTable(t *testing.T) {
 	}
 }
 
+// TestTaskStatusView_UnseenDecisionTable pins which live agent sessions are
+// unseen, and that a task is unseen while any of them is, without changing
+// which agent session leads.
+func TestTaskStatusView_UnseenDecisionTable(t *testing.T) {
+	at := func(minute int) time.Time {
+		return time.Date(2026, time.October, 9, 10, minute, 0, 0, time.UTC)
+	}
+	agent := func(id string, phase TaskStatusPhase, minute int, seenMinute int) AgentSession {
+		session := AgentSession{
+			ID:        id,
+			Provider:  ProviderClaude,
+			TmuxPane:  "%" + id,
+			StartedAt: at(0),
+			Status:    AgentSessionStatus{ObservedAt: at(minute), Phase: phase},
+		}
+		if seenMinute >= 0 {
+			session.SeenAt = at(seenMinute)
+		}
+		return session
+	}
+	recovering := agent("agent-r", TaskStatusPhaseWorking, 2, 3)
+
+	cases := []struct {
+		name       string
+		open       []AgentSession
+		recovered  map[string]recoveredAgentSessionStatus
+		wantLead   string
+		wantUnseen map[string]bool
+	}{
+		{
+			name:       "needs input never seen is unseen",
+			open:       []AgentSession{agent("agent-a", TaskStatusPhaseWaitingForInput, 5, -1)},
+			wantLead:   "agent-a",
+			wantUnseen: map[string]bool{"agent-a": true},
+		},
+		{
+			name:       "needs input since it was seen is unseen",
+			open:       []AgentSession{agent("agent-a", TaskStatusPhaseWaitingForInput, 5, 4)},
+			wantLead:   "agent-a",
+			wantUnseen: map[string]bool{"agent-a": true},
+		},
+		{
+			name:       "needs input seen when it began or later is seen",
+			open:       []AgentSession{agent("agent-a", TaskStatusPhaseWaitingForInput, 5, 5)},
+			wantLead:   "agent-a",
+			wantUnseen: map[string]bool{"agent-a": false},
+		},
+		{
+			name:       "working is never unseen",
+			open:       []AgentSession{agent("agent-a", TaskStatusPhaseWorking, 5, -1)},
+			wantLead:   "agent-a",
+			wantUnseen: map[string]bool{"agent-a": false},
+		},
+		{
+			name: "an unseen agent that does not lead makes the task unseen",
+			open: []AgentSession{
+				agent("agent-a", TaskStatusPhaseWaitingForInput, 6, 7),
+				agent("agent-b", TaskStatusPhaseWaitingForInput, 5, -1),
+			},
+			wantLead:   "agent-a",
+			wantUnseen: map[string]bool{"agent-a": false, "agent-b": true},
+		},
+		{
+			name: "seen needs input still outranks working",
+			open: []AgentSession{
+				agent("agent-a", TaskStatusPhaseWaitingForInput, 5, 6),
+				agent("agent-b", TaskStatusPhaseWorking, 8, -1),
+			},
+			wantLead:   "agent-a",
+			wantUnseen: map[string]bool{"agent-a": false, "agent-b": false},
+		},
+		{
+			name: "a recovered turn end newer than the last look is unseen",
+			open: []AgentSession{recovering},
+			recovered: map[string]recoveredAgentSessionStatus{
+				recovering.ID: {
+					pane:   recovering.paneRef(),
+					from:   recovering.Status,
+					status: AgentSessionStatus{ObservedAt: at(4), Phase: TaskStatusPhaseWaitingForInput},
+				},
+			},
+			wantLead:   "agent-r",
+			wantUnseen: map[string]bool{"agent-r": true},
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			liveView := newAgentSessionLiveView()
+			for id, recovered := range tc.recovered {
+				liveView.recovered[id] = recovered
+			}
+			update := taskStatusView("task-1", agentSessionEvidence{open: tc.open}, liveView)
+
+			require.Equal(t, tc.wantLead, update.LeadAgentSessionID)
+			unseen := make(map[string]bool, len(update.AgentSessions))
+			taskUnseen := false
+			for _, session := range update.AgentSessions {
+				unseen[session.ID] = session.Unseen
+				taskUnseen = taskUnseen || session.Unseen
+			}
+			require.Equal(t, tc.wantUnseen, unseen)
+			require.Equal(t, taskUnseen, update.Unseen)
+		})
+	}
+}
+
 // TestResolveSessionEnd_DecisionTable pins what a SessionEnd event does to the
 // agent session it was placed in.
 func TestResolveSessionEnd_DecisionTable(t *testing.T) {

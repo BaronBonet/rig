@@ -856,6 +856,7 @@ func TestSubscribeTaskStatusRoundTrip(t *testing.T) {
 			Phase:              core.TaskStatusPhaseWorking,
 			RawEventName:       "PreToolUse",
 			ObservedAt:         observedAt,
+			Unseen:             true,
 			LeadAgentSessionID: "agent-2",
 			AgentSessions: []core.LiveAgentSession{
 				{
@@ -870,6 +871,7 @@ func TestSubscribeTaskStatusRoundTrip(t *testing.T) {
 						BackgroundWork: core.TaskBackgroundWork{Subagents: 2},
 					},
 					LatestPrompt: "add retries",
+					Unseen:       true,
 				},
 				{
 					ID:       "agent-2",

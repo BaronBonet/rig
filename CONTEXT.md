@@ -137,6 +137,11 @@ Use `rig` for the CLI command and Rig for the product or system.
   status. Claude wakes the agent with a new turn when the work completes;
   Codex does not, so a Codex Task's count clears once its last subagent
   finishes.
+- Unseen: An Agent session that needs input since Rig last saw its pane on
+  screen, meaning shown in the active window of a tmux session with a client
+  attached, and not hidden behind another zoomed pane. Rig looks only while a
+  Frontend watches the Task. A Task is unseen while any of its live Agent
+  sessions is. The TUI highlights unseen rows; ranking ignores it.
 - Activity event: A compact persisted event used by the detail view to show
   recent user prompts and assistant actions.
 - Resume metadata: An Agent session's provider and current Provider session,

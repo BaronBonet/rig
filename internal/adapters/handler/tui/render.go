@@ -425,14 +425,14 @@ func (m model) renderRow(index int, row taskRow, layout taskRowLayout) string {
 	symbol, symbolStyle := m.taskRowSymbol(row)
 	name := taskRowText(row)
 
-	// A task that needs input stands out from the dimmed rest. The selected
+	// A task with an unseen agent stands out from the dimmed rest. The selected
 	// task stands out further, also while the cursor is on one of its agent
 	// sub-rows; the selection border, its bold name and its pull requests and
 	// provider at full color mark the cursor's line. Its terse markers, a child task's link
 	// marker and its agent's context and compactions, stay muted until it is
 	// selected.
 	nameStyle, markerStyle, timeStyle, rowStyle := dimStyle, mutedStyle, dimStyle, normalRowStyle
-	if needsInput(row.status) {
+	if row.status != nil && row.status.Unseen {
 		nameStyle = primaryStyle
 	}
 	onTaskRow := index == m.selected && m.selectedAgentSession() == nil
@@ -700,10 +700,6 @@ func (m model) statusSymbol(update *core.TaskStatusUpdate) (string, lipgloss.Sty
 		symbol = spinnerFrames[m.spinnerFrame%len(spinnerFrames)]
 	}
 	return symbol, style
-}
-
-func needsInput(update *core.TaskStatusUpdate) bool {
-	return update != nil && update.Phase == core.TaskStatusPhaseWaitingForInput
 }
 
 // selectedTaskDetailView describes the selected task, or the agent of the

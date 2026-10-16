@@ -266,6 +266,7 @@ func agentSessionFromRow(row generated.AgentSession) core.AgentSession {
 		StartedAt:              parseTime(row.StartedAt),
 		EndedAt:                parseTime(row.EndedAt),
 		LaunchedAt:             parseTime(row.LaunchedAt),
+		SeenAt:                 parseTime(row.SeenAt),
 		Name:                   row.Name,
 		NamedProviderSessionID: row.NamedProviderSessionID,
 		Status: core.AgentSessionStatus{

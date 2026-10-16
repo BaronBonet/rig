@@ -731,6 +731,12 @@ var dropAgentSessionLaunchedAtStatements = []string{
 	"alter table agent_sessions drop column launched_at",
 }
 
+// dropAgentSessionSeenAtStatements undo 00017, which records when Rig last
+// saw each agent session's pane on screen.
+var dropAgentSessionSeenAtStatements = []string{
+	"alter table agent_sessions drop column seen_at",
+}
+
 // dropAgentSessionNameStatements undo 00012, which records each agent
 // session's name.
 var dropAgentSessionNameStatements = []string{
@@ -1371,6 +1377,7 @@ func TestRepositoryNew_AddsAgentSessionsToAnExistingDatabase(t *testing.T) {
 		"launched_at",
 		"name",
 		"named_provider_session_id",
+		"seen_at",
 	}, tableColumnNames(t, reopened.db, "agent_sessions"))
 	require.NoError(t, reopened.CreateAgentSession(context.Background(), core.AgentSession{
 		ID:         "agent-1",
@@ -1389,7 +1396,7 @@ func TestRepositoryNew_DropsTaskStatusFromAnExistingDatabase(t *testing.T) {
 	// Rewind to a database migrated before task status moved to agent
 	// sessions, with a status row for the task.
 	for _, statement := range slices.Concat(
-		dropTaskLaunchChoiceStatements, dropTaskParentStatements, dropAgentSessionNameStatements, dropAgentSessionLaunchedAtStatements,
+		dropTaskLaunchChoiceStatements, dropTaskParentStatements, dropAgentSessionSeenAtStatements, dropAgentSessionNameStatements, dropAgentSessionLaunchedAtStatements,
 		dropActivityAgentSessionStatements, []string{
 			originalTaskStatusTable,
 			originalTaskResumeMetadataTable,
@@ -1419,7 +1426,7 @@ func TestRepositoryNew_KeepsAgentSessionsOfAnExistingDatabaseAsHookOpened(t *tes
 
 	// Rewind to a database migrated before Rig recorded agent launches, with
 	// an open agent session a hook event opened.
-	for _, statement := range slices.Concat(dropTaskLaunchChoiceStatements, dropTaskParentStatements, dropAgentSessionNameStatements, dropAgentSessionLaunchedAtStatements, []string{
+	for _, statement := range slices.Concat(dropTaskLaunchChoiceStatements, dropTaskParentStatements, dropAgentSessionSeenAtStatements, dropAgentSessionNameStatements, dropAgentSessionLaunchedAtStatements, []string{
 		originalTaskResumeMetadataTable,
 		"insert into agent_sessions (id, task_id, provider, tmux_socket_path, tmux_server_pid, tmux_pane, " +
 			"pane_trusted, provider_session_id, started_at) values ('agent-1', 'task-1', 'claude', " +
@@ -1665,7 +1672,7 @@ func TestRepositoryNew_MakesEachTasksLastConversationAnAgentSession(t *testing.T
 	// Rewind to a database migrated before Reconnect restored agent sessions,
 	// where task-1 and task-2 have resume metadata for their last
 	// conversation.
-	for _, statement := range slices.Concat(dropTaskLaunchChoiceStatements, dropTaskParentStatements, dropAgentSessionNameStatements, []string{
+	for _, statement := range slices.Concat(dropTaskLaunchChoiceStatements, dropTaskParentStatements, dropAgentSessionSeenAtStatements, dropAgentSessionNameStatements, []string{
 		originalTaskResumeMetadataTable,
 		"insert into task_resume_metadata (task_id, provider, session_id, observed_at) values " +
 			"('task-1', 'codex', 'codex-sess-1', '2026-10-09T10:05:00.123456789Z'), " +
@@ -1713,7 +1720,7 @@ func TestRepositoryNew_LeavesOutATaskWhoseIDAnAgentSessionHolds(t *testing.T) {
 		Provider:  core.ProviderClaude,
 		StartedAt: time.Date(2026, time.October, 9, 10, 0, 0, 0, time.UTC),
 	}))
-	for _, statement := range slices.Concat(dropTaskLaunchChoiceStatements, dropTaskParentStatements, dropAgentSessionNameStatements, []string{
+	for _, statement := range slices.Concat(dropTaskLaunchChoiceStatements, dropTaskParentStatements, dropAgentSessionSeenAtStatements, dropAgentSessionNameStatements, []string{
 		originalTaskResumeMetadataTable,
 		"insert into task_resume_metadata (task_id, provider, session_id, observed_at) values " +
 			"('task-2', 'codex', 'codex-sess-2', '2026-10-09T10:05:00Z')",
@@ -1788,7 +1795,7 @@ func TestRepositoryNew_MigratesOnlyResumeMetadataItCanResume(t *testing.T) {
 	// Rewind to before 00011. task-1's resume metadata has no time, task-2's
 	// no provider and task-3's no conversation; the last row's task is gone,
 	// as foreign keys were off when it was deleted.
-	for _, statement := range slices.Concat(dropTaskLaunchChoiceStatements, dropTaskParentStatements, dropAgentSessionNameStatements, []string{
+	for _, statement := range slices.Concat(dropTaskLaunchChoiceStatements, dropTaskParentStatements, dropAgentSessionSeenAtStatements, dropAgentSessionNameStatements, []string{
 		originalTaskResumeMetadataTable,
 		"pragma foreign_keys = off",
 		"insert into task_resume_metadata (task_id, provider, session_id, observed_at) values " +
@@ -1933,5 +1940,101 @@ func TestRepositoryNew_FoldsWorkingInBackgroundIntoWaitingForInput(t *testing.T)
 	reopened := newTestRepositoryAtPath(t, path)
 	found, err := reopened.OpenAgentSessionOnPane(ctx, agentSessionTestServer, "%1")
 	require.NoError(t, err)
+	// Rolling back to before 00017 also makes the agent start seen.
+	session.SeenAt = session.Status.ObservedAt
 	require.Equal(t, &session, found)
+}
+
+// Agents that already need input when Rig is upgraded start seen, so the
+// upgrade does not highlight all of them at once.
+func TestRepositoryNew_StartsOpenAgentSessionsSeen(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "state.db")
+	repo := newTestRepositoryAtPath(t, path)
+	ctx := context.Background()
+	createAgentSessionTestTask(t, repo, "task-1")
+	observedAt := time.Date(2026, time.October, 16, 9, 0, 0, 0, time.UTC)
+	open := core.AgentSession{
+		ID:          "agent-open",
+		TaskID:      "task-1",
+		Provider:    core.ProviderClaude,
+		TmuxServer:  agentSessionTestServer,
+		TmuxPane:    "%1",
+		PaneTrusted: true,
+		StartedAt:   observedAt.Add(-time.Hour),
+		Status: core.AgentSessionStatus{
+			ObservedAt:   observedAt,
+			RawEventName: "Stop",
+			Phase:        core.TaskStatusPhaseWaitingForInput,
+		},
+	}
+	ended := open
+	ended.ID = "agent-ended"
+	ended.TmuxPane = "%2"
+	ended.EndedAt = observedAt
+	require.NoError(t, repo.CreateAgentSession(ctx, open))
+	require.NoError(t, repo.CreateAgentSession(ctx, ended))
+	migrationsFS, err := fs.Sub(sqlFiles, "migrations")
+	require.NoError(t, err)
+	provider, err := goose.NewProvider(goose.DialectSQLite3, repo.db, migrationsFS)
+	require.NoError(t, err)
+	_, err = provider.DownTo(ctx, 16)
+	require.NoError(t, err)
+	require.NotContains(t, tableColumnNames(t, repo.db, "agent_sessions"), "seen_at")
+	require.NoError(t, repo.db.Close())
+
+	reopened := newTestRepositoryAtPath(t, path)
+	found, err := reopened.OpenAgentSessionOnPane(ctx, agentSessionTestServer, "%1")
+	require.NoError(t, err)
+	open.SeenAt = observedAt
+	require.Equal(t, &open, found)
+	var endedSeenAt string
+	require.NoError(t, reopened.db.QueryRowContext(ctx,
+		"select seen_at from agent_sessions where id = 'agent-ended'").Scan(&endedSeenAt))
+	require.Empty(t, endedSeenAt)
+}
+
+// Marking an agent seen and recording its status write separate columns, so
+// neither undoes the other.
+func TestRepositoryMarkAgentSessionSeen_LeavesTheStatusAlone(t *testing.T) {
+	repo := newTestRepository(t)
+	ctx := context.Background()
+	createAgentSessionTestTask(t, repo, "task-1")
+	stopAt := time.Date(2026, time.October, 16, 9, 0, 0, 0, time.UTC)
+	session := core.AgentSession{
+		ID:          "agent-1",
+		TaskID:      "task-1",
+		Provider:    core.ProviderClaude,
+		TmuxServer:  agentSessionTestServer,
+		TmuxPane:    "%1",
+		PaneTrusted: true,
+		StartedAt:   stopAt.Add(-time.Hour),
+		Status: core.AgentSessionStatus{
+			ObservedAt:   stopAt,
+			RawEventName: "Stop",
+			Phase:        core.TaskStatusPhaseWaitingForInput,
+		},
+	}
+	require.NoError(t, repo.CreateAgentSession(ctx, session))
+
+	seenAt := stopAt.Add(time.Minute)
+	require.NoError(t, repo.MarkAgentSessionSeen(ctx, session.ID, seenAt))
+	session.SeenAt = seenAt
+	open, err := repo.ListOpenAgentSessions(ctx, "task-1")
+	require.NoError(t, err)
+	require.Equal(t, []core.AgentSession{session}, open)
+
+	// A hook's status update, from a session read before the agent was seen,
+	// keeps when it was seen.
+	read := session
+	read.SeenAt = time.Time{}
+	read.Status = core.AgentSessionStatus{
+		ObservedAt:   stopAt.Add(2 * time.Minute),
+		RawEventName: "UserPromptSubmit",
+		Phase:        core.TaskStatusPhaseWorking,
+	}
+	require.NoError(t, repo.UpdateAgentSession(ctx, read))
+	latest, err := repo.LatestAgentSession(ctx, "task-1")
+	require.NoError(t, err)
+	require.Equal(t, seenAt, latest.SeenAt)
+	require.Equal(t, read.Status, latest.Status)
 }

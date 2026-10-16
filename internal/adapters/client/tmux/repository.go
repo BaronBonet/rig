@@ -360,9 +360,11 @@ func (r *repository) InspectTaskSession(ctx context.Context, task *core.Task) (c
 }
 
 // paneInventoryFormat lists every pane on the server. socket_path and pid are
-// server-wide, so every line repeats the server's identity.
+// server-wide, so every line repeats the server's identity. The last four
+// fields tell whether an attached client shows the pane.
 const paneInventoryFormat = "#{socket_path}\t#{pid}\t#{session_name}\t#{window_index}\t#{window_name}\t" +
-	"#{pane_index}\t#{pane_id}\t#{pane_current_command}\t#{pane_pid}"
+	"#{pane_index}\t#{pane_id}\t#{pane_current_command}\t#{pane_pid}\t" +
+	"#{session_attached}\t#{window_active}\t#{window_zoomed_flag}\t#{pane_active}"
 
 func (r *repository) InspectTaskSessions(ctx context.Context, tasks []*core.Task) (core.TmuxSnapshot, error) {
 	snapshot, _, err := r.inspectServer(ctx, tasks)
@@ -527,6 +529,7 @@ func inventoryPanes(
 			PID:                             panePID,
 			Children:                        childProcessesByPID[entry.pid],
 			ChildProcessEvidenceUnavailable: entry.pid == "" || !processInventoryAvailable,
+			Visible:                         entry.visible,
 		}
 		position, seen := positionByID[entry.id]
 		if !seen {
@@ -534,11 +537,14 @@ func inventoryPanes(
 			panes = append(panes, pane)
 			continue
 		}
+		// A pane linked into several sessions is on screen if any of them shows it.
+		visible := panes[position].Visible || entry.visible
 		_, keptInTaskSession := taskIDsBySession[panes[position].Session]
 		_, inTaskSession := taskIDsBySession[entry.session]
 		if inTaskSession && !keptInTaskSession {
 			panes[position] = pane
 		}
+		panes[position].Visible = visible
 	}
 	return server, panes
 }
@@ -1012,6 +1018,7 @@ type paneInventoryEntry struct {
 	pid         string
 	windowIndex int
 	paneIndex   int
+	visible     bool
 }
 
 // parsePaneInventory parses paneInventoryFormat output. A line missing its
@@ -1025,7 +1032,7 @@ func parsePaneInventory(output string) ([]paneInventoryEntry, bool) {
 			continue
 		}
 		fields := strings.Split(line, "\t")
-		if len(fields) != 9 {
+		if len(fields) != 13 {
 			return nil, false
 		}
 		session := normalizedSessionName(strings.TrimSpace(fields[2]))
@@ -1045,9 +1052,19 @@ func parsePaneInventory(output string) ([]paneInventoryEntry, bool) {
 			pid:         strings.TrimSpace(fields[8]),
 			windowIndex: windowIndex,
 			paneIndex:   paneIndex,
+			visible:     paneVisible(fields[9], fields[10], fields[11], fields[12]),
 		})
 	}
 	return inventory, true
+}
+
+// paneVisible reports whether an attached client shows a pane: its session
+// has a client attached, its window is the session's active one, and the
+// window is not zoomed onto another pane.
+func paneVisible(sessionAttached, windowActive, windowZoomed, paneActive string) bool {
+	clients, _ := strconv.Atoi(strings.TrimSpace(sessionAttached))
+	return clients > 0 && strings.TrimSpace(windowActive) == "1" &&
+		(strings.TrimSpace(windowZoomed) != "1" || strings.TrimSpace(paneActive) == "1")
 }
 
 // tmuxServer returns the identity of the server at socketPath with the given

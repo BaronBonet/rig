@@ -158,6 +158,10 @@ func (r *healthCheckRepository) EndAgentSession(context.Context, string, time.Ti
 	return errHealthCheckRepositoryOnly
 }
 
+func (r *healthCheckRepository) MarkAgentSessionSeen(context.Context, string, time.Time) error {
+	return errHealthCheckRepositoryOnly
+}
+
 func (r *healthCheckRepository) ListTaskBranches(context.Context, string) ([]string, error) {
 	return nil, errHealthCheckRepositoryOnly
 }
@@ -464,6 +468,18 @@ func (r *repository) EndAgentSession(ctx context.Context, agentSessionID string,
 	return r.queries.EndAgentSession(ctx, generated.EndAgentSessionParams{
 		EndedAt: formatTime(endedAt),
 		ID:      agentSessionID,
+	})
+}
+
+func (r *repository) MarkAgentSessionSeen(ctx context.Context, agentSessionID string, seenAt time.Time) error {
+	agentSessionID = strings.TrimSpace(agentSessionID)
+	if agentSessionID == "" {
+		return fmt.Errorf("agent session ID is required")
+	}
+
+	return r.queries.MarkAgentSessionSeen(ctx, generated.MarkAgentSessionSeenParams{
+		SeenAt: formatTime(seenAt),
+		ID:     agentSessionID,
 	})
 }
 
