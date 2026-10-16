@@ -89,8 +89,12 @@ func (m model) listView() string {
 	totalWidth := m.totalWidth()
 	totalHeight := m.totalHeight()
 
+	keybar := m.listKeybindText()
+	if m.notice != "" {
+		keybar = healthyStyle.Render(m.notice)
+	}
 	lines := []string{
-		renderHeader(m.renderHeaderLabel(), m.listKeybindText(), totalWidth),
+		renderHeader(m.renderHeaderLabel(), keybar, totalWidth),
 		divider(totalWidth),
 	}
 
@@ -957,9 +961,6 @@ func (m model) renderTextBox(input textarea.Model) string {
 }
 
 func (m model) listKeybindText() string {
-	if m.notice != "" {
-		return healthyStyle.Render(m.notice)
-	}
 	binds := [][2]string{{"n", "new"}, {"m", "main"}, {"r", "refresh"}}
 	if row := m.selectedRow(); row != nil && row.task != nil && row.creating == nil &&
 		row.task.CreationStatus == core.TaskCreationStatusFailed {

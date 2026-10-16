@@ -513,12 +513,14 @@ func TestModel_RefreshPreservesTaskStatus(t *testing.T) {
 }
 
 func TestModel_CopyKeyPutsSelectedTaskPromptOnClipboard(t *testing.T) {
-	m := model{rows: []taskRow{{task: &core.Task{ID: "task-1", Prompt: "fix the flaky test"}}}}
+	m := model{width: 500, rows: []taskRow{{task: &core.Task{ID: "task-1", Prompt: "fix the flaky test"}}}}
 
 	next, cmd := m.Update(tea.KeyPressMsg{Text: "c"})
 	got := asModel(t, next)
 	require.Equal(t, "copied to clipboard", got.notice)
-	require.Equal(t, "copied to clipboard", stripANSI(got.listKeybindText()))
+	require.Contains(t, stripANSI(got.listView()), "copied to clipboard")
+	// The short notice must not shrink the screen the key bar sized.
+	require.Equal(t, m.totalWidth(), got.totalWidth())
 
 	msgs := runBatchCmd(t, cmd)
 	require.Len(t, msgs, 2)
