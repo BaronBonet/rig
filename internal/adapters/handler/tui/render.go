@@ -779,10 +779,22 @@ func (m model) selectedTaskDetailView() string {
 }
 
 // detailSummaryParts are the parts of the detail panel's summary line: the
-// model and reasoning level, context and compactions of the agent described,
-// and on an agent sub-row where its pane runs.
+// background work still running, the model and reasoning level, context and
+// compactions of the agent described, and on an agent sub-row where its pane
+// runs.
 func (m model) detailSummaryParts(row taskRow, agentSession *core.LiveAgentSession) []string {
 	var parts []string
+	status := row.status
+	if agentSession != nil {
+		status = agentSessionStatusUpdate(*agentSession)
+	} else if status != nil && len(status.AgentSessions) > 1 {
+		// Each agent's sub-row says what it has running.
+		status = nil
+	}
+	if status != nil && !status.BackgroundWork.IsZero() {
+		running := strings.Join(backgroundWorkParts(status.BackgroundWork), ", ")
+		parts = append(parts, mutedStyle.Render("running")+" "+primaryStyle.Render(running))
+	}
 	if text := m.modelDetailText(row, agentSession); text != "" {
 		parts = append(parts, text)
 	}
@@ -1323,15 +1335,40 @@ func taskStatusSymbol(update *core.TaskStatusUpdate) (string, lipgloss.Style) {
 		return iconStatusStarting, warningStyle
 	case core.TaskStatusPhaseWorking:
 		return iconStatusActive, healthyStyle
-	case core.TaskStatusPhaseWorkingInBackground:
-		return iconStatusProgress, healthyStyle
 	case core.TaskStatusPhaseWaitingForInput:
+		// The user's move, while work the turn started still runs.
+		if !update.BackgroundWork.IsZero() {
+			return iconStatusProgress, warningStyle
+		}
 		return iconStatusNeedsInput, warningStyle
 	case core.TaskStatusPhaseStopped:
 		return iconStatusIdle, dimStyle
 	default:
 		return iconStatusIdle, dimStyle
 	}
+}
+
+// backgroundWorkParts names the background work still running by kind, such
+// as "1 subagent" and "2 shells".
+func backgroundWorkParts(work core.TaskBackgroundWork) []string {
+	kinds := []struct {
+		noun  string
+		count int
+	}{
+		{"subagent", work.Subagents},
+		{"monitor", work.Monitors},
+		{"workflow", work.Workflows},
+		{"shell", work.Shells},
+		{"bg task", work.Other},
+	}
+
+	var parts []string
+	for _, kind := range kinds {
+		if kind.count > 0 {
+			parts = append(parts, countNoun(kind.count, kind.noun))
+		}
+	}
+	return parts
 }
 
 func countNoun(count int, noun string) string {

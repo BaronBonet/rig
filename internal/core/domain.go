@@ -166,17 +166,18 @@ type TaskStatusPhase string
 const (
 	TaskStatusPhaseStarting TaskStatusPhase = "starting"
 	TaskStatusPhaseWorking  TaskStatusPhase = "working"
-	// TaskStatusPhaseWorkingInBackground means the root agent ended its turn
-	// while background work it started is still in flight. The agent is woken
-	// when that work completes, so the task is not waiting on the user.
-	TaskStatusPhaseWorkingInBackground TaskStatusPhase = "working_in_background"
-	TaskStatusPhaseWaitingForInput     TaskStatusPhase = "waiting_for_input"
-	TaskStatusPhaseStopped             TaskStatusPhase = "stopped"
+	// TaskStatusPhaseWaitingForInput means the root agent ended its turn, or
+	// asks for the user's approval or answer. A turn end is the user's move
+	// even while the turn's background work runs, so that work only rides
+	// along as the status's TaskBackgroundWork.
+	TaskStatusPhaseWaitingForInput TaskStatusPhase = "waiting_for_input"
+	TaskStatusPhaseStopped         TaskStatusPhase = "stopped"
 )
 
 // TaskBackgroundWork counts the provider background work still in flight when
-// the root agent ended its turn. Providers report the full in-flight set at
-// every turn end, so the counts are replaced, never accumulated.
+// the root agent ended its turn, while it waits for input. Providers report
+// the full in-flight set at every turn end, so the counts are replaced, never
+// accumulated.
 type TaskBackgroundWork struct {
 	Subagents int `json:"subagents,omitempty"`
 	Shells    int `json:"shells,omitempty"`

@@ -128,14 +128,14 @@ Use `rig` for the CLI command and Rig for the product or system.
 - Runtime status: The current live phase of an Agent session, derived from its
   hook evidence, its pane's live state, and the recoverable history of its
   current Provider session. A Task's Runtime status is its most urgent live
-  Agent session's: needs input, then working, then working in the background,
-  then starting. It is a live view rather than an event history, separate from
-  the durable task record.
+  Agent session's: needs input, then working, then starting. It is a live
+  view rather than an event history, separate from the durable task record.
 - Background work: Provider work the root agent started that is still in
   flight when its turn ends, such as background subagents, shells, monitors,
-  and workflows. A Task with background work is working in the background, not
-  waiting for input. Claude wakes the agent when the work completes; Codex
-  does not, so a Codex Task returns to needs input once its last subagent
+  and workflows. A turn end is the user's move whatever is still running, so
+  a Task with background work needs input, and the work is counted on its
+  status. Claude wakes the agent with a new turn when the work completes;
+  Codex does not, so a Codex Task's count clears once its last subagent
   finishes.
 - Activity event: A compact persisted event used by the detail view to show
   recent user prompts and assistant actions.

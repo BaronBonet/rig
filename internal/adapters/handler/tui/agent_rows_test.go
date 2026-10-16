@@ -75,6 +75,7 @@ func withAgentSessions(t *testing.T, m model, taskID string, sessions ...core.Li
 		update.LeadAgentSessionID = sessions[0].ID
 		update.Provider = sessions[0].Provider
 		update.Phase = sessions[0].Status.Phase
+		update.BackgroundWork = sessions[0].Status.BackgroundWork
 	}
 	next, _ := m.Update(taskStatusUpdatedMsg{taskID: taskID, updates: make(chan core.TaskStatusUpdate), update: update})
 	return asModel(t, next)
@@ -465,7 +466,7 @@ func TestModel_DetailViewDescribesTheSelectedAgentSession(t *testing.T) {
 	m := agentsTaskModel(frontend)
 	background := claudeAgent()
 	background.Status = core.AgentSessionStatus{
-		Phase:          core.TaskStatusPhaseWorkingInBackground,
+		Phase:          core.TaskStatusPhaseWaitingForInput,
 		RawEventName:   "Stop",
 		BackgroundWork: core.TaskBackgroundWork{Subagents: 2, Shells: 1},
 	}
@@ -477,7 +478,26 @@ func TestModel_DetailViewDescribesTheSelectedAgentSession(t *testing.T) {
 	m = pressKey(t, m, tea.KeyPressMsg{Code: 'j', Text: "j"})
 	m = pressKey(t, m, tea.KeyPressMsg{Code: 'j', Text: "j"})
 	require.Equal(t, "agent-claude", m.selectedAgent)
-	require.Equal(t, "window 0 (task) · pane 0", detailLines(m)[0])
+	require.Equal(t, "running 2 subagents, 1 shell    window 0 (task) · pane 0", detailLines(m)[0])
+}
+
+// A task row says what its agent has running only while it has one agent:
+// with more, each agent's sub-row says its own.
+func TestModel_DetailViewSaysWhatTheTasksOneAgentHasRunning(t *testing.T) {
+	background := claudeAgent()
+	background.Status = core.AgentSessionStatus{
+		Phase:          core.TaskStatusPhaseWaitingForInput,
+		RawEventName:   "Stop",
+		BackgroundWork: core.TaskBackgroundWork{Subagents: 2, Shells: 1},
+	}
+
+	m := withAgentSessions(t, agentsTaskModel(newFrontendHarness()), "task-1", background)
+	require.Empty(t, m.selectedAgent)
+	require.Contains(t, stripANSI(m.selectedTaskDetailView()), "running 2 subagents, 1 shell")
+
+	m = withAgentSessions(t, agentsTaskModel(newFrontendHarness()), "task-1", background, codexAgent())
+	require.Empty(t, m.selectedAgent)
+	require.NotContains(t, stripANSI(m.selectedTaskDetailView()), "running")
 }
 
 func TestModel_CursorStaysOnItsAgentWhileSubRowsChange(t *testing.T) {
@@ -633,7 +653,7 @@ func TestModel_DetailViewFitsTheSelectedAgentInEightyColumns(t *testing.T) {
 	busy := claudeAgent()
 	busy.Location = &core.TmuxPaneLocation{WindowName: "claude", WindowIndex: 3, PaneIndex: 1}
 	busy.Status = core.AgentSessionStatus{
-		Phase:          core.TaskStatusPhaseWorkingInBackground,
+		Phase:          core.TaskStatusPhaseWaitingForInput,
 		RawEventName:   "Stop",
 		BackgroundWork: core.TaskBackgroundWork{Subagents: 2, Shells: 1},
 	}
@@ -654,7 +674,13 @@ func TestModel_DetailViewFitsTheSelectedAgentInEightyColumns(t *testing.T) {
 		for _, line := range strings.Split(m.selectedTaskDetailView(), "\n") {
 			require.LessOrEqual(t, lipgloss.Width(line), width, "width %d: %q", width, stripANSI(line))
 		}
-		require.Equal(t, "window 3 (claude) · pane 1", detailLines(m)[0], "width %d", width)
+		require.Equal(
+			t,
+			"running 2 subagents, 1 shell    window 3 (claude) · pane 1",
+			detailLines(m)[0],
+			"width %d",
+			width,
+		)
 	}
 }
 

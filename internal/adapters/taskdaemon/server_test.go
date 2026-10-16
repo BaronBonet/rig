@@ -864,7 +864,7 @@ func TestSubscribeTaskStatusRoundTrip(t *testing.T) {
 					Pane:     core.TmuxPaneRef{Server: statusTestServer, ID: "%3"},
 					Location: &core.TmuxPaneLocation{WindowName: "task"},
 					Status: core.AgentSessionStatus{
-						Phase:          core.TaskStatusPhaseWorkingInBackground,
+						Phase:          core.TaskStatusPhaseWaitingForInput,
 						RawEventName:   "Stop",
 						ObservedAt:     observedAt.Add(-time.Minute),
 						BackgroundWork: core.TaskBackgroundWork{Subagents: 2},

@@ -189,8 +189,7 @@ func (r *repository) HookEventToTaskStatus(input core.HookEventInput) (*core.Tas
 	if err != nil || update == nil {
 		return update, err
 	}
-	if eventName == core.HookEventStop && !input.BackgroundWork.IsZero() {
-		update.Phase = core.TaskStatusPhaseWorkingInBackground
+	if eventName == core.HookEventStop {
 		update.BackgroundWork = input.BackgroundWork
 	}
 	return update, nil
@@ -236,7 +235,7 @@ func notificationNeedsInput(notificationType string) bool {
 // Every counted kind wakes the root agent with a new turn when it completes,
 // so the next Stop replaces these counts. Claude's own housekeeping tasks
 // (dream, auto-mode scan, memory import) finish without a new turn, so they
-// are not counted and cannot pin a task at working.
+// are not counted and cannot leave a stale count behind.
 func backgroundWorkFromTasks(tasks []hookBackgroundTask) core.TaskBackgroundWork {
 	var work core.TaskBackgroundWork
 	for _, task := range tasks {

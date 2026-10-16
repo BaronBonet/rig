@@ -1134,7 +1134,7 @@ func TestRepositoryAgentSessions_CreateFindListUpdateAndEnd(t *testing.T) {
 	first.Status = core.AgentSessionStatus{
 		ObservedAt:     startedAt.Add(2 * time.Minute),
 		RawEventName:   "Stop",
-		Phase:          core.TaskStatusPhaseWorkingInBackground,
+		Phase:          core.TaskStatusPhaseWaitingForInput,
 		BackgroundWork: core.TaskBackgroundWork{Subagents: 2, Shells: 1},
 	}
 	require.NoError(t, repo.UpdateAgentSession(ctx, first))
@@ -1167,7 +1167,7 @@ func TestRepositoryAgentSessions_CreateFindListUpdateAndEnd(t *testing.T) {
 	var phase, ended string
 	require.NoError(t, repo.db.QueryRowContext(ctx,
 		"select status_phase, ended_at from agent_sessions where id = 'agent-1'").Scan(&phase, &ended))
-	require.Equal(t, string(core.TaskStatusPhaseWorkingInBackground), phase)
+	require.Equal(t, string(core.TaskStatusPhaseWaitingForInput), phase)
 	require.Equal(t, endedAt.Format(time.RFC3339Nano), ended)
 }
 
@@ -1894,4 +1894,44 @@ func TestRepositoryNew_AddsTaskBranchesToAnExistingDatabaseAndRollsBack(t *testi
 	branches, err := reopened.ListTaskBranches(ctx, "task-1")
 	require.NoError(t, err)
 	require.Equal(t, []string{"feat/b"}, branches)
+}
+
+// An agent stored as working in the background, a phase Rig no longer has,
+// waits for input after the upgrade, its background work still counted.
+func TestRepositoryNew_FoldsWorkingInBackgroundIntoWaitingForInput(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "state.db")
+	repo := newTestRepositoryAtPath(t, path)
+	ctx := context.Background()
+	createAgentSessionTestTask(t, repo, "task-1")
+	startedAt := time.Date(2026, time.October, 16, 9, 0, 0, 0, time.UTC)
+	session := core.AgentSession{
+		ID:          "agent-1",
+		TaskID:      "task-1",
+		Provider:    core.ProviderClaude,
+		TmuxServer:  agentSessionTestServer,
+		TmuxPane:    "%1",
+		PaneTrusted: true,
+		StartedAt:   startedAt,
+		Status: core.AgentSessionStatus{
+			ObservedAt:     startedAt,
+			RawEventName:   "Stop",
+			Phase:          core.TaskStatusPhaseWaitingForInput,
+			BackgroundWork: core.TaskBackgroundWork{Subagents: 1},
+		},
+	}
+	require.NoError(t, repo.CreateAgentSession(ctx, session))
+	migrationsFS, err := fs.Sub(sqlFiles, "migrations")
+	require.NoError(t, err)
+	provider, err := goose.NewProvider(goose.DialectSQLite3, repo.db, migrationsFS)
+	require.NoError(t, err)
+	_, err = provider.DownTo(ctx, 15)
+	require.NoError(t, err)
+	_, err = repo.db.ExecContext(ctx, "update agent_sessions set status_phase = 'working_in_background'")
+	require.NoError(t, err)
+	require.NoError(t, repo.db.Close())
+
+	reopened := newTestRepositoryAtPath(t, path)
+	found, err := reopened.OpenAgentSessionOnPane(ctx, agentSessionTestServer, "%1")
+	require.NoError(t, err)
+	require.Equal(t, &session, found)
 }

@@ -40,7 +40,7 @@ func (r *repository) RecoverAgentSessionStatus(
 	_ time.Time,
 ) (*core.AgentSessionStatus, error) {
 	switch current.Phase {
-	case core.TaskStatusPhaseStarting, core.TaskStatusPhaseWorking, core.TaskStatusPhaseWorkingInBackground:
+	case core.TaskStatusPhaseStarting, core.TaskStatusPhaseWorking:
 	default:
 		return nil, nil
 	}

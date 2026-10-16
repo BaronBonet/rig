@@ -360,7 +360,7 @@ func TestRepositoryRecoverAgentSessionStatus_ReportsSubagentRunningAfterRootStop
 
 	require.NoError(t, err)
 	require.Equal(t, &core.AgentSessionStatus{
-		Phase:          core.TaskStatusPhaseWorkingInBackground,
+		Phase:          core.TaskStatusPhaseWaitingForInput,
 		RawEventName:   "TranscriptSubagentsRunning",
 		ObservedAt:     codexRootStopAt,
 		BackgroundWork: core.TaskBackgroundWork{Subagents: 1},
@@ -396,7 +396,7 @@ func TestRepositoryRecoverAgentSessionStatus_CountsOnlyRunningSubagents(t *testi
 
 	require.NoError(t, err)
 	require.NotNil(t, update)
-	require.Equal(t, core.TaskStatusPhaseWorkingInBackground, update.Phase)
+	require.Equal(t, core.TaskStatusPhaseWaitingForInput, update.Phase)
 	require.Equal(t, core.TaskBackgroundWork{Subagents: 2}, update.BackgroundWork)
 }
 

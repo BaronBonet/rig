@@ -117,15 +117,12 @@ func rollUpTaskStatus(taskID string, live []AgentSession, latest *AgentSession) 
 
 // taskStatusUrgency ranks agent session phases for the task's Runtime status:
 // an agent waiting on the user outranks one working, which outranks one
-// working in the background, which outranks one starting. A live agent
-// session without a status yet counts as starting.
+// starting. A live agent session without a status yet counts as starting.
 func taskStatusUrgency(phase TaskStatusPhase) int {
 	switch phase {
 	case TaskStatusPhaseWaitingForInput:
-		return 3
-	case TaskStatusPhaseWorking:
 		return 2
-	case TaskStatusPhaseWorkingInBackground:
+	case TaskStatusPhaseWorking:
 		return 1
 	default:
 		return 0

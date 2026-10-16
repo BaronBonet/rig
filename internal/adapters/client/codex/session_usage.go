@@ -120,9 +120,8 @@ func (r *repository) RecoverAgentSessionStatus(
 	// root transcript activity: Codex writes activity records around turn
 	// completion, and treating those as resumed work makes the live TUI fall
 	// back to working. A real resumed turn emits its own working hook and
-	// updates the persisted status directly. The one exception is the root
-	// agent's Stop while its subagents are still running, which reads as
-	// working in the background.
+	// updates the persisted status directly. The one addition is the count of
+	// subagents still running after the root agent's Stop.
 	switch current.Phase {
 	case core.TaskStatusPhaseStopped:
 		return nil, nil
@@ -159,11 +158,11 @@ func (r *repository) RecoverAgentSessionStatus(
 	}, nil
 }
 
-// recoverBackgroundSubagents reports an agent whose root agent ended its turn as
-// working in the background while thread-spawned subagents still have an open
-// turn. Codex delivers a finished subagent's result without waking the root
-// agent, so once the last subagent finishes this returns nil and the agent
-// falls back to the persisted needs-input.
+// recoverBackgroundSubagents adds the thread-spawned subagents that still have
+// an open turn to an agent whose root agent ended its turn, which keeps
+// needing input. Codex delivers a finished subagent's result without waking
+// the root agent, so once the last subagent finishes this returns nil and the
+// agent falls back to the persisted needs-input.
 func (r *repository) recoverBackgroundSubagents(
 	ctx context.Context,
 	current core.AgentSessionStatus,
@@ -179,7 +178,7 @@ func (r *repository) recoverBackgroundSubagents(
 		return nil, err
 	}
 	return &core.AgentSessionStatus{
-		Phase:        core.TaskStatusPhaseWorkingInBackground,
+		Phase:        core.TaskStatusPhaseWaitingForInput,
 		RawEventName: "TranscriptSubagentsRunning",
 		// The observer discards recoveries older than the persisted evidence.
 		ObservedAt:     current.ObservedAt,
