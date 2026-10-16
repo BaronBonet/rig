@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"os/exec"
 	"os/signal"
 	"path/filepath"
 	"syscall"
@@ -40,6 +41,10 @@ const (
 	// codexSandboxEnvKey is set for commands Codex runs in its sandbox, which
 	// cannot reach the daemon's socket.
 	codexSandboxEnvKey = "CODEX_SANDBOX"
+
+	// installScriptURL is the installer the README documents; rig update
+	// re-runs it so installing and updating share one download and checksum path.
+	installScriptURL = "https://raw.githubusercontent.com/BaronBonet/rig/main/scripts/install.sh"
 )
 
 // errInCodexSandbox is why the CLI commands refuse to run in the Codex
@@ -85,6 +90,9 @@ func newProductionCommandRuntime(stdout io.Writer, stderr io.Writer) commandRunt
 			}
 
 			return runDoctor(stdout, cfg)
+		},
+		runUpdate: func() error {
+			return runUpdate(stdout, stderr)
 		},
 		runDaemonStart: func() error {
 			return runDaemonLifecycleCommand(
@@ -154,6 +162,7 @@ type commandRuntime struct {
 	runTUI           func() error
 	runSetup         func() error
 	runDoctor        func() error
+	runUpdate        func() error
 	runDaemonStart   func() error
 	runDaemonStop    func() error
 	runDaemonRestart func() error
@@ -184,6 +193,7 @@ func newRootCommand(runtime commandRuntime) *cobra.Command {
 
 	root.AddCommand(newSetupCommand(runtime))
 	root.AddCommand(newDoctorCommand(runtime))
+	root.AddCommand(newUpdateCommand(runtime))
 	root.AddCommand(newDaemonCommand(runtime))
 	cliDeps := cli.Dependencies{
 		Frontend:        runtime.taskFrontend,
@@ -217,6 +227,17 @@ func newDoctorCommand(runtime commandRuntime) *cobra.Command {
 		Args:  cobra.NoArgs,
 		RunE: func(_ *cobra.Command, _ []string) error {
 			return runCommand(runtime.runDoctor)
+		},
+	}
+}
+
+func newUpdateCommand(runtime commandRuntime) *cobra.Command {
+	return &cobra.Command{
+		Use:   "update",
+		Short: "Install the latest rig release over this binary",
+		Args:  cobra.NoArgs,
+		RunE: func(_ *cobra.Command, _ []string) error {
+			return runCommand(runtime.runUpdate)
 		},
 	}
 }
@@ -274,6 +295,36 @@ func runCommand(run func() error) error {
 	}
 
 	return run()
+}
+
+// runUpdate re-runs the release installer into the running binary's directory,
+// so it replaces this rig instead of installing a second copy. The next rig run
+// replaces a daemon still on the old build.
+func runUpdate(stdout io.Writer, stderr io.Writer) error {
+	execPath, err := os.Executable()
+	if err != nil {
+		return err
+	}
+	execPath, err = filepath.EvalSymlinks(execPath)
+	if err != nil {
+		return err
+	}
+
+	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer cancel()
+
+	// Download the script before running it, so a failed download fails the
+	// update instead of piping nothing into sh.
+	cmd := exec.CommandContext(
+		ctx, "sh", "-c", `script="$(curl -fsSL "$1")" && printf '%s\n' "$script" | sh`, "sh", installScriptURL,
+	)
+	cmd.Env = append(os.Environ(), "BIN_DIR="+filepath.Dir(execPath))
+	cmd.Stdout = stdout
+	cmd.Stderr = stderr
+	if err := cmd.Run(); err != nil {
+		return fmt.Errorf("update rig: %w", err)
+	}
+	return nil
 }
 
 func runDaemonLifecycleCommand(
