@@ -8,6 +8,7 @@ import "time"
 func init() {
 	activityRefreshInterval = time.Millisecond
 	pullRequestRefreshInterval = time.Millisecond
+	taskListRefreshInterval = time.Millisecond
 	spinnerTickInterval = time.Millisecond
 	noticeDuration = time.Millisecond
 }

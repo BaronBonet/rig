@@ -38,6 +38,25 @@ func pullRequestRefreshTickCmd() tea.Cmd {
 	})
 }
 
+// taskListRefreshInterval paces the background reload of the task list, so
+// tasks another rig creates, renames or removes show here too. Status updates
+// already stream live; the list itself does not.
+var taskListRefreshInterval = 2 * time.Second
+
+func taskListRefreshTickCmd() tea.Cmd {
+	return tea.Tick(taskListRefreshInterval, func(time.Time) tea.Msg {
+		return taskListRefreshTickMsg{}
+	})
+}
+
+// refreshTasksCmd reloads the task list in the background.
+func refreshTasksCmd(ctx context.Context, frontend core.TaskFrontend) tea.Cmd {
+	return func() tea.Msg {
+		tasks, err := frontend.ListTasks(ctx)
+		return tasksLoadedMsg{tasks: tasks, err: err, background: true}
+	}
+}
+
 func loadTasksCmd(ctx context.Context, frontend core.TaskFrontend) tea.Cmd {
 	return func() tea.Msg {
 		tasks, err := frontend.ListTasks(ctx)

@@ -1418,6 +1418,46 @@ func TestModel_ErrorSurvivesBackgroundLoadsAndClearsOnNextKeyPress(t *testing.T)
 	require.NoError(t, got.err)
 }
 
+func TestModel_PeriodicReloadPicksUpTasksChangedElsewhere(t *testing.T) {
+	frontend := newFrontendHarness()
+	frontend.listTasks = []*core.Task{
+		{ID: "task-1", DisplayName: "first task", Provider: core.ProviderCodex},
+		{ID: "task-2", DisplayName: "second task", Provider: core.ProviderCodex},
+	}
+	m := newLoadedModel(frontend)
+	activity := []core.TaskActivityEvent{{Text: "edited main.go"}}
+	m.rows[0].activity = activity
+
+	// Another rig removes task-2 and creates task-3.
+	frontend.listTasks = []*core.Task{
+		frontend.listTasks[0],
+		{ID: "task-3", DisplayName: "third task", Provider: core.ProviderCodex},
+	}
+	_, cmd := m.Update(taskListRefreshTickMsg{})
+	msgs := runBatchCmd(t, cmd)
+	requireMsgType[taskListRefreshTickMsg](t, msgs)
+	loaded := requireMsgType[tasksLoadedMsg](t, msgs)
+	require.True(t, loaded.background)
+
+	next, cmd := m.Update(loaded)
+	got := asModel(t, next)
+	require.Equal(t, []string{"task-1", "task-3"}, []string{got.rows[0].task.ID, got.rows[1].task.ID})
+	require.Len(t, got.rows, 2)
+	require.Equal(t, activity, got.rows[0].activity)
+
+	// Only the new task's details are fetched; the known task's own
+	// refreshes keep it current.
+	runBatchCmd(t, cmd)
+	require.Equal(t, []string{"task-3"}, frontend.getTaskUsageCalls)
+	require.Equal(t, []string{"task-3"}, frontend.taskPullRequestsCalls)
+
+	// A failed periodic reload changes nothing and shows no error.
+	next, _ = got.Update(tasksLoadedMsg{err: errors.New("daemon restarting"), background: true})
+	failed := asModel(t, next)
+	require.NoError(t, failed.err)
+	require.Len(t, failed.rows, 2)
+}
+
 func TestModel_StatusEnrichmentFailuresDoNotCollapseListView(t *testing.T) {
 	frontend := newFrontendHarness()
 	frontend.listTasks = []*core.Task{
