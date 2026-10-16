@@ -290,6 +290,16 @@ func spinnerTickCmd() tea.Cmd {
 	})
 }
 
+// noticeDuration is how long a confirmation such as "copied to clipboard"
+// replaces the key bar before it clears.
+var noticeDuration = 1500 * time.Millisecond
+
+func clearNoticeCmd() tea.Cmd {
+	return tea.Tick(noticeDuration, func(time.Time) tea.Msg {
+		return clearNoticeMsg{}
+	})
+}
+
 func taskActivityCmd(ctx context.Context, frontend core.TaskFrontend, taskID string, limit int) tea.Cmd {
 	return func() tea.Msg {
 		activity, err := frontend.GetTaskActivity(ctx, taskID, limit)

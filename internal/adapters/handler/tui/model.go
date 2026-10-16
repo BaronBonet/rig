@@ -84,6 +84,8 @@ type model struct {
 	loading       bool
 	detailsHidden bool
 	setupOnly     bool
+	// notice is a short-lived confirmation shown in place of the key bar.
+	notice string
 
 	// spinnerFrame turns the spinner of working tasks and agents, while
 	// spinnerRunning keeps a single tick driving it.
@@ -344,6 +346,8 @@ type shimmerTickMsg struct{}
 
 type spinnerTickMsg struct{}
 
+type clearNoticeMsg struct{}
+
 type activityRefreshTickMsg struct{}
 
 type pullRequestRefreshTickMsg struct{}
@@ -542,6 +546,14 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		case "m":
 			if row := m.selectedRow(); row != nil && row.task != nil {
 				return m, openRepoSessionCmd(m.statusContext, m.frontend, row.task.RepoRoot)
+			}
+			return m, nil
+		case "c":
+			// OSC 52 copies through the terminal, so it works the same on
+			// macOS, Linux, tmux and SSH without a platform clipboard tool.
+			if row := m.selectedRow(); row != nil && row.task != nil && row.task.Prompt != "" {
+				m.notice = "copied to clipboard"
+				return m, tea.Batch(tea.SetClipboard(row.task.Prompt), clearNoticeCmd())
 			}
 			return m, nil
 		case "x":
@@ -797,6 +809,9 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 		}
 		return m, tea.Batch(cmds...)
+	case clearNoticeMsg:
+		m.notice = ""
+		return m, nil
 	case shimmerTickMsg:
 		if !m.opening {
 			return m, nil
