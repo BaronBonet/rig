@@ -281,6 +281,7 @@ Common TUI keys:
 | `ctrl+p` | Pick a GitHub pull request while creating a task |
 | `j` / `k` | Move between tasks and their agent sub-rows |
 | `enter` | Jump to the selected agent's pane: on a task row, the agent that most needs you, or the task's tmux session when no agent runs |
+| `c` | Copy the selected task's prompt to the clipboard (via OSC 52, so the terminal must support it; tmux needs `set-clipboard on`) |
 | `r` | Refresh task data |
 | `R` | Retry a failed task creation |
 | `x` | Clean up the selected task's tmux session and worktree, or on an agent sub-row, close only that agent's pane. It runs in the background: the row shows `⊖` until it finishes |

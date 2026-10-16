@@ -74,7 +74,7 @@ func TestModel_ViewRendersTaskMetadata(t *testing.T) {
 
 	view := stripANSI(got.View().Content)
 	require.Contains(t, view, "RIG dev")
-	require.Contains(t, view, "n new   m main   r refresh   space details   x clean   q quit")
+	require.Contains(t, view, "n new   m main   r refresh   c copy prompt   space details   x clean   q quit")
 	require.Contains(t, view, "first task")
 	require.Contains(t, view, "repo-a")
 	require.Contains(t, view, "codex")
@@ -510,6 +510,31 @@ func TestModel_RefreshPreservesTaskStatus(t *testing.T) {
 	require.True(t, ok)
 	require.Equal(t, &status, refreshed.rows[0].status)
 	require.Empty(t, frontend.subscribeTaskStatusCalls)
+}
+
+func TestModel_CopyKeyPutsSelectedTaskPromptOnClipboard(t *testing.T) {
+	m := model{rows: []taskRow{{task: &core.Task{ID: "task-1", Prompt: "fix the flaky test"}}}}
+
+	next, cmd := m.Update(tea.KeyPressMsg{Text: "c"})
+	got := asModel(t, next)
+	require.Equal(t, "copied to clipboard", got.notice)
+	require.Equal(t, "copied to clipboard", stripANSI(got.listKeybindText()))
+
+	msgs := runBatchCmd(t, cmd)
+	require.Len(t, msgs, 2)
+	require.Contains(t, msgs, tea.Msg(clearNoticeMsg{}))
+	for _, msg := range msgs {
+		if msg != tea.Msg(clearNoticeMsg{}) {
+			require.EqualValues(t, "fix the flaky test", msg)
+		}
+	}
+
+	next, _ = got.Update(clearNoticeMsg{})
+	require.Empty(t, asModel(t, next).notice)
+
+	empty := model{rows: []taskRow{{task: &core.Task{ID: "task-2"}}}}
+	_, cmd = empty.Update(tea.KeyPressMsg{Text: "c"})
+	require.Nil(t, cmd)
 }
 
 func TestModel_ReloadCancelsStatusSubscriptionForRemovedTask(t *testing.T) {
@@ -2486,7 +2511,7 @@ func TestModel_PRPickerEnterCreatesTaskFromSelectedPR(t *testing.T) {
 	require.Equal(t, modeBrowse, pending.mode)
 	require.NotNil(t, pending.selectedRow().creating)
 	view := stripANSI(pending.View().Content)
-	require.Contains(t, view, "n new   m main   r refresh   space details   x clean   q quit")
+	require.Contains(t, view, "n new   m main   r refresh   c copy prompt   space details   x clean   q quit")
 	require.Contains(t, view, "creating task")
 	require.NotContains(t, view, "suggesting name")
 	require.Less(t, strings.Index(view, "existing task"), strings.Index(view, "creating task"))
@@ -2556,7 +2581,7 @@ func TestModel_PRPickerCreateFailureReturnsToBrowseWithProgressAndError(t *testi
 	require.Len(t, got.rows, 1)
 
 	view = stripANSI(got.View().Content)
-	require.Contains(t, view, "n new   m main   r refresh   space details   x clean   q quit")
+	require.Contains(t, view, "n new   m main   r refresh   c copy prompt   space details   x clean   q quit")
 	require.NotContains(t, view, "creating worktree")
 	require.Contains(t, view, "create failed")
 }

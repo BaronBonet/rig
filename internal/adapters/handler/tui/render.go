@@ -957,6 +957,9 @@ func (m model) renderTextBox(input textarea.Model) string {
 }
 
 func (m model) listKeybindText() string {
+	if m.notice != "" {
+		return healthyStyle.Render(m.notice)
+	}
 	binds := [][2]string{{"n", "new"}, {"m", "main"}, {"r", "refresh"}}
 	if row := m.selectedRow(); row != nil && row.task != nil && row.creating == nil &&
 		row.task.CreationStatus == core.TaskCreationStatusFailed {
@@ -967,7 +970,8 @@ func (m model) listKeybindText() string {
 	if m.selectedAgentSession() != nil {
 		cleanup = "remove"
 	}
-	binds = append(binds, [2]string{"space", "details"}, [2]string{"x", cleanup}, [2]string{"q", "quit"})
+	binds = append(binds,
+		[2]string{"c", "copy prompt"}, [2]string{"space", "details"}, [2]string{"x", cleanup}, [2]string{"q", "quit"})
 
 	return keybindBar("   ", binds...)
 }

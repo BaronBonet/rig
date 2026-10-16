@@ -9,4 +9,5 @@ func init() {
 	activityRefreshInterval = time.Millisecond
 	pullRequestRefreshInterval = time.Millisecond
 	spinnerTickInterval = time.Millisecond
+	noticeDuration = time.Millisecond
 }
