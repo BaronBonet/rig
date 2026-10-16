@@ -199,10 +199,9 @@ when hook events were lost, for example while the daemon was restarting.
 
 Rig tracks every Claude or Codex agent running in a task's tmux panes, and each
 agent has its own status. The task shows its most urgent agent: one that needs
-input, then one working, then one working in the background, then one
-starting. When several agents share the most urgent status, the one that
-changed most recently leads. An agent that exits, or whose pane or window
-closes, stops counting; a task with no running agent shows `stopped`. When
+input, then one working, then one starting. When several agents share the most
+urgent status, the one that changed most recently leads. An agent that exits,
+or whose pane or window closes, stops counting; a task with no running agent shows `stopped`. When
 Claude, or a Codex started with `--no-daemon` as Rig starts it, exits
 cleanly, its `SessionEnd` hook tells Rig at once. Rig notices a killed or
 crashed agent, a closed pane, or the exit of a Codex on its shared background
@@ -232,13 +231,14 @@ task still shows `needs input` after you submit a prompt, Rig has not yet
 received the next provider hook, such as `UserPromptSubmit`, `PreToolUse`, or
 `PostToolUse`, that marks the agent as working.
 
-When a Claude task ends its turn while background work it started is still
-running (subagents, background shells, Monitor watches, workflows), Rig shows
-the task as working in the background, for example `1 subagent working`,
-instead of `needs input`. Claude wakes the task when that work finishes, and
-the next turn end updates the status. Monitor watches appear as shells, and a
-backgrounded long-running process such as a dev server keeps the task working
-until it exits.
+A turn end is always your move, even when the turn started background work
+that is still running (subagents, background shells, Monitor watches,
+workflows): you can reply while it runs. Rig shows such a task as `needs
+input` with an amber `◐` in place of `◆`, and the detail panel says what is
+running, for example `running 1 subagent`. Claude wakes the task when that
+work finishes, and the next turn end updates the status. Monitor watches
+appear as shells, and a backgrounded long-running process such as a dev server
+keeps its `◐` until it exits.
 
 When a Claude turn ends on an API error, such as a rate limit, an overloaded
 or failed request, or an authentication problem, Claude fires `StopFailure`
@@ -250,10 +250,10 @@ watching the task, Rig reads the interruption from the Claude transcript and
 shows the task as `needs input`.
 
 When a Codex task ends its turn while subagents it spawned are still running,
-Rig shows the task as working in the background in the same way, for example
-`2 subagents working`, while the TUI is watching it. Unlike Claude, Codex does
-not wake the task when its subagents finish: their results wait for your next
-prompt, so the task returns to `needs input` once the last subagent finishes.
+Rig shows them in the same way, for example `running 2 subagents`, while the
+TUI is watching it. Unlike Claude, Codex does not wake the task when its
+subagents finish: their results wait for your next prompt, so the `◐` turns
+back into `◆` once the last subagent finishes.
 
 Use `rig doctor` to verify that your configured providers are available and
 that Rig's hook forwarding is installed correctly.
@@ -290,6 +290,44 @@ Common TUI keys:
 | `R` | Retry a failed task creation |
 | `x` | Clean up the selected task's tmux session and worktree, or on an agent sub-row, close only that agent's pane. It runs in the background: the row shows `⊖` until it finishes |
 | `q` | Quit |
+
+### Reading the task list
+
+Each task is one row, led by its status symbol:
+
+```text
+◆ Fix login redirect                ✓●#127+  claude   45%  ↻2   7h 05m
+```
+
+From left to right, a row shows:
+
+- the task's status;
+- its name, with `↳` in front when the task was created from another task;
+- its pull requests;
+- muted, on the right: the provider, how full the agent's context window is, how many times it has compacted, and how long ago the task was created.
+
+A task with several agents shows an indented sub-row for each agent. Each sub-row has its own status symbol, provider, context and compactions. Rows that need you are highlighted. The detail panel under the list describes the selected row in words.
+
+| Status | Meaning |
+|--------|---------|
+| `◆` amber | Needs input: the agent ended its turn, or asks for your approval or an answer |
+| `◐` amber | Needs input, while background work the turn started is still running; the detail panel says what, for example `running 1 subagent` |
+| green spinner | Working |
+| `◌` amber | Starting |
+| `○` | Stopped: no agent is running |
+| `·` | No status: no agent has run yet |
+| muted spinner | Being created in the background |
+| `×` red | Creation failed; `R` retries it |
+| `⊖` | Being cleaned up |
+
+| Pull requests | Meaning |
+|---------------|---------|
+| `●#127` | Open (green) |
+| `◐#127` | Draft (amber) |
+| `✓#127` | Merged (purple) |
+| `×#127` | Closed (red) |
+| `✓✓●#127` | Earlier pull requests come before the current one as symbols; only the current one carries its number. `…` in front means older ones are left out |
+| `+` after the number | The branch has work that no pull request contains yet |
 
 Check environment health:
 

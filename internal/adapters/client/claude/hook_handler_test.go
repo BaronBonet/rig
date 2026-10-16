@@ -312,7 +312,7 @@ func TestHookEventToTaskStatus_MapsClaudeEventsToPhases(t *testing.T) {
 	}
 }
 
-func TestHookEventToTaskStatus_StopWithBackgroundWorkReportsWorkingInBackground(t *testing.T) {
+func TestHookEventToTaskStatus_StopWithBackgroundWorkNeedsInputAndCountsTheWork(t *testing.T) {
 	repo := &repository{binary: "claude"}
 	work := core.TaskBackgroundWork{Subagents: 1, Shells: 1}
 
@@ -325,7 +325,7 @@ func TestHookEventToTaskStatus_StopWithBackgroundWorkReportsWorkingInBackground(
 
 	require.NoError(t, err)
 	require.NotNil(t, update)
-	require.Equal(t, core.TaskStatusPhaseWorkingInBackground, update.Phase)
+	require.Equal(t, core.TaskStatusPhaseWaitingForInput, update.Phase)
 	require.Equal(t, work, update.BackgroundWork)
 	require.Equal(t, "Stop", update.RawEventName)
 }

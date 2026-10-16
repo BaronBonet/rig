@@ -115,9 +115,10 @@ func agentSessionStatusUpdate(session core.LiveAgentSession) *core.TaskStatusUpd
 		phase = core.TaskStatusPhaseStarting
 	}
 	return &core.TaskStatusUpdate{
-		ObservedAt: session.Status.ObservedAt,
-		Provider:   session.Provider,
-		Phase:      phase,
+		ObservedAt:     session.Status.ObservedAt,
+		Provider:       session.Provider,
+		Phase:          phase,
+		BackgroundWork: session.Status.BackgroundWork,
 	}
 }
 

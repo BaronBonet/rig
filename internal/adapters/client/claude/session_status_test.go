@@ -174,7 +174,6 @@ func TestRecoverAgentSessionStatus_RepairsOnlyInProgressStatus(t *testing.T) {
 	for _, phase := range []core.TaskStatusPhase{
 		core.TaskStatusPhaseStarting,
 		core.TaskStatusPhaseWorking,
-		core.TaskStatusPhaseWorkingInBackground,
 	} {
 		recovered, err := repo.RecoverAgentSessionStatus(
 			t.Context(), agentStatus(phase, fixturePreToolUseAt), sessions, time.Time{},

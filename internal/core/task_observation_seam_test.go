@@ -270,7 +270,7 @@ func TestRollUpTaskStatus_DecisionTable(t *testing.T) {
 			LeadAgentSessionID: lead,
 		}
 	}
-	background := agent("agent-bg", ProviderCodex, TaskStatusPhaseWorkingInBackground, 9)
+	background := agent("agent-bg", ProviderCodex, TaskStatusPhaseWaitingForInput, 9)
 	background.Status.BackgroundWork = TaskBackgroundWork{Subagents: 2}
 	starting := agent("agent-new", ProviderClaude, "", 0)
 	starting.StartedAt = at(8)
@@ -301,21 +301,17 @@ func TestRollUpTaskStatus_DecisionTable(t *testing.T) {
 			want: update("agent-b", ProviderCodex, TaskStatusPhaseWaitingForInput, "waiting_for_input-event", 1),
 		},
 		{
-			name: "working outranks working in background",
+			name: "needs input with background work outranks working and carries the work",
 			live: []AgentSession{
+				agent("agent-a", ProviderClaude, TaskStatusPhaseWorking, 10),
 				background,
-				agent("agent-a", ProviderClaude, TaskStatusPhaseWorking, 2),
+				starting,
 			},
-			want: update("agent-a", ProviderClaude, TaskStatusPhaseWorking, "working-event", 2),
-		},
-		{
-			name: "working in background outranks starting",
-			live: []AgentSession{starting, background},
 			want: &TaskStatusUpdate{
 				TaskID:             "task-1",
 				Provider:           ProviderCodex,
-				Phase:              TaskStatusPhaseWorkingInBackground,
-				RawEventName:       "working_in_background-event",
+				Phase:              TaskStatusPhaseWaitingForInput,
+				RawEventName:       "waiting_for_input-event",
 				ObservedAt:         at(9),
 				BackgroundWork:     TaskBackgroundWork{Subagents: 2},
 				LeadAgentSessionID: "agent-bg",

@@ -59,9 +59,8 @@ const (
 // tools (Read, Edit, Grep, ...), and every tool event must drive the task's
 // working status.
 //
-// Stop drives needs-input unless its payload reports background work still in
-// flight; HookEventToTaskStatus then reports the task as working in the
-// background instead.
+// Stop drives needs-input, also while its payload reports background work
+// still in flight; HookEventToTaskStatus then counts that work on the status.
 //
 // StopFailure replaces Stop when the turn ends on an API error, such as a rate
 // limit, an overloaded or failed request, or an authentication problem. It is

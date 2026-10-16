@@ -824,10 +824,13 @@ func TestRenderRow_StartsWithASymbolForEachStatus(t *testing.T) {
 		{"no status", nil, iconStatusNone, "no status"},
 		{"starting", &core.TaskStatusUpdate{Phase: core.TaskStatusPhaseStarting}, iconStatusStarting, "starting"},
 		{
-			"background",
-			&core.TaskStatusUpdate{Phase: core.TaskStatusPhaseWorkingInBackground},
+			"needs input while background work runs",
+			&core.TaskStatusUpdate{
+				Phase:          core.TaskStatusPhaseWaitingForInput,
+				BackgroundWork: core.TaskBackgroundWork{Subagents: 1},
+			},
 			iconStatusProgress,
-			"background",
+			"subagent",
 		},
 		{
 			"needs input",

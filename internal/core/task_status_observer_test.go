@@ -368,7 +368,7 @@ func TestTaskStatusObserver_AHookKeepsAnotherAgentsRecoveredStatus(t *testing.T)
 		side.ProviderSessionID: {
 			ObservedAt:     observedTaskObservedAt.Add(time.Minute),
 			RawEventName:   "TranscriptSubagentsRunning",
-			Phase:          TaskStatusPhaseWorkingInBackground,
+			Phase:          TaskStatusPhaseWaitingForInput,
 			BackgroundWork: TaskBackgroundWork{Subagents: 2},
 		},
 	}
@@ -377,15 +377,21 @@ func TestTaskStatusObserver_AHookKeepsAnotherAgentsRecoveredStatus(t *testing.T)
 	defer cancel()
 	stream, err := svc.service.SubscribeTaskStatus(ctx, "task-1")
 	require.NoError(t, err)
-	require.Equal(t, TaskStatusPhaseWorking, receiveTaskStatus(t, stream).Phase)
+	first := receiveTaskStatus(t, stream)
+	require.Equal(t, TaskStatusPhaseWaitingForInput, first.Phase)
+	require.Equal(t, TaskBackgroundWork{Subagents: 2}, first.BackgroundWork)
 
-	// A hook from the first agent publishes at once; the side agent stays
-	// working in the background rather than falling back to needs input.
+	// A hook from the first agent publishes at once; the side agent keeps
+	// its running subagents rather than falling back to its persisted status.
 	hookAt := observedTaskObservedAt.Add(2 * time.Minute)
 	svc.observedTaskHook(t, "task-1", HookEventPostToolUse, TaskStatusPhaseWorking, hookAt)
 	update := receiveTaskStatus(t, stream)
-	require.Equal(t, TaskStatusPhaseWorking, update.Phase)
-	require.Equal(t, hookAt, update.ObservedAt)
+	require.Equal(t, taskLevelStatus(first), taskLevelStatus(update))
+	observedAt := make([]time.Time, 0, len(update.AgentSessions))
+	for _, session := range update.AgentSessions {
+		observedAt = append(observedAt, session.Status.ObservedAt)
+	}
+	require.Contains(t, observedAt, hookAt)
 }
 
 // A cycle recovered that the agent needs input, as after Claude's Esc

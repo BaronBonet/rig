@@ -889,7 +889,7 @@ func TestAgentSessionStatus_ASideAgentsStatusRepublishesWhileTheTaskStatusStays(
 	svc.agentPanes("claude", "claude")
 	svc.handleAgentHook(t, agentHook(ProviderClaude, HookEventUserPromptSubmit, "sess-side", 102, "%2", 0),
 		TaskStatusPhaseWorking)
-	svc.handleAgentHook(t, agentHook(ProviderClaude, HookEventStop, "sess-main", 101, "%1", 1),
+	svc.handleAgentHook(t, agentHook(ProviderClaude, HookEventStop, "sess-main", 101, "%1", 3),
 		TaskStatusPhaseWaitingForInput)
 	ctx, cancel := context.WithCancel(t.Context())
 	defer cancel()
@@ -897,10 +897,11 @@ func TestAgentSessionStatus_ASideAgentsStatusRepublishesWhileTheTaskStatusStays(
 	require.NoError(t, err)
 	first := receiveTaskStatus(t, stream)
 
-	// The side agent ends its turn with background work running: only its
-	// own entry changes, and its prompt stays the same.
+	// The side agent ends its turn with background work running, before the
+	// main agent's turn end, which stays the task's: only its own entry
+	// changes, and its prompt stays the same.
 	svc.claudeRepo.hookUpdate = &TaskStatusUpdate{
-		Phase:          TaskStatusPhaseWorkingInBackground,
+		Phase:          TaskStatusPhaseWaitingForInput,
 		RawEventName:   HookEventStop,
 		BackgroundWork: TaskBackgroundWork{Subagents: 1},
 	}
@@ -909,7 +910,7 @@ func TestAgentSessionStatus_ASideAgentsStatusRepublishesWhileTheTaskStatusStays(
 
 	update := receiveTaskStatus(t, stream)
 	require.Equal(t, taskLevelStatus(first), taskLevelStatus(update))
-	require.Equal(t, TaskStatusPhaseWorkingInBackground, update.AgentSessions[0].Status.Phase)
+	require.Equal(t, TaskStatusPhaseWaitingForInput, update.AgentSessions[0].Status.Phase)
 	require.Equal(t, TaskBackgroundWork{Subagents: 1}, update.AgentSessions[0].Status.BackgroundWork)
 }
 
