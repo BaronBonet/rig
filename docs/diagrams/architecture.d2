@@ -23,6 +23,16 @@ tui: {
   }
 }
 
+cli: {
+  label: "CLI"
+  sublabel: "rig task, rig repo\nfor scripts and agents"
+  style: {
+    fill: "#3b4261"
+    stroke: "#8caaee"
+    font-color: white
+  }
+}
+
 daemon: {
   label: "Background task daemon"
   direction: down
@@ -44,7 +54,7 @@ daemon: {
 
   hooks: {
     label: "HTTP hook server"
-    sublabel: "local Codex\nhook events"
+    sublabel: "provider\nhook events"
     style: {
       fill: "#485e30"
       stroke: "#a6d189"
@@ -66,7 +76,7 @@ sqlite: {
 
 tmux: {
   label: "Tmux session"
-  sublabel: "task window in an\nisolated worktree"
+  sublabel: "editor and task windows\nin the task's worktree"
   style: {
     fill: "#233f45"
     stroke: "#81c8be"
@@ -74,10 +84,11 @@ tmux: {
   }
 }
 
-codex: {
-  label: "Codex CLI"
-  sublabel: "interactive\nprovider process"
+agent: {
+  label: "Agents"
+  sublabel: "Claude Code or Codex,\none per tmux pane"
   style: {
+    multiple: true
     fill: "#4a2f45"
     stroke: "#f4b8e4"
     font-color: white
@@ -93,6 +104,14 @@ tui -> daemon.socket: "create/list tasks\nsubscribe to status" {
 }
 
 daemon.socket -> tui: "task data and\nlive updates" {
+  style: {
+    stroke: "#8caaee"
+    stroke-width: 3
+    animated: true
+  }
+}
+
+cli -> daemon.socket: "create, list,\nshow tasks" {
   style: {
     stroke: "#8caaee"
     stroke-width: 3
@@ -116,7 +135,7 @@ daemon -> tmux: "create or reconnect\ntask session" {
   }
 }
 
-tmux -> codex: "launch codex or\ncodex resume" {
+tmux -> agent: "start or resume\nagents" {
   style: {
     stroke: "#f4b8e4"
     stroke-width: 3
@@ -124,7 +143,7 @@ tmux -> codex: "launch codex or\ncodex resume" {
   }
 }
 
-codex -> daemon.hooks: "post hooks" {
+agent -> daemon.hooks: "post hooks" {
   style: {
     stroke: "#f4b8e4"
     stroke-width: 3
