@@ -18,7 +18,7 @@ daemon owns task creation, local state, provider hooks, and live update streams.
 | **Unix socket server** | The local control channel between the daemon and the TUI or CLI. It carries commands such as creating tasks and streams live task updates back to the TUI. |
 | **HTTP hook server** | A loopback-only endpoint used by provider hooks to report session, prompt, tool, and stop events back to Rig. Routes exist for every supported provider. |
 | **SQLite** | The local task database. It stores task records, agent sessions with their latest status and the conversation Reconnect resumes, activity snippets, and token usage. |
-| **Provider CLI** | The provider (Codex or Claude Code) Rig starts for each task. It runs in an isolated task workspace and sends hook events back to the daemon. |
+| **Agents** | The Claude Code or Codex processes running in a task's tmux panes, in its isolated worktree. Rig starts the first one with the task's provider; you can add more in other panes. Each sends hook events back to the daemon. |
 
 When you launch `rig`, the foreground process ensures the task daemon is running
 and then opens the TUI. The TUI talks to the daemon over a local Unix socket
