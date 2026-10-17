@@ -1,28 +1,50 @@
 # Rig
 
-Rig runs your Codex and Claude Code agents side by side, each task in its own
-git worktree, branch and tmux session, and shows in one terminal list which of
-them needs you.
+Run agent tasks from tmux without giving up your terminal.
+
+Rig is for people who already have a terminal setup they like: tmux, a terminal
+editor, and a terminal such as Ghostty. Agent tools tend to replace that with
+their own terminal app, sidebar or IDE. Rig adds what's missing and leaves the
+rest alone. It runs each task's whole life, from the worktree, branch and tmux
+session it starts in to the pull requests it ends in, and its task list is a
+popup you open when you want it. It works with Claude Code and Codex, on macOS
+and Linux, locally or over SSH.
 
 ![Rig task list](docs/diagrams/rig-example.png)
 
-## What it's for
+## The life of a task
 
-- **Parallel work without collisions.** Start several tasks at once. Each gets
-  its own worktree and branch, so agents never step on each other or on your
-  main checkout.
-- **Knowing who needs you.** Every task, and every agent in it, shows whether
-  it is working, waiting on you, or stopped, beside its pull requests and how
-  full its context window is. `enter` jumps to the agent that most needs you.
-- **Starting from wherever the work is.** Describe the task, name an issue
-  ("work on #18" names the task `GH #18 …`), or pick an open pull request to
-  review or continue.
-- **Handing work to another repo.** Ask an agent to start a task in another
-  repository and it creates one, linked back to the task it came from.
-- **Picking up where you left off.** If tmux dies or you reboot, reconnecting
-  brings back every agent, each resuming its own conversation.
+1. **Start** from a prompt, an issue ("work on #18" names the task `GH #18 …`)
+   or an open pull request.
+2. **Set up.** Rig creates the task's branch, worktree and tmux session, copies
+   in the git-ignored files you list, such as `.env`, and runs your setup
+   script.
+3. **Work in parallel.** Each task has its own worktree, so agents never step on
+   each other or on your main checkout. To add an agent to a task, split a pane
+   and run `claude` or `codex`.
+4. **See who needs you.** Every task, and every agent in it, shows whether it is
+   working, waiting on you, or stopped, and how full its context window is.
+5. **Follow its pull requests** as they open, merge or close.
+6. **Hand work to another repo.** An agent can start a task in another
+   repository, linked back to the task it came from.
+7. **Pick up where you left off.** If tmux dies or you reboot, reconnecting
+   brings back every agent, each resuming its own conversation.
+8. **Clean up.** `x` removes the task's tmux session and worktree. Its branch
+   stays.
 
-Rig is built for people who already live in tmux and a keyboard-driven editor.
+## What Rig leaves alone
+
+- **Your terminal.** Ghostty, kitty, Alacritty or iTerm: Rig runs in any of
+  them, and over SSH.
+- **Your tmux and your screen.** Rig doesn't change your tmux config and adds no
+  sidebar or status bar.
+- **Your agents.** They run as plain `claude` and `codex`, with their own
+  interface and flags.
+- **Your `~/.claude/settings.json`.** Rig registers its Claude Code hooks in
+  each task's worktree instead.
+
+If you don't use tmux, or want agent status on screen all the time, a tool such
+as [cmux](https://cmux.com) or [herdr](https://herdr.dev/) will suit you better.
 
 ## Install
 
@@ -86,6 +108,12 @@ Shortcut MCP server), so only give it tools you trust with your tickets.
 To add another agent to a task, split a pane in its tmux session and run
 `claude` or `codex` there. Rig shows it as a sub-row of the task once you send
 it a prompt.
+
+To open Rig as a popup over whatever you're doing, bind it in `~/.tmux.conf`:
+
+```tmux
+bind R display-popup -E -w 80% -h 70% rig
+```
 
 | Key | Action |
 |-----|--------|
