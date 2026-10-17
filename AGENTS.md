@@ -1,12 +1,12 @@
 # AGENTS.md
 
-This file is mirrored in `CLAUDE.md`. Keep both files in sync.
-
 This file provides guidance to coding agents working with code in this repository.
 
 ## Project
 
 **rig** is a local terminal CLI tool (Go) that creates isolated development environments for AI-assisted coding tasks. It manages git worktrees, tmux sessions, Codex integration, and a task daemon to run parallel coding tasks with observability.
+
+How Rig behaves (hooks, status semantics, the `rig task`/`rig repo` CLI, the Rig skill, architecture) is in `docs/how-it-works.md`; the README covers only what Rig is for and how to set it up. Put new behavior detail there, not in the README.
 
 ## Commands
 
@@ -34,15 +34,15 @@ go test -run TestNewService_CreateTask ./internal/core
 
 ### Issue tracker
 
-Issues and PRDs are tracked in GitHub Issues for `BaronBonet/rig`. See `docs/agents/issue-tracker.md`.
+Issues and PRDs are tracked in GitHub Issues for `BaronBonet/rig`.
 
 ### Triage labels
 
-Triage labels use the default mattpocock/skills vocabulary. See `docs/agents/triage-labels.md`.
+Triage labels use the default mattpocock/skills vocabulary.
 
 ### Domain docs
 
-This repo uses a single-context domain docs layout. See `docs/agents/domain.md`.
+This repo uses a single-context domain docs layout: the glossary and relationships are in `CONTEXT.md`.
 
 ## Architecture
 
