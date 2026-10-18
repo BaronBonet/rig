@@ -409,10 +409,13 @@ func runTUI(stdout io.Writer) error {
 	if stdout == nil {
 		stdout = os.Stdout
 	}
+	// A tmux display-popup sets TMUX but runs its command outside any pane.
+	inPopup := os.Getenv("TMUX") != "" && os.Getenv("TMUX_PANE") == ""
 	program := tui.NewProgram(
 		frontend,
 		sourceRoot,
 		displayVersion,
+		inPopup,
 		tea.WithInput(os.Stdin),
 		tea.WithOutput(stdout),
 	)

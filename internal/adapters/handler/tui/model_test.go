@@ -1670,6 +1670,23 @@ func TestModel_EnterJumpsToTheLeadAgentsPane(t *testing.T) {
 	require.Equal(t, []*core.TmuxPaneRef{&leadAgentPane}, frontend.attachedPanes)
 }
 
+// Enter and m both report their jump with a taskOpenedMsg.
+func TestModel_AJumpQuitsOnlyInATmuxPopup(t *testing.T) {
+	m := newLoadedModel(newFrontendHarness())
+
+	_, cmd := m.Update(taskOpenedMsg{})
+	require.Nil(t, cmd, "in a normal pane rig keeps running")
+
+	m.inPopup = true
+	_, cmd = m.Update(taskOpenedMsg{err: errors.New("no session")})
+	require.Nil(t, cmd, "a failed jump keeps the popup open to show the error")
+	require.NoError(t, m.statusContext.Err())
+
+	_, cmd = m.Update(taskOpenedMsg{})
+	require.Equal(t, tea.Quit(), runCmd(t, cmd))
+	require.Error(t, m.statusContext.Err())
+}
+
 func TestModel_EnterAttachesToTheSessionWithoutALiveAgent(t *testing.T) {
 	frontend := newFrontendHarness()
 	frontend.listTasks = []*core.Task{
