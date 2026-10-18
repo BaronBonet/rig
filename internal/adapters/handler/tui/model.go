@@ -84,6 +84,9 @@ type model struct {
 	loading       bool
 	detailsHidden bool
 	setupOnly     bool
+	// inPopup is set when rig runs in a tmux display-popup, which a jump
+	// closes so it doesn't cover the session it jumped to.
+	inPopup bool
 	// notice is a short-lived confirmation shown in place of the key bar.
 	notice string
 
@@ -783,6 +786,9 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 		m.err = nil
+		if m.inPopup {
+			return m.quit()
+		}
 		return m, nil
 	case taskDeletedMsg:
 		// The user may have moved on since confirming, so the reply leaves
