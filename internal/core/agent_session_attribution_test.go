@@ -790,6 +790,23 @@ func TestAgentSessions_ALateDaemonSessionEndLeavesALostCodexAgentSessionToReconn
 	require.Equal(t, []string{"codex", "resume", "codex-a"}, svc.sessionClient.startedLaunch.Command)
 }
 
+// Killing a task's Session hangs up its agents, and Claude still runs its
+// SessionEnd from the pane as it exits.
+func TestAgentSessions_AKilledSessionLeavesItsClaudeAgentSessionToReconnect(t *testing.T) {
+	svc := newAgentSessionHarness(t)
+	svc.agentPanes("claude")
+	svc.handleAgentHook(t, agentHook(ProviderClaude, HookEventPostToolUse, "sess-a", 101, "%1", 0),
+		TaskStatusPhaseWorking)
+	svc.loseSession()
+
+	svc.handleAgentHook(t, sessionEndHook(ProviderClaude, "sess-a", 101, "%1", 1, "other"), "")
+
+	require.True(t, svc.agentSessionsWithoutIDs()[0].IsOpen())
+	svc.observation.now = func() time.Time { return reconnectedAt }
+	require.NoError(t, svc.service.ReconnectTaskSession(t.Context(), "task-1"))
+	require.Equal(t, []string{"claude", "resume", "sess-a"}, svc.sessionClient.startedLaunch.Command)
+}
+
 func TestAgentSessions_APanelessSessionEndLeavesTheAgentSessionOpenWhileTmuxCannotSay(t *testing.T) {
 	svc := newAgentSessionHarness(t)
 	svc.daemonCodexPanes("%9")
