@@ -112,9 +112,9 @@ func (o *taskObservation) recordAgentSession(
 type hookEventSource struct {
 	trace    paneTrace
 	snapshot *TmuxSnapshot
-	// sessionLost reports, for a Codex SessionEnd traced to no pane, that the
-	// task's Session is gone, or that tmux could not say: its agent sessions
-	// are lost and stay open for Reconnect.
+	// sessionLost reports, for a SessionEnd, that the task's Session is gone,
+	// or that tmux could not say: its agent sessions are lost and stay open
+	// for Reconnect, as a killed Session's agents still run their SessionEnd.
 	sessionLost bool
 }
 
@@ -138,17 +138,13 @@ func (o *taskObservation) traceHookEvent(
 	if err != nil || trace.failed() || trace.nested {
 		return hookEventSource{}, false
 	}
-	if trace.pane != "" {
-		return hookEventSource{trace: trace}, true
-	}
 	// A SessionEnd only ends an agent session it is already bound to, so it
 	// never needs the fallback's snapshot.
 	if strings.TrimSpace(input.EventName) == HookEventSessionEnd {
-		source := hookEventSource{trace: trace}
-		if input.Provider == ProviderCodex {
-			source.sessionLost = o.taskSessionLost(ctx, task)
-		}
-		return source, true
+		return hookEventSource{trace: trace, sessionLost: o.taskSessionLost(ctx, task)}, true
+	}
+	if trace.pane != "" {
+		return hookEventSource{trace: trace}, true
 	}
 	// Claude runs hooks inside the agent's process, so a Claude hook that ran
 	// in no pane came from outside tmux. Only a Codex agent using the shared
@@ -344,8 +340,9 @@ func resolveSessionEnd(
 // pane is not its own: the shared daemon may still hold a conversation that a
 // Codex without the daemon resumed. Nor does it end an agent session without
 // a pane, or one whose task's Session is gone: the daemon ends a conversation
-// it holds up to 30 minutes after its agent was lost with the Session, and
-// Reconnect could then no longer restore it. Callers hold agentSessionMu.
+// it holds up to 30 minutes after its agent was lost with the Session, a
+// killed Session's agents end theirs as they exit, and Reconnect could then no
+// longer restore them. Callers hold agentSessionMu.
 func (o *taskObservation) recordSessionEnd(
 	ctx context.Context,
 	task *Task,
@@ -353,6 +350,9 @@ func (o *taskObservation) recordSessionEnd(
 	source hookEventSource,
 	changes agentSessionChanges,
 ) error {
+	if source.sessionLost {
+		return nil
+	}
 	trace := source.trace
 	var session *AgentSession
 	switch {
@@ -364,7 +364,7 @@ func (o *taskObservation) recordSessionEnd(
 		if existing != nil && existing.TaskID == task.ID && existing.Provider == input.Provider {
 			session = existing
 		}
-	case input.Provider == ProviderCodex && !source.sessionLost:
+	case input.Provider == ProviderCodex:
 		sessions, err := o.tasks.ListOpenAgentSessions(ctx, task.ID)
 		if err != nil {
 			return fmt.Errorf("list open agent sessions: %w", err)
