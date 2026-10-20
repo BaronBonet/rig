@@ -75,18 +75,25 @@ func TestModel_ChildTaskRowCarriesTheLinkMarker(t *testing.T) {
 	m := linkedTasksModel()
 	m.detailsHidden = true
 
-	// A child task's link marker sits between its status symbol and its name,
-	// in a cross-repo child as in one in its parent's repo.
-	frontendRow := rowContent(viewLineContaining(t, m, frontendTaskName))
-	require.True(t, strings.HasPrefix(frontendRow, iconStatusNone+" "+iconChildTask+" "+frontendTaskName), frontendRow)
+	// A child task's link marker sits between its status symbol and its name.
+	// A child in another repo than its parent's, which the list cannot nest
+	// under it, carries a marker of its own.
 	docsRow := rowContent(viewLineContaining(t, m, docsTaskName))
 	require.True(t, strings.HasPrefix(docsRow, iconFailed+" "+iconChildTask+" "+docsTaskName), docsRow)
+	frontendRow := rowContent(viewLineContaining(t, m, frontendTaskName))
+	require.True(
+		t,
+		strings.HasPrefix(frontendRow, iconStatusNone+" "+iconCrossRepoChildTask+" "+frontendTaskName),
+		frontendRow,
+	)
+	require.NotContains(t, frontendRow, iconChildTask)
 
 	// The parent, an unlinked task and a task whose parent is gone carry none.
 	for _, name := range []string{backendTaskName, "Unrelated cleanup", "Orphaned follow-up"} {
 		row := rowContent(viewLineContaining(t, m, name))
 		require.True(t, strings.HasPrefix(row, iconStatusNone+" "+name), row)
 		require.NotContains(t, row, iconChildTask)
+		require.NotContains(t, row, iconCrossRepoChildTask)
 	}
 
 	// The marker is muted rather than the color of the child's status. The
@@ -222,9 +229,17 @@ func TestModel_AgentSubRowsRenderUnchangedUnderAChildTask(t *testing.T) {
 func TestModel_DetailViewNamesAChildsParentTask(t *testing.T) {
 	m := linkedTasksModel()
 
-	for _, id := range []string{"frontend-ui", "backend-docs"} {
-		require.Equal(t, []string{"from   " + backendTaskName}, detailSection(selectTask(t, m, id), "LINKED TASKS"), id)
-	}
+	require.Equal(
+		t,
+		[]string{"from   " + backendTaskName},
+		detailSection(selectTask(t, m, "backend-docs"), "LINKED TASKS"),
+	)
+
+	// A child from another repo also names its parent's repo.
+	require.Equal(t, []string{
+		"from   " + backendTaskName,
+		detailValueIndent + "in backend",
+	}, detailSection(selectTask(t, m, "frontend-ui"), "LINKED TASKS"))
 
 	// A task whose parent is gone, or that has none, has no linked tasks.
 	for _, id := range []string{"orphan", "unlinked"} {

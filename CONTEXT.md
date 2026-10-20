@@ -18,8 +18,9 @@ Use `rig` for the CLI command and Rig for the product or system.
   TUI or the CLI.
 - Parent task: The Task another Task was created from: the one whose worktree
   contained the working directory of the `rig task create` that created it.
-- Child task: A Task with a Parent task. The TUI marks its row with `↳`, and
-  its parent's detail panel lists it as spawned.
+- Child task: A Task with a Parent task. The TUI marks its row with `↳`, or
+  `↪` when its Parent task is in another repository, and its parent's detail
+  panel lists it as spawned.
 - Task draft: The in-progress task the TUI user is assembling before
   submission: the prompt text, the chosen provider and a Launch choice for
   it, and the optional pull request source. The Launch choice starts from

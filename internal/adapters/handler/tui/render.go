@@ -445,8 +445,8 @@ func (m model) renderRow(index int, row taskRow, layout taskRowLayout) string {
 	}
 
 	link := ""
-	if m.parentTask(row.task) != nil {
-		link = markerStyle.Render(iconChildTask)
+	if icon := m.linkMarker(row.task); icon != "" {
+		link = markerStyle.Render(icon)
 	}
 
 	marker := pullRequestsMarker{

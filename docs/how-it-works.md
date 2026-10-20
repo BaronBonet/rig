@@ -45,9 +45,10 @@ Each task is one row, led by its status symbol:
 ◆ Fix login redirect                ✓●#127+  claude   45%  ↻2   7h 05m
 ```
 
-After the status come the task's name (with `↳` when another task created it),
-its pull requests, and then, muted: the provider, how full the context window
-is, how many times it has compacted, and the task's age. A task with several
+After the status come the task's name (with `↳` when another task created it,
+or `↪` when that task is in another repository), its pull requests, and then,
+muted: the provider, how full the context window is, how many times it has
+compacted, and the task's age. A task with several
 agents gets a sub-row per agent. A row is highlighted until you have looked at
 the agent that needs you. The panel under the list describes the selected row
 in words.
@@ -352,8 +353,10 @@ session and shows up in the TUI.
   `--submit` sends it, so the agent starts working at once.
 - Run from inside a task's worktree, the new task records that task as its
   parent, even across repositories; `--no-parent` leaves it unlinked. In the
-  TUI, a child task's row carries a `↳`, and the detail panel shows which task
-  a child came from and which tasks a parent spawned. Deleting a parent leaves
+  TUI, a child task's row carries a `↳` and sits under its parent's row; a
+  child of a task in another repository carries a `↪` instead. The detail
+  panel shows which task a child came from, and its repository when that is
+  another one, and which tasks a parent spawned. Deleting a parent leaves
   its children unlinked.
 - If you interrupt the command, the daemon goes on creating the task, so check
   `rig task list` before creating it again. If creation fails, the error names
