@@ -38,6 +38,9 @@ const (
 	// iconChildTask marks the row of a child task, one created from another
 	// task in the list.
 	iconChildTask = "↳"
+	// iconCrossRepoChildTask marks a child task's row instead when its parent
+	// is in another repo, so the list cannot nest it under its parent.
+	iconCrossRepoChildTask = "↪"
 )
 
 // spinnerFrames animate the status symbol of a task or agent that is working.

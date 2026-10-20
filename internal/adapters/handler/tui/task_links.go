@@ -29,6 +29,21 @@ func (m model) parentTask(task *core.Task) *core.Task {
 	return nil
 }
 
+// linkMarker returns the marker a task's row carries when its parent is in the
+// task list: one for a child in its parent's repo, which the list nests under
+// its parent, and another for a child from another repo. Otherwise, it is "".
+func (m model) linkMarker(task *core.Task) string {
+	parent := m.parentTask(task)
+	switch {
+	case parent == nil:
+		return ""
+	case repoGroupKey(parent) != repoGroupKey(task):
+		return iconCrossRepoChildTask
+	default:
+		return iconChildTask
+	}
+}
+
 // childRows returns the rows of the tasks a task spawned, its child tasks, in
 // the order the task list shows them.
 func (m model) childRows(task *core.Task) []taskRow {
@@ -45,13 +60,19 @@ func (m model) childRows(task *core.Task) []taskRow {
 }
 
 // taskLinkDetailLines describes a task's links in the detail panel's linked
-// tasks section, within width columns: the parent task it came from, and the child
-// tasks it spawned, each led by the status symbol its row shows.
+// tasks section, within width columns: the parent task it came from, with its
+// repo when that is another one, and the child tasks it spawned, each led by
+// the status symbol its row shows.
 func (m model) taskLinkDetailLines(task *core.Task, width int) []string {
 	var lines []string
 	if parent := m.parentTask(task); parent != nil {
 		name := truncateStr(emptyFallback(parent.DisplayName, parent.ID), width-len(detailValueIndent))
 		lines = append(lines, mutedStyle.Render("from")+"   "+primaryStyle.Render(name))
+		if repoGroupKey(parent) != repoGroupKey(task) {
+			repo := emptyFallback(parent.RepoName, parent.RepoRoot)
+			repo = truncateStr(repo, width-len(detailValueIndent)-len("in "))
+			lines = append(lines, detailValueIndent+mutedStyle.Render("in ")+primaryStyle.Render(repo))
+		}
 	}
 
 	children := m.childRows(task)
