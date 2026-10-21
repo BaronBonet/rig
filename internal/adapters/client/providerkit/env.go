@@ -62,3 +62,23 @@ func AccountEnv(name string, dir string, defaultDir string) core.ProviderEnv {
 	}
 	return core.ProviderEnv{name: dir}
 }
+
+// TranscriptAccountDir returns the configuration directory a provider keeps
+// the session transcript at path in: the parent of the folder named root that
+// is depth folders above the transcript, as projects is two above
+// <dir>/projects/<project>/<session>.jsonl. It reports false for a path laid
+// out otherwise.
+func TranscriptAccountDir(path string, root string, depth int) (string, bool) {
+	path = strings.TrimSpace(path)
+	if !filepath.IsAbs(path) || depth < 1 {
+		return "", false
+	}
+	dir := filepath.Clean(path)
+	for range depth {
+		dir = filepath.Dir(dir)
+	}
+	if filepath.Base(dir) != root {
+		return "", false
+	}
+	return filepath.Dir(dir), true
+}

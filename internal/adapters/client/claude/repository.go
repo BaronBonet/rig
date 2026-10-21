@@ -330,7 +330,7 @@ func (r *repository) WriteSessionHandoff(
 		cwd = strings.TrimSpace(task.WorktreePath)
 	}
 	result, err := r.runner.RunWithStdin(ctx, subprocess.RunWithStdinOptions{
-		Env:   providerkit.EnvOverrides(task.ProviderEnv, ConfigEnvVars),
+		Env:   providerkit.EnvOverrides(r.sessionEnv(task, session), ConfigEnvVars),
 		Cwd:   cwd,
 		Name:  r.binary,
 		Args:  args,
@@ -349,6 +349,21 @@ func (r *repository) WriteSessionHandoff(
 		return "", err
 	}
 	return providerkit.SaveHandoffNote(dataDir, task, sessionID, note)
+}
+
+// sessionEnv is the Task's env under the account the session's transcript is
+// kept in, where --resume finds it. A Task recorded before rig kept its
+// account has no env, and its session, started under the folder's direnv
+// account, is not in the daemon's.
+func (r *repository) sessionEnv(task *core.Task, session core.TaskProviderSession) core.ProviderEnv {
+	dir, ok := providerkit.TranscriptAccountDir(session.TranscriptPath, "projects", 2)
+	if !ok {
+		return task.ProviderEnv
+	}
+	if current, err := r.AccountDir(task.ProviderEnv); err == nil && current == dir {
+		return task.ProviderEnv
+	}
+	return task.ProviderEnv.With(r.AccountEnv(dir))
 }
 
 func (r *repository) BuildReconnectTaskSessionLaunchSpec(

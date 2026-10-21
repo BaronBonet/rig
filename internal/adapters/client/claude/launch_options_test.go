@@ -111,6 +111,32 @@ func TestRepositoryWriteSessionHandoff_UsesTheTasksModelWhenTheSessionRecordedNo
 	require.Equal(t, "/tmp/repo-task", opts.Cwd)
 }
 
+func TestRepositoryWriteSessionHandoff_ResumesTheSessionUnderTheAccountItsTranscriptIsIn(t *testing.T) {
+	runner := subprocess.NewMockRunner(t)
+	repo, _ := newTestRepository(t, runner)
+	repo.claudeConfigDir = func() (string, error) { return "/home/me/.claude", nil }
+	var opts subprocess.RunWithStdinOptions
+	runner.EXPECT().RunWithStdin(mock.Anything, mock.Anything).RunAndReturn(
+		func(_ context.Context, o subprocess.RunWithStdinOptions) (subprocess.Result, error) {
+			opts = o
+			return subprocess.Result{Stdout: "note"}, nil
+		},
+	)
+
+	// A Task recorded before rig kept its account: its session ran under the
+	// folder's direnv account, not the daemon's.
+	_, err := repo.WriteSessionHandoff(context.Background(), &core.Task{
+		ID:           "task-1",
+		WorktreePath: "/home/me/dev/wef/code",
+	}, core.TaskProviderSession{
+		ProviderSessionID: "sess-1",
+		TranscriptPath:    "/home/me/.claude-wef/projects/-home-me-dev-wef-code/sess-1.jsonl",
+	}, "")
+
+	require.NoError(t, err)
+	require.Equal(t, map[string]string{"CLAUDE_CONFIG_DIR": "/home/me/.claude-wef"}, opts.Env)
+}
+
 func TestRepositoryWriteSessionHandoff_TellsTheSessionWhatTheNextOneWillDo(t *testing.T) {
 	runner := subprocess.NewMockRunner(t)
 	repo, _ := newTestRepository(t, runner)

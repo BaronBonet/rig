@@ -106,6 +106,34 @@ func TestRepositoryWriteSessionHandoff_FallsBackToTheTasksModelInItsWorktree(t *
 	require.Equal(t, prompts.HandoffPrompt, got.Stdin)
 }
 
+func TestRepositoryWriteSessionHandoff_ForksTheSessionUnderTheAccountItsRolloutIsIn(t *testing.T) {
+	runner := subprocess.NewMockRunner(t)
+	var got subprocess.RunWithStdinOptions
+	runner.EXPECT().RunWithStdin(mock.Anything, mock.Anything).RunAndReturn(
+		func(_ context.Context, opts subprocess.RunWithStdinOptions) (subprocess.Result, error) {
+			got = opts
+			require.NoError(t, os.WriteFile(outputFlagValue(t, opts.Args), []byte("note"), 0o600))
+			return subprocess.Result{}, nil
+		},
+	).Once()
+	repo, _ := newHandoffRepository(t, runner)
+	task := &core.Task{
+		ID:           "task-1",
+		WorktreePath: "/work/task-1",
+		ProviderEnv:  core.ProviderEnv{"CODEX_HOME": "/home/me/.codex-personal"},
+	}
+	session := core.TaskProviderSession{
+		ProviderSessionID: "sess-1",
+		TranscriptPath:    "/home/me/.codex-wef/sessions/2026/10/19/rollout-2026-10-19T09-45-55-sess-1.jsonl",
+	}
+
+	_, err := repo.WriteSessionHandoff(t.Context(), task, session, "")
+
+	require.NoError(t, err)
+	require.Equal(t, map[string]string{"CODEX_HOME": "/home/me/.codex-wef"}, got.Env,
+		"the fork can only find the session in the home its rollout is in")
+}
+
 func TestRepositoryWriteSessionHandoff_FailsWithoutANote(t *testing.T) {
 	for name, tc := range map[string]struct {
 		session core.TaskProviderSession

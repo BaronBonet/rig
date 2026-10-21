@@ -93,3 +93,18 @@ func TestAccountEnv_SelectsTheAccountByItsDirUnlessItIsTheProvidersDefault(t *te
 		})
 	}
 }
+
+func TestTranscriptAccountDir_FindsTheConfigurationDirAboveTheTranscript(t *testing.T) {
+	dir, ok := TranscriptAccountDir("/home/me/.claude-wef/projects/-home-me-code/s1.jsonl", "projects", 2)
+	require.True(t, ok)
+	require.Equal(t, "/home/me/.claude-wef", dir)
+
+	dir, ok = TranscriptAccountDir("/home/me/.codex-wef/sessions/2026/10/19/rollout-s1.jsonl", "sessions", 4)
+	require.True(t, ok)
+	require.Equal(t, "/home/me/.codex-wef", dir)
+
+	for _, path := range []string{"", "  ", "projects/-home-me-code/s1.jsonl", "/home/me/elsewhere/s1.jsonl"} {
+		_, ok := TranscriptAccountDir(path, "projects", 2)
+		require.False(t, ok, path)
+	}
+}

@@ -129,7 +129,9 @@ daemon, the tmux server or a direnv hook in the task's folder sets another.
 Rig starts the provider as `env CLAUDE_CONFIG_DIR=… claude` (or
 `env -u CLAUDE_CONFIG_DIR claude`) and also sets the variables on the task's
 tmux session, so a provider you start by hand there uses the same account.
-Tasks created before this existed keep using the daemon's environment.
+Tasks created before this existed keep using the daemon's environment, except
+for a handoff note, which is always written under the account the previous
+session's transcript is kept in.
 
 To give a client's folder its own Codex account:
 
