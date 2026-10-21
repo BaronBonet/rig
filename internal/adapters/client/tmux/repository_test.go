@@ -29,7 +29,7 @@ func TestRepositoryStartTaskSession_LaunchesTheCommandWithoutTypingThePrompt(t *
 			"new-session", "-d", "-s", "repo_task", "-n", "task", "-c", "/tmp/repo-task",
 		),
 		expectTmuxRun(runner, subprocess.Result{}, nil,
-			"new-window", "-d", "-t", "=repo_task", "-n", "editor", "-c", "/tmp/repo-task",
+			"new-window", "-d", "-t", "=repo_task:", "-n", "editor", "-c", "/tmp/repo-task",
 		),
 		expectTmuxRun(runner, subprocess.Result{}, nil,
 			"send-keys", "-t", "=repo_task:task", "codex", "C-m",
@@ -190,7 +190,7 @@ func TestRepositoryStartTaskSession_LeavesShellIdleWhenLaunchCommandIsEmpty(t *t
 			"new-session", "-d", "-s", "repo_task", "-n", "task", "-c", "/tmp/repo-task",
 		),
 		expectTmuxRun(runner, subprocess.Result{}, nil,
-			"new-window", "-d", "-t", "=repo_task", "-n", "editor", "-c", "/tmp/repo-task",
+			"new-window", "-d", "-t", "=repo_task:", "-n", "editor", "-c", "/tmp/repo-task",
 		),
 	)
 
@@ -216,7 +216,7 @@ func TestRepositoryStartTaskSession_ExportsTaskIDToTheSessionEnvironment(t *test
 			"-e", "RIG_TASK_ID=task-123",
 		),
 		expectTmuxRun(runner, subprocess.Result{}, nil,
-			"new-window", "-d", "-t", "=repo_task", "-n", "editor", "-c", "/tmp/repo-task",
+			"new-window", "-d", "-t", "=repo_task:", "-n", "editor", "-c", "/tmp/repo-task",
 		),
 	)
 
@@ -245,7 +245,7 @@ func TestRepositoryStartTaskSession_ExportsTheTaskProviderConfiguration(t *testi
 			"-e", "CODEX_HOME=/home/me/.codex-work",
 		),
 		expectTmuxRun(runner, subprocess.Result{}, nil,
-			"new-window", "-d", "-t", "=repo_task", "-n", "editor", "-c", "/tmp/repo-task",
+			"new-window", "-d", "-t", "=repo_task:", "-n", "editor", "-c", "/tmp/repo-task",
 		),
 	)
 
@@ -275,7 +275,7 @@ func TestRepositoryStartTaskSession_CleansUpSessionWhenEditorWindowCreationFails
 			"new-session", "-d", "-s", "repo-billing-retry-flow", "-n", "task", "-c", "/tmp/repo-billing-retry-flow",
 		),
 		expectTmuxRun(runner, subprocess.Result{}, errors.New("new-window failed"),
-			"new-window", "-d", "-t", "=repo-billing-retry-flow", "-n", "editor", "-c", "/tmp/repo-billing-retry-flow",
+			"new-window", "-d", "-t", "=repo-billing-retry-flow:", "-n", "editor", "-c", "/tmp/repo-billing-retry-flow",
 		),
 		expectTmuxRun(runner, subprocess.Result{}, nil,
 			"kill-session", "-t", "=repo-billing-retry-flow",
@@ -344,7 +344,14 @@ func TestRepositoryAttachTaskSession_SwitchesClientAndBindsAKeyBackToRig(t *test
 	insideTmux(repo, nil)
 
 	mock.InOrder(
-		expectTmuxRun(runner, subprocess.Result{}, nil, "switch-client", "-t", "=repo_task:task"),
+		expectTmuxRun(
+			runner,
+			subprocess.Result{},
+			nil,
+			"switch-client",
+			"-t",
+			"=repo_task:task",
+		),
 		expectTmuxRun(runner, subprocess.Result{Stdout: "project\n"}, nil,
 			"display-message", "-p", "-t", "%3", "#{session_name}"),
 		expectTmuxRun(runner, subprocess.Result{}, nil, "set-option", "-t", "=repo_task:", "@rig_session", "project"),
@@ -438,7 +445,14 @@ func TestRepositoryAttachTaskSession_TheReturnKeyCanBeChangedOrTurnedOff(t *test
 	runner := subprocess.NewMockRunner(t)
 	repo := New(runner).(*repository)
 	insideTmux(repo, map[string]string{"RIG_TMUX_RETURN_KEY": "e"})
-	expectTmuxRun(runner, subprocess.Result{}, nil, "switch-client", "-t", "=repo_task:task")
+	expectTmuxRun(
+		runner,
+		subprocess.Result{},
+		nil,
+		"switch-client",
+		"-t",
+		"=repo_task:task",
+	)
 	expectTmuxRun(runner, subprocess.Result{Stdout: "project"}, nil,
 		"display-message", "-p", "-t", "%3", "#{session_name}")
 	expectTmuxRun(runner, subprocess.Result{}, nil, "set-option", "-t", "=repo_task:", "@rig_session", "project")
@@ -451,7 +465,14 @@ func TestRepositoryAttachTaskSession_TheReturnKeyCanBeChangedOrTurnedOff(t *test
 	off := subprocess.NewMockRunner(t)
 	repo = New(off).(*repository)
 	insideTmux(repo, map[string]string{"RIG_TMUX_RETURN_KEY": "none"})
-	expectTmuxRun(off, subprocess.Result{}, nil, "switch-client", "-t", "=repo_task:task")
+	expectTmuxRun(
+		off,
+		subprocess.Result{},
+		nil,
+		"switch-client",
+		"-t",
+		"=repo_task:task",
+	)
 	require.NoError(t, repo.AttachTaskSession(context.Background(), &core.Task{TmuxSession: "repo_task"}))
 }
 
@@ -459,7 +480,14 @@ func TestRepositoryAttachTaskSession_BindsNothingWhenRigCannotNameItsSession(t *
 	runner := subprocess.NewMockRunner(t)
 	repo := New(runner).(*repository)
 	insideTmux(repo, nil)
-	expectTmuxRun(runner, subprocess.Result{}, nil, "switch-client", "-t", "=repo_task:task")
+	expectTmuxRun(
+		runner,
+		subprocess.Result{},
+		nil,
+		"switch-client",
+		"-t",
+		"=repo_task:task",
+	)
 	expectTmuxRun(runner, subprocess.Result{}, errors.New("no server"),
 		"display-message", "-p", "-t", "%3", "#{session_name}")
 
@@ -496,7 +524,14 @@ func TestRepositoryAttachTaskSession_OpensTheTasksOwnWindowNotTheLastOneShown(t 
 	repo.getenv = func(string) string { return "" }
 	parent := &core.Task{TmuxSession: "repo_task"}
 
-	expectTmuxRun(runner, subprocess.Result{}, nil, "attach-session", "-t", "=repo_task:task")
+	expectTmuxRun(
+		runner,
+		subprocess.Result{},
+		nil,
+		"attach-session",
+		"-t",
+		"=repo_task:task",
+	)
 	require.NoError(t, repo.AttachTaskSession(context.Background(), parent))
 
 	// A window closed by hand is reported missing, so the task is reconnected
@@ -511,7 +546,14 @@ func TestRepositoryAttachTaskSession_AttachesWhenOutsideTmux(t *testing.T) {
 	repo := New(runner).(*repository)
 	repo.getenv = func(string) string { return "" }
 
-	expectTmuxRun(runner, subprocess.Result{}, nil, "attach-session", "-t", "=repo_task:task")
+	expectTmuxRun(
+		runner,
+		subprocess.Result{},
+		nil,
+		"attach-session",
+		"-t",
+		"=repo_task:task",
+	)
 
 	err := repo.AttachTaskSession(context.Background(), &core.Task{
 		TmuxSession: "repo_task",
@@ -529,8 +571,12 @@ func TestRepositoryAttachTaskSession_ReturnsErrTaskSessionNotFoundWhenSessionIsM
 		runner,
 		subprocess.Result{Stderr: "can't find session: repo_task"},
 		subprocess.CommandError{
-			Name:   "tmux",
-			Args:   []string{"attach-session", "-t", "=repo_task:task"},
+			Name: "tmux",
+			Args: []string{
+				"attach-session",
+				"-t",
+				"=repo_task:task",
+			},
 			Stderr: "can't find session: repo_task",
 			Err:    errors.New("exit status 1"),
 		},
@@ -799,7 +845,7 @@ func TestRepositoryStartTaskSession_RecreatesAMissingTaskWindowInAnExistingSessi
 			"list-windows", "-t", "=repo_task", "-F", "#{window_name}",
 		),
 		expectTmuxRun(runner, subprocess.Result{}, nil,
-			"new-window", "-d", "-t", "=repo_task", "-n", "task", "-c", "/tmp/repo-task", "-e", "RIG_TASK_ID=task-1",
+			"new-window", "-d", "-t", "=repo_task:", "-n", "task", "-c", "/tmp/repo-task", "-e", "RIG_TASK_ID=task-1",
 		),
 		expectTmuxRun(runner, subprocess.Result{}, nil,
 			"send-keys", "-t", "=repo_task:task", "claude", "C-m",
@@ -936,7 +982,7 @@ func TestRepositoryStartTaskSession_AddsAChildTasksWindowToItsParentsSession(t *
 			"list-windows", "-t", "=repo_task", "-F", "#{window_name}",
 		),
 		expectTmuxRun(runner, subprocess.Result{}, nil,
-			"new-window", "-d", "-t", "=repo_task", "-n", "s2", "-c", "/tmp/repo-task",
+			"new-window", "-d", "-t", "=repo_task:", "-n", "s2", "-c", "/tmp/repo-task",
 			"-e", "RIG_TASK_ID=task-2", "-e", "CLAUDE_CONFIG_DIR=/home/me/.claude-work",
 		),
 		expectTmuxRun(runner, subprocess.Result{}, nil,
@@ -988,7 +1034,14 @@ func TestRepositoryAttachAndDeleteTaskSession_TargetAChildTasksWindow(t *testing
 	insideTmux(repo, nil)
 	child := &core.Task{TmuxSession: "repo_task", TmuxWindow: "s2"}
 
-	expectTmuxRun(runner, subprocess.Result{}, nil, "switch-client", "-t", "=repo_task:s2")
+	expectTmuxRun(
+		runner,
+		subprocess.Result{},
+		nil,
+		"switch-client",
+		"-t",
+		"=repo_task:s2",
+	)
 	expectTmuxRun(runner, subprocess.Result{Stdout: "rig"}, nil, "display-message", "-p", "-t", "%3", "#{session_name}")
 	runner.On("Run", mock.Anything, "", "tmux", "set-option", mock.Anything, mock.Anything, mock.Anything, mock.Anything).
 		Return(subprocess.Result{}, nil).

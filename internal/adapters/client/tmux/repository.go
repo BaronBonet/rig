@@ -578,7 +578,7 @@ func (r *repository) createSession(
 		"new-window",
 		"-d",
 		"-t",
-		exactSessionTarget(sessionName),
+		exactSessionTarget(sessionName)+":",
 		"-n",
 		"editor",
 		"-c",
@@ -621,7 +621,7 @@ func (r *repository) createWindow(
 	sessionName, window, workingDir, taskID string,
 	providerEnv core.ProviderEnv,
 ) error {
-	args := []string{"new-window", "-d", "-t", exactSessionTarget(sessionName), "-n", window, "-c", workingDir}
+	args := []string{"new-window", "-d", "-t", exactSessionTarget(sessionName) + ":", "-n", window, "-c", workingDir}
 	args = append(args, taskEnvArgs(taskID, providerEnv)...)
 	_, err := r.runner.Run(ctx, "", "tmux", args...)
 	if err != nil {
