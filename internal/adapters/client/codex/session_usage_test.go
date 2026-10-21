@@ -73,6 +73,66 @@ func TestRepositoryReadSessionTokenUsage_SkipsLargeNonTokenLines(t *testing.T) {
 	}, usage)
 }
 
+func TestRepositoryReadSessionTokenUsage_CountsCompletedCompactions(t *testing.T) {
+	repo := &repository{}
+	path := writeJSONL(t, []string{
+		`{"type":"compacted","payload":{"message":"first summary","replacement_history":[{"type":"compaction"}],"window_number":1}}`,
+		`{"type":"event_msg","payload":{"type":"token_count","info":{"total_token_usage":{"input_tokens":100,"output_tokens":10,"total_tokens":110},"last_token_usage":{"input_tokens":50}}}}`,
+		`{"type":"response_item","payload":{"type":"compaction","encrypted_content":"copied summary"}}`,
+		`{"type":"event_msg","payload":{"type":"context_compacted"}}`,
+		`{"type":"compacted","payload":{"message":"second summary","window_number":2}}`,
+		`{"type":"event_msg","payload":{"type":"token_count","info":{"total_token_usage":{"input_tokens":240,"output_tokens":25,"total_tokens":265},"last_token_usage":{"input_tokens":30}}}}`,
+	})
+
+	usage, err := repo.ReadSessionTokenUsage(t.Context(), path)
+
+	require.NoError(t, err)
+	require.Equal(t, &core.SessionTokenUsage{
+		ContextTokens: 30,
+		Compactions:   2,
+		InputTokens:   240,
+		OutputTokens:  25,
+		TotalTokens:   265,
+	}, usage)
+}
+
+func TestRepositoryReadSessionTokenUsage_CompactionsSurviveIncrementalReads(t *testing.T) {
+	repo := &repository{}
+	path := writeJSONL(t, []string{
+		`{"type":"compacted","payload":{"message":"summary","window_number":1}}`,
+	})
+	usage, err := repo.ReadSessionTokenUsage(t.Context(), path)
+	require.NoError(t, err)
+	require.Equal(t, &core.SessionTokenUsage{Compactions: 1}, usage)
+
+	// Re-reading unchanged data must not count the same record again.
+	usage, err = repo.ReadSessionTokenUsage(t.Context(), path)
+	require.NoError(t, err)
+	require.Equal(t, 1, usage.Compactions)
+
+	appendTranscript(
+		t,
+		path,
+		`{"type":"event_msg","payload":{"type":"token_count","info":{"total_token_usage":{"input_tokens":100,"output_tokens":10,"total_tokens":110}}}}`+"\n"+
+			`{"type":"compacted","payload":{"message":"next summary","window_number":2}}`+"\n",
+	)
+	usage, err = repo.ReadSessionTokenUsage(t.Context(), path)
+	require.NoError(t, err)
+	require.Equal(t, 2, usage.Compactions)
+	require.Equal(t, 110, usage.TotalTokens)
+
+	// Rebuilding a replaced transcript must discard the old session's count.
+	replacement := filepath.Join(t.TempDir(), "replacement.jsonl")
+	require.NoError(t, os.WriteFile(replacement, []byte(
+		`{"type":"event_msg","payload":{"type":"token_count","info":{"total_token_usage":{"input_tokens":8,"output_tokens":2,"total_tokens":10}}}}`+"\n",
+	), 0o644))
+	require.NoError(t, os.Rename(replacement, path))
+	usage, err = repo.ReadSessionTokenUsage(t.Context(), path)
+	require.NoError(t, err)
+	require.Zero(t, usage.Compactions)
+	require.Equal(t, 10, usage.TotalTokens)
+}
+
 func TestRepositoryReadSessionTokenUsage_MissingTranscriptReturnsNil(t *testing.T) {
 	repo := &repository{}
 

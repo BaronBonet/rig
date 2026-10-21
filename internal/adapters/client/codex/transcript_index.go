@@ -319,7 +319,19 @@ func parseCodexTranscriptRecord(
 		*status = candidate
 	}
 	if candidate := codexTranscriptEnvelopeTokenUsage(envelope); candidate != nil {
+		if *usage != nil {
+			candidate.Compactions = (*usage).Compactions
+		}
 		*usage = candidate
+	}
+	// A top-level compacted record marks a completed history replacement.
+	// Compaction response items may be copied into later histories or subagents,
+	// so those are not additional compactions of this session.
+	if envelope.Type == "compacted" {
+		if *usage == nil {
+			*usage = &core.SessionTokenUsage{}
+		}
+		(*usage).Compactions++
 	}
 	if activity := codexTranscriptActivityEvent("", envelope); activity != nil {
 		*activities = append(*activities, *activity)
