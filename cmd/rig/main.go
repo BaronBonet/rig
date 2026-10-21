@@ -61,6 +61,9 @@ func newProductionCommandRuntime(stdout io.Writer, stderr io.Writer) commandRunt
 		runSetup: func() error {
 			return runProviderSetup(stdout)
 		},
+		runUsage: func() error {
+			return runUsage(stdout)
+		},
 		runDoctor: func() error {
 			cfg, err := infrastructure.LoadConfig()
 			if err != nil {
@@ -130,6 +133,7 @@ type commandRuntime struct {
 
 	runTUI           func() error
 	runSetup         func() error
+	runUsage         func() error
 	runDoctor        func() error
 	runDaemonStart   func() error
 	runDaemonStop    func() error
@@ -160,6 +164,7 @@ func newRootCommand(runtime commandRuntime) *cobra.Command {
 	root.SetVersionTemplate("{{.Version}}\n")
 
 	root.AddCommand(newSetupCommand(runtime))
+	root.AddCommand(newUsageCommand(runtime))
 	root.AddCommand(newDoctorCommand(runtime))
 	root.AddCommand(newDaemonCommand(runtime))
 
@@ -173,6 +178,17 @@ func newSetupCommand(runtime commandRuntime) *cobra.Command {
 		Args:  cobra.NoArgs,
 		RunE: func(_ *cobra.Command, _ []string) error {
 			return runCommand(runtime.runSetup)
+		},
+	}
+}
+
+func newUsageCommand(runtime commandRuntime) *cobra.Command {
+	return &cobra.Command{
+		Use:   "usage",
+		Short: "Show the accounts tasks here can run under and each plan's usage",
+		Args:  cobra.NoArgs,
+		RunE: func(_ *cobra.Command, _ []string) error {
+			return runCommand(runtime.runUsage)
 		},
 	}
 }

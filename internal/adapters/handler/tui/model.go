@@ -37,6 +37,7 @@ const (
 	modeSwitchProvider
 	modeImportSession
 	modeRenameTask
+	modeAccounts
 )
 
 const defaultBuildVersion = "dev"
@@ -69,10 +70,15 @@ type model struct {
 	// launchSettings are the configured providers' launch options and the
 	// options each was last launched with; nil until loaded.
 	launchSettings *core.LaunchSettings
-	selected       int
-	width          int
-	height         int
-	shimmerTick    int
+	// accounts are the provider accounts this window's tasks may run under,
+	// nil until loaded; accountUsage is each one's latest usage reading.
+	accounts     []core.ProviderAccount
+	accountsErr  error
+	accountUsage map[string]accountUsageState
+	selected     int
+	width        int
+	height       int
+	shimmerTick  int
 	// previewSeq numbers the composer's live views of a session about to be
 	// replaced; readings for an earlier one are dropped.
 	previewSeq int
@@ -148,6 +154,9 @@ type taskDraft struct {
 	// provider's own default.
 	model  string
 	effort string
+	// account is the directory of the account chosen for the provider; ""
+	// means the window's for a new task and the task's for a new session.
+	account string
 	// forTask, when set, makes the draft a fresh session of that existing
 	// task rather than a new task.
 	forTask *core.Task
@@ -400,6 +409,7 @@ func newModel(frontend core.TaskFrontend, launchCwd string, buildVersion string)
 		adoptionReloads:  make(map[string]core.Provider),
 		statusSubscribed: make(map[string]bool),
 		statusCancels:    make(map[string]context.CancelFunc),
+		accountUsage:     make(map[string]accountUsageState),
 	}
 }
 
@@ -407,6 +417,7 @@ func (m model) Init() tea.Cmd {
 	return tea.Batch(
 		getProviderSetupCmd(m.statusContext, m.frontend),
 		getLaunchSettingsCmd(m.statusContext, m.frontend, m.providerEnv),
+		listProviderAccountsCmd(m.statusContext, m.frontend, m.launchCwd, m.providerEnv),
 		m.loadTasks(true),
 		activityRefreshTickCmd(),
 	)
@@ -457,13 +468,20 @@ func (m *model) cycleCreateProvider() {
 			break
 		}
 	}
+	m.draft.account = ""
 	m.applyLaunchDefaults(m.draft.provider)
 }
 
 // launchChoices lists the models and efforts provider accepts, each led by
-// "" for the provider's own default.
+// "" for the provider's own default: under the draft's account when provider
+// is the draft's, under the window's otherwise.
 func (m model) launchChoices(provider core.Provider) ([]string, []string) {
 	models, efforts := []string{""}, []string{""}
+	if provider == m.effectiveCreateProvider() {
+		if account := m.draftAccount(); account != nil && len(account.Options.Models) > 0 {
+			return append(models, account.Options.Models...), append(efforts, account.Options.Efforts...)
+		}
+	}
 	if m.launchSettings == nil {
 		return models, efforts
 	}
@@ -610,6 +628,9 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if m.mode == modeRenameTask {
 			return m.updateRename(msg)
 		}
+		if m.mode == modeAccounts {
+			return m.updateAccounts(msg)
+		}
 
 		if isQuitKey(msg) {
 			return m.quit()
@@ -649,6 +670,8 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m.enterSwitchProviderMode()
 		case "i":
 			return m.enterImportSessionMode()
+		case "u":
+			return m.enterAccountsMode()
 		case "S":
 			return m.enterProviderSetupMode()
 		case "r":
@@ -856,7 +879,12 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, tea.Batch(
 			m.loadTasks(false),
 			getLaunchSettingsCmd(m.statusContext, m.frontend, m.providerEnv),
+			listProviderAccountsCmd(m.statusContext, m.frontend, m.launchCwd, m.providerEnv),
 		)
+	case providerAccountsLoadedMsg:
+		return m.handleProviderAccountsLoaded(msg)
+	case accountUsageMsg:
+		return m.handleAccountUsage(msg)
 	case launchSettingsLoadedMsg:
 		// Without settings the composer simply offers no options to cycle.
 		if msg.err == nil && msg.settings != nil {
@@ -1075,6 +1103,8 @@ func (m model) View() tea.View {
 		body = m.importSessionView()
 	case modeRenameTask:
 		body = m.renameTaskView()
+	case modeAccounts:
+		body = m.accountsView()
 	default:
 		body = m.listView()
 	}
@@ -1214,6 +1244,7 @@ func (m model) submitPrompt() (model, tea.Cmd) {
 	forTask := m.draft.forTask
 	handoff := m.draft.handoff
 	newWindow := m.draft.newWindow
+	taskEnv, sessionEnv := m.draftTaskEnv(), m.draftSessionEnv()
 	submitted := m.draft
 	m.transition(modeBrowse)
 	m.beginOp(opCreating)
@@ -1226,13 +1257,14 @@ func (m model) submitPrompt() (model, tea.Cmd) {
 	if forTask != nil {
 		return m, tea.Batch(
 			newTaskSessionStreamCmd(m.statusContext, m.frontend, core.NewTaskSessionInput{
-				TaskID:    forTask.ID,
-				Prompt:    prompt,
-				Provider:  provider,
-				Model:     options.Model,
-				Effort:    options.Effort,
-				Handoff:   handoff,
-				NewWindow: newWindow,
+				TaskID:      forTask.ID,
+				Prompt:      prompt,
+				Provider:    provider,
+				Model:       options.Model,
+				Effort:      options.Effort,
+				Handoff:     handoff,
+				NewWindow:   newWindow,
+				ProviderEnv: sessionEnv,
 			}),
 			shimmerTickCmd(),
 		)
@@ -1244,7 +1276,7 @@ func (m model) submitPrompt() (model, tea.Cmd) {
 			Prompt:      prompt,
 			Provider:    provider,
 			Workspace:   workspace,
-			ProviderEnv: m.providerEnv,
+			ProviderEnv: taskEnv,
 			Model:       options.Model,
 			Effort:      options.Effort,
 		}),
@@ -1323,7 +1355,10 @@ func (m model) updatePromptInput(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if typed.String() == "tab" {
 			// Tab cycles through configured providers for the new task.
 			m.cycleCreateProvider()
-			return m, nil
+			return m, m.readAccountUsage(m.accountsFor(m.effectiveCreateProvider()), false)
+		}
+		if typed.String() == "shift+tab" {
+			return m, m.cycleCreateAccount()
 		}
 		if typed.String() == "ctrl+t" {
 			m.cycleCreateModel()
@@ -1447,6 +1482,7 @@ func (m model) updatePRPicker(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		selected := *pr
 		repoRoot := m.draft.repoRoot
 		provider := m.effectiveCreateProvider()
+		env := m.draftTaskEnv()
 		m.transition(modeBrowse)
 		m.beginOp(opCreating)
 		m.create = createFlowState{fromPR: true}
@@ -1458,13 +1494,15 @@ func (m model) updatePRPicker(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 				Source: core.CreateTaskSource{
 					PullRequest: &selected,
 				},
-				ProviderEnv: m.providerEnv,
+				ProviderEnv: env,
 			}),
 			shimmerTickCmd(),
 		)
 	case "tab":
 		m.cycleCreateProvider()
 		return m, nil
+	case "shift+tab":
+		return m, m.cycleCreateAccount()
 	default:
 		return m, nil
 	}
@@ -1482,7 +1520,7 @@ func (m model) enterPromptInputMode(initialValue string) (tea.Model, tea.Cmd) {
 	m.create.err = nil
 	m.create.fromPR = false
 	m.create.newSession = false
-	return m, m.draft.input.Focus()
+	return m, tea.Batch(m.draft.input.Focus(), m.readAccountUsage(m.accountsFor(m.effectiveCreateProvider()), false))
 }
 
 // enterNewSessionMode opens the composer for a fresh provider session of the
@@ -1525,7 +1563,7 @@ func (m model) enterNewSessionMode() (tea.Model, tea.Cmd) {
 	m.draft.newWindow = true
 	m.create = createFlowState{}
 	m.err = nil
-	return m, m.draft.input.Focus()
+	return m, tea.Batch(m.draft.input.Focus(), m.readAccountUsage(m.accountsFor(m.effectiveCreateProvider()), false))
 }
 
 // continuationPreview is the continuation prompt as the daemon will compose

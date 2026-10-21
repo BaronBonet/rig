@@ -52,6 +52,15 @@ type launchSettingsRequest struct {
 	Env core.ProviderEnv `json:"env,omitempty"`
 }
 
+type providerAccountsRequest struct {
+	Env    core.ProviderEnv `json:"env,omitempty"`
+	Folder string           `json:"folder"`
+}
+
+type accountUsageRequest struct {
+	Account core.ProviderAccount `json:"account"`
+}
+
 type importSessionRequest struct {
 	Env     core.ProviderEnv            `json:"env,omitempty"`
 	Session core.ProviderSessionSummary `json:"session"`
@@ -277,6 +286,22 @@ var opGetLaunchSettings = unaryOp[launchSettingsRequest, *core.LaunchSettings]{
 	},
 }
 
+var opListProviderAccounts = unaryOp[providerAccountsRequest, []core.ProviderAccount]{
+	command:  "list_provider_accounts",
+	envelope: "provider_accounts",
+	call: func(ctx context.Context, svc core.TaskService, req providerAccountsRequest) ([]core.ProviderAccount, error) {
+		return svc.ListProviderAccounts(ctx, req.Folder, req.Env)
+	},
+}
+
+var opGetAccountUsage = unaryOp[accountUsageRequest, *core.AccountUsage]{
+	command:  "get_account_usage",
+	envelope: "account_usage",
+	call: func(ctx context.Context, svc core.TaskService, req accountUsageRequest) (*core.AccountUsage, error) {
+		return svc.GetAccountUsage(ctx, req.Account)
+	},
+}
+
 var opDeleteTask = unaryOp[taskIDRequest, emptyResponse]{
 	command:  "delete_task",
 	envelope: "task_deleted",
@@ -353,6 +378,8 @@ var socketUnaryHandlers = map[string]unaryHandler{
 	opDetectProviders.command:        serveUnary(opDetectProviders),
 	opSwitchTaskProvider.command:     serveUnary(opSwitchTaskProvider),
 	opGetLaunchSettings.command:      serveUnary(opGetLaunchSettings),
+	opListProviderAccounts.command:   serveUnary(opListProviderAccounts),
+	opGetAccountUsage.command:        serveUnary(opGetAccountUsage),
 	opDeleteTask.command:             serveUnary(opDeleteTask),
 	opListTasks.command:              serveUnary(opListTasks),
 	opLatestTaskStatus.command:       serveUnary(opLatestTaskStatus),

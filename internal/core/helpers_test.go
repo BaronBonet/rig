@@ -47,6 +47,7 @@ type providerConfigState struct {
 	savedSetup          *ProviderSetup
 	launchDefaults      map[Provider]LaunchOptions
 	savedLaunchDefaults map[Provider]LaunchOptions
+	accounts            []AccountConfig
 }
 
 type taskRepositoryState struct {
@@ -122,8 +123,14 @@ type sessionClientState struct {
 }
 
 type providerClientState struct {
-	mu                      sync.Mutex
-	commandName             string
+	mu          sync.Mutex
+	commandName string
+	// accountEnvVar and accountDefaultDir are how the provider picks its
+	// account; accountUsage is each account directory's usage.
+	accountEnvVar           string
+	accountDefaultDir       string
+	accountUsage            map[string]*AccountUsage
+	accountUsageEnv         ProviderEnv
 	exitCommand             string
 	clearCommand            string
 	healthErr               error
@@ -241,8 +248,10 @@ func newTestTaskService(t *testing.T) *testTaskServiceHarness {
 	h.sessionClient.events = &h.events
 	h.providerRepo.events = &h.events
 	h.providerRepo.commandName = "codex"
+	h.providerRepo.accountEnvVar, h.providerRepo.accountDefaultDir = "CODEX_HOME", "/home/me/.codex"
 	h.claudeRepo.events = &h.events
 	h.claudeRepo.commandName = "claude"
+	h.claudeRepo.accountEnvVar, h.claudeRepo.accountDefaultDir = "CLAUDE_CONFIG_DIR", "/home/me/.claude"
 	h.providerConfig.setup = &ProviderSetup{
 		Configured: []Provider{ProviderCodex},
 		Default:    ProviderCodex,
@@ -310,6 +319,14 @@ func configureProviderConfigMock(store *MockProviderConfigStore, state *provider
 			setup := *state.setup
 			setup.Configured = append([]Provider(nil), state.setup.Configured...)
 			return &setup, nil
+		},
+	).Maybe()
+	store.EXPECT().GetAccounts(mock.Anything).RunAndReturn(
+		func(context.Context) ([]AccountConfig, error) {
+			if state.getErr != nil {
+				return nil, state.getErr
+			}
+			return state.accounts, nil
 		},
 	).Maybe()
 	store.EXPECT().GetLaunchDefaults(mock.Anything).RunAndReturn(
@@ -553,6 +570,25 @@ func configureProviderClientMock(client *MockProviderClient, state *providerClie
 				return state.suggestedSuggestion, nil
 			}
 			return TaskSuggestion{Name: state.suggestedName, BranchType: "feat"}, nil
+		},
+	).Maybe()
+	client.EXPECT().AccountDir(mock.Anything).RunAndReturn(func(env ProviderEnv) (string, error) {
+		if dir, ok := env.Lookup(state.accountEnvVar); ok && dir != "" {
+			return dir, nil
+		}
+		return state.accountDefaultDir, nil
+	}).Maybe()
+	client.EXPECT().AccountEnv(mock.Anything).RunAndReturn(func(dir string) ProviderEnv {
+		if dir == state.accountDefaultDir {
+			return ProviderEnv{state.accountEnvVar: ""}
+		}
+		return ProviderEnv{state.accountEnvVar: dir}
+	}).Maybe()
+	client.EXPECT().AccountUsage(mock.Anything, mock.Anything).RunAndReturn(
+		func(_ context.Context, env ProviderEnv) (*AccountUsage, error) {
+			state.accountUsageEnv = env
+			dir, _ := env.Lookup(state.accountEnvVar)
+			return state.accountUsage[dir], nil
 		},
 	).Maybe()
 	client.EXPECT().EnsureTaskSessionEnvironment(mock.Anything, mock.Anything).RunAndReturn(

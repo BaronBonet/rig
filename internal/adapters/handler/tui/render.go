@@ -447,6 +447,12 @@ func (m model) selectedTaskDetailView() string {
 			mutedStyle.Render("launch")+"    "+primaryStyle.Render(launch),
 		)
 	}
+	if account := m.taskAccount(task); account != nil {
+		sessionLines = append(
+			sessionLines,
+			mutedStyle.Render("account")+"   "+primaryStyle.Render(account.Name),
+		)
+	}
 	if window := strings.TrimSpace(task.TmuxWindow); window != "" {
 		sessionLines = append(
 			sessionLines,
@@ -590,6 +596,9 @@ func (m model) promptInputView() string {
 		providerLine += mutedStyle.Render("  ·  ") + keybindStyle.Render("tab") + mutedStyle.Render(" cycle")
 	}
 	builder.WriteString(providerLine + "\n")
+	if accountLine := m.draftAccountLine(); accountLine != "" {
+		builder.WriteString(accountLine + "\n")
+	}
 	builder.WriteString(m.draftLaunchLine("model", m.draft.model, "ctrl+t") + "\n")
 	builder.WriteString(m.draftLaunchLine("effort", m.draft.effort, "ctrl+r") + "\n")
 	if newSession {
@@ -718,7 +727,7 @@ func (m model) listKeybindText(width int) string {
 	}
 	binds := [][2]string{
 		{"n", "new"}, {"N", "session"}, {"d", "shelve"}, {"e", "rename"}, {"tab", "shelf"},
-		{"i", "import"}, {"p", "provider"}, {"r", "refresh"},
+		{"i", "import"}, {"p", "provider"}, {"u", "usage"}, {"r", "refresh"},
 	}
 	if row := m.selectedRow(); row != nil && row.task != nil &&
 		row.task.CreationStatus == core.TaskCreationStatusFailed {
@@ -726,7 +735,7 @@ func (m model) listKeybindText(width int) string {
 	}
 	binds = append(binds, [2]string{"space", "details"}, [2]string{"x", "clean"}, [2]string{"q", "quit"})
 
-	return m.fitKeybindBar(width, binds, "r", "p", "i", "e", "space", "tab")
+	return m.fitKeybindBar(width, binds, "r", "u", "p", "i", "e", "space", "tab")
 }
 
 // fitKeybindBar renders binds as a key bar, leaving out the droppable keys,

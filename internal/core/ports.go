@@ -76,6 +76,9 @@ type NewTaskSessionInput struct {
 	// child Task in a new window of the Task's tmux session, instead of
 	// replacing it in the Task's own window.
 	NewWindow bool `json:"new_window,omitempty"`
+	// ProviderEnv is the provider configuration the session runs with, which
+	// chooses its account; nil keeps the Task's.
+	ProviderEnv ProviderEnv `json:"provider_env,omitempty"`
 }
 
 type TaskCreateProgressStep string
@@ -284,6 +287,14 @@ type TaskService interface {
 	// under the window's provider configuration env, and the options each was
 	// last launched with.
 	GetLaunchSettings(ctx context.Context, env ProviderEnv) (*LaunchSettings, error)
+	// ListProviderAccounts returns the accounts a rig window launched in
+	// folder with the provider configuration env may run Tasks under: for
+	// each configured provider, the window's own account first, then the
+	// others the user config offers in folder.
+	ListProviderAccounts(ctx context.Context, folder string, env ProviderEnv) ([]ProviderAccount, error)
+	// GetAccountUsage reads how much of its plan's rate limits the account
+	// has used, from its provider.
+	GetAccountUsage(ctx context.Context, account ProviderAccount) (*AccountUsage, error)
 }
 
 // HookEventHandler consumes provider hook events inside the daemon process.
@@ -319,6 +330,9 @@ type ProviderConfigStore interface {
 	// SaveLaunchDefaults records the launch options a provider was last
 	// launched with, keeping the rest of the config.
 	SaveLaunchDefaults(ctx context.Context, provider Provider, options LaunchOptions) error
+	// GetAccounts returns the provider accounts the user config offers, with
+	// their directories and folders as absolute paths.
+	GetAccounts(ctx context.Context) ([]AccountConfig, error)
 }
 
 // TaskRepository persists task records and returns their durable state.
@@ -386,6 +400,16 @@ type ProviderClient interface {
 	// when it runs with env, and whether it can write a handoff note from a
 	// previous session.
 	LaunchOptions(env ProviderEnv) ProviderLaunchOptions
+	// AccountDir returns the configuration directory, the account, the
+	// provider runs with under env.
+	AccountDir(env ProviderEnv) (string, error)
+	// AccountEnv returns the provider configuration that selects the account
+	// in dir; the provider's default directory is selected by leaving its
+	// variable unset.
+	AccountEnv(dir string) ProviderEnv
+	// AccountUsage reads how much of its plan's rate limits the account env
+	// selects has used.
+	AccountUsage(ctx context.Context, env ProviderEnv) (*AccountUsage, error)
 	// WriteSessionHandoff asks a previous provider session of the task, in
 	// print mode and without touching the task's interactive session, for a
 	// handoff note a fresh session can start from, and returns the path it

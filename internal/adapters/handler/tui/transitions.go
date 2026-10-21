@@ -43,7 +43,7 @@ func backTarget(mode modelMode, hasSetup bool, setupOnly bool) backDest {
 	case modePRPicker:
 		// Back to the prompt: both modes edit the same task draft.
 		return backDest{to: modePromptInput}
-	case modeCleanupConfirm, modeSwitchProvider, modeImportSession, modeRenameTask:
+	case modeCleanupConfirm, modeSwitchProvider, modeImportSession, modeRenameTask, modeAccounts:
 		return backDest{to: modeBrowse}
 	case modeProviderSetup:
 		// Provider setup is mandatory: without a valid setup the only way out

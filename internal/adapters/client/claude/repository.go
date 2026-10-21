@@ -117,6 +117,10 @@ type repository struct {
 	// claudeConfigDir overrides where Claude Code keeps its sessions; nil
 	// means the task's CLAUDE_CONFIG_DIR, the daemon's, or ~/.claude.
 	claudeConfigDir func() (string, error)
+	// usage keeps each account's latest plan usage reading; usageURL
+	// overrides where it is read from.
+	usage    *providerkit.UsageCache
+	usageURL string
 }
 
 func New(runner subprocess.Runner, cfg Config, hooks HookForwardingConfig) core.ProviderClient {
@@ -131,6 +135,7 @@ func New(runner subprocess.Runner, cfg Config, hooks HookForwardingConfig) core.
 		collectorURL: collectorURL,
 		hookSecret:   strings.TrimSpace(hooks.HookSecret),
 		rigDataDir:   providerkit.DefaultRigDataDir,
+		usage:        providerkit.NewUsageCache(),
 	}
 }
 

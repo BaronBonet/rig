@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"testing"
+	"time"
 
 	"github.com/BaronBonet/rig/internal/core"
 
@@ -36,6 +37,45 @@ func TestGetLaunchSettingsRoundTrip(t *testing.T) {
 	svc.mu.Unlock()
 	_, err = client.GetLaunchSettings(context.Background(), nil)
 	require.ErrorContains(t, err, "config unreadable")
+}
+
+func TestProviderAccountsAndUsageRoundTrip(t *testing.T) {
+	t.Parallel()
+
+	svc := newFakeTaskService()
+	licentiam := core.ProviderAccount{
+		Provider: core.ProviderClaude,
+		Name:     "licentiam",
+		Dir:      "/home/me/.claude-licentiam",
+		Env:      core.ProviderEnv{"CLAUDE_CONFIG_DIR": "/home/me/.claude-licentiam"},
+		Window:   true,
+	}
+	svc.accounts = []core.ProviderAccount{licentiam}
+	resets := time.Date(2026, 10, 13, 17, 0, 0, 0, time.UTC)
+	svc.accountUsage = map[string]*core.AccountUsage{licentiam.Dir: {
+		Plan:   "max",
+		Limits: []core.UsageLimit{{Name: "5h", UsedPercent: 42, ResetsAt: resets}},
+	}}
+	client := startTestFrontend(t, svc)
+	env := core.ProviderEnv{"CLAUDE_CONFIG_DIR": "/home/me/.claude-licentiam", "CODEX_HOME": ""}
+
+	accounts, err := client.ListProviderAccounts(context.Background(), "/home/me/dev/licentiam", env)
+	require.NoError(t, err)
+	require.Equal(t, svc.accounts, accounts)
+	svc.mu.Lock()
+	require.Equal(t, "/home/me/dev/licentiam", svc.accountsFolder)
+	require.Equal(t, env, svc.accountsEnv, "the window's provider env reaches the service")
+	svc.mu.Unlock()
+
+	usage, err := client.GetAccountUsage(context.Background(), accounts[0])
+	require.NoError(t, err)
+	require.Equal(t, svc.accountUsage[licentiam.Dir], usage)
+
+	svc.mu.Lock()
+	svc.errByOp["get_account_usage"] = errors.New("login expired")
+	svc.mu.Unlock()
+	_, err = client.GetAccountUsage(context.Background(), accounts[0])
+	require.ErrorContains(t, err, "login expired")
 }
 
 func TestNewTaskSessionStreamRoundTrip(t *testing.T) {

@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"maps"
 	"strconv"
 	"strings"
 	"time"
@@ -71,6 +72,14 @@ func (s *service) newTaskSession(
 		}
 	}
 
+	// A session may run under another account than the Task's last one. The
+	// handoff is still written by the previous session, under the Task's.
+	env := task.ProviderEnv
+	if input.ProviderEnv != nil {
+		env = input.ProviderEnv
+	}
+	accountChanged := !maps.Equal(env, task.ProviderEnv)
+
 	custom := strings.TrimSpace(input.Prompt)
 	handoffPath := ""
 	if input.Handoff {
@@ -83,7 +92,7 @@ func (s *service) newTaskSession(
 	options := LaunchOptions{Model: input.Model, Effort: input.Effort}
 
 	if input.NewWindow {
-		return s.startSessionAlongside(ctx, task, provider, providerClient, custom, prompt, options, reporter)
+		return s.startSessionAlongside(ctx, task, provider, providerClient, custom, prompt, options, env, reporter)
 	}
 
 	// The handoff is written first, from the session's transcript, so the
@@ -91,15 +100,18 @@ func (s *service) newTaskSession(
 	// from.
 	cleared := false
 	if occupant != "" {
-		if cleared, err = s.clearOrEndProviderSession(ctx, task, occupant, provider, options); err != nil {
+		cleared, err = s.clearOrEndProviderSession(ctx, task, occupant, provider, options, accountChanged)
+		if err != nil {
 			return nil, err
 		}
 	}
 
-	if provider != task.Provider {
-		if err := providerClient.EnsureTaskSessionEnvironment(ctx, task.ProviderEnv); err != nil {
+	if provider != task.Provider || accountChanged {
+		if err := providerClient.EnsureTaskSessionEnvironment(ctx, env); err != nil {
 			return nil, fmt.Errorf("ensure task session environment: %w", err)
 		}
+	}
+	if provider != task.Provider {
 		// Like a provider switch: the workspace is bootstrapped for the new
 		// provider, never reseeded.
 		if err := s.launcher.bootstrapWorkspace(ctx, providerClient, task); err != nil {
@@ -113,6 +125,7 @@ func (s *service) newTaskSession(
 	launchTask.Provider = provider
 	launchTask.SetLaunch(options)
 	launchTask.Prompt = prompt
+	launchTask.ProviderEnv = env
 
 	reportTaskCreateProgress(reporter, TaskCreateProgressStartingSession)
 	// A cleared provider is still running: it is only given the prompt.
@@ -126,6 +139,7 @@ func (s *service) newTaskSession(
 
 	task.Provider = provider
 	task.SetLaunch(launchTask.Launch())
+	task.ProviderEnv = env
 	task.UpdatedAt = time.Now().UTC()
 	if err := s.tasks.UpdateTask(ctx, task); err != nil {
 		return nil, fmt.Errorf("record task launch options: %w", err)
@@ -156,21 +170,22 @@ func (s *service) sessionOccupant(ctx context.Context, task *Task, next Provider
 
 // clearOrEndProviderSession readies the Task's window for the next session.
 // A provider that would be launched the same way, the same provider with the
-// same model and effort, starts a fresh conversation in place with its clear
-// command, and reports true; any other is ended, so the next session is
-// launched anew with its own options.
+// same model and effort under the same account, starts a fresh conversation
+// in place with its clear command, and reports true; any other is ended, so
+// the next session is launched anew with its own options.
 func (s *service) clearOrEndProviderSession(
 	ctx context.Context,
 	task *Task,
 	occupant Provider,
 	next Provider,
 	options LaunchOptions,
+	accountChanged bool,
 ) (bool, error) {
 	client, err := supportedProviderClient(s.providers, occupant)
 	if err != nil {
 		return false, err
 	}
-	sameLaunch := occupant == next && next == task.Provider &&
+	sameLaunch := occupant == next && next == task.Provider && !accountChanged &&
 		strings.TrimSpace(options.Model) == task.Launch().Model &&
 		strings.TrimSpace(options.Effort) == task.Launch().Effort
 	if clear := client.ClearCommand(); sameLaunch && clear != "" {
@@ -228,6 +243,7 @@ func (s *service) startSessionAlongside(
 	custom string,
 	prompt string,
 	options LaunchOptions,
+	env ProviderEnv,
 	reporter TaskCreateProgressReporter,
 ) (*Task, error) {
 	existing, err := s.tasks.ListTasks(ctx)
@@ -252,7 +268,7 @@ func (s *service) startSessionAlongside(
 		reportTaskCreateProgress(reporter, TaskCreateProgressSuggestingName)
 		// The name is a label; a failed suggestion is not worth failing the
 		// session.
-		if suggestion, suggestErr := suggestTaskName(ctx, providerClient, custom, root.ProviderEnv); suggestErr == nil {
+		if suggestion, suggestErr := suggestTaskName(ctx, providerClient, custom, env); suggestErr == nil {
 			displayName = suggestion.Name
 		}
 	}
@@ -266,7 +282,7 @@ func (s *service) startSessionAlongside(
 	)
 	// The composed prompt is the child's own ask: a retry types it again.
 	child.Prompt = prompt
-	child.ProviderEnv = root.ProviderEnv
+	child.ProviderEnv = env
 	child.SetLaunch(options)
 	if err := s.tasks.CreateTask(ctx, child); err != nil {
 		return nil, err

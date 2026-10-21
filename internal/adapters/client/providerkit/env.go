@@ -1,6 +1,11 @@
 package providerkit
 
-import "github.com/BaronBonet/rig/internal/core"
+import (
+	"path/filepath"
+	"strings"
+
+	"github.com/BaronBonet/rig/internal/core"
+)
 
 // EnvCommand prefixes command with env(1) so a provider runs with the
 // configuration env decides for names: variables env leaves unset are removed
@@ -45,4 +50,15 @@ func EnvOverrides(env core.ProviderEnv, names []string) map[string]string {
 		overrides[name] = value
 	}
 	return overrides
+}
+
+// AccountEnv returns the env that selects the account in dir through the
+// variable name, which is left unset for defaultDir, the directory the
+// provider uses without it.
+func AccountEnv(name string, dir string, defaultDir string) core.ProviderEnv {
+	dir = filepath.Clean(strings.TrimSpace(dir))
+	if defaultDir != "" && dir == filepath.Clean(defaultDir) {
+		return core.ProviderEnv{name: ""}
+	}
+	return core.ProviderEnv{name: dir}
 }

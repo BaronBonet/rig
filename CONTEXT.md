@@ -64,6 +64,13 @@ Use `rig` for the CLI command and Rig for the product or system.
   session store (CLAUDE_CONFIG_DIR, CODEX_HOME), captured from the rig window a
   task came from and kept on the task, with an unset variable meaning the
   provider's default.
+- Account: One login of a Provider that Tasks can run under, the configuration
+  directory the provider keeps its credentials, settings and sessions in,
+  selected through the Provider configuration. A rig window offers its own
+  account first, then the others the user config offers in its folder; a new
+  Task takes the window's unless another is chosen, a New session its Task's.
+- Plan usage: How much of an Account's subscription rate limits (a five-hour
+  session, a week) is used and when each resets, as its Provider reports it.
 - Folder task: A task whose workspace is an existing folder, Git or not, used as
   it is. It has no branch of its own, may share its folder with other tasks,
   and is never seeded or removed by Rig.

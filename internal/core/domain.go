@@ -2,6 +2,7 @@ package core
 
 import (
 	"fmt"
+	"maps"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -139,6 +140,98 @@ type ProviderEnv map[string]string
 func (e ProviderEnv) Lookup(name string) (string, bool) {
 	value, ok := e[name]
 	return strings.TrimSpace(value), ok
+}
+
+// With returns the env with every variable overrides decides set its way, as
+// for a Task that runs under another account than its rig window's.
+func (e ProviderEnv) With(overrides ProviderEnv) ProviderEnv {
+	if len(overrides) == 0 {
+		return e
+	}
+	merged := make(ProviderEnv, len(e)+len(overrides))
+	maps.Copy(merged, e)
+	maps.Copy(merged, overrides)
+	return merged
+}
+
+// Selects reports whether a provider running with the env runs under the
+// account that selector, an account's env, selects: the env decides every
+// variable of selector the same way.
+func (e ProviderEnv) Selects(selector ProviderEnv) bool {
+	for name := range selector {
+		want, _ := selector.Lookup(name)
+		got, ok := e.Lookup(name)
+		if !ok || got != want {
+			return false
+		}
+	}
+	return true
+}
+
+// ProviderAccount is one login of a Provider that Tasks can run under: the
+// configuration directory the provider keeps its credentials, settings and
+// sessions in, chosen through the Provider configuration.
+type ProviderAccount struct {
+	Provider Provider `json:"provider"`
+	// Name is what the user config calls the account; the rig window's own
+	// account, when the config does not name it, is called by its directory.
+	Name string `json:"name"`
+	// Dir is the account's configuration directory.
+	Dir string `json:"dir"`
+	// Env is the Provider configuration that selects the account.
+	Env ProviderEnv `json:"env"`
+	// Window marks the account the rig window's own Provider configuration
+	// selects, which its new Tasks run under unless another is chosen.
+	Window bool `json:"window,omitempty"`
+	// Options are the launch choices the provider offers under the account;
+	// a Codex account offers the models of its own plan.
+	Options ProviderLaunchOptions `json:"options"`
+}
+
+// AccountConfig is an account of a Provider the user config offers in
+// Folders and every folder below them, or in every folder when it names none.
+type AccountConfig struct {
+	Provider Provider `json:"provider"`
+	Name     string   `json:"name"`
+	Dir      string   `json:"dir"`
+	Folders  []string `json:"folders,omitempty"`
+}
+
+// OfferedIn reports whether the account is offered to a rig window launched
+// in folder.
+func (a AccountConfig) OfferedIn(folder string) bool {
+	if len(a.Folders) == 0 {
+		return true
+	}
+	folder = filepath.Clean(folder)
+	for _, root := range a.Folders {
+		rel, err := filepath.Rel(filepath.Clean(root), folder)
+		if err == nil && rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+			return true
+		}
+	}
+	return false
+}
+
+// AccountUsage is how much of its plan's rate limits an account has used, as
+// its provider last reported.
+type AccountUsage struct {
+	// Plan names the account's subscription, such as "max" or "plus"; empty
+	// when the provider does not say.
+	Plan   string       `json:"plan,omitempty"`
+	Limits []UsageLimit `json:"limits,omitempty"`
+	// ReportedAt is when the provider reported the usage, which is earlier
+	// than now when it was recovered from a session transcript.
+	ReportedAt time.Time `json:"reported_at,omitzero"`
+}
+
+// UsageLimit is one rate limit window of a plan and how much of it is used.
+type UsageLimit struct {
+	// Name is the window, such as "5h" or "week".
+	Name        string  `json:"name"`
+	UsedPercent float64 `json:"used_percent"`
+	// ResetsAt is when the window starts over; zero when unknown.
+	ResetsAt time.Time `json:"resets_at,omitzero"`
 }
 
 // WorkspaceKind says how a Task's Workspace came to be, which decides what Rig

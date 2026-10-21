@@ -49,6 +49,11 @@ type fakeTaskService struct {
 	launchSettings    *core.LaunchSettings
 	launchSettingsEnv core.ProviderEnv
 
+	accounts       []core.ProviderAccount
+	accountsFolder string
+	accountsEnv    core.ProviderEnv
+	accountUsage   map[string]*core.AccountUsage
+
 	updates      chan core.TaskStatusUpdate
 	subscribeErr error
 	subscribeCtx chan context.Context
@@ -129,6 +134,23 @@ func (f *fakeTaskService) GetLaunchSettings(_ context.Context, env core.Provider
 	defer f.mu.Unlock()
 	f.launchSettingsEnv = env
 	return f.launchSettings, f.errByOp["get_launch_settings"]
+}
+
+func (f *fakeTaskService) ListProviderAccounts(
+	_ context.Context,
+	folder string,
+	env core.ProviderEnv,
+) ([]core.ProviderAccount, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.accountsFolder, f.accountsEnv = folder, env
+	return f.accounts, f.errByOp["list_provider_accounts"]
+}
+
+func (f *fakeTaskService) GetAccountUsage(_ context.Context, account core.ProviderAccount) (*core.AccountUsage, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.accountUsage[account.Dir], f.errByOp["get_account_usage"]
 }
 
 func (f *fakeTaskService) ListRepoPullRequests(_ context.Context, cwd string) ([]core.RepoPullRequest, error) {

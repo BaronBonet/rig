@@ -61,6 +61,9 @@ type configFile struct {
 	// LaunchDefaults are the options each provider was last launched with,
 	// preselected for its next launch.
 	LaunchDefaults map[core.Provider]core.LaunchOptions `json:"launch_defaults,omitempty"`
+	// Accounts are provider accounts offered besides each rig window's own,
+	// as the user wrote them: "~" may start a directory or folder.
+	Accounts []core.AccountConfig `json:"accounts,omitempty"`
 }
 
 // readConfigFile returns the persisted config, or false when none exists yet.
@@ -115,7 +118,7 @@ func (s *store) SaveProviderSetup(_ context.Context, setup core.ProviderSetup) e
 		return err
 	}
 
-	// Launch defaults survive a rerun of provider setup.
+	// Launch defaults and accounts survive a rerun of provider setup.
 	current, _, err := s.readConfigFile()
 	if err != nil {
 		return err
@@ -125,7 +128,60 @@ func (s *store) SaveProviderSetup(_ context.Context, setup core.ProviderSetup) e
 		ConfiguredProviders: setup.Configured,
 		DefaultProvider:     setup.Default,
 		LaunchDefaults:      current.LaunchDefaults,
+		Accounts:            current.Accounts,
 	})
+}
+
+// GetAccounts returns the accounts the config offers, with "~" expanded and
+// paths cleaned. An account without a supported provider, a name or a
+// directory is a mistake in the hand-written config, reported as an error.
+func (s *store) GetAccounts(_ context.Context) ([]core.AccountConfig, error) {
+	file, _, err := s.readConfigFile()
+	if err != nil {
+		return nil, err
+	}
+	accounts := make([]core.AccountConfig, 0, len(file.Accounts))
+	for index, account := range file.Accounts {
+		account.Name = strings.TrimSpace(account.Name)
+		if !core.IsSupportedProvider(account.Provider) ||
+			account.Name == "" || strings.TrimSpace(account.Dir) == "" {
+			return nil, fmt.Errorf(
+				"invalid account %d in user config %s: it needs a supported provider, a name and a dir",
+				index+1,
+				s.path,
+			)
+		}
+		if account.Dir, err = expandHome(account.Dir); err != nil {
+			return nil, err
+		}
+		folders := make([]string, 0, len(account.Folders))
+		for _, folder := range account.Folders {
+			if strings.TrimSpace(folder) == "" {
+				continue
+			}
+			expanded, err := expandHome(folder)
+			if err != nil {
+				return nil, err
+			}
+			folders = append(folders, expanded)
+		}
+		account.Folders = folders
+		accounts = append(accounts, account)
+	}
+	return accounts, nil
+}
+
+// expandHome resolves a leading "~" to the home directory and cleans path.
+func expandHome(path string) (string, error) {
+	path = strings.TrimSpace(path)
+	if path != "~" && !strings.HasPrefix(path, "~/") {
+		return filepath.Clean(path), nil
+	}
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return "", fmt.Errorf("resolve home directory: %w", err)
+	}
+	return filepath.Join(home, strings.TrimPrefix(path, "~")), nil
 }
 
 func (s *store) GetLaunchDefaults(_ context.Context) (map[core.Provider]core.LaunchOptions, error) {

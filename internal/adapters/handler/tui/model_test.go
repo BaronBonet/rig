@@ -75,7 +75,7 @@ func TestModel_ViewRendersTaskMetadata(t *testing.T) {
 	require.Contains(
 		t,
 		view,
-		"n new  N session  d shelve  e rename  tab shelf  i import  p provider  r refresh  space details  x clean  q quit",
+		"n new  N session  d shelve  e rename  tab shelf  i import  p provider  u usage  r refresh  space details  x clean  q quit",
 	)
 	require.Contains(t, view, "first task")
 	require.Contains(t, view, "repo-a")
@@ -2161,7 +2161,7 @@ func TestModel_PRPickerEnterCreatesTaskFromSelectedPR(t *testing.T) {
 	require.Contains(
 		t,
 		view,
-		"n new  N session  d shelve  e rename  tab shelf  i import  p provider  r refresh  space details  x clean  q quit",
+		"n new  N session  d shelve  e rename  tab shelf  i import  p provider  u usage  r refresh  space details  x clean  q quit",
 	)
 	require.Contains(t, view, "Creating task from pull request")
 	require.NotContains(t, view, "Suggesting name")
@@ -2237,7 +2237,7 @@ func TestModel_PRPickerCreateFailureReturnsToBrowseWithProgressAndError(t *testi
 	require.Contains(
 		t,
 		view,
-		"n new  N session  d shelve  e rename  tab shelf  i import  p provider  r refresh  space details  x clean  q quit",
+		"n new  N session  d shelve  e rename  tab shelf  i import  p provider  u usage  r refresh  space details  x clean  q quit",
 	)
 	require.Contains(t, view, "Creating task from pull request")
 	require.NotContains(t, view, "Creating worktree")
@@ -2498,6 +2498,12 @@ type frontendHarness struct {
 	newSessionStreamCalls       int
 	claimedFolder               string
 	claimedTasks                []*core.Task
+	accounts                    []core.ProviderAccount
+	accountsFolder              string
+	accountsEnv                 core.ProviderEnv
+	accountUsage                map[string]*core.AccountUsage
+	accountUsageErr             map[string]error
+	accountUsageCalls           []string
 }
 
 func newFrontendHarness() *frontendHarness {
@@ -2545,6 +2551,18 @@ func newFrontendHarness() *frontendHarness {
 				return nil, frontend.launchSettingsErr
 			}
 			return frontend.launchSettings, nil
+		},
+	).Maybe()
+	frontend.mock.EXPECT().ListProviderAccounts(mock.Anything, mock.Anything, mock.Anything).RunAndReturn(
+		func(_ context.Context, folder string, env core.ProviderEnv) ([]core.ProviderAccount, error) {
+			frontend.accountsFolder, frontend.accountsEnv = folder, env
+			return frontend.accounts, nil
+		},
+	).Maybe()
+	frontend.mock.EXPECT().GetAccountUsage(mock.Anything, mock.Anything).RunAndReturn(
+		func(_ context.Context, account core.ProviderAccount) (*core.AccountUsage, error) {
+			frontend.accountUsageCalls = append(frontend.accountUsageCalls, account.Dir)
+			return frontend.accountUsage[account.Dir], frontend.accountUsageErr[account.Dir]
 		},
 	).Maybe()
 	frontend.mock.EXPECT().NewTaskSessionStream(mock.Anything, mock.Anything).RunAndReturn(

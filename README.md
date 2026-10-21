@@ -152,6 +152,49 @@ Codex asks once per home to trust Rig's hooks, on the first task there.
 For a Claude Code account, export `CLAUDE_CONFIG_DIR` instead and run
 `claude` there once to log in.
 
+### Choosing the account per task
+
+The window's account is only the default. To offer other accounts while
+composing, name them under `accounts` in `~/.config/rig/config.json`:
+
+```json
+"accounts": [
+  { "provider": "claude", "name": "personal", "dir": "~/.claude" },
+  { "provider": "claude", "name": "acme", "dir": "~/.claude-acme", "folders": ["~/clients/acme"] },
+  { "provider": "codex", "name": "personal", "dir": "~/.codex" }
+]
+```
+
+`dir` is the account's `CLAUDE_CONFIG_DIR` or `CODEX_HOME`. Its provider's
+default directory means leaving the variable unset, which matters for Claude
+Code: it keeps the login of an explicit `CLAUDE_CONFIG_DIR=~/.claude` apart
+from the default one. An account is offered in a window launched in one of its
+`folders` or below them, or in every window when it names none. The window's
+own account always comes first and takes the name an entry gives its
+directory.
+
+While composing a task or a new session, `shift+tab` cycles the selected
+provider's accounts. The account line shows each one's plan usage as it is
+read. A new task takes the window's account, and a new session takes its
+task's. A session started under another account ends the running provider
+instead of clearing it, and the task keeps the new account from then on. The
+detail view names the task's account.
+
+### Plan usage
+
+`u` lists the accounts a window's tasks can run under, for every configured
+provider, with how much of each plan's limits is used and when they reset.
+`r` reads them again. `rig usage` prints the same list for the folder it runs
+in.
+
+Rig reads usage the way the providers' own `/usage` and `/status` do, with
+the login each one stored. That means the Claude Code login in the macOS
+keychain (or `.credentials.json` in its config directory), sent to
+`api.anthropic.com/api/oauth/usage`, and Codex's `auth.json`, sent to
+`chatgpt.com/backend-api/wham/usage`. Rig never renews a login. An expired one
+is reported until a session on that account renews it. Readings are reused for
+a minute.
+
 ## Provider Hooks
 
 Rig uses provider hooks to capture live task status, recent activity, provider
@@ -348,6 +391,7 @@ Common TUI keys:
 | `tab` | Cycle configured providers while composing a task |
 | `ctrl+t` | Cycle the model while composing |
 | `ctrl+r` | Cycle the effort while composing |
+| `shift+tab` | Cycle the account while composing |
 | `alt+enter` | Start a new line in the prompt (`shift+enter` too, inside tmux only with `extended-keys` on) |
 | `ctrl+g` | Toggle the handoff note while composing a new session |
 | `ctrl+w` | Replace the running session in its window instead of opening a new one |
@@ -359,6 +403,7 @@ Common TUI keys:
 | `tab` | Switch the list between the current tasks and the shelf |
 | `i` | Import a provider session started in this folder outside Rig |
 | `p` | Switch the selected task to another configured provider |
+| `u` | Show the accounts tasks here can run under and their plan usage |
 | `r` | Refresh task data and reorder the list |
 | `f` | Show the tasks of every folder, or only this folder's |
 | `R` | Retry a failed task creation |
@@ -387,6 +432,12 @@ Check environment health:
 
 ```bash
 rig doctor
+```
+
+Show the accounts tasks in this folder can run under, with each plan's usage:
+
+```bash
+rig usage
 ```
 
 Manage the background task daemon:

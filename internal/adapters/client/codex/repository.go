@@ -76,6 +76,10 @@ type repository struct {
 	transcriptKindMu    sync.Mutex
 	transcriptKinds     map[string]codexTranscriptKind
 	transcriptKindOrder []string
+	// usage keeps each account's latest plan usage reading; usageURL
+	// overrides where it is read from.
+	usage    *providerkit.UsageCache
+	usageURL string
 }
 
 func New(runner subprocess.Runner, cfg Config, hooks HookForwardingConfig) core.ProviderClient {
@@ -92,6 +96,7 @@ func New(runner subprocess.Runner, cfg Config, hooks HookForwardingConfig) core.
 		codexHomeDir: defaultCodexHomeDir,
 		rigDataDir:   providerkit.DefaultRigDataDir,
 		transcripts:  newCodexTranscriptIndex(defaultCodexTranscriptIndexBudget),
+		usage:        providerkit.NewUsageCache(),
 	}
 }
 

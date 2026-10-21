@@ -189,6 +189,18 @@ func (f *frontend) GetLaunchSettings(ctx context.Context, env core.ProviderEnv) 
 	return callUnary(ctx, f, opGetLaunchSettings, launchSettingsRequest{Env: env})
 }
 
+func (f *frontend) ListProviderAccounts(
+	ctx context.Context,
+	folder string,
+	env core.ProviderEnv,
+) ([]core.ProviderAccount, error) {
+	return callUnary(ctx, f, opListProviderAccounts, providerAccountsRequest{Folder: folder, Env: env})
+}
+
+func (f *frontend) GetAccountUsage(ctx context.Context, account core.ProviderAccount) (*core.AccountUsage, error) {
+	return callUnary(ctx, f, opGetAccountUsage, accountUsageRequest{Account: account})
+}
+
 func (f *frontend) RetryTaskCreationStream(
 	ctx context.Context,
 	taskID string,
