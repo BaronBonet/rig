@@ -96,3 +96,22 @@ func TestTaskServiceUnshelveTask_PutsTheGroupBackWithoutStartingIt(t *testing.T)
 	}
 	require.Nil(t, svc.sessionClient.startedTask, "it starts when opened")
 }
+
+func TestTaskServiceShelveTask_ReopeningResumesTheSavedConversation(t *testing.T) {
+	svc := newTestTaskService(t)
+	task := readyTaskFixture()
+	svc.taskRepo.listTasks = []*Task{task}
+	svc.taskRepo.latestResumeByTask[task.ID] = TaskResumeMetadata{
+		TaskID: task.ID, Provider: ProviderCodex, SessionID: "saved-conversation",
+	}
+
+	require.NoError(t, svc.service.ShelveTask(t.Context(), task.ID))
+	require.NoError(t, svc.service.UnshelveTask(t.Context(), task.ID))
+	svc.sessionClient.inspectState = TaskSessionRuntimeState{}
+	require.NoError(t, svc.service.ReconnectTaskSession(t.Context(), task.ID))
+
+	require.Equal(t, []string{"env", "RIG_TASK_ID=" + task.ID, "codex", "resume", "saved-conversation"},
+		svc.sessionClient.startedLaunch.Command)
+	require.Empty(t, svc.taskRepo.deletedTaskIDs)
+	require.Nil(t, svc.repoClient.removedTask)
+}

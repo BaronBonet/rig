@@ -373,6 +373,16 @@ running for its folder, it returns to the rig that opened the task, and from
 any other session to the rig you used last. Set `RIG_TMUX_RETURN_KEY` to use
 another key, or to `none` to leave your tmux key bindings alone.
 
+Returning to Rig or detaching from tmux leaves the task's tmux session and
+programs running. Shelving closes the task's tmux session; shelving one
+additional session closes only its window. The task, worktree and saved
+provider conversations stay. Opening a shelved task recreates its tmux session
+and resumes its latest conversation.
+
+If a session closes before its first Claude prompt is submitted, Rig restores
+that saved initial prompt when reopened. Opening a failed creation retries its
+failed step and restores its original prompt.
+
 Check environment health:
 
 ```bash
@@ -525,8 +535,15 @@ Tasks whose active provider is no longer configured stay visible so you can
 browse, inspect, and clean them up; provider-dependent actions on them report a
 clear error until you re-enable the provider with `rig setup`.
 
-Reconnecting a lost tmux session resumes the active provider by its recorded
-session ID when available and launches the provider fresh otherwise.
+Opening a task ensures its provider is running before attaching. After a reboot,
+run `rig` in your restored Rig tmux session and press `enter` on the task you want.
+Rig resumes its recorded Codex or Claude conversation even when tmux restored
+the task's window as an idle shell. Other tasks stay dormant until opened, and
+an already running provider is attached without launching another process.
+The task's account configuration, model, effort and hook identity are preserved.
+When no conversation has been recorded, the provider starts fresh without
+resubmitting the original task prompt. An unrelated foreground program must
+be exited before Rig can resume the provider in that window.
 
 ## Workspace Seeding
 

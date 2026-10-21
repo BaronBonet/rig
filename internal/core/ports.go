@@ -247,13 +247,13 @@ type TaskService interface {
 	// DeleteTask deletes the task and its local runtime resources while keeping
 	// the Git branch.
 	DeleteTask(ctx context.Context, taskID string) error
-	// ReconnectTaskSession recreates a missing task runtime session from
-	// persisted provider resume metadata.
+	// ReconnectTaskSession ensures the task's provider is running, resuming
+	// persisted metadata when its window is missing or contains an idle shell.
 	ReconnectTaskSession(ctx context.Context, taskID string) error
 	// ShelveTask takes the task and its child tasks off the current list. Their
 	// provider sessions end and everything else is kept, so opening the task
-	// later resumes its latest session. It refuses while any of them is
-	// working.
+	// later resumes its latest session. It refuses while the task is being
+	// created.
 	ShelveTask(ctx context.Context, taskID string) error
 	// UnshelveTask puts the task and its child tasks back on the current list.
 	// Their sessions start again when they are opened.

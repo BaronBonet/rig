@@ -44,6 +44,7 @@ func TestTaskServiceCreateTask_RunsTheTaskWithTheWindowsProviderConfiguration(t 
 
 func TestTaskServiceReconnectTaskSession_KeepsTheTasksProviderConfiguration(t *testing.T) {
 	svc := newTestTaskService(t)
+	svc.sessionClient.inspectState = TaskSessionRuntimeState{}
 	task := codexTaskFixture()
 	task.ProviderEnv = workEnv
 	svc.taskRepo.listTasks = []*Task{task}

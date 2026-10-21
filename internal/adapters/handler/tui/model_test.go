@@ -1319,16 +1319,16 @@ func TestModel_EnterReconnectsWhenSessionIsMissing(t *testing.T) {
 	frontend.listTasks = []*core.Task{
 		{ID: "task-1", DisplayName: "first task", TmuxSession: "repo_task_1", Provider: core.ProviderCodex},
 	}
-	attempts := 0
+	exists := false
 	frontend.attachTaskSessionFn = func(context.Context, *core.Task) error {
-		attempts++
-		if attempts == 1 {
+		if !exists {
 			return core.ErrTaskSessionNotFound
 		}
 		return nil
 	}
 	frontend.reconnectTaskSessionFn = func(_ context.Context, taskID string) error {
 		require.Equal(t, "task-1", taskID)
+		exists = true
 		return nil
 	}
 
@@ -1352,8 +1352,59 @@ func TestModel_EnterReconnectsWhenSessionIsMissing(t *testing.T) {
 	require.NoError(t, got.err)
 	require.Equal(t, opNone, got.pending)
 	require.False(t, got.opening)
-	require.Equal(t, 2, frontend.attachTaskSessionCalls)
+	require.Equal(t, 1, frontend.attachTaskSessionCalls)
 	require.Equal(t, 1, frontend.reconnectTaskSessionCalls)
+}
+
+func TestModel_OpenRestoredTaskEnsuresItsProviderBeforeAttaching(t *testing.T) {
+	frontend := newFrontendHarness()
+	task := &core.Task{ID: "task-1", TmuxSession: "repo_task", TmuxWindow: "s2"}
+	var events []string
+	frontend.reconnectTaskSessionFn = func(_ context.Context, taskID string) error {
+		require.Equal(t, task.ID, taskID)
+		events = append(events, "resume")
+		return nil
+	}
+	frontend.attachTaskSessionFn = func(_ context.Context, attached *core.Task) error {
+		require.Same(t, task, attached)
+		events = append(events, "attach")
+		return nil
+	}
+
+	msg := openTaskSessionCmd(t.Context(), frontend.mock, task)().(taskOpenedMsg)
+
+	require.NoError(t, msg.err)
+	require.Equal(t, []string{"resume", "attach"}, events)
+}
+
+func TestModel_OpenTaskResumeFailureLeavesTheUserInRig(t *testing.T) {
+	frontend := newFrontendHarness()
+	frontend.reconnectTaskSessionErr = errors.New("saved conversation unavailable")
+
+	msg := openTaskSessionCmd(t.Context(), frontend.mock, &core.Task{ID: "task-1"})().(taskOpenedMsg)
+
+	require.ErrorContains(t, msg.err, "saved conversation unavailable")
+	require.Zero(t, frontend.attachTaskSessionCalls)
+}
+
+func TestModel_EnterRetriesFailedCreationInsteadOfOpeningWithoutItsPrompt(t *testing.T) {
+	frontend := newFrontendHarness()
+	frontend.listTasks = []*core.Task{{
+		ID: "task-1", DisplayName: "CME priorities", Prompt: "review the meeting notes",
+		CreationStatus: core.TaskCreationStatusFailed, CreationStep: core.TaskCreateProgressStartingSession,
+	}}
+	m := newLoadedModel(frontend)
+
+	next, cmd := m.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
+	pending := next.(model)
+	require.Equal(t, opCreating, pending.pending)
+	require.False(t, pending.opening)
+	_ = runBatchCmd(t, cmd)
+
+	require.Equal(t, "task-1", frontend.retryTaskID)
+	require.Equal(t, 1, frontend.retryTaskStreamCalls)
+	require.Zero(t, frontend.reconnectTaskSessionCalls)
+	require.Zero(t, frontend.attachTaskSessionCalls)
 }
 
 func TestModel_EnterDoesNotStartAnotherOpenWhileReconnectIsPending(t *testing.T) {

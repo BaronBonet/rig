@@ -3,6 +3,7 @@ package tui
 import (
 	"context"
 	"errors"
+	"fmt"
 	"time"
 
 	"github.com/BaronBonet/rig/internal/core"
@@ -84,6 +85,14 @@ func sessionPreviewTickCmd(seq int) tea.Cmd {
 
 func openTaskSessionCmd(ctx context.Context, frontend core.TaskFrontend, task *core.Task) tea.Cmd {
 	return func() tea.Msg {
+		if task == nil {
+			return taskOpenedMsg{err: fmt.Errorf("task is required")}
+		}
+		// A restored tmux window can exist with only an idle shell. Ensure its
+		// provider on demand before moving the user's terminal into the window.
+		if err := frontend.ReconnectTaskSession(ctx, task.ID); err != nil {
+			return taskOpenedMsg{err: err}
+		}
 		err := frontend.AttachTaskSession(ctx, task)
 		if errors.Is(err, core.ErrTaskSessionNotFound) && task != nil {
 			if reconnectErr := frontend.ReconnectTaskSession(ctx, task.ID); reconnectErr != nil {

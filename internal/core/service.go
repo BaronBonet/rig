@@ -4,6 +4,8 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"os"
+	"path/filepath"
 	"strings"
 	"time"
 )
@@ -396,13 +398,56 @@ func (s *service) reconnectTask(ctx context.Context, task *Task) error {
 		return err
 	}
 
+	// A resurrected window may contain only a shell. Opening a task ensures
+	// its provider is running before attaching, without starting it twice or
+	// typing a launch command into another foreground program.
+	runtime, err := s.tmuxSession.InspectTaskSession(ctx, task)
+	if err != nil {
+		return fmt.Errorf("inspect task session before reconnect: %w", err)
+	}
+	if runtime.Exists {
+		for _, client := range s.providers {
+			if taskSessionRunningProvider(runtime, client.TaskSessionCommandName()) {
+				return nil
+			}
+		}
+		if runtime.ChildProcessEvidenceUnavailable || len(runtime.ActiveCommands) == 0 {
+			return fmt.Errorf("cannot determine whether task window is idle; inspect it before reconnecting")
+		}
+		for _, command := range runtime.ActiveCommands {
+			switch strings.TrimPrefix(filepath.Base(strings.TrimSpace(command)), "-") {
+			case "sh", "bash", "zsh", "fish", "dash", "ksh":
+			default:
+				return fmt.Errorf("task window is busy with %s; exit it before reconnecting", command)
+			}
+		}
+	}
+
 	resumeMetadata, err := s.tasks.LatestTaskResumeMetadata(ctx, task.ID)
 	if err != nil {
 		return fmt.Errorf("load task resume metadata: %w", err)
 	}
-	// Resume metadata recorded for a previous active provider cannot resume the
-	// current one; reconnect launches the active provider fresh instead.
+	// Late hooks from a previous provider can leave the resume row stale.
+	// Prefer the active provider's recorded history over a fresh conversation.
 	if resumeMetadata != nil && resumeMetadata.Provider != task.Provider {
+		resumeMetadata = nil
+	}
+	if resumeMetadata == nil || strings.TrimSpace(resumeMetadata.SessionID) == "" {
+		previous, previousErr := s.latestProviderSession(ctx, task)
+		if previousErr != nil {
+			return previousErr
+		}
+		if previous != nil {
+			resumeMetadata = &TaskResumeMetadata{
+				TaskID: task.ID, Provider: task.Provider, SessionID: previous.ProviderSessionID,
+			}
+		}
+	}
+	restoreInitialPrompt, err := s.initialClaudePromptPending(ctx, task, resumeMetadata)
+	if err != nil {
+		return err
+	}
+	if restoreInitialPrompt {
 		resumeMetadata = nil
 	}
 
@@ -422,6 +467,11 @@ func (s *service) reconnectTask(ctx context.Context, task *Task) error {
 		if err != nil {
 			return fmt.Errorf("build reconnect task session launch spec: %w", err)
 		}
+	} else if restoreInitialPrompt {
+		launch, err = providerClient.BuildTaskSessionLaunchSpec(task)
+		if err != nil {
+			return fmt.Errorf("restore initial task prompt: %w", err)
+		}
 	} else {
 		launch, err = promptlessTaskSessionLaunchSpec(providerClient, task)
 		if err != nil {
@@ -429,11 +479,49 @@ func (s *service) reconnectTask(ctx context.Context, task *Task) error {
 		}
 	}
 
+	// Restored shells have lost tmux's per-window environment. Carry the task
+	// identity on the provider command as well, especially for sibling sessions.
+	launch.Command = append([]string{"env", TaskIDEnvVar + "=" + task.ID}, launch.Command...)
+	prefill := launch.PrefillInput
+	launch.PrefillInput = nil
+	var knownSessions map[string]bool
+	if len(prefill) > 0 {
+		knownSessions = s.launcher.providerSessionIDs(ctx, task)
+	}
 	if err := s.tmuxSession.StartTaskSession(ctx, task, launch); err != nil {
 		return fmt.Errorf("reconnect task session: %w", err)
 	}
 
-	return nil
+	launch.PrefillInput = prefill
+	return s.launcher.prefillSession(ctx, task, launch, knownSessions, false)
+}
+
+// Claude can report its first session ID before writing a conversation. If
+// the task has only startup records whose transcripts do not exist,
+// reopening must restore the initial prompt rather than resume a nonexistent
+// conversation. Later sessions and unreadable transcripts keep their IDs.
+func (s *service) initialClaudePromptPending(
+	ctx context.Context, task *Task, resume *TaskResumeMetadata,
+) (bool, error) {
+	if task.Provider != ProviderClaude || task.Prompt == "" || resume == nil {
+		return false, nil
+	}
+	sessions, err := s.tasks.ListTaskProviderSessions(ctx, task.ID)
+	if err != nil {
+		return false, fmt.Errorf("read initial task session: %w", err)
+	}
+	matched := false
+	for _, session := range sessions {
+		if session.Provider != task.Provider || session.LastEventName != HookEventSessionStart ||
+			session.TranscriptPath == "" {
+			return false, nil
+		}
+		if _, statErr := os.Stat(session.TranscriptPath); !errors.Is(statErr, os.ErrNotExist) {
+			return false, nil
+		}
+		matched = matched || session.ProviderSessionID == resume.SessionID
+	}
+	return matched, nil
 }
 
 // promptlessTaskSessionLaunchSpec builds a fresh provider launch spec without

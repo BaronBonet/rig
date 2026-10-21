@@ -693,6 +693,11 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			if row == nil || row.task == nil {
 				return m, nil
 			}
+			if row.task.CreationStatus == core.TaskCreationStatusFailed {
+				// Finish the original creation, including its saved prompt,
+				// instead of reconnecting into a fresh, promptless provider.
+				return m.retrySelectedTaskCreation()
+			}
 			cmds := []tea.Cmd{openTaskSessionCmd(m.statusContext, m.frontend, row.task)}
 			if m.pending == opNone {
 				m.shimmerTick = 0

@@ -251,26 +251,35 @@ func (l *sessionLauncher) launchSession(ctx context.Context, task *Task, reuseRu
 			return task, fmt.Errorf("start task session: %w", err)
 		}
 	}
-	if len(prefill) == 0 {
-		return task, nil
-	}
-
 	// A provider that was already running reported its session before; only
 	// a fresh launch has a session start to wait for.
 	launch.PrefillInput = prefill
+	return task, l.prefillSession(ctx, task, launch, knownSessions, reused)
+}
+
+func (l *sessionLauncher) prefillSession(
+	ctx context.Context,
+	task *Task,
+	launch TaskSessionLaunchSpec,
+	knownSessions map[string]bool,
+	reused bool,
+) error {
+	if len(launch.PrefillInput) == 0 {
+		return nil
+	}
 	if reused || l.providerSessionWait <= 0 ||
 		l.awaitProviderReady(ctx, task, launch, knownSessions, l.providerSessionWait) {
 		if err := l.tmuxSession.PrefillTaskSession(ctx, task, launch); err != nil {
-			return task, fmt.Errorf("type task prompt into the session: %w", err)
+			return fmt.Errorf("type task prompt into the session: %w", err)
 		}
-		return task, nil
+		return nil
 	}
 
 	// The provider is not ready yet, most likely a startup dialog is waiting
 	// for the user. The launch is complete; the prompt is typed once it is
 	// ready. The task record keeps it meanwhile.
 	go l.prefillWhenReady(context.WithoutCancel(ctx), task, launch, knownSessions)
-	return task, nil
+	return nil
 }
 
 func (l *sessionLauncher) prefillWhenReady(

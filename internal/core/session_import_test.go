@@ -44,6 +44,7 @@ func TestTaskService_ListImportableSessionsMergesProvidersAndSkipsOwnedSessions(
 
 func TestTaskService_ImportSessionResumesItAsAFolderTask(t *testing.T) {
 	svc := newTestTaskService(t)
+	svc.sessionClient.inspectState = TaskSessionRuntimeState{}
 	folder := t.TempDir()
 	lastActive := time.Date(2026, time.October, 2, 9, 0, 0, 0, time.UTC)
 	env := ProviderEnv{"CODEX_HOME": "/home/me/.codex-work"}
@@ -80,7 +81,11 @@ func TestTaskService_ImportSessionResumesItAsAFolderTask(t *testing.T) {
 	}, svc.taskRepo.savedResumeMetadata)
 
 	require.Equal(t, task.ID, svc.sessionClient.startedTask.ID)
-	require.Equal(t, []string{"codex", "resume", "sess-42"}, svc.sessionClient.startedLaunch.Command)
+	require.Equal(
+		t,
+		[]string{"env", "RIG_TASK_ID=" + task.ID, "codex", "resume", "sess-42"},
+		svc.sessionClient.startedLaunch.Command,
+	)
 	require.False(t, svc.workspace.setupCalled, "an imported session's folder is never seeded")
 }
 
@@ -116,6 +121,7 @@ func TestTaskService_ImportSessionRefusesAMissingFolder(t *testing.T) {
 
 func TestTaskService_ImportSessionKeepsTheTaskWhenItsSessionFailsToStart(t *testing.T) {
 	svc := newTestTaskService(t)
+	svc.sessionClient.inspectState = TaskSessionRuntimeState{}
 	svc.providerRepo.reconnectLaunchErr = errTestReconnect
 
 	task, err := svc.service.ImportSession(t.Context(), ProviderSessionSummary{
