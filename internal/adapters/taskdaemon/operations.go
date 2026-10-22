@@ -133,6 +133,18 @@ var opTaskPullRequests = unaryOp[taskIDRequest, core.TaskPullRequests]{
 	},
 }
 
+var opStoredTaskPullRequests = unaryOp[taskIDRequest, core.TaskPullRequests]{
+	command:  "stored_task_pull_requests",
+	envelope: "stored_task_pull_requests",
+	call: func(ctx context.Context, svc core.TaskService, req taskIDRequest) (core.TaskPullRequests, error) {
+		taskID, err := requiredTaskID("stored_task_pull_requests", req.TaskID)
+		if err != nil {
+			return core.TaskPullRequests{}, err
+		}
+		return svc.StoredTaskPullRequests(ctx, taskID)
+	},
+}
+
 var opReconnectTaskSession = unaryOp[taskIDRequest, emptyResponse]{
 	command:  "reconnect_task_session",
 	envelope: "task_session_reconnected",
@@ -324,26 +336,27 @@ func serveUnary[Req, Resp any](op unaryOp[Req, Resp]) unaryHandler {
 // callUnary. The frontend cannot compile without a descriptor per TaskService
 // method, which keeps this table honest.
 var socketUnaryHandlers = map[string]unaryHandler{
-	opGetTaskActivity.command:      serveUnary(opGetTaskActivity),
-	opGetTaskUsage.command:         serveUnary(opGetTaskUsage),
-	opListRepoPullRequests.command: serveUnary(opListRepoPullRequests),
-	opTaskPullRequests.command:     serveUnary(opTaskPullRequests),
-	opReconnectTaskSession.command: serveUnary(opReconnectTaskSession),
-	opGetProviderSetup.command:     serveUnary(opGetProviderSetup),
-	opSaveProviderSetup.command:    serveUnary(opSaveProviderSetup),
-	opDetectProviders.command:      serveUnary(opDetectProviders),
-	opListProviderModels.command:   serveUnary(opListProviderModels),
-	opGetLaunchDefaults.command:    serveUnary(opGetLaunchDefaults),
-	opSaveLaunchDefault.command:    serveUnary(opSaveLaunchDefault),
-	opGetRepoDirs.command:          serveUnary(opGetRepoDirs),
-	opSaveRepoDirs.command:         serveUnary(opSaveRepoDirs),
-	opListRepos.command:            serveUnary(opListRepos),
-	opSuggestRepoDir.command:       serveUnary(opSuggestRepoDir),
-	opDeleteTask.command:           serveUnary(opDeleteTask),
-	opRemoveAgentSession.command:   serveUnary(opRemoveAgentSession),
-	opListTasks.command:            serveUnary(opListTasks),
-	opTaskAtPath.command:           serveUnary(opTaskAtPath),
-	opLatestTaskStatus.command:     serveUnary(opLatestTaskStatus),
+	opGetTaskActivity.command:        serveUnary(opGetTaskActivity),
+	opGetTaskUsage.command:           serveUnary(opGetTaskUsage),
+	opListRepoPullRequests.command:   serveUnary(opListRepoPullRequests),
+	opTaskPullRequests.command:       serveUnary(opTaskPullRequests),
+	opStoredTaskPullRequests.command: serveUnary(opStoredTaskPullRequests),
+	opReconnectTaskSession.command:   serveUnary(opReconnectTaskSession),
+	opGetProviderSetup.command:       serveUnary(opGetProviderSetup),
+	opSaveProviderSetup.command:      serveUnary(opSaveProviderSetup),
+	opDetectProviders.command:        serveUnary(opDetectProviders),
+	opListProviderModels.command:     serveUnary(opListProviderModels),
+	opGetLaunchDefaults.command:      serveUnary(opGetLaunchDefaults),
+	opSaveLaunchDefault.command:      serveUnary(opSaveLaunchDefault),
+	opGetRepoDirs.command:            serveUnary(opGetRepoDirs),
+	opSaveRepoDirs.command:           serveUnary(opSaveRepoDirs),
+	opListRepos.command:              serveUnary(opListRepos),
+	opSuggestRepoDir.command:         serveUnary(opSuggestRepoDir),
+	opDeleteTask.command:             serveUnary(opDeleteTask),
+	opRemoveAgentSession.command:     serveUnary(opRemoveAgentSession),
+	opListTasks.command:              serveUnary(opListTasks),
+	opTaskAtPath.command:             serveUnary(opTaskAtPath),
+	opLatestTaskStatus.command:       serveUnary(opLatestTaskStatus),
 }
 
 func errorEnvelope(err error) socketEnvelope {

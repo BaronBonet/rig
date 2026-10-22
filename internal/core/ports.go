@@ -286,6 +286,11 @@ type TaskService interface {
 	// branch known, it also returns the worktree's unshipped work, or none
 	// when the worktree is gone or git cannot read it.
 	TaskPullRequests(ctx context.Context, taskID string) (TaskPullRequests, error)
+	// StoredTaskPullRequests returns what TaskPullRequests last returned for
+	// a task, or nothing when it never has. It asks neither gh nor git, so it
+	// is quick, for showing a task's pull requests while TaskPullRequests
+	// looks them up again.
+	StoredTaskPullRequests(ctx context.Context, taskID string) (TaskPullRequests, error)
 	// GetTaskActivity returns recent persisted activity events for the selected
 	// task detail view, ordered oldest-to-newest within the requested window.
 	GetTaskActivity(ctx context.Context, taskID string, limit int) ([]TaskActivityEvent, error)
@@ -476,6 +481,12 @@ type TaskRepository interface {
 	// recorded before. Recording a branch again changes nothing, and deleting
 	// the task deletes its branches' records.
 	RecordTaskBranches(ctx context.Context, taskID string, branchNames []string) error
+	// GetTaskPullRequests returns the pull requests and unshipped work last
+	// saved for a task, without their commits, or none when none were saved.
+	GetTaskPullRequests(ctx context.Context, taskID string) (TaskPullRequests, error)
+	// SaveTaskPullRequests replaces what was saved for a task. Deleting the
+	// task deletes it.
+	SaveTaskPullRequests(ctx context.Context, taskID string, pullRequests TaskPullRequests) error
 }
 
 // ProviderClient wraps provider-specific behavior behind one application

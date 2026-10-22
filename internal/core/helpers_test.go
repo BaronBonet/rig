@@ -102,6 +102,9 @@ type taskRepositoryState struct {
 	recordedTaskBranches [][]string
 	listTaskBranchesErr  error
 	recordTaskBranchErr  error
+	// savedPullRequests are the pull requests last saved for each task.
+	savedPullRequests       map[string]TaskPullRequests
+	saveTaskPullRequestsErr error
 }
 
 type repoClientState struct {
@@ -1253,6 +1256,27 @@ func configureAgentSessionRepositoryMock(repo *MockTaskRepository, state *taskRe
 					state.taskBranches[taskID] = append(state.taskBranches[taskID], branch)
 				}
 			}
+			return nil
+		},
+	).Maybe()
+	repo.EXPECT().GetTaskPullRequests(mock.Anything, mock.Anything).RunAndReturn(
+		func(_ context.Context, taskID string) (TaskPullRequests, error) {
+			state.mu.Lock()
+			defer state.mu.Unlock()
+			return state.savedPullRequests[taskID], nil
+		},
+	).Maybe()
+	repo.EXPECT().SaveTaskPullRequests(mock.Anything, mock.Anything, mock.Anything).RunAndReturn(
+		func(_ context.Context, taskID string, pullRequests TaskPullRequests) error {
+			state.mu.Lock()
+			defer state.mu.Unlock()
+			if state.saveTaskPullRequestsErr != nil {
+				return state.saveTaskPullRequestsErr
+			}
+			if state.savedPullRequests == nil {
+				state.savedPullRequests = map[string]TaskPullRequests{}
+			}
+			state.savedPullRequests[taskID] = pullRequests
 			return nil
 		},
 	).Maybe()

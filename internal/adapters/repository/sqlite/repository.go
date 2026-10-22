@@ -3,6 +3,7 @@ package sqlite
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
@@ -167,6 +168,14 @@ func (r *healthCheckRepository) ListTaskBranches(context.Context, string) ([]str
 }
 
 func (r *healthCheckRepository) RecordTaskBranches(context.Context, string, []string) error {
+	return errHealthCheckRepositoryOnly
+}
+
+func (r *healthCheckRepository) GetTaskPullRequests(context.Context, string) (core.TaskPullRequests, error) {
+	return core.TaskPullRequests{}, errHealthCheckRepositoryOnly
+}
+
+func (r *healthCheckRepository) SaveTaskPullRequests(context.Context, string, core.TaskPullRequests) error {
 	return errHealthCheckRepositoryOnly
 }
 
@@ -524,6 +533,42 @@ func (r *repository) RecordTaskBranches(ctx context.Context, taskID string, bran
 		}
 	}
 	return tx.Commit()
+}
+
+func (r *repository) GetTaskPullRequests(ctx context.Context, taskID string) (core.TaskPullRequests, error) {
+	stored, err := r.queries.GetTaskPullRequests(ctx, strings.TrimSpace(taskID))
+	if errors.Is(err, sql.ErrNoRows) {
+		return core.TaskPullRequests{}, nil
+	}
+	if err != nil {
+		return core.TaskPullRequests{}, err
+	}
+
+	var pullRequests core.TaskPullRequests
+	if err := json.Unmarshal([]byte(stored), &pullRequests); err != nil {
+		return core.TaskPullRequests{}, fmt.Errorf("decode task pull requests: %w", err)
+	}
+	return pullRequests, nil
+}
+
+func (r *repository) SaveTaskPullRequests(
+	ctx context.Context,
+	taskID string,
+	pullRequests core.TaskPullRequests,
+) error {
+	taskID = strings.TrimSpace(taskID)
+	if taskID == "" {
+		return fmt.Errorf("task pull requests task ID is required")
+	}
+
+	encoded, err := json.Marshal(pullRequests)
+	if err != nil {
+		return fmt.Errorf("encode task pull requests: %w", err)
+	}
+	return r.queries.SaveTaskPullRequests(ctx, generated.SaveTaskPullRequestsParams{
+		TaskID:       taskID,
+		PullRequests: string(encoded),
+	})
 }
 
 func openSQLiteDB(path string) (*sql.DB, error) {

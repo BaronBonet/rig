@@ -69,6 +69,10 @@ func (f *frontend) TaskPullRequests(ctx context.Context, taskID string) (core.Ta
 	return callUnary(ctx, f, opTaskPullRequests, taskIDRequest{TaskID: taskID})
 }
 
+func (f *frontend) StoredTaskPullRequests(ctx context.Context, taskID string) (core.TaskPullRequests, error) {
+	return callUnary(ctx, f, opStoredTaskPullRequests, taskIDRequest{TaskID: taskID})
+}
+
 func (f *frontend) ReconnectTaskSession(ctx context.Context, taskID string) error {
 	_, err := callUnary(ctx, f, opReconnectTaskSession, taskIDRequest{TaskID: taskID})
 	return err

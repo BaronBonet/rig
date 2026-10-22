@@ -30,6 +30,7 @@ type fakeTaskService struct {
 	usage      map[string]*core.TaskUsage
 	prs        map[string][]core.RepoPullRequest
 	taskPRs    map[string]core.TaskPullRequests
+	storedPRs  map[string]core.TaskPullRequests
 	setup      *core.ProviderSetup
 	detections []core.ProviderDetection
 	models     map[core.Provider][]core.ProviderModel
@@ -69,6 +70,7 @@ func newFakeTaskService() *fakeTaskService {
 		usage:          map[string]*core.TaskUsage{},
 		prs:            map[string][]core.RepoPullRequest{},
 		taskPRs:        map[string]core.TaskPullRequests{},
+		storedPRs:      map[string]core.TaskPullRequests{},
 		models:         map[core.Provider][]core.ProviderModel{},
 		launchDefaults: map[core.Provider]core.LaunchChoice{},
 		latest:         map[string]*core.TaskStatusUpdate{},
@@ -132,6 +134,12 @@ func (f *fakeTaskService) TaskPullRequests(_ context.Context, taskID string) (co
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	return f.taskPRs[taskID], f.errByOp["task_pull_requests"]
+}
+
+func (f *fakeTaskService) StoredTaskPullRequests(_ context.Context, taskID string) (core.TaskPullRequests, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.storedPRs[taskID], f.errByOp["stored_task_pull_requests"]
 }
 
 func (f *fakeTaskService) GetTaskActivity(
@@ -346,6 +354,11 @@ func TestUnaryOperationsRoundTrip(t *testing.T) {
 		},
 		UnshippedWork: core.UnshippedWork{Commits: 2, UncommittedChanges: true},
 	}
+	svc.storedPRs["task-1"] = core.TaskPullRequests{
+		PullRequests: []core.PullRequest{
+			{Number: 5, State: core.PRStateOpen, HeadBranch: "retries", HeadCommit: "5aa"},
+		},
+	}
 	svc.setup = &core.ProviderSetup{
 		Configured: []core.Provider{core.ProviderCodex},
 		Default:    core.ProviderCodex,
@@ -441,6 +454,14 @@ func TestUnaryOperationsRoundTrip(t *testing.T) {
 
 	t.Run("task pull requests requires task id", func(t *testing.T) {
 		_, err := client.TaskPullRequests(ctx, " ")
+		require.ErrorContains(t, err, "task_id required")
+	})
+
+	t.Run("stored task pull requests", func(t *testing.T) {
+		pullRequests, err := client.StoredTaskPullRequests(ctx, "task-1")
+		require.NoError(t, err)
+		require.Equal(t, svc.storedPRs["task-1"], pullRequests)
+		_, err = client.StoredTaskPullRequests(ctx, " ")
 		require.ErrorContains(t, err, "task_id required")
 	})
 
