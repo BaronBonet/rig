@@ -352,6 +352,20 @@ func taskPullRequestsCmd(ctx context.Context, frontend core.TaskFrontend, taskID
 	}
 }
 
+// storedTaskPullRequestsCmd loads the pull requests the daemon saved for a
+// task, which it reads without asking gh.
+func storedTaskPullRequestsCmd(ctx context.Context, frontend core.TaskFrontend, taskID string) tea.Cmd {
+	return func() tea.Msg {
+		pullRequests, err := frontend.StoredTaskPullRequests(ctx, taskID)
+		return taskPullRequestsLoadedMsg{
+			taskID:       taskID,
+			pullRequests: pullRequests,
+			err:          err,
+			stored:       true,
+		}
+	}
+}
+
 func subscribeTaskStatusCmd(ctx context.Context, frontend core.TaskFrontend, taskID string) tea.Cmd {
 	return func() tea.Msg {
 		updates, err := frontend.SubscribeTaskStatus(ctx, taskID)

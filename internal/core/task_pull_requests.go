@@ -46,7 +46,17 @@ func (s *service) TaskPullRequests(ctx context.Context, taskID string) (TaskPull
 	if len(pullRequests) > 0 && defaultBranch != "" {
 		result.UnshippedWork = s.unshippedWork(ctx, task, defaultBranch, pullRequests)
 	}
+	// Failing to save only means the task list waits for gh next time.
+	if err := s.tasks.SaveTaskPullRequests(ctx, task.ID, result); err != nil {
+		s.reportWarning(fmt.Errorf("save task %s pull requests: %w", task.ID, err))
+	}
 	return result, nil
+}
+
+// StoredTaskPullRequests returns what TaskPullRequests last returned for a
+// task, as saved, without asking gh or git.
+func (s *service) StoredTaskPullRequests(ctx context.Context, taskID string) (TaskPullRequests, error) {
+	return s.tasks.GetTaskPullRequests(ctx, taskID)
 }
 
 // listPullRequests returns the pull requests of branches, oldest first, each

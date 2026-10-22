@@ -228,6 +228,47 @@ func TestTaskService_TaskPullRequestsStillListsWhenRecordingFails(t *testing.T) 
 	require.ErrorContains(t, h.warnings[0], "database is locked")
 }
 
+func TestTaskService_StoredTaskPullRequestsAreTheLastOnesListed(t *testing.T) {
+	h := newPullRequestsTestService(t)
+	ctx := context.Background()
+
+	stored, err := h.service.StoredTaskPullRequests(ctx, "task-1")
+	require.NoError(t, err)
+	require.Empty(t, stored.PullRequests)
+
+	h.pullRequests.branchPullRequests = map[string][]PullRequest{
+		"feat/billing-export": {{Number: 120, State: PRStateOpen}},
+	}
+	listed, err := h.service.TaskPullRequests(ctx, "task-1")
+	require.NoError(t, err)
+
+	// A failed lookup keeps the last ones listed, without asking gh.
+	h.pullRequests.branchPullRequestErrs = map[string]error{"feat/billing-export": errors.New("gh: offline")}
+	_, err = h.service.TaskPullRequests(ctx, "task-1")
+	require.Error(t, err)
+	listings := len(h.pullRequests.branchListings)
+
+	stored, err = h.service.StoredTaskPullRequests(ctx, "task-1")
+	require.NoError(t, err)
+	require.Equal(t, listed, stored)
+	require.Len(t, h.pullRequests.branchListings, listings)
+}
+
+func TestTaskService_TaskPullRequestsStillListsWhenSavingFails(t *testing.T) {
+	h := newPullRequestsTestService(t)
+	h.taskRepo.saveTaskPullRequestsErr = errors.New("database is locked")
+	h.pullRequests.branchPullRequests = map[string][]PullRequest{
+		"feat/billing-export": {{Number: 120, State: PRStateOpen}},
+	}
+
+	pullRequests, err := listTaskPullRequests(h)
+
+	require.NoError(t, err)
+	require.Equal(t, []PullRequest{{Number: 120, State: PRStateOpen}}, pullRequests)
+	require.Len(t, h.warnings, 1)
+	require.ErrorContains(t, h.warnings[0], "database is locked")
+}
+
 func TestTaskService_TaskPullRequestsFailsWhenTheRecordedBranchesCannotBeRead(t *testing.T) {
 	h := newPullRequestsTestService(t)
 	h.taskRepo.listTaskBranchesErr = errors.New("database is locked")

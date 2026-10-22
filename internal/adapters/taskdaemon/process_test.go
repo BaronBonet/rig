@@ -363,7 +363,7 @@ func TestFrontendBuildVersion_DefaultsToDev(t *testing.T) {
 func TestFrontendProtocolVersion_DefaultsToCurrentValue(t *testing.T) {
 	t.Parallel()
 
-	require.Equal(t, 26, currentFrontendProtocolVersion)
+	require.Equal(t, 27, currentFrontendProtocolVersion)
 }
 
 func TestAdapterEnsureRunning_RestartsStaleHealthyDaemonMissingFrontendProtocol(t *testing.T) {

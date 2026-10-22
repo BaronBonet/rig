@@ -74,6 +74,10 @@ in words.
 | <img src="legend/pr-history.svg" height="22" alt="purple ✓✓ then green ●#127"> | Earlier pull requests come first, as symbols; `…` in front means older ones are left out |
 | <img src="legend/pr-unshipped.svg" height="22" alt="green ●#127 then +"> | The branch has work no pull request contains yet |
 
+When the task list opens, each task first shows the pull requests the daemon
+found for it last time, from its database. The list then asks GitHub again,
+and does so every 30 seconds after that.
+
 ## Per-repo Setup
 
 To copy files into each new worktree and run a setup script there, add a

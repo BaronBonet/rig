@@ -232,6 +232,9 @@ type taskPullRequestsLoadedMsg struct {
 	err          error
 	taskID       string
 	pullRequests core.TaskPullRequests
+	// stored marks the pull requests the daemon saved last time, which show
+	// until it has looked them up again.
+	stored bool
 }
 
 type taskActivityLoadedMsg struct {
@@ -643,10 +646,12 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case taskPullRequestsLoadedMsg:
 		// A refresh that fails keeps the pull requests and unshipped work
 		// loaded before.
-		if msg.err != nil {
-			return m, nil
+		if msg.err == nil {
+			m.setTaskPullRequests(msg.taskID, msg.pullRequests)
 		}
-		m.setTaskPullRequests(msg.taskID, msg.pullRequests)
+		if msg.stored {
+			return m, taskPullRequestsCmd(m.statusContext, m.frontend, msg.taskID)
+		}
 		return m, nil
 	case taskActivityLoadedMsg:
 		if msg.err != nil {
@@ -935,7 +940,7 @@ func (m *model) afterTasksLoadedCmds(known map[string]bool) []tea.Cmd {
 		if taskID != "" && !known[taskID] {
 			cmds = append(cmds, taskActivityCmd(m.statusContext, m.frontend, taskID, taskActivityFetchLimit))
 			cmds = append(cmds, taskUsageCmd(m.statusContext, m.frontend, taskID))
-			cmds = append(cmds, taskPullRequestsCmd(m.statusContext, m.frontend, taskID))
+			cmds = append(cmds, storedTaskPullRequestsCmd(m.statusContext, m.frontend, taskID))
 		}
 	}
 	return cmds

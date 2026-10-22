@@ -395,6 +395,10 @@ func TestModel_PullRequestsShownInOverviewRowsAndDetailPanel(t *testing.T) {
 		}},
 	}
 
+	frontend.storedTaskPullRequests = map[string]core.TaskPullRequests{
+		"task-1": {PullRequests: []core.PullRequest{{Number: 40, State: core.PRStateOpen, HeadBranch: "feat/auth"}}},
+	}
+
 	m := newTestModel(frontend.mock)
 	m, loadMsg := initModel(t, m)
 	next, cmd := m.Update(loadMsg)
@@ -403,12 +407,21 @@ func TestModel_PullRequestsShownInOverviewRowsAndDetailPanel(t *testing.T) {
 	got, ok := next.(model)
 	require.True(t, ok)
 
+	// The pull requests saved last time show first, while the daemon looks
+	// them up again.
 	msgs := runBatchCmd(t, cmd)
-	next, _ = got.Update(requireMsgType[taskPullRequestsLoadedMsg](t, msgs))
+	require.Empty(t, frontend.taskPullRequestsCalls)
+	next, cmd = got.Update(requireMsgType[taskPullRequestsLoadedMsg](t, msgs))
+	got, ok = next.(model)
+	require.True(t, ok)
+	require.Equal(t, frontend.storedTaskPullRequests["task-1"].PullRequests, got.rows[0].pullRequests)
+
+	next, _ = got.Update(runCmd(t, cmd))
 	got, ok = next.(model)
 	require.True(t, ok)
 
 	require.Equal(t, frontend.taskPullRequests["task-1"].PullRequests, got.rows[0].pullRequests)
+	require.Equal(t, []string{"task-1"}, frontend.storedTaskPullRequestsCalls)
 	require.Equal(t, []string{"task-1"}, frontend.taskPullRequestsCalls)
 
 	// The row shows the pull requests' state symbols and the current one's
@@ -1488,7 +1501,7 @@ func TestModel_PeriodicReloadPicksUpTasksChangedElsewhere(t *testing.T) {
 	// refreshes keep it current.
 	runBatchCmd(t, cmd)
 	require.Equal(t, []string{"task-3"}, frontend.getTaskUsageCalls)
-	require.Equal(t, []string{"task-3"}, frontend.taskPullRequestsCalls)
+	require.Equal(t, []string{"task-3"}, frontend.storedTaskPullRequestsCalls)
 
 	// A failed periodic reload changes nothing and shows no error.
 	next, _ = got.Update(tasksLoadedMsg{err: errors.New("daemon restarting"), background: true})
@@ -2906,35 +2919,37 @@ func stripANSI(s string) string {
 type frontendHarness struct {
 	mock *core.MockTaskFrontend
 
-	listTasks                 []*core.Task
-	listTasksContext          context.Context
-	listTasksErr              error
-	listTasksCalls            int
-	listRepoPullRequests      []core.RepoPullRequest
-	listRepoPullRequestsErr   error
-	listRepoPullRequestsCwd   string
-	taskPullRequests          map[string]core.TaskPullRequests
-	taskPullRequestsErr       map[string]error
-	taskPullRequestsCalls     []string
-	attachedTask              *core.Task
-	attachedPanes             []*core.TmuxPaneRef
-	attachTaskSessionErr      error
-	attachTaskSessionCalls    int
-	attachTaskSessionFn       func(context.Context, *core.Task, *core.TmuxPaneRef) error
-	reconnectTaskSessionErr   error
-	reconnectTaskSessionFn    func(context.Context, string) error
-	reconnectTaskSessionCalls int
-	createInput               core.CreateTaskInput
-	createTaskEvents          []core.TaskCreateEvent
-	createTaskStreamErr       error
-	createTaskStreamCalls     int
-	retryTaskID               string
-	retryTaskEvents           []core.TaskCreateEvent
-	retryTaskStreamErr        error
-	retryTaskStreamCalls      int
-	deleteTaskErr             error
-	deleteTaskIDs             []string
-	removeAgentErr            error
+	listTasks                   []*core.Task
+	listTasksContext            context.Context
+	listTasksErr                error
+	listTasksCalls              int
+	listRepoPullRequests        []core.RepoPullRequest
+	listRepoPullRequestsErr     error
+	listRepoPullRequestsCwd     string
+	taskPullRequests            map[string]core.TaskPullRequests
+	taskPullRequestsErr         map[string]error
+	taskPullRequestsCalls       []string
+	storedTaskPullRequests      map[string]core.TaskPullRequests
+	storedTaskPullRequestsCalls []string
+	attachedTask                *core.Task
+	attachedPanes               []*core.TmuxPaneRef
+	attachTaskSessionErr        error
+	attachTaskSessionCalls      int
+	attachTaskSessionFn         func(context.Context, *core.Task, *core.TmuxPaneRef) error
+	reconnectTaskSessionErr     error
+	reconnectTaskSessionFn      func(context.Context, string) error
+	reconnectTaskSessionCalls   int
+	createInput                 core.CreateTaskInput
+	createTaskEvents            []core.TaskCreateEvent
+	createTaskStreamErr         error
+	createTaskStreamCalls       int
+	retryTaskID                 string
+	retryTaskEvents             []core.TaskCreateEvent
+	retryTaskStreamErr          error
+	retryTaskStreamCalls        int
+	deleteTaskErr               error
+	deleteTaskIDs               []string
+	removeAgentErr              error
 	// removedAgents are the agent sessions RemoveAgentSession received, each
 	// as "task/agent".
 	removedAgents               []string
@@ -3168,6 +3183,12 @@ func newFrontendHarness() *frontendHarness {
 			pullRequests := frontend.taskPullRequests[taskID]
 			pullRequests.PullRequests = slices.Clone(pullRequests.PullRequests)
 			return pullRequests, nil
+		},
+	).Maybe()
+	frontend.mock.EXPECT().StoredTaskPullRequests(mock.Anything, mock.Anything).RunAndReturn(
+		func(_ context.Context, taskID string) (core.TaskPullRequests, error) {
+			frontend.storedTaskPullRequestsCalls = append(frontend.storedTaskPullRequestsCalls, taskID)
+			return frontend.storedTaskPullRequests[taskID], nil
 		},
 	).Maybe()
 	frontend.mock.EXPECT().LatestTaskStatus(mock.Anything, mock.Anything).RunAndReturn(

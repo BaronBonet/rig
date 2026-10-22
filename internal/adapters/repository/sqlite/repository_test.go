@@ -1879,6 +1879,41 @@ func TestRepositoryDeleteTask_CascadesTaskBranches(t *testing.T) {
 	require.Equal(t, []string{"feat/a"}, branches)
 }
 
+func TestRepositorySaveTaskPullRequests_ReplacesWhatTheTaskLastSaved(t *testing.T) {
+	repo := newTestRepository(t)
+	ctx := context.Background()
+	createAgentSessionTestTask(t, repo, "task-1")
+
+	saved, err := repo.GetTaskPullRequests(ctx, "task-1")
+	require.NoError(t, err)
+	require.Equal(t, core.TaskPullRequests{}, saved)
+
+	open := core.TaskPullRequests{
+		PullRequests: []core.PullRequest{
+			{Number: 7, State: core.PRStateOpen, HeadBranch: "feat/a", Commits: []string{"7aa"}},
+		},
+		UnshippedWork: core.UnshippedWork{Commits: 2, UncommittedChanges: true},
+	}
+	require.NoError(t, repo.SaveTaskPullRequests(ctx, "task-1", open))
+	merged := core.TaskPullRequests{PullRequests: []core.PullRequest{{Number: 7, State: core.PRStateMerged}}}
+	require.NoError(t, repo.SaveTaskPullRequests(ctx, "task-1", merged))
+
+	saved, err = repo.GetTaskPullRequests(ctx, "task-1")
+	require.NoError(t, err)
+	require.Equal(t, merged, saved)
+
+	// Commits are left out, and deleting the task deletes what it saved.
+	require.NoError(t, repo.SaveTaskPullRequests(ctx, "task-1", open))
+	saved, err = repo.GetTaskPullRequests(ctx, "task-1")
+	require.NoError(t, err)
+	require.Nil(t, saved.PullRequests[0].Commits)
+	require.NoError(t, repo.DeleteTask(ctx, "task-1"))
+	var remaining int
+	require.NoError(t, repo.db.QueryRowContext(ctx, "select count(*) from task_pull_requests").Scan(&remaining))
+	require.Zero(t, remaining)
+	require.Error(t, repo.SaveTaskPullRequests(ctx, "task-1", open))
+}
+
 func TestRepositoryNew_AddsTaskBranchesToAnExistingDatabaseAndRollsBack(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "state.db")
 	repo := newTestRepositoryAtPath(t, path)
