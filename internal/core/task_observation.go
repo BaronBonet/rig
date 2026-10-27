@@ -357,7 +357,7 @@ func (o *taskObservation) resolveTaskIDFromCwd(ctx context.Context, input HookEv
 	// An agent started at the root stays the task's after its cwd moves
 	// below it, as a cd in Claude's Bash tool moves it: the task's open agent
 	// session in the hook's pane vouches for it.
-	task := taskAtPath(tasks, cwd)
+	task := FindTaskAtPath(tasks, cwd)
 	if task == nil || input.TmuxPane == "" {
 		return "", ErrUnmanagedHookEvent
 	}
