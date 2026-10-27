@@ -78,7 +78,9 @@ func (r *repository) StartTaskSession(
 		return pane, nil
 	}
 
-	if err := r.waitForPrompt(ctx, task.TmuxSession, taskWindowName, launch.ReadyMarker); err != nil {
+	if err := r.waitForPrompt(
+		ctx, task.TmuxSession, taskWindowName, launch.Command[0], launch.ReadyMarker,
+	); err != nil {
 		return core.TmuxPaneRef{}, r.cleanupStartedSession(ctx, task.TmuxSession, err)
 	}
 	r.sleep(promptInputSettleDelay)
@@ -942,12 +944,19 @@ func (r *repository) typeInWindow(ctx context.Context, session, window string, c
 	return deleteErr
 }
 
-func (r *repository) waitForPrompt(ctx context.Context, session, window, marker string) error {
+// waitForPrompt waits until binary runs in the window and the window shows
+// marker. The marker alone is not enough: a shell prompt can show it, as
+// Powerlevel10k's instant prompt shows ❯ while the shell is still starting,
+// and input typed into a shell that is starting up may never reach the agent.
+func (r *repository) waitForPrompt(ctx context.Context, session, window, binary, marker string) error {
 	const (
 		pollInterval = 500 * time.Millisecond
-		timeout      = 30 * time.Second
+		// The wait includes the shell's own startup, which can take tens of
+		// seconds on a busy machine.
+		timeout = 2 * time.Minute
 	)
 
+	target := exactWindowTarget(session, window)
 	deadline := r.now().Add(timeout)
 	for r.now().Before(deadline) {
 		select {
@@ -956,15 +965,44 @@ func (r *repository) waitForPrompt(ctx context.Context, session, window, marker 
 		default:
 		}
 
-		content, err := r.capturePaneContent(ctx, session, window)
-		if err == nil && strings.Contains(content, marker) {
-			return nil
+		if r.agentInForeground(ctx, target, binary) {
+			content, err := r.capturePaneContent(ctx, session, window)
+			if err == nil && strings.Contains(content, marker) {
+				return nil
+			}
 		}
 
 		r.sleep(pollInterval)
 	}
 
 	return errors.New("timed out waiting for " + marker + " prompt")
+}
+
+// agentInForeground reports whether a process of binary is in the target
+// pane's foreground process group, which ps marks with a + in its state. An
+// agent run as a script shows its interpreter first and its path second.
+func (r *repository) agentInForeground(ctx context.Context, target, binary string) bool {
+	tty, err := r.runner.Run(ctx, "", "tmux", "display-message", "-p", "-t", target, "#{pane_tty}")
+	if err != nil {
+		return false
+	}
+	result, err := r.runner.Run(ctx, "", "ps", "-o", "stat=,args=", "-t", strings.TrimSpace(tty.Stdout))
+	if err != nil {
+		return false
+	}
+	name := filepath.Base(binary)
+	for _, line := range strings.Split(result.Stdout, "\n") {
+		fields := strings.Fields(line)
+		if len(fields) < 2 || !strings.Contains(fields[0], "+") {
+			continue
+		}
+		for _, arg := range fields[1:min(len(fields), 3)] {
+			if filepath.Base(arg) == name {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 func exactSessionTarget(session string) string {
