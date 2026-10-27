@@ -22,6 +22,10 @@ To open Rig as a popup over whatever you're doing, bind it in `~/.tmux.conf`:
 bind R display-popup -E -w 80% -h 70% rig
 ```
 
+Rig opens with the cursor on the task you opened it from, the one whose
+worktree holds the directory it starts in. A popup starts in its session's
+directory, which for a task session is the task's worktree.
+
 | Key | Action |
 |-----|--------|
 | `n` | Create a task |

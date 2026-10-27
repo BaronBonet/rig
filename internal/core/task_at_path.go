@@ -14,16 +14,16 @@ func (s *service) TaskAtPath(ctx context.Context, path string) (*Task, error) {
 	if err != nil {
 		return nil, fmt.Errorf("list tasks: %w", err)
 	}
-	return taskAtPath(tasks, path), nil
+	return FindTaskAtPath(tasks, path), nil
 }
 
-// taskAtPath returns the task whose worktree contains path: its worktree root
+// FindTaskAtPath returns the task whose worktree contains path: its worktree root
 // or anything below it. Paths are compared clean and absolute, a whole
 // component at a time, so a worktree /work/app_fix does not contain
 // /work/app_fix-ui. Should worktrees nest, the deepest one holding path wins.
 // It returns nil when no task's worktree contains path, or path is not
 // absolute.
-func taskAtPath(tasks []*Task, path string) *Task {
+func FindTaskAtPath(tasks []*Task, path string) *Task {
 	path = strings.TrimSpace(path)
 	if !filepath.IsAbs(path) {
 		return nil
@@ -66,7 +66,7 @@ func parentTaskID(input CreateTaskInput, tasks []*Task) string {
 	if !input.LinkToCallingTask {
 		return ""
 	}
-	if parent := taskAtPath(tasks, input.Cwd); parent != nil {
+	if parent := FindTaskAtPath(tasks, input.Cwd); parent != nil {
 		return parent.ID
 	}
 	return ""

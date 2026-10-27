@@ -1470,6 +1470,24 @@ func TestModel_ErrorSurvivesBackgroundLoadsAndClearsOnNextKeyPress(t *testing.T)
 	require.NoError(t, got.err)
 }
 
+func TestModel_FirstLoadSelectsTheTaskRigWasOpenedFrom(t *testing.T) {
+	frontend := newFrontendHarness()
+	tasks := []*core.Task{
+		{ID: "task-1", WorktreePath: "/work/app_one", Provider: core.ProviderCodex},
+		{ID: "task-2", WorktreePath: "/work/app_two", Provider: core.ProviderCodex},
+	}
+	m := newModel(frontend.mock, "/work/app_two/internal", "")
+
+	next, _ := m.Update(tasksLoadedMsg{tasks: tasks})
+	got := asModel(t, next)
+	require.Equal(t, "task-2", got.selectedRow().task.ID)
+
+	// Once the user moves, a reload keeps their row.
+	next, _ = got.Update(tea.KeyPressMsg{Code: 'k', Text: "k"})
+	next, _ = asModel(t, next).Update(tasksLoadedMsg{tasks: tasks, background: true})
+	require.Equal(t, "task-1", asModel(t, next).selectedRow().task.ID)
+}
+
 func TestModel_PeriodicReloadPicksUpTasksChangedElsewhere(t *testing.T) {
 	frontend := newFrontendHarness()
 	frontend.listTasks = []*core.Task{

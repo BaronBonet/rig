@@ -628,6 +628,13 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		selectedKey := m.selectedRowKey()
 		selectedAgent := m.selectedAgent
+		// Until a row is selected, start on the task rig was opened from: a
+		// tmux popup runs in its session's directory, a task's worktree.
+		if selectedKey == "" {
+			if task := core.FindTaskAtPath(msg.tasks, m.launchCwd); task != nil {
+				selectedKey = task.ID
+			}
+		}
 		// shortcut: a periodic reload sent just before a local delete lands can
 		// show the deleted task again until the next reload, 2s later; add a
 		// load generation if that flicker shows up.
