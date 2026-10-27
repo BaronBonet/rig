@@ -36,6 +36,8 @@ func TestRepositoryStartTaskSession_LaunchesCommandAndPrefillsInputWithoutSubmit
 		expectTmuxRun(runner, subprocess.Result{}, nil,
 			"send-keys", "-t", "=repo_task:task", "codex", "C-m",
 		),
+		expectPaneTTY(runner),
+		expectForegroundProcesses(runner, "Ss   -zsh\nS+   codex\n"),
 		expectTmuxRun(runner, subprocess.Result{Stdout: "›"}, nil,
 			"capture-pane", "-t", "=repo_task:task", "-p",
 		),
@@ -70,6 +72,67 @@ func TestRepositoryStartTaskSession_LaunchesCommandAndPrefillsInputWithoutSubmit
 	require.Equal(t, []time.Duration{promptSubmitDelay, promptInputSettleDelay}, slept)
 }
 
+// A shell starting up can show the agent's ready marker in its prompt, as
+// Powerlevel10k's instant prompt does, and lose input typed into it, so the
+// prefill waits until the agent runs in the foreground.
+func TestRepositoryStartTaskSession_PrefillsOnlyOnceTheAgentRunsInTheForeground(t *testing.T) {
+	runner := subprocess.NewMockRunner(t)
+	repo := New(runner).(*repository)
+	repo.now = func() time.Time { return time.Unix(0, 0) }
+	var slept []time.Duration
+	repo.sleep = func(d time.Duration) { slept = append(slept, d) }
+
+	mock.InOrder(
+		expectTmuxRun(runner, subprocess.Result{}, errors.New("no session"),
+			"has-session", "-t", "=repo_task:",
+		),
+		expectTmuxRun(runner, subprocess.Result{}, nil,
+			"new-session", "-d", "-P", "-F", paneRefFormat, "-s", "repo_task", "-n", "task", "-c", "/tmp/repo-task",
+		),
+		expectTmuxRun(runner, subprocess.Result{}, nil,
+			"new-window", "-d", "-t", "=repo_task", "-n", "editor", "-c", "/tmp/repo-task",
+		),
+		expectTmuxRun(runner, subprocess.Result{}, nil,
+			"send-keys", "-t", "=repo_task:task", "/opt/bin/codex", "C-m",
+		),
+		expectPaneTTY(runner),
+		expectForegroundProcesses(runner, "Ss+  -zsh\n"),
+		expectPaneTTY(runner),
+		expectForegroundProcesses(runner, "Ss   -zsh\nS+   stty -icanon\n"),
+		expectPaneTTY(runner),
+		expectForegroundProcesses(runner, "Ss   -zsh\nS+   node /opt/bin/codex\n"),
+		expectTmuxRun(runner, subprocess.Result{Stdout: "›"}, nil,
+			"capture-pane", "-t", "=repo_task:task", "-p",
+		),
+		expectTmuxRunWithStdin(runner, subprocess.RunWithStdinOptions{
+			Cwd:   "",
+			Name:  "tmux",
+			Args:  []string{"load-buffer", "-b", "rig-prefill-repo_task-task", "-"},
+			Stdin: "fix billing retry flow",
+		}, subprocess.Result{}, nil),
+		expectTmuxRun(runner, subprocess.Result{}, nil,
+			"paste-buffer", "-p", "-t", "=repo_task:task", "-b", "rig-prefill-repo_task-task",
+		),
+		expectTmuxRun(runner, subprocess.Result{}, nil,
+			"delete-buffer", "-b", "rig-prefill-repo_task-task",
+		),
+	)
+
+	_, err := repo.StartTaskSession(context.Background(), &core.Task{
+		TmuxSession:  "repo_task",
+		WorktreePath: "/tmp/repo-task",
+	}, core.TaskSessionLaunchSpec{
+		Command:      []string{"/opt/bin/codex"},
+		ReadyMarker:  "›",
+		PrefillInput: []string{"fix billing retry flow"},
+	})
+
+	require.NoError(t, err)
+	require.Equal(t, []time.Duration{
+		promptSubmitDelay, 500 * time.Millisecond, 500 * time.Millisecond, promptInputSettleDelay,
+	}, slept)
+}
+
 // expectPrefilledLaunch expects StartTaskSession to start codex in a new
 // repo_task session and paste "fix billing retry flow" into it.
 func expectPrefilledLaunch(runner *subprocess.MockRunner) []*mock.Call {
@@ -86,6 +149,8 @@ func expectPrefilledLaunch(runner *subprocess.MockRunner) []*mock.Call {
 		expectTmuxRun(runner, subprocess.Result{}, nil,
 			"send-keys", "-t", "=repo_task:task", "codex", "C-m",
 		),
+		expectPaneTTY(runner),
+		expectForegroundProcesses(runner, "Ss   -zsh\nS+   codex\n"),
 		expectTmuxRun(runner, subprocess.Result{Stdout: "›"}, nil,
 			"capture-pane", "-t", "=repo_task:task", "-p",
 		),
@@ -260,6 +325,8 @@ func TestRepositoryStartTaskSession_PrefillsLargeInputThroughTmuxBuffer(t *testi
 		expectTmuxRun(runner, subprocess.Result{}, nil,
 			"send-keys", "-t", "=repo_task:task", "codex", "C-m",
 		),
+		expectPaneTTY(runner),
+		expectForegroundProcesses(runner, "Ss   -zsh\nS+   codex\n"),
 		expectTmuxRun(runner, subprocess.Result{Stdout: "›"}, nil,
 			"capture-pane", "-t", "=repo_task:task", "-p",
 		),
@@ -396,6 +463,8 @@ func TestRepositoryStartTaskSession_CleansUpSessionWhenPrefillFails(t *testing.T
 		expectTmuxRun(runner, subprocess.Result{}, nil,
 			"send-keys", "-t", "=repo_task:task", "codex", "C-m",
 		),
+		expectPaneTTY(runner),
+		expectForegroundProcesses(runner, "Ss   -zsh\nS+   codex\n"),
 		expectTmuxRun(runner, subprocess.Result{Stdout: "›"}, nil,
 			"capture-pane", "-t", "=repo_task:task", "-p",
 		),
@@ -1687,6 +1756,20 @@ func expectTmuxRun(runner *subprocess.MockRunner, result subprocess.Result, err 
 		callArgs = append(callArgs, arg)
 	}
 	return runner.On("Run", callArgs...).Return(result, err).Once()
+}
+
+// expectPaneTTY expects the task window's tty to be read.
+func expectPaneTTY(runner *subprocess.MockRunner) *mock.Call {
+	return expectTmuxRun(runner, subprocess.Result{Stdout: "/dev/ttys004\n"}, nil,
+		"display-message", "-p", "-t", "=repo_task:task", "#{pane_tty}",
+	)
+}
+
+// expectForegroundProcesses expects the processes on the task window's tty to
+// be listed, as stdout.
+func expectForegroundProcesses(runner *subprocess.MockRunner, stdout string) *mock.Call {
+	return runner.On("Run", mock.Anything, "", "ps", "-o", "stat=,args=", "-t", "/dev/ttys004").
+		Return(subprocess.Result{Stdout: stdout}, nil).Once()
 }
 
 func expectTmuxRunWithStdin(
