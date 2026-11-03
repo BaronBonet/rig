@@ -29,6 +29,7 @@ func TestRepositoryBuildTaskSessionLaunchSpec_StartsCodexWithoutSharedDaemonAndP
 	require.NoError(t, err)
 	require.Equal(t, core.TaskSessionLaunchSpec{
 		Command:      []string{"env", "CODEX_HOME=" + codexHome, "codex", "--no-daemon"},
+		AgentBinary:  "codex",
 		ReadyMarker:  "›",
 		PrefillInput: []string{"add billing retry flow"},
 	}, launch)
@@ -44,6 +45,7 @@ func TestRepositoryBuildTaskSessionLaunchSpec_StartsCodexWithoutSharedDaemonWith
 	require.NoError(t, err)
 	require.Equal(t, core.TaskSessionLaunchSpec{
 		Command:     []string{"env", "CODEX_HOME=" + codexHome, "codex", "--no-daemon"},
+		AgentBinary: "codex",
 		ReadyMarker: "›",
 	}, launch)
 }
@@ -57,6 +59,7 @@ func TestRepositoryBuildReconnectTaskSessionLaunchSpec_ResumesCodexWithoutShared
 	require.NoError(t, err)
 	require.Equal(t, core.TaskSessionLaunchSpec{
 		Command:     []string{"env", "CODEX_HOME=" + codexHome, "codex", "resume", "--no-daemon", "sess-1"},
+		AgentBinary: "codex",
 		ReadyMarker: "›",
 	}, launch)
 }
@@ -179,6 +182,7 @@ func TestRepositoryBuildReconnectTaskSessionLaunchSpec_ResumesOnTheLastDefaultMo
 					"env", "CODEX_HOME=" + codexHome, "codex", "resume", "--no-daemon",
 					"-m", "gpt-6-astra", "-c", "model_reasoning_effort=medium", rolloutSessionID,
 				},
+				AgentBinary: "codex",
 				ReadyMarker: "›",
 			}, launch)
 		})

@@ -269,6 +269,7 @@ func (r *repository) BuildTaskSessionLaunchSpec(task *core.Task) (core.TaskSessi
 
 	return core.TaskSessionLaunchSpec{
 		Command:      r.codexTaskCommand(codexHome, args...),
+		AgentBinary:  r.binary,
 		ReadyMarker:  readyMarker,
 		PrefillInput: prefillInput,
 	}, nil
@@ -301,6 +302,7 @@ func (r *repository) BuildReconnectTaskSessionLaunchSpec(
 
 	return core.TaskSessionLaunchSpec{
 		Command:     r.codexTaskCommand(codexHome, append(args, sessionID)...),
+		AgentBinary: r.binary,
 		ReadyMarker: readyMarker,
 	}, nil
 }

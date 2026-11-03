@@ -681,6 +681,10 @@ type TaskSessionLaunchSpec struct {
 	// Command is the argv launched in the agent's tmux pane, for example
 	// []string{"codex"}.
 	Command []string
+	// AgentBinary is the provider executable to look for before prefilling.
+	// It differs from Command[0] when a wrapper such as env launches it.
+	// When empty, the session client uses Command[0].
+	AgentBinary string
 	// ReadyMarker is the terminal prompt marker emitted by the provider when it is
 	// ready to receive interactive input. The tmux session client waits for this
 	// marker before typing PrefillInput into the window.

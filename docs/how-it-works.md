@@ -129,6 +129,10 @@ the TUI. Provider hook events are posted to the daemon's local HTTP hook
 server, which updates the agent session each event came from in SQLite and any
 active TUI subscriptions.
 
+Before pasting a new task's prompt, Rig waits for the provider executable to
+run in the foreground and its input prompt to appear. For Codex, it checks
+for Codex itself, even though the launch command uses `env` to set `CODEX_HOME`.
+
 This split keeps the terminal UI responsive while task setup, provider
 sessions, and status collection continue in the background.
 
