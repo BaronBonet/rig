@@ -153,7 +153,7 @@ type taskDraft struct {
 	prs        []core.RepoPullRequest
 	prSelected int
 	// repoRoot and repoName are the repository the draft creates its task
-	// in, once picked; until then it is the current repo scope.
+	// in, defaulted from the overview when the draft opens.
 	repoRoot string
 	repoName string
 	err      error // validation error shown inside the draft views
@@ -1210,6 +1210,7 @@ func (m model) enterPromptInputMode(initialValue string) (tea.Model, tea.Cmd) {
 	input := newPromptInput()
 	input.SetValue(initialValue)
 	m.draft = taskDraft{prompt: initialValue, input: input}
+	m.draft.repoRoot, m.draft.repoName, _ = m.currentRepoScope()
 	m.startDraftLaunchChoice()
 	cmds := append([]tea.Cmd{m.draft.input.Focus()}, m.retryLaunchChoiceCmds()...)
 	return m, tea.Batch(cmds...)
@@ -1581,18 +1582,11 @@ func taskID(task *core.Task) string {
 }
 
 // currentRepoScope is the repository a new task is created in: the one picked
-// for the draft, else where rig was launched, else the selected task's.
+// for the draft, else the selected task's, else where rig was launched.
 func (m model) currentRepoScope() (string, string, bool) {
 	if m.draft.repoRoot != "" {
 		return m.draft.repoRoot, m.draft.repoName, true
 	}
-	launchCwd := strings.TrimSpace(m.launchCwd)
-	if launchCwd != "" {
-		// Launched in a task's worktree, the new task goes to that task's repo.
-		_, repoName := m.creationRepo(launchCwd)
-		return launchCwd, repoName, true
-	}
-
 	if row := m.selectedRow(); row != nil && row.task != nil {
 		repoRoot := strings.TrimSpace(row.task.RepoRoot)
 		if repoRoot != "" {
@@ -1602,6 +1596,11 @@ func (m model) currentRepoScope() (string, string, bool) {
 			}
 			return repoRoot, repoName, true
 		}
+	}
+	launchCwd := strings.TrimSpace(m.launchCwd)
+	if launchCwd != "" {
+		_, repoName := m.creationRepo(launchCwd)
+		return launchCwd, repoName, true
 	}
 
 	return "", "", false

@@ -2031,7 +2031,7 @@ func TestModel_CreateTaskFromPromptAppendsTaskAndStartsStatusTracking(t *testing
 	require.Equal(t, core.TaskStatusPhaseWorking, got.rows[2].status.Phase)
 }
 
-func TestModel_CreateTaskFromPromptUsesLaunchCwdWhenAnotherRepoTaskIsSelected(t *testing.T) {
+func TestModel_CreateTaskFromPromptUsesSelectedRepoInsteadOfLaunchCwd(t *testing.T) {
 	frontend := newFrontendHarness()
 	frontend.listTasks = []*core.Task{
 		{
@@ -2056,7 +2056,7 @@ func TestModel_CreateTaskFromPromptUsesLaunchCwdWhenAnotherRepoTaskIsSelected(t 
 	require.NotNil(t, cmd)
 
 	runBatchCmd(t, cmd)
-	require.Equal(t, "/tmp/repo-b/subdir", frontend.createInput.Cwd)
+	require.Equal(t, "/tmp/repo-a", frontend.createInput.Cwd)
 }
 
 func TestModel_CreateTaskReloadsAuthoritativeTaskSnapshotWhenCreateResponseIsPartial(t *testing.T) {
@@ -2552,7 +2552,7 @@ func TestModel_CtrlPFromPromptModeLoadsRepoPullRequests(t *testing.T) {
 	require.Len(t, got.draft.prs, 1)
 }
 
-func TestModel_CtrlPFromPromptModeUsesLaunchCwdWhenAnotherRepoTaskIsSelected(t *testing.T) {
+func TestModel_CtrlPFromPromptModeUsesSelectedRepoInsteadOfLaunchCwd(t *testing.T) {
 	frontend := newFrontendHarness()
 	frontend.listTasks = []*core.Task{
 		{
@@ -2578,11 +2578,11 @@ func TestModel_CtrlPFromPromptModeUsesLaunchCwdWhenAnotherRepoTaskIsSelected(t *
 	msg := runCmd(t, cmd)
 	loaded, ok := msg.(repoPullRequestsLoadedMsg)
 	require.True(t, ok)
-	require.Equal(t, "/tmp/repo-b/subdir", loaded.repoRoot)
-	require.Equal(t, "subdir", loaded.repoName)
+	require.Equal(t, "/tmp/repo-a", loaded.repoRoot)
+	require.Equal(t, "repo-a", loaded.repoName)
 
 	_, _ = pending.Update(loaded)
-	require.Equal(t, "/tmp/repo-b/subdir", frontend.listRepoPullRequestsCwd)
+	require.Equal(t, "/tmp/repo-a", frontend.listRepoPullRequestsCwd)
 }
 
 func TestPRPickerView_ShowsDuplicateRowsAsDisabled(t *testing.T) {

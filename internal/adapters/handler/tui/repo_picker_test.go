@@ -33,22 +33,21 @@ func TestModel_RepoPickerCreatesTheTaskInThePickedRepo(t *testing.T) {
 	m.rows[1].status = &core.TaskStatusUpdate{TaskID: "b", ObservedAt: now.Add(-time.Minute)}
 
 	m = press(t, m, tea.KeyPressMsg{Text: "n"})
-	require.Contains(t, stripANSI(m.View().Content), "Creating in repo  ctrl+n change repo")
+	require.Contains(t, stripANSI(m.View().Content), "Creating in repo-a  ctrl+n change repo")
 	m.draft.prompt = "fix the retry loop"
 
 	m = press(t, m, tea.KeyPressMsg{Code: 'n', Mod: tea.ModCtrl})
 	require.Equal(t, modeRepoPicker, m.mode)
 	require.Equal(t, []string{"repo-b", "repo-a", "repo-c"}, repoNames(m.draft.repos))
 
-	m = press(t, m, tea.KeyPressMsg{Text: "j"})
 	m = press(t, m, tea.KeyPressMsg{Code: tea.KeyEnter})
 	require.Equal(t, modePromptInput, m.mode)
 	require.Equal(t, "fix the retry loop", m.draft.prompt)
-	require.Contains(t, stripANSI(m.View().Content), "Creating in repo-a")
+	require.Contains(t, stripANSI(m.View().Content), "Creating in repo-b")
 
 	_, cmd := m.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
 	runBatchCmd(t, cmd)
-	require.Equal(t, "/src/repo-a", frontend.createInput.Cwd)
+	require.Equal(t, "/src/repo-b", frontend.createInput.Cwd)
 }
 
 func repoNames(repos []core.KnownRepo) []string {
@@ -87,4 +86,43 @@ func TestPromptInputView_NamesTheRepoOfTheWorktreeRigWasLaunchedIn(t *testing.T)
 
 	m = press(t, m, tea.KeyPressMsg{Text: "n"})
 	require.Contains(t, stripANSI(m.View().Content), "Creating in rig  ctrl+n change repo")
+}
+
+func TestModel_NewTaskKeepsHighlightedRepoWhileComposing(t *testing.T) {
+	for _, agent := range []string{"", "agent-1"} {
+		t.Run("selected agent="+agent, func(t *testing.T) {
+			frontend := newFrontendHarness()
+			frontend.listTasks = []*core.Task{
+				{ID: "a", RepoRoot: "/src/repo-a", RepoName: "repo-a"},
+				{ID: "b", RepoRoot: "/src/fws-facade", RepoName: "fws-facade"},
+			}
+			frontend.createTaskEvents = []core.TaskCreateEvent{{Task: &core.Task{ID: "new"}}}
+			m := newLoadedModel(frontend)
+			m.width = 120
+			require.True(t, m.selectRow("b"))
+			m.selectedAgent = agent
+
+			m = press(t, m, tea.KeyPressMsg{Text: "n"})
+			require.Contains(t, stripANSI(m.View().Content), "Creating in fws-facade")
+			// A background refresh can remove the highlighted task while typing.
+			m.rows = rowsFromTasks(frontend.listTasks[:1])
+			m.clampSelection()
+			m.draft.prompt = "fix the retry loop"
+			_, cmd := m.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
+			runBatchCmd(t, cmd)
+			require.Equal(t, "/src/fws-facade", frontend.createInput.Cwd)
+		})
+	}
+}
+
+func TestModel_NewTaskFallsBackToLaunchDirectoryWithoutSelectedRepo(t *testing.T) {
+	frontend := newFrontendHarness()
+	frontend.createTaskEvents = []core.TaskCreateEvent{{Task: &core.Task{ID: "new"}}}
+	m := newLoadedModel(frontend)
+	m.launchCwd = "/src/fws-facade"
+	m = press(t, m, tea.KeyPressMsg{Text: "n"})
+	m.draft.prompt = "fix the retry loop"
+	_, cmd := m.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
+	runBatchCmd(t, cmd)
+	require.Equal(t, "/src/fws-facade", frontend.createInput.Cwd)
 }
