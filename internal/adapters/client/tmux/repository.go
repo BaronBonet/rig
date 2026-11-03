@@ -78,8 +78,12 @@ func (r *repository) StartTaskSession(
 		return pane, nil
 	}
 
+	binary := launch.AgentBinary
+	if binary == "" {
+		binary = launch.Command[0]
+	}
 	if err := r.waitForPrompt(
-		ctx, task.TmuxSession, taskWindowName, launch.Command[0], launch.ReadyMarker,
+		ctx, task.TmuxSession, taskWindowName, binary, launch.ReadyMarker,
 	); err != nil {
 		return core.TmuxPaneRef{}, r.cleanupStartedSession(ctx, task.TmuxSession, err)
 	}

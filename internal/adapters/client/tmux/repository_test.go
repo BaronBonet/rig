@@ -9,6 +9,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/BaronBonet/rig/internal/adapters/client/codex"
 	"github.com/BaronBonet/rig/internal/core"
 	"github.com/BaronBonet/rig/internal/pkg/subprocess"
 
@@ -136,6 +137,11 @@ func TestRepositoryStartTaskSession_PrefillsOnlyOnceTheAgentRunsInTheForeground(
 // expectPrefilledLaunch expects StartTaskSession to start codex in a new
 // repo_task session and paste "fix billing retry flow" into it.
 func expectPrefilledLaunch(runner *subprocess.MockRunner) []*mock.Call {
+	return expectPrefilledLaunchCommand(runner, []string{"codex"})
+}
+
+func expectPrefilledLaunchCommand(runner *subprocess.MockRunner, command []string) []*mock.Call {
+	sendArgs := []string{"send-keys", "-t", "=repo_task:task", strings.Join(command, " "), "C-m"}
 	return []*mock.Call{
 		expectTmuxRun(runner, subprocess.Result{}, errors.New("no session"),
 			"has-session", "-t", "=repo_task:",
@@ -147,7 +153,7 @@ func expectPrefilledLaunch(runner *subprocess.MockRunner) []*mock.Call {
 			"new-window", "-d", "-t", "=repo_task", "-n", "editor", "-c", "/tmp/repo-task",
 		),
 		expectTmuxRun(runner, subprocess.Result{}, nil,
-			"send-keys", "-t", "=repo_task:task", "codex", "C-m",
+			sendArgs...,
 		),
 		expectPaneTTY(runner),
 		expectForegroundProcesses(runner, "Ss   -zsh\nS+   codex\n"),
@@ -166,6 +172,33 @@ func expectPrefilledLaunch(runner *subprocess.MockRunner) []*mock.Call {
 		expectTmuxRun(runner, subprocess.Result{}, nil,
 			"delete-buffer", "-b", "rig-prefill-repo_task-task",
 		),
+	}
+}
+
+// Use Codex's real launch spec: env sets CODEX_HOME and then execs Codex,
+// so env itself is never the agent process the readiness check should find.
+func TestRepositoryStartTaskSession_PrefillsCodexThroughItsEnvironmentWrapper(t *testing.T) {
+	for _, binary := range []string{"codex", "/opt/bin/codex"} {
+		t.Run(binary, func(t *testing.T) {
+			t.Setenv("CODEX_HOME", t.TempDir())
+			runner := subprocess.NewMockRunner(t)
+			repo := New(runner).(*repository)
+			now := time.Unix(0, 0)
+			repo.now = func() time.Time { return now }
+			repo.sleep = func(d time.Duration) { now = now.Add(d) }
+			task := &core.Task{
+				TmuxSession: "repo_task", WorktreePath: "/tmp/repo-task", Prompt: "fix billing retry flow",
+			}
+			provider := codex.New(runner, codex.Config{Binary: binary}, codex.HookForwardingConfig{})
+			launch, err := provider.BuildTaskSessionLaunchSpec(task)
+			require.NoError(t, err)
+			mock.InOrder(expectPrefilledLaunchCommand(runner, launch.Command)...)
+
+			pane, err := repo.StartTaskSession(t.Context(), task, launch)
+
+			require.NoError(t, err)
+			require.Equal(t, "%4", pane.ID)
+		})
 	}
 }
 
