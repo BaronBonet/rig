@@ -87,6 +87,9 @@ type model struct {
 	// inPopup is set when rig runs in a tmux display-popup, which a jump
 	// closes so it doesn't cover the session it jumped to.
 	inPopup bool
+	// cursorMoved is set once the user moves the cursor: until then the
+	// launch directory, not the row rig opened on, picks a new task's repo.
+	cursorMoved bool
 	// notice is a short-lived confirmation shown in place of the key bar.
 	notice string
 
@@ -543,16 +546,22 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		case "g", "home":
 			m.selected = 0
 			m.selectedAgent = ""
+			m.cursorMoved = true
 		case "G", "end":
 			m.selectLastLine()
+			m.cursorMoved = true
 		case "pgdown":
 			m.moveSelection(m.taskListPageSize())
+			m.cursorMoved = true
 		case "pgup":
 			m.moveSelection(-m.taskListPageSize())
+			m.cursorMoved = true
 		case "j", "down":
 			m.moveCursor(1)
+			m.cursorMoved = true
 		case "k", "up":
 			m.moveCursor(-1)
+			m.cursorMoved = true
 		case " ", "space":
 			m.detailsHidden = !m.detailsHidden
 		case "m":
@@ -757,7 +766,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 		m.draft.err = msg.err
-		m.draft.repos = m.reposByLastWork(msg.repos)
+		m.draft.repos = m.reposByLastWork(m.withLaunchRepo(msg.repos))
 		m.draft.reposLoaded = msg.err == nil
 		m.draft.repoSelected = 0
 		return m, nil
@@ -1582,12 +1591,14 @@ func taskID(task *core.Task) string {
 }
 
 // currentRepoScope is the repository a new task is created in: the one picked
-// for the draft, else the selected task's, else where rig was launched.
+// for the draft, else the selected task's once the user moved the cursor, else
+// where rig was launched.
 func (m model) currentRepoScope() (string, string, bool) {
 	if m.draft.repoRoot != "" {
 		return m.draft.repoRoot, m.draft.repoName, true
 	}
-	if row := m.selectedRow(); row != nil && row.task != nil {
+	launchCwd := strings.TrimSpace(m.launchCwd)
+	if row := m.selectedRow(); (m.cursorMoved || launchCwd == "") && row != nil && row.task != nil {
 		repoRoot := strings.TrimSpace(row.task.RepoRoot)
 		if repoRoot != "" {
 			repoName := strings.TrimSpace(row.task.RepoName)
@@ -1597,13 +1608,26 @@ func (m model) currentRepoScope() (string, string, bool) {
 			return repoRoot, repoName, true
 		}
 	}
-	launchCwd := strings.TrimSpace(m.launchCwd)
 	if launchCwd != "" {
 		_, repoName := m.creationRepo(launchCwd)
 		return launchCwd, repoName, true
 	}
-
 	return "", "", false
+}
+
+// withLaunchRepo adds the repository rig was launched in to the known ones
+// when no task or repo directory makes it known, so the picker can pick it.
+func (m model) withLaunchRepo(repos []core.KnownRepo) []core.KnownRepo {
+	launchCwd := strings.TrimSpace(m.launchCwd)
+	if launchCwd == "" {
+		return repos
+	}
+	root, name := m.creationRepo(launchCwd)
+	known := func(repo core.KnownRepo) bool { return pathWithin(root, filepath.Clean(repo.Root)) }
+	if slices.ContainsFunc(repos, known) {
+		return repos
+	}
+	return append(slices.Clone(repos), core.KnownRepo{Name: name, Root: root})
 }
 
 func (m model) selectedPR() *core.RepoPullRequest {

@@ -2031,7 +2031,7 @@ func TestModel_CreateTaskFromPromptAppendsTaskAndStartsStatusTracking(t *testing
 	require.Equal(t, core.TaskStatusPhaseWorking, got.rows[2].status.Phase)
 }
 
-func TestModel_CreateTaskFromPromptUsesSelectedRepoInsteadOfLaunchCwd(t *testing.T) {
+func TestModel_CreateTaskFromPromptUsesMovedToRepoInsteadOfLaunchCwd(t *testing.T) {
 	frontend := newFrontendHarness()
 	frontend.listTasks = []*core.Task{
 		{
@@ -2049,6 +2049,7 @@ func TestModel_CreateTaskFromPromptUsesSelectedRepoInsteadOfLaunchCwd(t *testing
 	m := newLoadedModel(frontend)
 	m.launchCwd = "/tmp/repo-b/subdir"
 	m.selected = 0
+	m.cursorMoved = true
 	m.mode = modePromptInput
 	m.draft.prompt = "fix the retry loop"
 
@@ -2552,7 +2553,7 @@ func TestModel_CtrlPFromPromptModeLoadsRepoPullRequests(t *testing.T) {
 	require.Len(t, got.draft.prs, 1)
 }
 
-func TestModel_CtrlPFromPromptModeUsesSelectedRepoInsteadOfLaunchCwd(t *testing.T) {
+func TestModel_CtrlPFromPromptModeUsesMovedToRepoInsteadOfLaunchCwd(t *testing.T) {
 	frontend := newFrontendHarness()
 	frontend.listTasks = []*core.Task{
 		{
@@ -2567,6 +2568,7 @@ func TestModel_CtrlPFromPromptModeUsesSelectedRepoInsteadOfLaunchCwd(t *testing.
 	m := newLoadedModel(frontend)
 	m.launchCwd = "/tmp/repo-b/subdir"
 	m.selected = 0
+	m.cursorMoved = true
 	m.mode = modePromptInput
 
 	next, cmd := m.Update(tea.KeyPressMsg{Code: 'p', Mod: tea.ModCtrl})
