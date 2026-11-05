@@ -548,6 +548,11 @@ type ProviderClient interface {
 		conversation []TaskProviderSession,
 		providerStartedAt time.Time,
 	) (*AgentSessionStatus, error)
+	// ContinuedInSession returns the Provider session the provider itself moved
+	// a conversation to, as Claude does when it backgrounds one, or "" when it
+	// did not. conversation is the Provider session history of one Provider
+	// session ID, as RecoverAgentSessionStatus takes it.
+	ContinuedInSession(ctx context.Context, conversation []TaskProviderSession) (string, error)
 	// ReadSessionActivity reads provider-specific user and assistant activity
 	// from one provider transcript after the supplied timestamp.
 	ReadSessionActivity(

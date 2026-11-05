@@ -221,3 +221,31 @@ func TestTranscriptInterruptedAt_ReadsOnlyTheTranscriptTail(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, fixtureInterruptedAt, interruptedAt)
 }
+
+func TestContinuedInSession_ReadsTheMoveAfterTheLatestMessage(t *testing.T) {
+	repo, _ := newTestRepository(t, subprocess.NewMockRunner(t))
+	// Shaped like Claude Code 2.1.316 backgrounding a conversation as its
+	// prompt arrives: the old transcript ends with bookkeeping and the move.
+	backgrounding := `{"type":"system","subtype":"informational",` +
+		`"content":"Backgrounding after the current tool finishes…","isSidechain":false}`
+	costState := `{"type":"cost-state","sessionId":"sess-1","totalCostUSD":4.25}`
+	continuedIn := `{"type":"continued-in","timestamp":"2026-11-03T12:32:26.581Z","sessionId":"sess-1",` +
+		`"continuedInSessionId":"sess-2"}`
+
+	for name, test := range map[string]struct {
+		lines []string
+		want  string
+	}{
+		"moved":     {[]string{transcriptPrompt, transcriptNextPrompt, backgrounding, costState, continuedIn}, "sess-2"},
+		"not moved": {[]string{transcriptPrompt, transcriptToolUse, transcriptTurnDuration}, ""},
+		// The conversation was resumed in its own session after the move.
+		"went on afterwards": {[]string{transcriptPrompt, continuedIn, transcriptNextPrompt, transcriptNextToolUse}, ""},
+	} {
+		transcript := writeTranscript(t, test.lines...)
+
+		got, err := repo.ContinuedInSession(t.Context(), []core.TaskProviderSession{claudeSession(transcript)})
+
+		require.NoError(t, err, name)
+		require.Equal(t, test.want, got, name)
+	}
+}

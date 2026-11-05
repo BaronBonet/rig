@@ -107,6 +107,13 @@ const (
 
 const maxCodexTranscriptKindCacheEntries = 4096
 
+// ContinuedInSession reports no move: Codex never moves a conversation to
+// another session by itself, and its hooks outside a pane go to Rig's Codex
+// fallback instead.
+func (r *repository) ContinuedInSession(context.Context, []core.TaskProviderSession) (string, error) {
+	return "", nil
+}
+
 // RecoverAgentSessionStatus recovers one Codex agent session's status from
 // its conversation's transcripts.
 func (r *repository) RecoverAgentSessionStatus(

@@ -264,7 +264,9 @@ starts it, exits cleanly, its `SessionEnd` hook tells Rig at once. Rig notices
 a killed or crashed agent, a closed pane, or the exit of a Codex on its shared
 background server (which keeps the conversation open) while the TUI watches the
 task. Starting a new conversation in an agent, for example with `/clear` or
-`/resume`, keeps it the same agent.
+`/resume`, keeps it the same agent. So does Claude backgrounding a
+conversation: it goes on in a new session that runs outside tmux while the pane
+still shows it, and Rig follows it there.
 
 When a task runs two or more agents, each one gets an indented sub-row under
 the task, oldest first, with its provider, its status, and its latest prompt,
