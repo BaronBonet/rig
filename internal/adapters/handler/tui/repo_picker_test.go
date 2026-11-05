@@ -31,6 +31,7 @@ func TestModel_RepoPickerCreatesTheTaskInThePickedRepo(t *testing.T) {
 	m.width = 120
 	// repo-b's agent worked last, though repo-a's task is newer.
 	m.rows[1].status = &core.TaskStatusUpdate{TaskID: "b", ObservedAt: now.Add(-time.Minute)}
+	m.cursorMoved = true
 
 	m = press(t, m, tea.KeyPressMsg{Text: "n"})
 	require.Contains(t, stripANSI(m.View().Content), "Creating in repo-a  ctrl+n change repo")
@@ -38,7 +39,8 @@ func TestModel_RepoPickerCreatesTheTaskInThePickedRepo(t *testing.T) {
 
 	m = press(t, m, tea.KeyPressMsg{Code: 'n', Mod: tea.ModCtrl})
 	require.Equal(t, modeRepoPicker, m.mode)
-	require.Equal(t, []string{"repo-b", "repo-a", "repo-c"}, repoNames(m.draft.repos))
+	// repo, where rig was launched, is listed though nothing else knows it.
+	require.Equal(t, []string{"repo-b", "repo-a", "repo-c", "repo"}, repoNames(m.draft.repos))
 
 	m = press(t, m, tea.KeyPressMsg{Code: tea.KeyEnter})
 	require.Equal(t, modePromptInput, m.mode)
@@ -101,6 +103,7 @@ func TestModel_NewTaskKeepsHighlightedRepoWhileComposing(t *testing.T) {
 			m.width = 120
 			require.True(t, m.selectRow("b"))
 			m.selectedAgent = agent
+			m.cursorMoved = true
 
 			m = press(t, m, tea.KeyPressMsg{Text: "n"})
 			require.Contains(t, stripANSI(m.View().Content), "Creating in fws-facade")
@@ -125,4 +128,23 @@ func TestModel_NewTaskFallsBackToLaunchDirectoryWithoutSelectedRepo(t *testing.T
 	_, cmd := m.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
 	runBatchCmd(t, cmd)
 	require.Equal(t, "/src/fws-facade", frontend.createInput.Cwd)
+}
+
+func TestModel_NewTaskUsesLaunchRepoUntilTheCursorMoves(t *testing.T) {
+	frontend := newFrontendHarness()
+	frontend.listTasks = []*core.Task{
+		{ID: "a", RepoRoot: "/src/repo-a", RepoName: "repo-a"},
+		{ID: "b", RepoRoot: "/src/repo-b", RepoName: "repo-b"},
+	}
+	m := newLoadedModel(frontend)
+	m.width = 120
+	// Launched in a repo with no tasks, rig opens on another repo's task.
+	m.launchCwd = "/src/rig"
+
+	opened := press(t, m, tea.KeyPressMsg{Text: "n"})
+	require.Contains(t, stripANSI(opened.View().Content), "Creating in rig  ctrl+n change repo")
+
+	moved := press(t, m, tea.KeyPressMsg{Text: "j"})
+	moved = press(t, moved, tea.KeyPressMsg{Text: "n"})
+	require.Contains(t, stripANSI(moved.View().Content), "Creating in repo-b  ctrl+n change repo")
 }

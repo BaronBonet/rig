@@ -7,9 +7,10 @@ Domain terms are defined in [CONTEXT.md](../CONTEXT.md).
 
 Press `n`, describe the task, and press `enter`. Rig names the task, creates its
 branch and worktree, and starts your default provider in a new tmux session.
-The task defaults to the repository of the highlighted task or agent in the
-overview. With no selected task repository, it uses the directory Rig was
-launched from. Press `ctrl+n` while writing the prompt to choose another repo.
+The task defaults to the directory Rig was launched from until you move the
+cursor, then to the repository of the highlighted task or agent. Press `ctrl+n`
+while writing the prompt to choose another repo; the list always includes the
+one Rig was launched from.
 The prompt is pasted into the agent but not sent. If the prompt names an issue
 or ticket, the provider looks it up with whatever read-only access you have
 given it (`gh`, or a Jira, Linear, YouTrack or Shortcut MCP server), so only
