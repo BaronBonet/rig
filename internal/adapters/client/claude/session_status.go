@@ -65,6 +65,41 @@ func (r *repository) RecoverAgentSessionStatus(
 	}, nil
 }
 
+// ContinuedInSession returns the session Claude moved a conversation to when
+// it backgrounded it: Claude forks the conversation into a new session, run by
+// a process outside the agent's pane, and ends the old transcript with a
+// continued-in entry. Like Claude, it reads only entries after the latest
+// message: a conversation resumed in its own session afterwards has not moved.
+func (r *repository) ContinuedInSession(
+	_ context.Context,
+	conversation []core.TaskProviderSession,
+) (string, error) {
+	session := claudeConversationTranscript(conversation)
+	if session == nil {
+		return "", nil
+	}
+	lines, err := readTranscriptTail(session.TranscriptPath, transcriptStatusTailBytes)
+	if err != nil {
+		return "", err
+	}
+	for i := len(lines) - 1; i >= 0; i-- {
+		var entry struct {
+			Type                 string `json:"type"`
+			ContinuedInSessionID string `json:"continuedInSessionId"`
+		}
+		if err := json.Unmarshal(lines[i], &entry); err != nil {
+			continue
+		}
+		switch entry.Type {
+		case "continued-in":
+			return strings.TrimSpace(entry.ContinuedInSessionID), nil
+		case "user", "assistant":
+			return "", nil
+		}
+	}
+	return "", nil
+}
+
 // claudeConversationTranscript returns the most recently observed transcript
 // of one Claude conversation. Hooks fired inside Claude subagents carry the
 // root session's transcript path, so this is the root agent's transcript.

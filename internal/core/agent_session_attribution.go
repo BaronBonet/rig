@@ -121,7 +121,7 @@ type hookEventSource struct {
 // traceHookEvent traces a hook event to where its agent runs. It may inspect
 // tmux, so it runs without agentSessionMu. attributable is false for an
 // event no agent session can take: one without a task record, one whose
-// trace failed, a nested agent's, or a Claude event from outside tmux.
+// trace failed, or a nested agent's.
 func (o *taskObservation) traceHookEvent(
 	ctx context.Context,
 	task *Task,
@@ -143,14 +143,12 @@ func (o *taskObservation) traceHookEvent(
 	if strings.TrimSpace(input.EventName) == HookEventSessionEnd {
 		return hookEventSource{trace: trace, sessionLost: o.taskSessionLost(ctx, task)}, true
 	}
-	if trace.pane != "" {
-		return hookEventSource{trace: trace}, true
-	}
 	// Claude runs hooks inside the agent's process, so a Claude hook that ran
-	// in no pane came from outside tmux. Only a Codex agent using the shared
-	// daemon runs hooks outside its pane.
-	if input.Provider != ProviderCodex {
-		return hookEventSource{}, false
+	// in no pane came from outside tmux, which recordClaudeOutsidePaneEvent
+	// places. Only a Codex agent using the shared daemon runs hooks outside
+	// its pane.
+	if trace.pane != "" || input.Provider != ProviderCodex {
+		return hookEventSource{trace: trace}, true
 	}
 
 	snapshot, err = o.codexFallbackSnapshot(ctx, task, input, snapshot)
@@ -176,9 +174,61 @@ func (o *taskObservation) placeHookEvent(
 		return "", o.recordSessionEnd(ctx, task, input, source, changes)
 	case source.trace.pane != "":
 		return o.recordPaneEvent(ctx, task, input, update, source.trace.server, source.trace.pane, true, changes)
-	default:
+	case input.Provider == ProviderCodex:
 		return o.recordCodexFallbackEvent(ctx, task, input, update, source.snapshot, changes)
+	default:
+		return o.recordClaudeOutsidePaneEvent(ctx, task, input, update, changes)
 	}
+}
+
+// recordClaudeOutsidePaneEvent places a Claude event whose hook ran outside
+// any pane. Such an event is a pane agent's only when Claude moved the agent's
+// conversation into a background session: the conversation goes on in a new
+// Provider session, run by a process outside tmux, while the pane shows it.
+//  1. the open agent session in a pane whose current Provider session is the
+//     event's;
+//  2. otherwise the open agent session in a pane whose current conversation
+//     Claude continued in the event's Provider session, which moves to it;
+//  3. otherwise, as for a Claude in a terminal outside tmux, the event stays
+//     unattributed.
+func (o *taskObservation) recordClaudeOutsidePaneEvent(
+	ctx context.Context,
+	task *Task,
+	input HookEventInput,
+	update *TaskStatusUpdate,
+	changes agentSessionChanges,
+) (string, error) {
+	providerSessionID := strings.TrimSpace(input.SessionID)
+	providerClient := o.providers[input.Provider]
+	if providerSessionID == "" || providerClient == nil {
+		return "", nil
+	}
+	sessions, err := o.tasks.ListOpenAgentSessions(ctx, task.ID)
+	if err != nil {
+		return "", fmt.Errorf("list open agent sessions: %w", err)
+	}
+	if bound := boundAgentSession(sessions, input.Provider, providerSessionID); bound != nil {
+		return o.applyAgentSessionEvent(ctx, *bound, input, update, false, changes)
+	}
+
+	history, err := o.tasks.ListTaskProviderSessions(ctx, task.ID)
+	if err != nil {
+		return "", fmt.Errorf("list provider sessions: %w", err)
+	}
+	for _, session := range sessions {
+		if session.TmuxPane == "" || session.Provider != input.Provider {
+			continue
+		}
+		continuedIn, err := providerClient.ContinuedInSession(ctx, conversationHistory(history, session))
+		if err != nil || continuedIn != providerSessionID {
+			continue
+		}
+		// Any event of the conversation moves the agent session there, as an
+		// agent session's first event does, not only a SessionStart.
+		session.ProviderSessionID = ""
+		return o.applyAgentSessionEvent(ctx, session, input, update, false, changes)
+	}
+	return "", nil
 }
 
 // agentSessionChanges collects the tasks whose agent sessions one hook event

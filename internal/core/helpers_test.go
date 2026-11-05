@@ -242,20 +242,23 @@ type providerClientState struct {
 	// statusRecoveryByConversation, when set, recovers per Provider session
 	// ID instead of statusRecoveryUpdate.
 	statusRecoveryByConversation map[string]*AgentSessionStatus
-	statusRecoveryCurrent        *AgentSessionStatus
-	statusRecoverySessions       []TaskProviderSession
-	statusRecoveryStartedAt      time.Time
-	statusRecoveryCalls          map[string]int
-	statusRecoveryActive         int
-	statusRecoveryMax            int
-	statusRecoveryStarted        chan struct{}
-	statusRecoveryRelease        chan struct{}
-	activityErrByTranscript      map[string]error
-	activityByTranscript         map[string][]TaskActivityEvent
-	activityCalls                []providerActivityCall
-	errByTranscript              map[string]error
-	usageByTranscript            map[string]*SessionTokenUsage
-	tokenUsageCalls              []providerTokenUsageCall
+	// continuedIn is what ContinuedInSession returns for a conversation, by
+	// its Provider session ID.
+	continuedIn             map[string]string
+	statusRecoveryCurrent   *AgentSessionStatus
+	statusRecoverySessions  []TaskProviderSession
+	statusRecoveryStartedAt time.Time
+	statusRecoveryCalls     map[string]int
+	statusRecoveryActive    int
+	statusRecoveryMax       int
+	statusRecoveryStarted   chan struct{}
+	statusRecoveryRelease   chan struct{}
+	activityErrByTranscript map[string]error
+	activityByTranscript    map[string][]TaskActivityEvent
+	activityCalls           []providerActivityCall
+	errByTranscript         map[string]error
+	usageByTranscript       map[string]*SessionTokenUsage
+	tokenUsageCalls         []providerTokenUsageCall
 	// conversationUsageBySession is what ReadConversationUsage returns for a
 	// conversation, by its Provider session ID.
 	conversationUsageBySession map[string]ConversationUsage
@@ -825,6 +828,14 @@ func configureProviderClientMock(client *MockProviderClient, state *providerClie
 			}
 			update := *state.hookUpdate
 			return &update, nil
+		},
+	).Maybe()
+	client.EXPECT().ContinuedInSession(mock.Anything, mock.Anything).RunAndReturn(
+		func(_ context.Context, conversation []TaskProviderSession) (string, error) {
+			if len(conversation) == 0 {
+				return "", nil
+			}
+			return state.continuedIn[conversation[0].ProviderSessionID], nil
 		},
 	).Maybe()
 	client.EXPECT().RecoverAgentSessionStatus(mock.Anything, mock.Anything, mock.Anything, mock.Anything).RunAndReturn(

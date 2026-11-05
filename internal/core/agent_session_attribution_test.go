@@ -209,6 +209,39 @@ func TestAgentSessions_ClaudeHookOutsideAnyPaneIsNotAttributed(t *testing.T) {
 	require.Equal(t, []int{101}, svc.locatedPIDs())
 }
 
+// Claude backgrounds a conversation by forking it into a new Provider session
+// run by a process outside tmux, while the agent's pane goes on showing it.
+func TestAgentSessions_AClaudeConversationMovedToTheBackgroundKeepsItsAgentSession(t *testing.T) {
+	svc := newAgentSessionHarness(t)
+	svc.agentPanes("claude")
+	svc.handleAgentHook(t, agentHook(ProviderClaude, HookEventUserPromptSubmit, "sess-a", 101, "%1", 0),
+		TaskStatusPhaseWorking)
+
+	// Another Claude outside tmux, in a terminal, is no pane's agent.
+	svc.handleAgentHook(t, agentHook(ProviderClaude, HookEventStop, "sess-x", 900, "", 1),
+		TaskStatusPhaseWaitingForInput)
+	require.Equal(t, "sess-a", svc.agentSessionsWithoutIDs()[0].ProviderSessionID)
+
+	// Any event of the conversation sess-a continued in moves the agent, not
+	// only its SessionStart; PIDs 701 and 702 trace to no pane.
+	svc.claudeRepo.continuedIn = map[string]string{"sess-a": "sess-b"}
+	svc.handleAgentHook(t, agentHook(ProviderClaude, HookEventStop, "sess-b", 701, "%1", 2),
+		TaskStatusPhaseWaitingForInput)
+	sessions := svc.agentSessionsWithoutIDs()
+	require.Len(t, sessions, 1)
+	require.Equal(t, "sess-b", sessions[0].ProviderSessionID)
+	require.Equal(t, agentStatus(TaskStatusPhaseWaitingForInput, HookEventStop, 2), sessions[0].Status)
+
+	// From then on its hooks drive the agent's status.
+	svc.handleAgentHook(t, agentHook(ProviderClaude, HookEventUserPromptSubmit, "sess-b", 702, "%1", 3),
+		TaskStatusPhaseWorking)
+	sessions = svc.agentSessionsWithoutIDs()
+	require.Len(t, sessions, 1)
+	require.Equal(t, "%1", sessions[0].TmuxPane)
+	require.True(t, sessions[0].PaneTrusted)
+	require.Equal(t, agentStatus(TaskStatusPhaseWorking, HookEventUserPromptSubmit, 3), sessions[0].Status)
+}
+
 func TestAgentSessions_TraceEachConversationAndPaneHintOnce(t *testing.T) {
 	svc := newAgentSessionHarness(t)
 	svc.sessionClient.locatePaneByPID = map[int]string{101: "%1", 102: "%1", 103: "%1", 201: "%1", 301: "%9"}
