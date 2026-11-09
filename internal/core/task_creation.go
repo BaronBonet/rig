@@ -251,17 +251,19 @@ func (c *taskCreation) createTaskFromPullRequest(
 		return nil, fmt.Errorf("pull request source is required")
 	}
 
+	var existingWorktree string
 	task, err := c.saveNewTask(ctx, func(existingTasks []*Task) (*Task, error) {
 		if existingTaskForBranch(existingTasks, repoCtx.Root, pr.BranchName) != nil {
 			return nil, fmt.Errorf("PR already has workspace")
 		}
 
-		inUseByWorktree, err := c.gitWorktree.IsBranchUsedByWorktree(ctx, repoCtx.Root, pr.BranchName)
+		var err error
+		existingWorktree, err = c.gitWorktree.BranchWorktree(ctx, repoCtx.Root, pr.BranchName)
 		if err != nil {
 			return nil, err
 		}
-		if inUseByWorktree {
-			return nil, fmt.Errorf("PR already has workspace")
+		if existingWorktree == repoCtx.Root {
+			return nil, fmt.Errorf("PR branch is checked out in the main checkout")
 		}
 
 		taskSlug := uniqueTaskSlug(repoCtx.Root, pr.BranchName, existingTasks)
@@ -272,6 +274,10 @@ func (c *taskCreation) createTaskFromPullRequest(
 			taskSlug,
 			pr.BranchName,
 		)
+		if existingWorktree != "" {
+			// The branch is in a worktree no task has, such as one a removed task left: the task takes it over.
+			task.WorktreePath = existingWorktree
+		}
 		task.Model = input.Model
 		task.ReasoningLevel = input.ReasoningLevel
 		task.ParentTaskID = parentTaskID(input, existingTasks)
@@ -281,14 +287,13 @@ func (c *taskCreation) createTaskFromPullRequest(
 		return nil, err
 	}
 
-	steps := c.creationSteps(
-		task,
-		repoCtx.Root,
-		func(ctx context.Context) error {
-			return c.gitWorktree.CreateTaskWorkspaceFromPullRequest(ctx, task, pr.Number)
-		},
-		input.SubmitPrompt,
-	)
+	createWorktree := func(ctx context.Context) error {
+		return c.gitWorktree.CreateTaskWorkspaceFromPullRequest(ctx, task, pr.Number)
+	}
+	if existingWorktree != "" {
+		createWorktree = nil
+	}
+	steps := c.creationSteps(task, repoCtx.Root, createWorktree, input.SubmitPrompt)
 	if err := c.runSteps(ctx, task, reporter, steps, taskCreationStepPersistenceReadyOnly); err != nil {
 		return task, err
 	}
@@ -322,7 +327,9 @@ func (c *taskCreation) saveNewTask(
 
 // creationSteps returns the retryable steps that turn a task record into a
 // ready task. submitPrompt submits the task's prompt once the session starts
-// with it pasted in; only an initial creation that asked for it sets it.
+// with it pasted in; only an initial creation that asked for it sets it. A nil
+// createWorktree means the task's worktree exists already: it is neither
+// created nor seeded, as seeding replaces the files it copies.
 func (c *taskCreation) creationSteps(
 	task *Task,
 	repoRoot string,
@@ -333,6 +340,9 @@ func (c *taskCreation) creationSteps(
 		{
 			step: TaskCreateProgressCreatingWorktree,
 			run: func(ctx context.Context) error {
+				if createWorktree == nil {
+					return nil
+				}
 				if err := createWorktree(ctx); err != nil {
 					return fmt.Errorf("create worktree: %w", err)
 				}
@@ -342,7 +352,7 @@ func (c *taskCreation) creationSteps(
 		{
 			step: TaskCreateProgressPreparingWorkspace,
 			run: func(ctx context.Context) error {
-				return c.launcher.prepareWorkspace(ctx, task, repoRoot)
+				return c.launcher.prepareWorkspace(ctx, task, repoRoot, createWorktree != nil)
 			},
 		},
 		{

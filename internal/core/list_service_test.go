@@ -32,7 +32,8 @@ func TestTaskService_ListRepoPullRequests_MarksExistingWorkspaceBranches(t *test
 			BranchName: "feat/auth",
 		},
 	}
-	svc.repoClient.branchInUse["feat/billing"] = true
+	svc.repoClient.branchWorktree["feat/billing"] = "/tmp/repo"
+	svc.repoClient.branchWorktree["feat/search"] = "/tmp/repo_search"
 	svc.pullRequests.listRepoPullRequests = []RepoPullRequest{
 		{Number: 41, Title: "Billing", BranchName: "feat/billing", State: PRStateOpen},
 		{Number: 42, Title: "Auth", BranchName: "feat/auth", State: PRStateDraft},

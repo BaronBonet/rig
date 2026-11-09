@@ -323,11 +323,12 @@ func (s *service) ListRepoPullRequests(ctx context.Context, cwd string) ([]RepoP
 	for _, pr := range prs {
 		pr.HasExistingTask = existingTaskForBranch(existingTasks, repoCtx.Root, pr.BranchName) != nil
 		if !pr.HasExistingTask {
-			inUse, err := s.gitWorktree.IsBranchUsedByWorktree(ctx, repoCtx.Root, pr.BranchName)
+			worktreePath, err := s.gitWorktree.BranchWorktree(ctx, repoCtx.Root, pr.BranchName)
 			if err != nil {
 				return nil, err
 			}
-			pr.HasExistingTask = inUse
+			// A task can take over another worktree with the branch, but not the main checkout.
+			pr.HasExistingTask = worktreePath == repoCtx.Root
 		}
 		annotated = append(annotated, pr)
 	}

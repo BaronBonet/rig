@@ -531,6 +531,43 @@ func TestTaskServiceCreateTask_RejectsDuplicatePullRequestBranchBeforePersist(t 
 	require.Nil(t, svc.repoClient.createdTask)
 }
 
+func TestTaskServiceCreateTask_FromPullRequestTakesOverAWorktreeWithoutATask(t *testing.T) {
+	svc := newTestTaskService(t)
+	svc.repoClient.branchWorktree["feat/auth"] = "/tmp/repo_old-auth"
+
+	task, err := svc.service.CreateTaskWithProgress(t.Context(), CreateTaskInput{
+		Cwd:      "/tmp/repo",
+		Provider: ProviderCodex,
+		Source: CreateTaskSource{
+			PullRequest: &RepoPullRequest{Number: 42, Title: "Auth rewrite", BranchName: "feat/auth"},
+		},
+	}, nil)
+
+	require.NoError(t, err)
+	require.Equal(t, "/tmp/repo_old-auth", task.WorktreePath)
+	require.Nil(t, svc.repoClient.createdTask)
+	require.False(t, svc.workspace.setupCalled)
+	require.True(t, svc.workspace.bootstrapCalled)
+	require.NotNil(t, svc.sessionClient.startedTask)
+}
+
+func TestTaskServiceCreateTask_RejectsPullRequestBranchInTheMainCheckout(t *testing.T) {
+	svc := newTestTaskService(t)
+	svc.repoClient.branchWorktree["feat/auth"] = "/tmp/repo"
+
+	task, err := svc.service.CreateTaskWithProgress(t.Context(), CreateTaskInput{
+		Cwd:      "/tmp/repo",
+		Provider: ProviderCodex,
+		Source: CreateTaskSource{
+			PullRequest: &RepoPullRequest{Number: 42, Title: "Auth rewrite", BranchName: "feat/auth"},
+		},
+	}, nil)
+
+	require.Nil(t, task)
+	require.EqualError(t, err, "PR branch is checked out in the main checkout")
+	require.Nil(t, svc.taskRepo.createdTask)
+}
+
 func TestTaskServiceCreateTask_ReturnsErrorWithoutPersistingLifecycleWhenRuntimeLaunchFails(t *testing.T) {
 	svc := newTestTaskService(t)
 	svc.providerRepo.suggestedName = "billing retry flow"

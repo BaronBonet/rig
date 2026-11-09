@@ -85,7 +85,7 @@ func (l *sessionLauncher) resolveProvider(
 // bootstrap files are written best-effort so that a manually launched
 // configured provider in this workspace is observed as an agent session.
 // Their failures degrade observability but never fail the workspace.
-func (l *sessionLauncher) prepareWorkspace(ctx context.Context, task *Task, repoRoot string) error {
+func (l *sessionLauncher) prepareWorkspace(ctx context.Context, task *Task, repoRoot string, seed bool) error {
 	_, providerClient, err := l.resolveProvider(ctx, task.Provider)
 	if err != nil {
 		return fmt.Errorf("build workspace bootstrap spec: %w", err)
@@ -99,7 +99,7 @@ func (l *sessionLauncher) prepareWorkspace(ctx context.Context, task *Task, repo
 		return nil
 	}
 
-	if l.enableWorkspaceSetup {
+	if l.enableWorkspaceSetup && seed {
 		if err := l.workspace.SetupTaskWorkspace(ctx, task, repoRoot); err != nil {
 			return fmt.Errorf("setup workspace: %w", err)
 		}

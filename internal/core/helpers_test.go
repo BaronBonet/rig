@@ -114,7 +114,7 @@ type repoClientState struct {
 	createErr       error
 	removeErr       error
 	repoContext     RepoContext
-	branchInUse     map[string]bool
+	branchWorktree  map[string]string
 	createdTask     *Task
 	removedTask     *Task
 	createdPRNumber int
@@ -328,7 +328,7 @@ func newTestTaskService(t *testing.T) *testTaskServiceHarness {
 				Name:       "repo",
 				BaseBranch: "main",
 			},
-			branchInUse: map[string]bool{},
+			branchWorktree: map[string]string{},
 		},
 	}
 	h.sessionClient.inspectState = TaskSessionRuntimeState{Exists: true}
@@ -460,12 +460,12 @@ func configureGitWorktreeMock(client *MockGitWorktreeClient, state *repoClientSt
 			return state.repoContext, nil
 		},
 	).Maybe()
-	client.EXPECT().IsBranchUsedByWorktree(mock.Anything, mock.Anything, mock.Anything).RunAndReturn(
-		func(_ context.Context, _ string, branchName string) (bool, error) {
+	client.EXPECT().BranchWorktree(mock.Anything, mock.Anything, mock.Anything).RunAndReturn(
+		func(_ context.Context, _ string, branchName string) (string, error) {
 			if state.branchInUseErr != nil {
-				return false, state.branchInUseErr
+				return "", state.branchInUseErr
 			}
-			return state.branchInUse[branchName], nil
+			return state.branchWorktree[branchName], nil
 		},
 	).Maybe()
 	client.EXPECT().CreateTaskWorkspace(mock.Anything, mock.Anything).RunAndReturn(

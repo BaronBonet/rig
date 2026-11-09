@@ -50,10 +50,10 @@ func (r *repository) DetectRepo(ctx context.Context, cwd string) (core.RepoConte
 	}, nil
 }
 
-func (r *repository) IsBranchUsedByWorktree(ctx context.Context, repoRoot string, branchName string) (bool, error) {
+func (r *repository) BranchWorktree(ctx context.Context, repoRoot string, branchName string) (string, error) {
 	result, err := r.runner.Run(ctx, repoRoot, "git", "worktree", "list", "--porcelain")
 	if err != nil {
-		return false, err
+		return "", err
 	}
 
 	target := "refs/heads/" + strings.TrimSpace(branchName)
@@ -62,11 +62,11 @@ func (r *repository) IsBranchUsedByWorktree(ctx context.Context, repoRoot string
 			continue
 		}
 		if entry.branch == target {
-			return true, nil
+			return entry.path, nil
 		}
 	}
 
-	return false, nil
+	return "", nil
 }
 
 func (r *repository) CreateTaskWorkspace(ctx context.Context, task *core.Task) error {
@@ -442,6 +442,7 @@ func onDiskName(dir string, name string) string {
 }
 
 type worktreeEntry struct {
+	path     string
 	branch   string
 	prunable bool
 }
@@ -459,6 +460,8 @@ func parseWorktreeEntries(worktreeList string) []worktreeEntry {
 
 		current := &entries[len(entries)-1]
 		switch {
+		case strings.HasPrefix(line, "worktree "):
+			current.path = strings.TrimSpace(strings.TrimPrefix(line, "worktree "))
 		case strings.HasPrefix(line, "branch "):
 			current.branch = strings.TrimSpace(strings.TrimPrefix(line, "branch "))
 		case strings.HasPrefix(line, "prunable "):
