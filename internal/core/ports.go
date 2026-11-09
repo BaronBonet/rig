@@ -579,10 +579,9 @@ type GitWorktreeClient interface {
 	// DetectRepo resolves the canonical repository root, display name, and base
 	// branch for the working directory where task creation was requested.
 	DetectRepo(ctx context.Context, cwd string) (RepoContext, error)
-	// IsBranchUsedByWorktree reports whether the target branch is already checked
-	// out by another Git worktree, which prevents creating a duplicate task
-	// workspace for the same branch.
-	IsBranchUsedByWorktree(ctx context.Context, repoRoot string, branchName string) (bool, error)
+	// BranchWorktree returns the path of the Git worktree, the main checkout
+	// included, that has the branch checked out, or "" when none has.
+	BranchWorktree(ctx context.Context, repoRoot string, branchName string) (string, error)
 	// CreateTaskWorkspace creates a new Git worktree for a task by creating the
 	// task branch from the repository base branch and checking it out into the
 	// task's worktree path.

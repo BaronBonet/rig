@@ -36,7 +36,7 @@ directory, which for a task session is the task's worktree.
 | `tab` | Switch provider while writing the prompt |
 | `ctrl+o` / `ctrl+r` | Pick the model / reasoning level while writing the prompt |
 | `ctrl+n` | Pick the repository while writing the prompt |
-| `ctrl+p` | Create the task from a GitHub pull request |
+| `ctrl+p` | Create the task from a GitHub pull request (in the worktree that already has its branch, if no task does) |
 | `j` / `k` | Move between tasks and their agents |
 | `enter` | Jump to the agent that most needs you, or to the selected agent |
 | `m` | Jump to the tmux session of the task's main repository |

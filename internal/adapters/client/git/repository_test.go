@@ -67,7 +67,7 @@ func TestRepositoryDetectRepo_UsesPrimaryWorktreeWhenCalledFromLinkedWorktree(t 
 	require.Equal(t, "main", repoCtx.BaseBranch)
 }
 
-func TestRepositoryIsBranchUsedByWorktree_ReturnsTrueWhenBranchIsCheckedOutElsewhere(t *testing.T) {
+func TestRepositoryBranchWorktree_ReturnsTheWorktreeThatHasTheBranch(t *testing.T) {
 	runner := subprocess.NewMockRunner(t)
 	runner.EXPECT().
 		Run(mock.Anything, "/tmp/repo", "git", "worktree", "list", "--porcelain").
@@ -77,12 +77,12 @@ func TestRepositoryIsBranchUsedByWorktree_ReturnsTrueWhenBranchIsCheckedOutElsew
 		}, nil).
 		Once()
 
-	used, err := New(runner).IsBranchUsedByWorktree(context.Background(), "/tmp/repo", "feat/auth")
+	path, err := New(runner).BranchWorktree(context.Background(), "/tmp/repo", "feat/auth")
 	require.NoError(t, err)
-	require.True(t, used)
+	require.Equal(t, "/tmp/repo-auth", path)
 }
 
-func TestRepositoryIsBranchUsedByWorktree_IgnoresPrunableWorktrees(t *testing.T) {
+func TestRepositoryBranchWorktree_IgnoresPrunableWorktrees(t *testing.T) {
 	runner := subprocess.NewMockRunner(t)
 	runner.EXPECT().
 		Run(mock.Anything, "/tmp/repo", "git", "worktree", "list", "--porcelain").
@@ -93,9 +93,9 @@ func TestRepositoryIsBranchUsedByWorktree_IgnoresPrunableWorktrees(t *testing.T)
 		}, nil).
 		Once()
 
-	used, err := New(runner).IsBranchUsedByWorktree(context.Background(), "/tmp/repo", "feat/auth")
+	path, err := New(runner).BranchWorktree(context.Background(), "/tmp/repo", "feat/auth")
 	require.NoError(t, err)
-	require.False(t, used)
+	require.Empty(t, path)
 }
 
 func TestRepositoryCreateTaskWorkspace_UsesDetectedBaseBranch(t *testing.T) {

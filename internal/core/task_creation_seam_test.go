@@ -175,7 +175,7 @@ func TestSessionLauncherSeam_PrepareWorkspaceSeedsBeforeBootstrap(t *testing.T) 
 	)
 
 	task := failedTaskFixture(TaskCreateProgressPreparingWorkspace)
-	require.NoError(t, launcher.prepareWorkspace(t.Context(), task, task.RepoRoot))
+	require.NoError(t, launcher.prepareWorkspace(t.Context(), task, task.RepoRoot, true))
 	require.Equal(t, []string{"setup", "bootstrap"}, order,
 		"repo seeding must run before provider bootstrap so bootstrap files can rely on repo-local configuration")
 }
