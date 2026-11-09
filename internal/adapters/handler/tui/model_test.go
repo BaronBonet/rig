@@ -2603,6 +2603,25 @@ func TestPRPickerView_ShowsDuplicateRowsAsDisabled(t *testing.T) {
 	require.NotContains(t, view, "already has workspace")
 }
 
+func TestPRPickerView_ScrollsToKeepTheCursorInView(t *testing.T) {
+	m := newLoadedModel(newFrontendHarness())
+	m.width, m.height = 80, 20
+	m.mode = modePRPicker
+	for i := range 20 {
+		m.draft.prs = append(m.draft.prs, core.RepoPullRequest{
+			Number: i, Title: "pr-title-" + strconv.Itoa(100+i), BranchName: "b",
+		})
+	}
+	m.draft.prSelected = 15
+
+	view := stripANSI(m.View().Content)
+	require.LessOrEqual(t, strings.Count(view, "\n")+1, 20)
+	require.Contains(t, view, "pr-title-115")
+	require.NotContains(t, view, "pr-title-100")
+	require.Contains(t, view, taskListScrollbarThumb)
+	require.Contains(t, view, "enter create")
+}
+
 func TestModel_PRPickerEnterCreatesTaskFromSelectedPR(t *testing.T) {
 	frontend := newFrontendHarness()
 	frontend.createTaskEvents = []core.TaskCreateEvent{

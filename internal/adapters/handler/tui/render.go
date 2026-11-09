@@ -1152,7 +1152,24 @@ func (m model) prPickerView() string {
 		return builder.String()
 	}
 
-	for i, pr := range m.draft.prs {
+	tail := "\n\n" + m.launchChoiceView(m.totalWidth()) + "\n\n" + footerKeybinds(
+		[2]string{"enter", "create"},
+		[2]string{"esc", "back"},
+	)
+	// PRs that outgrow the screen scroll around the cursor, with the task
+	// list's scrollbar. Each PR takes 2 lines plus a blank one between.
+	prs := m.draft.prs
+	budget := len(prs)
+	if m.height > 0 {
+		lines := m.height - strings.Count(builder.String(), "\n") - strings.Count(tail, "\n")
+		budget = max((lines+1)/3, 1)
+	}
+	start := min(max(m.draft.prSelected-budget/2, 0), max(len(prs)-budget, 0))
+	end := min(start+budget, len(prs))
+
+	var lines []string
+	for i := start; i < end; i++ {
+		pr := prs[i]
 		title := strings.TrimSpace(pr.Title)
 		if title == "" {
 			title = pr.BranchName
@@ -1176,21 +1193,17 @@ func (m model) prPickerView() string {
 
 		block := titleLine + "\n" + metaLine
 		if i == m.draft.prSelected {
-			builder.WriteString(selectedRowStyle.Render(block))
+			block = selectedRowStyle.Render(block)
 		} else {
-			builder.WriteString(normalRowStyle.Render(block))
+			block = normalRowStyle.Render(block)
 		}
-		if i < len(m.draft.prs)-1 {
-			builder.WriteString("\n\n")
+		if i > start {
+			lines = append(lines, "")
 		}
+		lines = append(lines, strings.Split(block, "\n")...)
 	}
-
-	builder.WriteString("\n\n")
-	builder.WriteString(m.launchChoiceView(m.totalWidth()) + "\n\n")
-	builder.WriteString(footerKeybinds(
-		[2]string{"enter", "create"},
-		[2]string{"esc", "back"},
-	))
+	builder.WriteString(strings.Join(withTaskListScrollbar(lines, totalWidth, start, end-1, len(prs)), "\n"))
+	builder.WriteString(tail)
 
 	return builder.String()
 }
