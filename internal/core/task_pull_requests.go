@@ -210,7 +210,8 @@ func (f *taskFailures) succeeded(taskID string) {
 
 // taskBranches returns a task's branches, its Task branches, sorted: the
 // branches recorded for it, its own branch, and the branches its worktree has
-// had checked out, less the repository's default branch. It records the ones
+// had checked out, with the branches those track on a remote, less the
+// repository's default branch. It records the ones
 // not recorded before, so a branch stays the task's once git has expired the
 // reflog entries that found it. Without the default branch, an empty string,
 // the worktree's branches cannot be told from it, so they are left out, and

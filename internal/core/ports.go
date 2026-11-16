@@ -598,7 +598,9 @@ type GitWorktreeClient interface {
 	// had checked out, as its own HEAD reflog records them: each branch a
 	// checkout moved away from, both names of each rename of its branch, and
 	// the branch it has checked out now. A branch deleted since is kept. Git
-	// expires old reflog entries, so a branch may drop out of it. It returns
+	// expires old reflog entries, so a branch may drop out of it. With them
+	// comes the branch each one still there tracks on a remote, its upstream,
+	// which has another name when the branch was pushed under one. It returns
 	// an error wrapping fs.ErrNotExist when the worktree does not exist.
 	ListWorktreeBranches(ctx context.Context, worktreePath string) ([]string, error)
 	// UnshippedWork returns a worktree's work that shipped does not contain:

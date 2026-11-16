@@ -422,6 +422,35 @@ func TestRepositoryListWorktreeBranches_IncludesTheBranchCheckedOutNow(t *testin
 	require.Equal(t, []string{"feat/billing-export"}, branches)
 }
 
+// A repository that names its branches after tickets has the task's branch
+// pushed under another name, so its pull request's head is a branch the
+// worktree never had checked out. Git keeps that name as the branch's
+// upstream, also once a fetch has pruned the remote-tracking branch of a
+// merged pull request. A branch tracking a local one is pushed nowhere, and
+// the upstream of a branch the worktree never had is not the worktree's.
+func TestRepositoryListWorktreeBranches_IncludesTheRemoteBranchABranchIsPushedTo(t *testing.T) {
+	t.Setenv("GIT_CONFIG_GLOBAL", os.DevNull)
+	t.Setenv("GIT_CONFIG_NOSYSTEM", "1")
+	root := physicalTempDir(t)
+	repo := filepath.Join(root, "repo")
+	origin := filepath.Join(root, "origin.git")
+	worktree := filepath.Join(root, "repo_topics")
+	initRepo(t, repo)
+	runGit(t, repo, "branch", "-M", "main")
+	runGit(t, root, "init", "--quiet", "--bare", origin)
+	runGit(t, repo, "remote", "add", "origin", origin)
+	runGit(t, repo, "push", "--quiet", "-u", "origin", "HEAD:refs/heads/release")
+	runGit(t, repo, "worktree", "add", "--quiet", "-b", "feat/topics", worktree, "main")
+	runGit(t, worktree, "push", "--quiet", "-u", "origin", "HEAD:refs/heads/WEBSITE-331")
+	runGit(t, worktree, "update-ref", "-d", "refs/remotes/origin/WEBSITE-331")
+	runGit(t, worktree, "switch", "--quiet", "--track", "-c", "feat/local", "main")
+
+	branches, err := New(subprocess.ExecRunner{}).ListWorktreeBranches(context.Background(), worktree)
+
+	require.NoError(t, err)
+	require.Equal(t, []string{"WEBSITE-331", "feat/local", "feat/topics"}, branches)
+}
+
 const (
 	shippedHeadA = "a7d3f0c2b8e14f6a9c5d2e7b1f0a3c8d6e4b2a90"
 	shippedHeadB = "b2c4e6f8a0b2c4e6f8a0b2c4e6f8a0b2c4e6f8a0"
