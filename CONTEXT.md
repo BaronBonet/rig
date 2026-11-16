@@ -163,11 +163,14 @@ Use `rig` for the CLI command and Rig for the product or system.
   request. Rig reads it from the same root transcript as Compactions, so
   `/clear` starts it over.
 - Task branch: A branch a Task's worktree has had checked out, as the
-  worktree's reflog records, or the branch the Task was created on. Rig
-  records each one it finds, so a branch deleted after its pull request merged,
-  or one git has expired from the reflog, stays the Task's. The repository's
-  default branch on GitHub is never one; while Rig cannot learn it, it adds no
-  branches from the reflog.
+  worktree's reflog records, or the branch the Task was created on. So is the
+  branch one of those tracks on a remote, its upstream, which has another name
+  when the branch was pushed under one, as with
+  `git push -u origin HEAD:refs/heads/TICKET-1`. Rig records each one it
+  finds, so a branch deleted after its pull request merged, or one git has
+  expired from the reflog, stays the Task's. The repository's default branch
+  on GitHub is never one; while Rig cannot learn it, it adds no branches from
+  the worktree.
 - Pull request: A GitHub pull request whose head is a Task branch, in the
   Task's own repository rather than a fork. The current one is the Task's
   newest open or draft pull request, or else its newest. The task list marks a

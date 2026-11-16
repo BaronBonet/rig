@@ -147,6 +147,10 @@ func (r *repository) RemoveTaskWorkspace(ctx context.Context, task *core.Task) e
 // it moves to is the name the checkout was given, which may be a revision, a
 // tag or a remote-tracking branch, so it is left out: a branch HEAD moved to
 // is the side a later checkout moves from, or the branch checked out now.
+//
+// The branch each of them tracks on a remote comes from its upstream
+// configuration, which for-each-ref reads without the remote-tracking branch,
+// so it is still found once a fetch has pruned that of a merged pull request.
 func (r *repository) ListWorktreeBranches(ctx context.Context, worktreePath string) ([]string, error) {
 	if _, err := os.Stat(worktreePath); err != nil {
 		return nil, err
@@ -165,8 +169,40 @@ func (r *repository) ListWorktreeBranches(ctx context.Context, worktreePath stri
 	if branch := strings.TrimSpace(current.Stdout); branch != "" {
 		branches = append(branches, branch)
 	}
+	upstreams, err := r.runner.Run(
+		ctx,
+		worktreePath,
+		"git",
+		"for-each-ref",
+		"--format=%(refname) %(upstream:remotename) %(upstream:remoteref)",
+		"refs/heads",
+	)
+	if err != nil {
+		return nil, err
+	}
+	branches = append(branches, upstreamBranchNames(upstreams.Stdout, branches)...)
 	slices.Sort(branches)
 	return slices.Compact(branches), nil
+}
+
+// upstreamBranchNames returns the branches that the named local branches
+// track on a remote, from for-each-ref lines of a local branch's ref, its
+// upstream's remote and the upstream's ref there. A branch without an
+// upstream has its ref alone on its line, and one tracking a local branch
+// has the remote ".".
+func upstreamBranchNames(refs string, branches []string) []string {
+	var names []string
+	for _, line := range strings.Split(refs, "\n") {
+		fields := strings.Fields(line)
+		if len(fields) != 3 || fields[1] == "." ||
+			!slices.Contains(branches, strings.TrimPrefix(fields[0], "refs/heads/")) {
+			continue
+		}
+		if name, ok := strings.CutPrefix(fields[2], "refs/heads/"); ok && name != "" {
+			names = append(names, name)
+		}
+	}
+	return names
 }
 
 // noLazyFetch stops git fetching the objects a partial clone lacks from its
